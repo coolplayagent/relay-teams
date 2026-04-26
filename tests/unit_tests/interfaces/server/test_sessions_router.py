@@ -170,11 +170,15 @@ class _FakeSessionService:
                     role_id="coordinator",
                     input_tokens=120,
                     cached_input_tokens=48,
+                    latest_input_tokens=44,
+                    max_input_tokens=64,
                     output_tokens=30,
                     reasoning_output_tokens=9,
                     total_tokens=150,
                     requests=3,
                     tool_calls=1,
+                    context_window=1_000_000,
+                    model_profile="gpt-4.1",
                 )
             },
         )
@@ -233,11 +237,15 @@ class _FakeSessionService:
                     role_id="coordinator",
                     input_tokens=44,
                     cached_input_tokens=12,
+                    latest_input_tokens=22,
+                    max_input_tokens=28,
                     output_tokens=10,
                     reasoning_output_tokens=4,
                     total_tokens=54,
                     requests=2,
                     tool_calls=0,
+                    context_window=1_000_000,
+                    model_profile="gpt-4.1",
                 )
             ],
         )
@@ -912,11 +920,15 @@ def test_get_session_token_usage_route_returns_extended_totals() -> None:
                 "role_id": "coordinator",
                 "input_tokens": 120,
                 "cached_input_tokens": 48,
+                "latest_input_tokens": 44,
+                "max_input_tokens": 64,
                 "output_tokens": 30,
                 "reasoning_output_tokens": 9,
                 "total_tokens": 150,
                 "requests": 3,
                 "tool_calls": 1,
+                "context_window": 1000000,
+                "model_profile": "gpt-4.1",
             }
         },
     }
@@ -944,11 +956,15 @@ def test_get_run_token_usage_route_returns_extended_totals() -> None:
                 "role_id": "coordinator",
                 "input_tokens": 44,
                 "cached_input_tokens": 12,
+                "latest_input_tokens": 22,
+                "max_input_tokens": 28,
                 "output_tokens": 10,
                 "reasoning_output_tokens": 4,
                 "total_tokens": 54,
                 "requests": 2,
                 "tool_calls": 0,
+                "context_window": 1000000,
+                "model_profile": "gpt-4.1",
             }
         ],
     }

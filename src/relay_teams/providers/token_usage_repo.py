@@ -23,10 +23,14 @@ class TokenUsageRecord(BaseModel):
     role_id: str
     input_tokens: int
     cached_input_tokens: int
+    latest_input_tokens: int = 0
+    max_input_tokens: int = 0
     output_tokens: int
     reasoning_output_tokens: int
     requests: int
     tool_calls: int
+    context_window: int | None = None
+    model_profile: str = ""
     recorded_at: datetime
 
 
@@ -37,11 +41,15 @@ class AgentTokenSummary(BaseModel):
     role_id: str
     input_tokens: int
     cached_input_tokens: int
+    latest_input_tokens: int = 0
+    max_input_tokens: int = 0
     output_tokens: int
     reasoning_output_tokens: int
     total_tokens: int
     requests: int
     tool_calls: int
+    context_window: int | None = None
+    model_profile: str = ""
 
 
 class RunTokenUsage(BaseModel):
@@ -76,10 +84,13 @@ class TokenUsageRepository(SharedSqliteRepository):
     _NUMERIC_COLUMNS: tuple[str, ...] = (
         "input_tokens",
         "cached_input_tokens",
+        "latest_input_tokens",
+        "max_input_tokens",
         "output_tokens",
         "reasoning_output_tokens",
         "requests",
         "tool_calls",
+        "context_window",
     )
 
     def __init__(
@@ -104,10 +115,14 @@ class TokenUsageRepository(SharedSqliteRepository):
                     role_id       TEXT NOT NULL,
                     input_tokens  INTEGER DEFAULT 0,
                     cached_input_tokens INTEGER DEFAULT 0,
+                    latest_input_tokens INTEGER DEFAULT 0,
+                    max_input_tokens INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
                     reasoning_output_tokens INTEGER DEFAULT 0,
                     requests      INTEGER DEFAULT 0,
                     tool_calls    INTEGER DEFAULT 0,
+                    context_window INTEGER DEFAULT 0,
+                    model_profile TEXT NOT NULL DEFAULT '',
                     recorded_at   TEXT NOT NULL
                 )
                 """
@@ -133,11 +148,39 @@ class TokenUsageRepository(SharedSqliteRepository):
                     ADD COLUMN cached_input_tokens INTEGER NOT NULL DEFAULT 0
                     """
                 )
+            if "latest_input_tokens" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE token_usage
+                    ADD COLUMN latest_input_tokens INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "max_input_tokens" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE token_usage
+                    ADD COLUMN max_input_tokens INTEGER NOT NULL DEFAULT 0
+                    """
+                )
             if "reasoning_output_tokens" not in columns:
                 self._conn.execute(
                     """
                     ALTER TABLE token_usage
                     ADD COLUMN reasoning_output_tokens INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "context_window" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE token_usage
+                    ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "model_profile" not in columns:
+                self._conn.execute(
+                    """
+                    ALTER TABLE token_usage
+                    ADD COLUMN model_profile TEXT NOT NULL DEFAULT ''
                     """
                 )
             self._conn.execute(
@@ -159,32 +202,50 @@ class TokenUsageRepository(SharedSqliteRepository):
         role_id: str,
         input_tokens: int = 0,
         cached_input_tokens: int = 0,
+        latest_input_tokens: int = 0,
+        max_input_tokens: int = 0,
         output_tokens: int = 0,
         reasoning_output_tokens: int = 0,
         requests: int = 0,
         tool_calls: int = 0,
+        context_window: int | None = None,
+        model_profile: str = "",
     ) -> None:
         def operation() -> None:
             now = self._next_recorded_at(session_id=session_id)
+            safe_input_tokens = self._coerce_non_negative_int(input_tokens)
+            safe_latest_input_tokens = self._coerce_non_negative_int(
+                latest_input_tokens
+            )
+            safe_max_input_tokens = self._coerce_non_negative_int(max_input_tokens)
+            if safe_latest_input_tokens <= 0:
+                safe_latest_input_tokens = safe_input_tokens
+            if safe_max_input_tokens <= 0:
+                safe_max_input_tokens = safe_latest_input_tokens
             self._conn.execute(
                 """
                 INSERT INTO token_usage
                   (session_id, run_id, instance_id, role_id,
-                   input_tokens, cached_input_tokens, output_tokens,
-                   reasoning_output_tokens, requests, tool_calls, recorded_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   input_tokens, cached_input_tokens, latest_input_tokens,
+                   max_input_tokens, output_tokens, reasoning_output_tokens,
+                   requests, tool_calls, context_window, model_profile, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
                     run_id,
                     instance_id,
                     role_id,
-                    self._coerce_non_negative_int(input_tokens),
+                    safe_input_tokens,
                     self._coerce_non_negative_int(cached_input_tokens),
+                    safe_latest_input_tokens,
+                    safe_max_input_tokens,
                     self._coerce_non_negative_int(output_tokens),
                     self._coerce_non_negative_int(reasoning_output_tokens),
                     self._coerce_non_negative_int(requests),
                     self._coerce_non_negative_int(tool_calls),
+                    self._coerce_non_negative_int(context_window),
+                    model_profile.strip(),
                     now.isoformat(),
                 ),
             )
@@ -200,10 +261,14 @@ class TokenUsageRepository(SharedSqliteRepository):
         role_id: str,
         input_tokens: int = 0,
         cached_input_tokens: int = 0,
+        latest_input_tokens: int = 0,
+        max_input_tokens: int = 0,
         output_tokens: int = 0,
         reasoning_output_tokens: int = 0,
         requests: int = 0,
         tool_calls: int = 0,
+        context_window: int | None = None,
+        model_profile: str = "",
     ) -> None:
         return await self._call_sync_async(
             self.record,
@@ -213,10 +278,14 @@ class TokenUsageRepository(SharedSqliteRepository):
             role_id=role_id,
             input_tokens=input_tokens,
             cached_input_tokens=cached_input_tokens,
+            latest_input_tokens=latest_input_tokens,
+            max_input_tokens=max_input_tokens,
             output_tokens=output_tokens,
             reasoning_output_tokens=reasoning_output_tokens,
             requests=requests,
             tool_calls=tool_calls,
+            context_window=context_window,
+            model_profile=model_profile,
         )
 
     def get_by_run(self, run_id: str) -> RunTokenUsage:
@@ -232,19 +301,29 @@ class TokenUsageRepository(SharedSqliteRepository):
             iid = str(row["instance_id"])
             input_tokens = self._row_int(row, "input_tokens")
             cached_input_tokens = self._row_int(row, "cached_input_tokens")
+            latest_input_tokens = self._row_int(row, "latest_input_tokens")
+            if latest_input_tokens <= 0:
+                latest_input_tokens = input_tokens
+            max_input_tokens = self._row_int(row, "max_input_tokens")
+            if max_input_tokens <= 0:
+                max_input_tokens = latest_input_tokens
             output_tokens = self._row_int(row, "output_tokens")
             reasoning_output_tokens = self._row_int(row, "reasoning_output_tokens")
             requests = self._row_int(row, "requests")
             tool_calls = self._row_int(row, "tool_calls")
+            context_window = self._positive_row_int_or_none(row, "context_window")
+            model_profile = self._row_text(row, "model_profile")
             if iid in by_instance:
                 existing = by_instance[iid]
                 by_instance[iid] = AgentTokenSummary(
                     instance_id=iid,
-                    role_id=existing.role_id,
+                    role_id=str(row["role_id"]) or existing.role_id,
                     input_tokens=existing.input_tokens + input_tokens,
                     cached_input_tokens=(
                         existing.cached_input_tokens + cached_input_tokens
                     ),
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max(existing.max_input_tokens, max_input_tokens),
                     output_tokens=existing.output_tokens + output_tokens,
                     reasoning_output_tokens=(
                         existing.reasoning_output_tokens + reasoning_output_tokens
@@ -252,6 +331,8 @@ class TokenUsageRepository(SharedSqliteRepository):
                     total_tokens=existing.total_tokens + input_tokens + output_tokens,
                     requests=existing.requests + requests,
                     tool_calls=existing.tool_calls + tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
                 )
             else:
                 by_instance[iid] = AgentTokenSummary(
@@ -259,11 +340,15 @@ class TokenUsageRepository(SharedSqliteRepository):
                     role_id=str(row["role_id"]),
                     input_tokens=input_tokens,
                     cached_input_tokens=cached_input_tokens,
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max_input_tokens,
                     output_tokens=output_tokens,
                     reasoning_output_tokens=reasoning_output_tokens,
                     total_tokens=input_tokens + output_tokens,
                     requests=requests,
                     tool_calls=tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
                 )
 
         agents = list(by_instance.values())
@@ -312,10 +397,18 @@ class TokenUsageRepository(SharedSqliteRepository):
             role_id = str(row["role_id"])
             input_tokens = self._row_int(row, "input_tokens")
             cached_input_tokens = self._row_int(row, "cached_input_tokens")
+            latest_input_tokens = self._row_int(row, "latest_input_tokens")
+            if latest_input_tokens <= 0:
+                latest_input_tokens = input_tokens
+            max_input_tokens = self._row_int(row, "max_input_tokens")
+            if max_input_tokens <= 0:
+                max_input_tokens = latest_input_tokens
             output_tokens = self._row_int(row, "output_tokens")
             reasoning_output_tokens = self._row_int(row, "reasoning_output_tokens")
             requests = self._row_int(row, "requests")
             tool_calls = self._row_int(row, "tool_calls")
+            context_window = self._positive_row_int_or_none(row, "context_window")
+            model_profile = self._row_text(row, "model_profile")
             if role_id in by_role:
                 existing = by_role[role_id]
                 by_role[role_id] = AgentTokenSummary(
@@ -325,6 +418,8 @@ class TokenUsageRepository(SharedSqliteRepository):
                     cached_input_tokens=(
                         existing.cached_input_tokens + cached_input_tokens
                     ),
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max(existing.max_input_tokens, max_input_tokens),
                     output_tokens=existing.output_tokens + output_tokens,
                     reasoning_output_tokens=(
                         existing.reasoning_output_tokens + reasoning_output_tokens
@@ -332,6 +427,8 @@ class TokenUsageRepository(SharedSqliteRepository):
                     total_tokens=existing.total_tokens + input_tokens + output_tokens,
                     requests=existing.requests + requests,
                     tool_calls=existing.tool_calls + tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
                 )
             else:
                 by_role[role_id] = AgentTokenSummary(
@@ -339,11 +436,15 @@ class TokenUsageRepository(SharedSqliteRepository):
                     role_id=role_id,
                     input_tokens=input_tokens,
                     cached_input_tokens=cached_input_tokens,
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max_input_tokens,
                     output_tokens=output_tokens,
                     reasoning_output_tokens=reasoning_output_tokens,
                     total_tokens=input_tokens + output_tokens,
                     requests=requests,
                     tool_calls=tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
                 )
 
         roles = list(by_role.values())
@@ -438,6 +539,24 @@ class TokenUsageRepository(SharedSqliteRepository):
         except IndexError:
             return 0
         return self._coerce_non_negative_int(value)
+
+    def _positive_row_int_or_none(
+        self,
+        row: sqlite3.Row,
+        field_name: str,
+    ) -> int | None:
+        value = self._row_int(row, field_name)
+        return value if value > 0 else None
+
+    @staticmethod
+    def _row_text(row: sqlite3.Row, field_name: str) -> str:
+        try:
+            value = row[field_name]
+        except IndexError:
+            return ""
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
 
     def _coerce_non_negative_int(self, value: object) -> int:
         if value is None:

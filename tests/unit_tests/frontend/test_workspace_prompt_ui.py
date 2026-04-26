@@ -162,11 +162,14 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "fetchSessionContextPreview" not in context_indicator_script
     assert "main-context-indicator" in context_indicator_script
     assert "panel-context-indicator" in context_indicator_script
+    assert "latest_input_tokens" in context_indicator_script
+    assert "formatTokenCount(inputTokens)" in context_indicator_script
+    assert "formatTokenCount(usage.input_tokens)" not in context_indicator_script
     assert "isMainComposerRecoveryActionVisible" not in context_indicator_script
-    assert "Prompt / context window" in i18n_script
-    assert "Prompt tokens: {input_tokens}" in i18n_script
-    assert "本轮输入 / 上下文窗口" in i18n_script
-    assert "本轮输入：{input_tokens}" in i18n_script
+    assert "Latest request input / context window" in i18n_script
+    assert "Latest request input tokens: {input_tokens}" in i18n_script
+    assert "最新请求输入 / 上下文窗口" in i18n_script
+    assert "最新请求输入：{input_tokens}" in i18n_script
     assert 'data-tab="orchestration"' in settings_index_script
     assert 'id="orchestration-panel"' in settings_index_script
     assert "loadOrchestrationSettingsPanel" in settings_index_script

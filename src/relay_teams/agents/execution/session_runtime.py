@@ -386,6 +386,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             request_level_output_tokens = 0
             request_level_reasoning_output_tokens = 0
             request_level_requests = 0
+            latest_request_input_tokens = 0
+            max_request_input_tokens = 0
             saw_request_level_usage = False
             streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta] = {}
             latest_streamed_text = ""
@@ -462,11 +464,18 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                                     text=text_delta,
                                                 )
                                 usage_after = stream.usage()
-                                request_level_input_tokens += self._usage_delta_int(
+                                input_tokens_delta = self._usage_delta_int(
                                     after=usage_after,
                                     before=usage_before,
                                     field_name="input_tokens",
                                 )
+                                request_level_input_tokens += input_tokens_delta
+                                if input_tokens_delta > 0:
+                                    latest_request_input_tokens = input_tokens_delta
+                                    max_request_input_tokens = max(
+                                        max_request_input_tokens,
+                                        input_tokens_delta,
+                                    )
                                 request_level_cached_input_tokens += (
                                     self._usage_delta_int(
                                         after=usage_after,
@@ -682,6 +691,14 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 usage, "reasoning_tokens"
                             )
                             requests = self._usage_field_int(usage, "requests")
+                            latest_request_input_tokens = input_tokens
+                            max_request_input_tokens = input_tokens
+                        elif latest_request_input_tokens <= 0:
+                            latest_request_input_tokens = input_tokens
+                            max_request_input_tokens = max(
+                                max_request_input_tokens,
+                                latest_request_input_tokens,
+                            )
                         tool_calls = self._usage_field_int(usage, "tool_calls")
                         if self._token_usage_repo is not None:
                             await self._token_usage_repo.record_async(
@@ -691,10 +708,14 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 role_id=request.role_id,
                                 input_tokens=input_tokens,
                                 cached_input_tokens=cached_input_tokens,
+                                latest_input_tokens=latest_request_input_tokens,
+                                max_input_tokens=max_request_input_tokens,
                                 output_tokens=output_tokens,
                                 reasoning_output_tokens=reasoning_output_tokens,
                                 requests=requests,
                                 tool_calls=tool_calls,
+                                context_window=self._config.context_window,
+                                model_profile=self._profile_name or "",
                             )
                         await publish_run_event_async(
                             self._run_event_hub,
@@ -710,11 +731,15 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     {
                                         "input_tokens": input_tokens,
                                         "cached_input_tokens": cached_input_tokens,
+                                        "latest_input_tokens": latest_request_input_tokens,
+                                        "max_input_tokens": max_request_input_tokens,
                                         "output_tokens": output_tokens,
                                         "reasoning_output_tokens": reasoning_output_tokens,
                                         "total_tokens": input_tokens + output_tokens,
                                         "requests": requests,
                                         "tool_calls": tool_calls,
+                                        "context_window": self._config.context_window,
+                                        "model_profile": self._profile_name or "",
                                         "role_id": request.role_id,
                                         "instance_id": request.instance_id,
                                     }
@@ -741,10 +766,14 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             payload={
                                 "input_tokens": input_tokens,
                                 "cached_input_tokens": cached_input_tokens,
+                                "latest_input_tokens": latest_request_input_tokens,
+                                "max_input_tokens": max_request_input_tokens,
                                 "output_tokens": output_tokens,
                                 "reasoning_output_tokens": reasoning_output_tokens,
                                 "requests": requests,
                                 "tool_calls": tool_calls,
+                                "context_window": self._config.context_window,
+                                "model_profile": self._profile_name or "",
                                 "role_id": request.role_id,
                                 "instance_id": request.instance_id,
                             },

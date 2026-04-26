@@ -59,10 +59,14 @@ def test_token_usage_repo_migrates_legacy_schema_before_recording(
         SELECT
             input_tokens,
             cached_input_tokens,
+            latest_input_tokens,
+            max_input_tokens,
             output_tokens,
             reasoning_output_tokens,
             requests,
-            tool_calls
+            tool_calls,
+            context_window,
+            model_profile
         FROM token_usage
         WHERE run_id=?
         """,
@@ -74,10 +78,14 @@ def test_token_usage_repo_migrates_legacy_schema_before_recording(
     assert row is not None
     assert int(row["input_tokens"]) == 10
     assert int(row["cached_input_tokens"]) == 6
+    assert int(row["latest_input_tokens"]) == 10
+    assert int(row["max_input_tokens"]) == 10
     assert int(row["output_tokens"]) == 4
     assert int(row["reasoning_output_tokens"]) == 2
     assert int(row["requests"]) == 2
     assert int(row["tool_calls"]) == 1
+    assert int(row["context_window"]) == 0
+    assert row["model_profile"] == ""
 
 
 def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> None:
@@ -248,6 +256,96 @@ def test_token_usage_repo_aggregates_cached_and_reasoning_tokens(
     assert session_usage.total_cached_input_tokens == 82
     assert session_usage.total_output_tokens == 31
     assert session_usage.total_reasoning_output_tokens == 13
+
+
+def test_token_usage_repo_tracks_latest_and_peak_request_input_tokens(
+    tmp_path: Path,
+) -> None:
+    repo = TokenUsageRepository(tmp_path / "token_usage_latest.db")
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-coordinator",
+        role_id="coordinator",
+        input_tokens=120,
+        latest_input_tokens=70,
+        max_input_tokens=70,
+        output_tokens=20,
+        requests=2,
+        context_window=1_000_000,
+        model_profile="gpt-4.1",
+    )
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-coordinator",
+        role_id="coordinator",
+        input_tokens=30,
+        latest_input_tokens=30,
+        max_input_tokens=80,
+        output_tokens=11,
+        requests=1,
+        context_window=1_000_000,
+        model_profile="gpt-4.1",
+    )
+
+    run_usage = repo.get_by_run("run-1")
+    session_usage = repo.get_by_session("session-1")
+
+    agent_usage = run_usage.by_agent[0]
+    role_usage = session_usage.by_role["coordinator"]
+    assert run_usage.total_input_tokens == 150
+    assert agent_usage.input_tokens == 150
+    assert agent_usage.latest_input_tokens == 30
+    assert agent_usage.max_input_tokens == 80
+    assert agent_usage.context_window == 1_000_000
+    assert agent_usage.model_profile == "gpt-4.1"
+    assert role_usage.latest_input_tokens == 30
+    assert role_usage.max_input_tokens == 80
+    assert role_usage.context_window == 1_000_000
+    assert role_usage.model_profile == "gpt-4.1"
+
+
+def test_token_usage_repo_latest_row_can_clear_context_metadata(
+    tmp_path: Path,
+) -> None:
+    repo = TokenUsageRepository(tmp_path / "token_usage_context_clear.db")
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-coordinator",
+        role_id="coordinator",
+        input_tokens=120,
+        latest_input_tokens=70,
+        max_input_tokens=70,
+        output_tokens=20,
+        requests=2,
+        context_window=1_000_000,
+        model_profile="gpt-4.1",
+    )
+    repo.record(
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-coordinator",
+        role_id="coordinator",
+        input_tokens=30,
+        latest_input_tokens=30,
+        max_input_tokens=80,
+        output_tokens=11,
+        requests=1,
+    )
+
+    agent_usage = repo.get_by_run("run-1").by_agent[0]
+    role_usage = repo.get_by_session("session-1").by_role["coordinator"]
+
+    assert agent_usage.latest_input_tokens == 30
+    assert agent_usage.max_input_tokens == 80
+    assert agent_usage.context_window is None
+    assert agent_usage.model_profile == ""
+    assert role_usage.latest_input_tokens == 30
+    assert role_usage.max_input_tokens == 80
+    assert role_usage.context_window is None
+    assert role_usage.model_profile == ""
 
 
 def test_token_usage_repo_filters_pre_clear_usage_from_session_totals(

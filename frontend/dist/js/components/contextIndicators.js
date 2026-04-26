@@ -148,7 +148,7 @@ async function fetchAndRenderUsage({
             renderIdle(indicator);
             return;
         }
-        renderUsage(indicator, agentUsage, resolveContextWindow(profiles));
+        renderUsage(indicator, agentUsage, resolveContextWindow(profiles, agentUsage));
     } catch (error) {
         if (error?.name === 'AbortError') return;
         if (previewState.requestId !== nextRequestId) return;
@@ -209,17 +209,18 @@ function renderUsage(indicator, usage, contextWindow) {
     if (!indicator) return;
     indicator.style.display = 'inline-flex';
     indicator.dataset.state = 'ready';
+    const inputTokens = resolveLatestInputTokens(usage);
     const upper = typeof contextWindow === 'number' && contextWindow > 0
         ? formatTokenCount(contextWindow)
         : '--';
-    indicator.textContent = `${formatTokenCount(usage.input_tokens)} / ${upper}`;
+    indicator.textContent = `${formatTokenCount(inputTokens)} / ${upper}`;
     indicator.title = typeof contextWindow === 'number' && contextWindow > 0
         ? formatMessage('context_indicator.latest_with_window', {
-            input_tokens: usage.input_tokens,
+            input_tokens: inputTokens,
             context_window: contextWindow,
         })
         : formatMessage('context_indicator.latest_without_window', {
-            input_tokens: usage.input_tokens,
+            input_tokens: inputTokens,
         });
 }
 
@@ -277,14 +278,33 @@ function selectAgentUsage(usage, { roleId = '', instanceId = '' } = {}) {
     return agents.length === 1 ? agents[0] : null;
 }
 
-function resolveContextWindow(profiles) {
+function resolveContextWindow(profiles, usage) {
+    const usageContextWindow = Number(usage?.context_window);
+    if (Number.isFinite(usageContextWindow) && usageContextWindow > 0) {
+        return usageContextWindow;
+    }
     if (!profiles || typeof profiles !== 'object') {
         return null;
+    }
+    const modelProfile = String(usage?.model_profile || '').trim();
+    if (modelProfile && profiles[modelProfile] && typeof profiles[modelProfile] === 'object') {
+        const profileContextWindow = Number(profiles[modelProfile].context_window);
+        if (Number.isFinite(profileContextWindow) && profileContextWindow > 0) {
+            return profileContextWindow;
+        }
     }
     const profileEntries = Object.values(profiles).filter(profile => profile && typeof profile === 'object');
     const defaultProfile = profileEntries.find(profile => profile.is_default === true);
     const contextWindow = Number(defaultProfile?.context_window);
     return Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null;
+}
+
+function resolveLatestInputTokens(usage) {
+    const latestInputTokens = Number(usage?.latest_input_tokens);
+    if (Number.isFinite(latestInputTokens) && latestInputTokens > 0) {
+        return latestInputTokens;
+    }
+    return Number(usage?.input_tokens);
 }
 
 function formatTokenCount(value) {
