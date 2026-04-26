@@ -34,6 +34,7 @@ from relay_teams.sessions.runs.background_tasks.repository import (
 )
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.ssh_profile_models import SshProfilePreparedCommand
 from relay_teams.workspace.ssh_profile_service import SshProfileService
@@ -284,6 +285,18 @@ class _FakeMonitorSink:
         self.body_texts.append(envelope.body_text)
 
 
+class _AsyncOnlyRunEventHub:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def publish(self, event: RunEvent) -> None:
+        _ = event
+        raise AssertionError("background task manager must publish async events")
+
+    async def publish_async(self, event: RunEvent) -> None:
+        self.events.append(event)
+
+
 def test_background_task_manager_resolves_ssh_execution_context(
     tmp_path: Path,
 ) -> None:
@@ -487,6 +500,45 @@ async def test_background_task_manager_completes_and_publishes_events(
     assert updated_payload["delta"] == "hello\n"
     assert completed_payload is not None
     assert completed_payload["output_excerpt"] == "hello\n"
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_uses_async_run_event_publishing(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-async-events.db")
+    hub = _AsyncOnlyRunEventHub()
+    manager = BackgroundTaskManager(
+        repository=repo,
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+    )
+    workspace = _build_workspace_handle(tmp_path)
+
+    try:
+        started, completed = await manager.run_command(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            workspace=workspace,
+            command="printf 'hello\\n'",
+            cwd=workspace.execution_root,
+            timeout_ms=5000,
+            yield_time_ms=5000,
+            env=None,
+            tty=False,
+        )
+    finally:
+        await manager.close()
+
+    assert completed is True
+    assert started.status == BackgroundTaskStatus.COMPLETED
+    assert [
+        RunEventType.BACKGROUND_TASK_STARTED,
+        RunEventType.BACKGROUND_TASK_UPDATED,
+        RunEventType.BACKGROUND_TASK_COMPLETED,
+    ] == [event.event_type for event in hub.events]
 
 
 @pytest.mark.asyncio

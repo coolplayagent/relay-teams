@@ -36,7 +36,7 @@ from pydantic import JsonValue
 from relay_teams.logger import get_logger, log_event
 from relay_teams.monitors import MonitorEventEnvelope, MonitorService, MonitorSourceKind
 from relay_teams.sessions.runs.enums import RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
     BackgroundTaskStatus,
@@ -585,11 +585,11 @@ class BackgroundTaskManager:
             try:
                 runtime.record = self._repository.upsert(record)
                 persisted = True
-                self._publish_background_task_event(
+                await self._publish_background_task_event_async(
                     event_type=RunEventType.BACKGROUND_TASK_STARTED,
                     record=runtime.record,
                 )
-                self._emit_monitor_state_event(
+                await self._emit_monitor_state_event_async(
                     record=runtime.record,
                     event_name="background_task.started",
                 )
@@ -821,11 +821,11 @@ class BackgroundTaskManager:
                 }
             )
         )
-        self._publish_background_task_event(
+        await self._publish_background_task_event_async(
             event_type=RunEventType.BACKGROUND_TASK_STOPPED,
             record=updated,
         )
-        self._emit_monitor_state_event(
+        await self._emit_monitor_state_event_async(
             record=updated,
             event_name="background_task.stopped",
         )
@@ -1342,13 +1342,13 @@ class BackgroundTaskManager:
                 }
             ),
         )
-        self._emit_monitor_lines(
+        await self._emit_monitor_lines_async(
             runtime,
             stream_name=stream_name,
             chunk=chunk,
         )
         await self._mark_runtime_changed(runtime)
-        self._publish_background_task_event(
+        await self._publish_background_task_event_async(
             event_type=RunEventType.BACKGROUND_TASK_UPDATED,
             record=runtime.record,
             payload=self._build_background_task_update_payload(
@@ -1369,7 +1369,7 @@ class BackgroundTaskManager:
             if runtime.completed.is_set():
                 return
             runtime.recent_output.finalize()
-            self._emit_monitor_final_lines(runtime)
+            await self._emit_monitor_final_lines_async(runtime)
             exit_code = runtime.transport.returncode
             if exit_code is None and not timed_out and wait_for_exit:
                 exit_code = await runtime.transport.wait()
@@ -1401,7 +1401,7 @@ class BackgroundTaskManager:
             completion_error: Exception | None = None
             try:
                 await self._mark_runtime_changed(runtime)
-                self._publish_background_task_event(
+                await self._publish_background_task_event_async(
                     event_type=(
                         RunEventType.BACKGROUND_TASK_STOPPED
                         if status == BackgroundTaskStatus.STOPPED
@@ -1409,7 +1409,7 @@ class BackgroundTaskManager:
                     ),
                     record=runtime.record,
                 )
-                self._emit_monitor_state_event(
+                await self._emit_monitor_state_event_async(
                     record=runtime.record,
                     event_name=_background_task_state_event_name(status),
                 )
@@ -1531,14 +1531,15 @@ class BackgroundTaskManager:
                 continue
             self._repository.delete(record.background_task_id)
 
-    def _publish_background_task_event(
+    async def _publish_background_task_event_async(
         self,
         *,
         event_type: RunEventType,
         record: BackgroundTaskRecord,
         payload: dict[str, JsonValue] | None = None,
     ) -> None:
-        self._run_event_hub.publish(
+        await publish_run_event_async(
+            self._run_event_hub,
             RunEvent(
                 session_id=record.session_id,
                 run_id=record.run_id,
@@ -1551,7 +1552,7 @@ class BackgroundTaskManager:
                     (record.model_dump(mode="json") if payload is None else payload),
                     ensure_ascii=False,
                 ),
-            )
+            ),
         )
         with contextlib.suppress(Exception):
             log_event(
@@ -1578,7 +1579,7 @@ class BackgroundTaskManager:
         payload["delta"] = chunk
         return payload
 
-    def _emit_monitor_lines(
+    async def _emit_monitor_lines_async(
         self,
         runtime: _BackgroundTaskRuntime,
         *,
@@ -1593,7 +1594,7 @@ class BackgroundTaskManager:
         )
         for line in buffer.feed(chunk):
             runtime.monitor_line_sequence += 1
-            self._emit_monitor_event(
+            await self._emit_monitor_event_async(
                 record=runtime.record,
                 event_name="background_task.line",
                 body_text=line,
@@ -1607,13 +1608,15 @@ class BackgroundTaskManager:
                 ),
             )
 
-    def _emit_monitor_final_lines(self, runtime: _BackgroundTaskRuntime) -> None:
+    async def _emit_monitor_final_lines_async(
+        self, runtime: _BackgroundTaskRuntime
+    ) -> None:
         if self._monitor_service is None:
             return
         for stream_name, buffer in runtime.monitor_line_buffers.items():
             for line in buffer.finalize():
                 runtime.monitor_line_sequence += 1
-                self._emit_monitor_event(
+                await self._emit_monitor_event_async(
                     record=runtime.record,
                     event_name="background_task.line",
                     body_text=line,
@@ -1627,13 +1630,13 @@ class BackgroundTaskManager:
                     ),
                 )
 
-    def _emit_monitor_state_event(
+    async def _emit_monitor_state_event_async(
         self,
         *,
         record: BackgroundTaskRecord,
         event_name: str,
     ) -> None:
-        self._emit_monitor_event(
+        await self._emit_monitor_event_async(
             record=record,
             event_name=event_name,
             body_text=record.output_excerpt or record.command,
@@ -1647,7 +1650,7 @@ class BackgroundTaskManager:
             ),
         )
 
-    def _emit_monitor_event(
+    async def _emit_monitor_event_async(
         self,
         *,
         record: BackgroundTaskRecord,
@@ -1678,7 +1681,7 @@ class BackgroundTaskManager:
             "body_text": body_text,
             "attributes": normalized_attributes,
         }
-        self._monitor_service.emit(
+        await self._monitor_service.emit_async(
             MonitorEventEnvelope(
                 source_kind=MonitorSourceKind.BACKGROUND_TASK,
                 source_key=record.background_task_id,
