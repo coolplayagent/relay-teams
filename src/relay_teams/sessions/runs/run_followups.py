@@ -374,6 +374,12 @@ class RunFollowupRouter:
             return False
         return any(True for _ in agent_repo.list_running(run_id))
 
+    async def has_running_agents_for_run_async(self, run_id: str) -> bool:
+        agent_repo = self._get_agent_repo()
+        if agent_repo is None:
+            return False
+        return any(True for _ in await agent_repo.list_running_async(run_id))
+
     def has_pending_resolvable_question_for_session(self, session_id: str) -> bool:
         user_question_repo = self._get_user_question_repo()
         if user_question_repo is None:

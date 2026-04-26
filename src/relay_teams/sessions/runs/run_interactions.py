@@ -197,6 +197,7 @@ class RunInteractionService:
             [str], Awaitable[bool]
         ],
         has_running_agents_for_run: Callable[[str], bool],
+        has_running_agents_for_run_async: Callable[[str], Awaitable[bool]],
         resume_run: Callable[[str], str],
         resume_run_async: Callable[[str], Awaitable[str]],
         ensure_run_started: Callable[[str], None],
@@ -220,6 +221,7 @@ class RunInteractionService:
             has_pending_resolvable_question_for_session_async
         )
         self._has_running_agents_for_run = has_running_agents_for_run
+        self._has_running_agents_for_run_async = has_running_agents_for_run_async
         self._resume_run = resume_run
         self._resume_run_async = resume_run_async
         self._ensure_run_started = ensure_run_started
@@ -810,7 +812,7 @@ class RunInteractionService:
             and not await self._has_pending_resolvable_question_for_session_async(
                 resolved_record.session_id
             )
-            and not self._has_running_agents_for_run(run_id)
+            and not await self._has_running_agents_for_run_async(run_id)
         ):
             try:
                 _ = await self._resume_run_async(run_id)

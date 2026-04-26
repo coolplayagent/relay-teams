@@ -3398,12 +3398,31 @@ async def test_answer_user_question_async_uses_async_resume_path(
     def _sync_runtime_unavailable(run_id: str) -> RunRuntimeRecord | None:
         raise AssertionError(f"sync runtime lookup must not run for {run_id}")
 
+    def _sync_running_agent_check_unavailable(run_id: str) -> bool:
+        raise AssertionError(f"sync running-agent check must not run for {run_id}")
+
+    running_agent_checks: list[str] = []
+
+    async def _capture_running_agent_check(run_id: str) -> bool:
+        running_agent_checks.append(run_id)
+        return False
+
     async def _capture_ensure(run_id: str) -> None:
         ensured.append(run_id)
 
     monkeypatch.setattr(manager, "resume_run", _sync_resume_unavailable)
     monkeypatch.setattr(manager, "_runtime_for_run", _sync_runtime_unavailable)
     monkeypatch.setattr(manager, "ensure_run_started_async", _capture_ensure)
+    monkeypatch.setattr(
+        manager._interaction_service,
+        "_has_running_agents_for_run",
+        _sync_running_agent_check_unavailable,
+    )
+    monkeypatch.setattr(
+        manager._interaction_service,
+        "_has_running_agents_for_run_async",
+        _capture_running_agent_check,
+    )
 
     result = await manager.answer_user_question_async(
         run_id="run-existing",
@@ -3415,6 +3434,7 @@ async def test_answer_user_question_async_uses_async_resume_path(
 
     assert result["status"] == "answered"
     assert "run-existing" in manager._resume_requested_runs
+    assert running_agent_checks == ["run-existing"]
     assert ensured == ["run-existing"]
 
 

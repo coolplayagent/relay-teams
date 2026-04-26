@@ -271,6 +271,7 @@ class SessionRunService:
                 self._has_pending_resolvable_question_for_session_async
             ),
             has_running_agents_for_run=self._has_running_agents_for_run,
+            has_running_agents_for_run_async=self._has_running_agents_for_run_async,
             resume_run=lambda run_id: self.resume_run(run_id),
             resume_run_async=lambda run_id: self.resume_run_async(run_id),
             ensure_run_started=lambda run_id: self.ensure_run_started(run_id),
@@ -2169,6 +2170,9 @@ class SessionRunService:
 
     def _has_running_agents_for_run(self, run_id: str) -> bool:
         return self._followup_router.has_running_agents_for_run(run_id)
+
+    async def _has_running_agents_for_run_async(self, run_id: str) -> bool:
+        return await self._followup_router.has_running_agents_for_run_async(run_id)
 
     def _has_pending_resolvable_question_for_session(self, session_id: str) -> bool:
         return self._followup_router.has_pending_resolvable_question_for_session(
