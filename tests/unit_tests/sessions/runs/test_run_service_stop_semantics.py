@@ -308,6 +308,32 @@ def test_worker_finalization_only_stops_foreground_background_tasks() -> None:
     assert background_task_manager.calls == [("run-1", "run_finalized", "foreground")]
 
 
+def test_stop_active_runs_for_shutdown_requests_running_run_stop() -> None:
+    control = RunControlManager()
+    manager = _make_run_service(control)
+
+    async def never_complete() -> None:
+        await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        task = asyncio.create_task(never_complete())
+        control.register_run_task(
+            run_id="run-1",
+            session_id="session-1",
+            task=task,
+        )
+        manager._running_run_ids.add("run-1")
+
+        stopped = await manager.stop_active_runs_for_shutdown_async()
+
+        assert stopped == 1
+        assert control.is_run_stop_requested("run-1") is True
+        await asyncio.gather(task, return_exceptions=True)
+        assert task.cancelled() is True
+
+    asyncio.run(scenario())
+
+
 def test_completed_notification_uses_final_run_output() -> None:
     control = RunControlManager()
     hub = RunEventHub()

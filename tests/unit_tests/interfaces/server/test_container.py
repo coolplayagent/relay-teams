@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -103,6 +104,57 @@ def test_container_injects_fallback_middleware_into_reflection_service(
 
     assert reflection_service is not None
     assert isinstance(reflection_service._fallback_middleware, LlmFallbackMiddleware)
+
+
+def test_container_stop_requests_active_runs_before_background_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.interfaces.server import container as container_module
+
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+    calls: list[str] = []
+
+    async def fake_stop_active_runs_for_shutdown_async() -> int:
+        calls.append("runs")
+        return 1
+
+    async def fake_external_close() -> None:
+        calls.append("external")
+
+    async def fake_background_close() -> None:
+        calls.append("background")
+
+    async def fake_close_repositories() -> None:
+        calls.append("repositories")
+
+    async def fake_clear_llm_cache() -> None:
+        calls.append("llm_cache")
+
+    monkeypatch.setattr(
+        container.run_service,
+        "stop_active_runs_for_shutdown_async",
+        fake_stop_active_runs_for_shutdown_async,
+    )
+    monkeypatch.setattr(
+        container.external_acp_session_manager, "close", fake_external_close
+    )
+    monkeypatch.setattr(
+        container.background_task_manager, "close", fake_background_close
+    )
+    monkeypatch.setattr(container, "_close_async_repositories", fake_close_repositories)
+    monkeypatch.setattr(
+        container_module,
+        "clear_llm_http_client_cache_async",
+        fake_clear_llm_cache,
+    )
+
+    asyncio.run(container.stop())
+
+    assert calls == ["runs", "external", "background", "repositories", "llm_cache"]
 
 
 def test_roles_reload_updates_long_lived_role_registry_references(

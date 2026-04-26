@@ -1633,6 +1633,27 @@ class SessionRunService:
             return
         await self._stop_run_local_async(run_id)
 
+    async def stop_active_runs_for_shutdown_async(self) -> int:
+        run_ids = tuple(dict.fromkeys((*self._running_run_ids, *self._pending_runs)))
+        stopped_count = 0
+        for run_id in run_ids:
+            try:
+                await self._stop_run_local_async(run_id)
+            except KeyError:
+                continue
+            except Exception as exc:
+                with bind_trace_context(trace_id=run_id, run_id=run_id):
+                    log_event(
+                        logger,
+                        logging.ERROR,
+                        event="run.shutdown_stop_failed",
+                        message="Failed to request run stop during server shutdown",
+                        exc_info=exc,
+                    )
+                continue
+            stopped_count += 1
+        return stopped_count
+
     def _stop_run_local(self, run_id: str) -> None:
         self._scheduler.stop_run_local(run_id)
 

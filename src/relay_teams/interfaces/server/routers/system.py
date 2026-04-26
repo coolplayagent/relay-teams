@@ -7,7 +7,10 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
-from relay_teams.interfaces.server.async_call import call_maybe_async
+from relay_teams.interfaces.server.async_call import (
+    call_maybe_async,
+    call_maybe_async_in_isolated_thread,
+)
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.net.clawhub_connectivity import (
@@ -209,8 +212,8 @@ def _raise_system_http_error(
 async def health_check(request: Request) -> ServerHealthPayload:
     container = getattr(request.app.state, "container", None)
     if container is None:
-        return await call_maybe_async(build_server_health_payload)
-    return await call_maybe_async(
+        return await call_maybe_async_in_isolated_thread(build_server_health_payload)
+    return await call_maybe_async_in_isolated_thread(
         build_server_health_payload,
         config_dir=container.config_dir,
         role_registry=container.role_registry,

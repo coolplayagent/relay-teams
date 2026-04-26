@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
+from relay_teams.logger import get_logger, log_event
 from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.roles import SystemRolesUnavailableError
 from relay_teams.sessions.session_service import SessionService
@@ -19,6 +23,9 @@ from relay_teams.sessions.session_models import (
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
+logger = get_logger(__name__)
+
+SESSION_RECOVERY_TIMEOUT_SECONDS = 8.0
 
 
 class CreateSessionRequest(BaseModel):
@@ -187,9 +194,27 @@ async def get_session_recovery(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await call_maybe_async(service.get_recovery_snapshot, session_id)
+        return await asyncio.wait_for(
+            call_maybe_async(service.get_recovery_snapshot, session_id),
+            timeout=SESSION_RECOVERY_TIMEOUT_SECONDS,
+        )
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
+    except TimeoutError as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            event="session.recovery.snapshot_timeout",
+            message="Session recovery snapshot timed out",
+            payload={
+                "session_id": session_id,
+                "timeout_seconds": SESSION_RECOVERY_TIMEOUT_SECONDS,
+            },
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Session recovery snapshot timed out",
+        ) from exc
 
 
 @router.get("/{session_id}/rounds/{run_id}")
