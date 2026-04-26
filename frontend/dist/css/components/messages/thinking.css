@@ -1,0 +1,64 @@
+.thinking-block {
+    margin: 0 0 0.45rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--bg-surface-muted) 72%, transparent);
+    overflow: hidden;
+}
+
+.thinking-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.34rem 0.65rem;
+    cursor: pointer;
+    color: color-mix(in srgb, var(--text-secondary) 85%, var(--primary) 15%);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    list-style: none;
+}
+
+.thinking-summary::-webkit-details-marker {
+    display: none;
+}
+
+.thinking-summary::before {
+    content: '>';
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    transform: rotate(0deg);
+    transition: transform 0.16s ease;
+}
+
+.thinking-block[open] .thinking-summary::before {
+    transform: rotate(90deg);
+}
+
+.thinking-label {
+    flex: 1 1 auto;
+}
+
+.thinking-live {
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.2rem;
+    padding: 0.1rem 0.38rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 14%, transparent);
+    color: color-mix(in srgb, var(--primary) 86%, var(--text-secondary) 14%);
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+}
+
+.thinking-body {
+    padding: 0 0.65rem 0.45rem;
+}
+
+.thinking-text {
+    color: color-mix(in srgb, var(--text-msg-content) 88%, var(--text-secondary) 12%);
+}

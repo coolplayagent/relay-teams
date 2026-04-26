@@ -87,7 +87,7 @@ function handleBackgroundTaskPanelToggle(runId) {
 
 export async function hydrateSessionView(
     sessionId = state.currentSessionId,
-    { includeRounds = true, quiet = true } = {},
+    { includeRounds = true, quiet = true, roundsScrollPolicy = '' } = {},
 ) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) {
@@ -107,6 +107,7 @@ export async function hydrateSessionView(
     if (includeRounds && !shouldSkipRoundsReload) {
         await loadSessionRounds(safeSessionId, {
             render: !preserveActiveSubagentView,
+            scrollPolicy: roundsScrollPolicy || undefined,
         });
         if (state.currentSessionId !== safeSessionId) return null;
     }

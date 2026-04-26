@@ -1,4 +1,4 @@
-# Agent Teams API Design
+﻿# Agent Teams API Design
 
 ## Overview
 
@@ -916,6 +916,10 @@ If a session still has related data and `cascade` is omitted or `false`, the bac
 ### `GET /sessions/{session_id}/rounds`
 
 Returns paged round projections.
+Query parameters:
+- optional `limit`: number of round projections to return for the normal paged view
+- optional `cursor_run_id`: cursor for loading older normal round projections
+- optional `timeline=true`: returns the full lightweight round index for timeline navigation; this mode ignores `limit` and `cursor_run_id`, sets `has_more = false`, and omits heavy message/task mapping fields such as `coordinator_messages`, `tasks`, `instance_role_map`, `role_instance_map`, `task_instance_map`, and `task_status_map`
 
 Response shape:
 

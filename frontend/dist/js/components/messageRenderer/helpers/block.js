@@ -19,6 +19,11 @@ import {
 } from './prompt.js';
 
 const STREAMING_CURSOR_CLASS = 'streaming-cursor';
+const LARGE_STREAM_TEXT_THRESHOLD = 12000;
+const RICH_TEXT_AUTORENDER_LIMIT = 80000;
+const PLAIN_TEXT_CHUNK_SIZE = 16384;
+const BOTTOM_FOLLOW_THRESHOLD_PX = 96;
+const thinkingOpenState = new Map();
 
 export function renderMessageBlock(container, role, label, parts = [], options = {}) {
     const safeLabel = label || 'Agent';
@@ -86,7 +91,13 @@ export function renderParts(contentEl, parts, pendingToolBlocks, options = {}) {
             appendUserPromptText(contentEl, part.content);
         } else if (kind === 'thinking') {
             flushText();
-            appendThinkingText(contentEl, part.content || '', { streaming: false });
+            appendThinkingText(contentEl, part.content || '', {
+                streaming: false,
+                runId: options.runId,
+                instanceId: options.instanceId,
+                streamKey: options.streamKey,
+                partIndex: part.part_index ?? part.part_id ?? '',
+            });
         } else if (kind === 'file') {
             flushText();
             const structuredPart = binaryPayloadToStructuredPart(part.content);
@@ -211,6 +222,13 @@ export function appendThinkingText(contentEl, text, options = {}) {
 }
 
 export function updateMessageText(textEl, text, options = {}) {
+    const source = String(text || '');
+    if (shouldRenderPlainText(textEl, source, options)) {
+        renderPlainTextContent(textEl, source, options);
+        syncStreamingCursor(textEl, options.streaming === true);
+        return textEl;
+    }
+    clearPlainTextRenderState(textEl);
     renderRichContent(textEl, String(text || ''), {
         enableWorkspaceImagePreview: options.enableWorkspaceImagePreview !== false,
     });
@@ -228,17 +246,150 @@ export function updateThinkingText(textEl, text, options = {}) {
     updateMessageText(textEl, text, {
         ...options,
         enableWorkspaceImagePreview: false,
+        forcePlainText: true,
     });
     const thinkingBlock = textEl?.closest?.('.thinking-block');
     if (thinkingBlock) {
+        bindThinkingOpenState(thinkingBlock, options);
         const liveEl = thinkingBlock.querySelector('.thinking-live');
         if (liveEl) {
             liveEl.style.display = options.streaming === true ? 'inline-flex' : 'none';
         }
         thinkingBlock.dataset.streaming = options.streaming === true ? 'true' : 'false';
-        thinkingBlock.open = options.streaming === true;
+        syncThinkingOpenFromState(thinkingBlock, options.streaming === true);
     }
     return textEl;
+}
+
+function shouldRenderPlainText(textEl, source, options = {}) {
+    if (!textEl) {
+        return false;
+    }
+    if (options.appendDelta === true || options.forcePlainText === true) {
+        return true;
+    }
+    if (textEl.__plainTextRenderState) {
+        return true;
+    }
+    if (options.streaming === true && source.length >= LARGE_STREAM_TEXT_THRESHOLD) {
+        return true;
+    }
+    return options.streaming !== true && source.length > RICH_TEXT_AUTORENDER_LIMIT;
+}
+
+function renderPlainTextContent(textEl, source, options = {}) {
+    const state = ensurePlainTextRenderState(textEl);
+    if (options.appendDelta === true) {
+        appendPlainText(textEl, source, state);
+        return;
+    }
+    if (
+        state.renderedLength > 0
+        && source.length >= state.renderedLength
+        && options.streaming === true
+    ) {
+        appendPlainText(textEl, source.slice(state.renderedLength), state);
+        return;
+    }
+    if (
+        state.renderedLength > 0
+        && source.length === state.renderedLength
+        && options.streaming !== true
+    ) {
+        return;
+    }
+    resetPlainText(textEl, source, state);
+}
+
+function ensurePlainTextRenderState(textEl) {
+    if (textEl.__plainTextRenderState) {
+        textEl.classList?.add?.('plain-stream-text');
+        if (textEl.dataset) {
+            textEl.dataset.renderMode = 'plain-stream';
+        }
+        return textEl.__plainTextRenderState;
+    }
+    const state = {
+        renderedLength: 0,
+        tailNode: null,
+    };
+    textEl.__plainTextRenderState = state;
+    textEl.classList?.add?.('plain-stream-text');
+    if (textEl.dataset) {
+        textEl.dataset.renderMode = 'plain-stream';
+    }
+    if (typeof textEl.replaceChildren === 'function') {
+        textEl.replaceChildren();
+    } else {
+        textEl.textContent = '';
+    }
+    return state;
+}
+
+function clearPlainTextRenderState(textEl) {
+    if (!textEl?.__plainTextRenderState) {
+        return;
+    }
+    delete textEl.__plainTextRenderState;
+    textEl.classList?.remove?.('plain-stream-text');
+    if (textEl.dataset && textEl.dataset.renderMode === 'plain-stream') {
+        delete textEl.dataset.renderMode;
+    }
+}
+
+function resetPlainText(textEl, source, state) {
+    if (typeof textEl.replaceChildren === 'function') {
+        textEl.replaceChildren();
+    } else {
+        textEl.textContent = '';
+    }
+    state.renderedLength = 0;
+    state.tailNode = null;
+    appendPlainText(textEl, source, state);
+}
+
+function appendPlainText(textEl, delta, state) {
+    const text = String(delta || '');
+    if (!text) {
+        return;
+    }
+    let offset = 0;
+    while (offset < text.length) {
+        if (!state.tailNode || String(state.tailNode.textContent || '').length >= PLAIN_TEXT_CHUNK_SIZE) {
+            state.tailNode = createPlainTextNode('');
+            textEl.appendChild(state.tailNode);
+        }
+        const currentLength = String(state.tailNode.textContent || '').length;
+        const available = Math.max(1, PLAIN_TEXT_CHUNK_SIZE - currentLength);
+        const next = text.slice(offset, offset + available);
+        state.tailNode.textContent = String(state.tailNode.textContent || '') + next;
+        state.renderedLength += next.length;
+        offset += next.length;
+    }
+}
+
+function createPlainTextNode(text) {
+    if (typeof document !== 'undefined' && typeof document.createTextNode === 'function') {
+        return document.createTextNode(text);
+    }
+    return {
+        nodeType: 3,
+        textContent: String(text || ''),
+    };
+}
+
+export function clearThinkingOpenState() {
+    thinkingOpenState.clear();
+}
+
+export function clearThinkingOpenStateForRun(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) return;
+    Array.from(thinkingOpenState.keys()).forEach(key => {
+        if (key.startsWith(`${safeRunId}::`)) {
+            thinkingOpenState.delete(key);
+        }
+    });
 }
 
 export function syncStreamingCursor(textEl, active) {
@@ -270,6 +421,8 @@ function ensureThinkingBlock(contentEl, options = {}) {
             `.thinking-block[data-part-index="${safePartIndex}"]`
         );
         if (existing) {
+            bindThinkingOpenState(existing, options);
+            syncThinkingOpenFromState(existing, options.streaming === true);
             const textEl = existing.querySelector('.thinking-text');
             if (textEl) {
                 return { blockEl: existing, textEl };
@@ -280,10 +433,11 @@ function ensureThinkingBlock(contentEl, options = {}) {
     const detailsEl = document.createElement('details');
     detailsEl.className = 'thinking-block';
     detailsEl.dataset.streaming = options.streaming === true ? 'true' : 'false';
-    detailsEl.open = options.streaming === true;
     if (safePartIndex) {
         detailsEl.dataset.partIndex = safePartIndex;
     }
+    bindThinkingOpenState(detailsEl, options);
+    syncThinkingOpenFromState(detailsEl, options.streaming === true);
     detailsEl.innerHTML = `
         <summary class="thinking-summary">
             <span class="thinking-label">Thinking</span>
@@ -298,6 +452,137 @@ function ensureThinkingBlock(contentEl, options = {}) {
         blockEl: detailsEl,
         textEl: detailsEl.querySelector('.thinking-text'),
     };
+}
+
+function bindThinkingOpenState(block, options = {}) {
+    const key = resolveThinkingOpenStateKey(block, options);
+    if (key) {
+        block.dataset.thinkingOpenKey = key;
+    }
+    if (block.dataset.thinkingOpenBound === 'true') {
+        return;
+    }
+    block.dataset.thinkingOpenBound = 'true';
+    const captureToggleAnchor = () => {
+        const container = block.closest?.('.chat-scroll');
+        if (!container || !block.getBoundingClientRect) return;
+        block.__thinkingToggleAnchor = {
+            container,
+            top: block.getBoundingClientRect().top,
+        };
+    };
+    const summary = block.querySelector?.('.thinking-summary') || null;
+    summary?.addEventListener?.('pointerdown', captureToggleAnchor, { passive: true });
+    summary?.addEventListener?.('keydown', event => {
+        const key = String(event?.key || '');
+        if (key === 'Enter' || key === ' ') {
+            captureToggleAnchor();
+        }
+    });
+    block.addEventListener('toggle', () => {
+        if (block.dataset.thinkingOpenSync === 'true') return;
+        const stateKey = String(block.dataset.thinkingOpenKey || '').trim();
+        if (!stateKey) return;
+        block.dataset.thinkingUserToggled = 'true';
+        thinkingOpenState.set(stateKey, block.open === true);
+        restoreThinkingToggleAnchor(block);
+    });
+}
+
+function restoreThinkingToggleAnchor(block) {
+    const anchor = block?.__thinkingToggleAnchor || null;
+    delete block.__thinkingToggleAnchor;
+    if (!anchor?.container || typeof window === 'undefined') {
+        return;
+    }
+    const restore = () => {
+        if (!anchor.container?.isConnected || !block?.isConnected || !block.getBoundingClientRect) {
+            return;
+        }
+        const nextTop = block.getBoundingClientRect().top;
+        const delta = nextTop - Number(anchor.top || 0);
+        if (Math.abs(delta) > 0.5) {
+            anchor.container.scrollTop += delta;
+        }
+    };
+    if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => {
+            restore();
+            window.requestAnimationFrame(restore);
+        });
+        return;
+    }
+    restore();
+}
+
+function syncThinkingOpenFromState(block, defaultOpen = false) {
+    const stateKey = String(block?.dataset?.thinkingOpenKey || '').trim();
+    const nextOpen = stateKey && thinkingOpenState.has(stateKey)
+        ? thinkingOpenState.get(stateKey) === true
+        : defaultOpen === true;
+    if (block.open === nextOpen) return;
+    block.dataset.thinkingOpenSync = 'true';
+    block.open = nextOpen;
+    const clearSyncFlag = () => {
+        if (block.dataset.thinkingOpenSync === 'true') {
+            delete block.dataset.thinkingOpenSync;
+        }
+    };
+    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
+        window.setTimeout(clearSyncFlag, 0);
+        return;
+    }
+    clearSyncFlag();
+}
+
+function resolveThinkingOpenStateKey(block, options = {}) {
+    const runId = String(options.runId || block?.closest?.('.message')?.dataset?.runId || '').trim();
+    const streamKey = String(
+        options.streamKey
+        || block?.closest?.('.message')?.dataset?.streamKey
+        || options.instanceId
+        || '',
+    ).trim();
+    const partIndex = String(
+        options.partIndex
+        ?? options.partKey
+        ?? block?.dataset?.partIndex
+        ?? '',
+    ).trim();
+    if (!runId && !streamKey && !partIndex) return '';
+    return `${runId || 'run'}::${streamKey || 'stream'}::${partIndex || 'thinking'}`;
+}
+
+function captureBottomIntent(container) {
+    if (!container) {
+        return { shouldFollow: false };
+    }
+    return { shouldFollow: isNearScrollBottom(container) };
+}
+
+function scheduleFollowBottom(container, options = {}) {
+    if (!container || options.follow?.shouldFollow !== true) return;
+    const scroll = () => {
+        container.scrollTop = Math.max(
+            0,
+            Number(container.scrollHeight || 0) - Number(container.clientHeight || 0),
+        );
+    };
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => {
+            scroll();
+            window.requestAnimationFrame(scroll);
+        });
+        return;
+    }
+    scroll();
+}
+
+function isNearScrollBottom(container) {
+    const distance = Number(container?.scrollHeight || 0)
+        - Number(container?.scrollTop || 0)
+        - Number(container?.clientHeight || 0);
+    return distance <= BOTTOM_FOLLOW_THRESHOLD_PX;
 }
 
 function resolveStreamingCursorHost(root) {

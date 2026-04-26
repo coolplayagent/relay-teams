@@ -259,7 +259,7 @@ export async function renderInstanceHistoryInto(container, options = {}) {
                 streamOverlayEntry,
             };
         }
-        renderHistoricalMessageList(container, messages, {
+        const renderOptions = {
             pendingToolApprovals,
             runId,
             streamOverlayEntry:
@@ -268,7 +268,13 @@ export async function renderInstanceHistoryInto(container, options = {}) {
                     : streamOverlayEntry,
             separateOverlayMessage: overlayMode === 'separate',
             userRoleLabel,
-        });
+        };
+        if (runId) {
+            renderOptions.timelineView = runId.startsWith('subagent_run_')
+                ? 'normal-child-session'
+                : 'orchestration-panel';
+        }
+        renderHistoricalMessageList(container, messages, renderOptions);
         if (overlayMode === 'bind' && messages.length > 0 && streamOverlayEntry) {
             bindStreamOverlayToContainer(container, {
                 instanceId,

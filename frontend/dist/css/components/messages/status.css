@@ -1,0 +1,149 @@
+/* Chat: status indicators, agent tabs, messages, markdown, think blocks */
+
+.icon-sm {
+    width: 14px;
+    height: 14px;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.status-indicator > span:first-child {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background-color: var(--text-secondary);
+    opacity: 0.65;
+}
+
+.status-indicator > span:last-child {
+    flex: 1 1 auto;
+    display: block;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-indicator.online > span:first-child {
+    background-color: var(--success);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--success);
+}
+
+.status-indicator.offline > span:first-child {
+    background-color: var(--danger);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 72%, transparent);
+    opacity: 1;
+}
+
+.status-indicator.checking > span:first-child {
+    background-color: var(--warning);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--warning) 70%, transparent);
+    opacity: 1;
+}
+
+@keyframes roundSectionEmphasis {
+    0% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 22%, transparent);
+    }
+
+    35% {
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 10%, transparent);
+    }
+
+    100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+}
+
+.session-info {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.agent-tabs {
+    display: flex;
+    overflow-x: auto;
+    background-color: var(--bg-surface);
+    border-bottom: 1px solid var(--border-color);
+    padding: 0 1.5rem;
+    flex-shrink: 0;
+}
+
+.agent-tabs::-webkit-scrollbar {
+    height: 4px;
+}
+
+.agent-tabs::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+.agent-tab {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    padding: 1rem 1.25rem;
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+    transition: color 0.2s, border-color 0.2s;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.agent-tab:hover {
+    color: var(--text-primary);
+}
+
+.agent-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+/* Hide dynamically added agent tabs. Session-level role selection lives in the right rail. */
+.agent-tab:not([data-target="main"]) {
+    display: none !important;
+}
+
+.system-intro {
+    text-align: center;
+    margin-top: 10vh;
+    animation: fadeIn 0.8s ease backwards;
+}
+
+.intro-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.system-intro h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(to right, var(--text-primary), var(--primary-hover));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.system-intro p {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+/* Chat Messages */

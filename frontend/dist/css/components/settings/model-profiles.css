@@ -206,6 +206,15 @@
     margin-top: 0.75rem;
 }
 
+#profile-model-field-home {
+    width: 100%;
+    min-width: 0;
+}
+
+#profile-model-field-home .model-profile-collapsible-field {
+    margin-top: 0.75rem;
+}
+
 .model-catalog-search-row {
     position: relative;
     grid-template-columns: minmax(190px, 0.75fr) minmax(260px, 1.25fr);

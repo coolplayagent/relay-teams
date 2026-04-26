@@ -16,7 +16,6 @@ import {
     indexPendingToolBlock,
     renderMessageBlock,
     resolvePendingToolBlock,
-    scrollBottom,
     setToolStatus,
     setToolValidationFailureState,
     syncStreamingCursor,
@@ -29,6 +28,14 @@ const streamState = new Map();
 const overlayState = new Map();
 const overlayCleanupTimers = new Map();
 const PRIMARY_KEY = 'primary';
+const pendingTextUpdates = new Map();
+const pendingScrollContainers = new Map();
+const streamFollowState = new WeakMap();
+const LARGE_STREAM_TEXT_THRESHOLD = 12000;
+const BOTTOM_FOLLOW_THRESHOLD_PX = 96;
+const STREAM_USER_SCROLL_LOCK_MS = 1800;
+let pendingTextFrame = 0;
+let pendingScrollFrame = 0;
 
 export function getOrCreateStreamBlock(
     container,
@@ -63,6 +70,7 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
     const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const st = streamState.get(streamKey);
     if (!st) return;
+    const follow = captureStreamFollow(st.container);
 
     if (!st.activeTextEl) {
         st.activeTextEl = document.createElement('div');
@@ -74,8 +82,28 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
     st.raw += text;
     st.activeRaw += text;
     st.activeTextIsIdle = false;
-    updateMessageText(st.activeTextEl, st.activeRaw, { streaming: true });
+    if (shouldAppendPlainTextDelta(st.activeTextEl)) {
+        pendingTextUpdates.delete(st.activeTextEl);
+        updateMessageText(st.activeTextEl, String(text || ''), {
+            streaming: true,
+            appendDelta: true,
+        });
+    } else if (st.activeRaw.length >= LARGE_STREAM_TEXT_THRESHOLD) {
+        pendingTextUpdates.delete(st.activeTextEl);
+        updateMessageText(st.activeTextEl, st.activeRaw, { streaming: true });
+    } else {
+        scheduleRichTextUpdate(st.activeTextEl, st.activeRaw, { streaming: true }, updateMessageText);
+    }
     markIdleCursorPlaceholder(st.activeTextEl, false);
+    applyTimelineAction({
+        type: 'text_delta',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        text,
+    });
     updateOverlayText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, label || st.label, text);
     setOverlayTextStreaming(
         st.runId || runId,
@@ -91,7 +119,7 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
         label || st.label,
         false,
     );
-    scrollBottom(st.container);
+    scheduleStreamScrollBottom(st.container, follow);
 }
 
 export function appendStreamOutputParts(
@@ -116,6 +144,7 @@ export function appendStreamOutputParts(
         streamState.set(streamKey, st);
     }
     if (!st || !Array.isArray(outputParts)) return;
+    const follow = captureStreamFollow(st.container || container);
     appendOverlayOutputParts(
         runId || st.runId,
         instanceId || st.instanceId,
@@ -124,6 +153,15 @@ export function appendStreamOutputParts(
         outputParts,
         { includeText: false },
     );
+    applyTimelineAction({
+        type: 'output_parts',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        parts: outputParts.filter(part => part?.kind !== 'text'),
+    });
     outputParts.forEach(part => {
         if (!part || typeof part !== 'object') return;
         if (part.kind === 'text') {
@@ -139,7 +177,7 @@ export function appendStreamOutputParts(
         endActiveText(st);
         appendStructuredContentPart(st.contentEl, part);
     });
-    scrollBottom(st.container || container);
+    scheduleStreamScrollBottom(st.container || container, follow);
 }
 
 export function finalizeStream(instanceId, roleId = '', options = {}) {
@@ -235,6 +273,7 @@ export function clearRunStreamState(runId) {
     if (!safeRunId) return;
     clearRunOverlayCleanupTimer(safeRunId);
     overlayState.delete(safeRunId);
+    clearTimelineRun(safeRunId);
     Array.from(streamState.entries()).forEach(([key, entry]) => {
         if (entry.runId === safeRunId) {
             if (entry.activeTextEl) {
@@ -248,6 +287,7 @@ export function clearRunStreamState(runId) {
 export function clearRenderedStreamState() {
     streamState.forEach(entry => {
         if (entry?.activeTextEl) {
+            flushRichTextUpdate(entry.activeTextEl);
             syncStreamingCursor(entry.activeTextEl, false);
         }
     });
@@ -264,6 +304,7 @@ export function clearAllStreamState(options = {}) {
     });
     overlayCleanupTimers.clear();
     overlayState.clear();
+    clearTimelineState();
 }
 
 export function getRunStreamOverlaySnapshot(runId) {
@@ -325,10 +366,12 @@ export function appendToolCallBlock(
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
 
+    const follow = captureStreamFollow(st.container || container);
     endActiveText(st);
 
     const toolBlock = buildPendingToolBlock(toolName, args, toolCallId);
     st.contentEl.appendChild(toolBlock);
+    bindHeightObserver(st.container || container, toolBlock);
     indexPendingToolBlock(st.pendingToolBlocks, toolBlock, toolName, toolCallId);
     updateOverlayToolCall(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label, {
         tool_call_id: toolCallId || '',
@@ -336,7 +379,18 @@ export function appendToolCallBlock(
         args,
         status: 'pending',
     });
-    scrollBottom(st.container || container);
+    applyTimelineAction({
+        type: 'tool_call',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        toolCallId,
+        toolName,
+        args,
+    });
+    scheduleStreamScrollBottom(st.container || container, follow);
     return toolBlock;
 }
 
@@ -367,6 +421,19 @@ export function updateToolResult(
         result,
         isError,
     );
+    applyTimelineAction({
+        type: 'tool_result',
+        scope: streamScope(st, {
+            runId: resolvedRunId,
+            instanceId: resolvedInstanceId,
+            roleId: resolvedRoleId,
+        }),
+        toolName,
+        toolCallId,
+        result,
+        isError,
+    });
+    const follow = captureStreamFollow((st && st.container) || container);
     let toolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId);
     let boundState = st;
     if (!toolBlock) {
@@ -389,7 +456,7 @@ export function updateToolResult(
     if (boundState && !hasActiveThinking(boundState)) {
         ensureIdleStreamingTail(boundState);
     }
-    scrollBottom((boundState && boundState.container) || container);
+    scheduleStreamScrollBottom((boundState && boundState.container) || container, follow);
 }
 
 export function markToolInputValidationFailed(instanceId, payload, options = {}) {
@@ -409,9 +476,21 @@ export function markToolInputValidationFailed(instanceId, payload, options = {})
         return false;
     }
 
+    const follow = captureStreamFollow((st && st.container) || container);
     setToolValidationFailureState(toolBlock, payload);
     updateOverlayToolValidation(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, payload);
-    scrollBottom((st && st.container) || container);
+    applyTimelineAction({
+        type: 'tool_input_validation_failed',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        toolName: payload?.tool_name,
+        toolCallId: payload?.tool_call_id || null,
+        validation: payload,
+    });
+    scheduleStreamScrollBottom((st && st.container) || container, follow);
     return true;
 }
 
@@ -440,10 +519,20 @@ export function startThinkingBlock(instanceId, partIndex, options = {}) {
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
     if (!st) return false;
+    const follow = captureStreamFollow(st.container || container);
     endActiveText(st);
     ensureThinkingEntry(st, partIndex, { forceNew: true });
     startOverlayThinking(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label || label, partIndex);
-    scrollBottom(st.container || container);
+    applyTimelineAction({
+        type: 'thinking_started',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        partIndex,
+    });
+    scheduleStreamScrollBottom(st.container || container, follow);
     return true;
 }
 
@@ -458,11 +547,38 @@ export function appendThinkingChunk(instanceId, partIndex, text, options = {}) {
         updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text, { append: true });
         return false;
     }
+    const follow = captureStreamFollow((st && st.container) || container);
     const entry = resolveThinkingEntry(st, partIndex);
-    entry.raw += String(text || '');
-    updateThinkingText(entry.textEl, entry.raw, { streaming: true });
-    updateOverlayThinkingText(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label || label, partIndex, entry.raw);
-    scrollBottom((st && st.container) || container);
+    const delta = String(text || '');
+    entry.raw += delta;
+    updateThinkingText(entry.textEl, delta, {
+        streaming: true,
+        runId: st.runId || runId,
+        instanceId: st.instanceId || instanceId,
+        streamKey: st.streamKey,
+        partIndex: entry.key,
+        appendDelta: true,
+    });
+    applyTimelineAction({
+        type: 'thinking_delta',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        partIndex,
+        text,
+    });
+    updateOverlayThinkingText(
+        st.runId || runId,
+        st.instanceId || instanceId,
+        roleId || st.roleId,
+        st.label || label,
+        partIndex,
+        delta,
+        { append: true },
+    );
+    scheduleStreamScrollBottom((st && st.container) || container, follow);
     return true;
 }
 
@@ -474,17 +590,44 @@ export function finalizeThinking(instanceId, partIndex, options = {}) {
     const entry = resolveThinkingEntry(st, partIndex, { allowCreate: false });
     if (!entry) {
         finishOverlayThinking(runId, instanceId, roleId, partIndex);
+        applyTimelineAction({
+            type: 'thinking_finished',
+            scope: {
+                runId,
+                instanceId,
+                roleId,
+            },
+            partIndex,
+        });
         return false;
     }
-    updateThinkingText(entry.textEl, entry.raw, { streaming: false });
+    const follow = captureStreamFollow(st && st.container);
+    flushRichTextUpdate(entry.textEl);
+    updateThinkingText(entry.textEl, entry.raw, {
+        streaming: false,
+        runId: st.runId || runId,
+        instanceId: st.instanceId || instanceId,
+        streamKey: st.streamKey,
+        partIndex: entry.key,
+    });
     entry.finished = true;
     if (st?.thinkingActiveByPart) {
         st.thinkingActiveByPart.delete(String(partIndex));
     }
     finishOverlayThinking((st && st.runId) || runId, (st && st.instanceId) || instanceId, (st && st.roleId) || roleId, partIndex);
+    applyTimelineAction({
+        type: 'thinking_finished',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        partIndex,
+    });
     if (st && !hasActiveThinking(st)) {
         ensureIdleStreamingTail(st);
     }
+    scheduleStreamScrollBottom(st && st.container, follow);
     return true;
 }
 
@@ -508,6 +651,7 @@ export function attachToolApprovalControls(instanceId, toolName, payload, handle
         toolBlock.dataset.toolCallId = payload.tool_call_id;
     }
 
+    const follow = captureStreamFollow((st && st.container) || container);
     const approvalEl = ensureApprovalState(toolBlock);
 
     toolBlock.open = true;
@@ -516,7 +660,18 @@ export function attachToolApprovalControls(instanceId, toolName, payload, handle
     if (stateEl) stateEl.textContent = t('stream.approval_required');
 
     updateOverlayToolApproval(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, toolName, payload, 'requested');
-    scrollBottom((st && st.container) || container);
+    applyTimelineAction({
+        type: 'tool_approval_requested',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        toolName,
+        toolCallId: payload?.tool_call_id || null,
+        payload,
+    });
+    scheduleStreamScrollBottom((st && st.container) || container, follow);
     return true;
 }
 
@@ -534,9 +689,22 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
         payload,
         String(payload?.action || '').toLowerCase() || 'resolved',
     );
+    applyTimelineAction({
+        type: 'tool_approval_resolved',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        toolName: payload?.tool_name,
+        toolCallId: payload?.tool_call_id || null,
+        action: payload?.action || '',
+        payload,
+    });
     const toolCallId = payload?.tool_call_id;
     if (!toolCallId) return false;
 
+    const follow = captureStreamFollow((st && st.container) || container);
     const toolBlock = resolveToolBlockTarget(st, container, payload?.tool_name, toolCallId);
     if (!toolBlock) return false;
     toolBlock.dataset.toolCallId = toolCallId;
@@ -561,7 +729,7 @@ export function markToolApprovalResolved(instanceId, payload, options = {}) {
             outputEl.innerHTML = t('stream.approval_waiting');
         }
     }
-    scrollBottom((st && st.container) || container);
+    scheduleStreamScrollBottom((st && st.container) || container, follow);
     return true;
 }
 
@@ -573,6 +741,18 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     const label = String(options.label || '').trim();
     const streamKey = resolveStreamKey(instanceId, roleId, runId);
     const cleanupDelayMs = Number(options.cleanupDelayMs || 0);
+    applyRunEventToTimeline(evType, payload, {
+        event_id: payload?.event_id || options.eventId || '',
+        run_id: runId,
+        role_id: roleId,
+        instance_id: instanceId,
+    }, {
+        runId,
+        roleId,
+        instanceId,
+        streamKey,
+        view: resolveTimelineView(runId, instanceId),
+    });
 
     if (evType === 'text_delta') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
@@ -710,6 +890,7 @@ function finalizeStreamEntry(entry) {
         return;
     }
     if (entry.activeTextEl) {
+        flushRichTextUpdate(entry.activeTextEl);
         if (entry.activeTextIsIdle === true && isIdleCursorPlaceholder(entry.activeTextEl)) {
             syncStreamingCursor(entry.activeTextEl, false);
             entry.activeTextEl.remove?.();
@@ -723,13 +904,24 @@ function finalizeStreamEntry(entry) {
     }
     if (entry.thinkingParts instanceof Map) {
         entry.thinkingParts.forEach(thinkingEntry => {
-            updateThinkingText(thinkingEntry.textEl, thinkingEntry.raw, { streaming: false });
+            flushRichTextUpdate(thinkingEntry.textEl);
+            updateThinkingText(thinkingEntry.textEl, thinkingEntry.raw, {
+                streaming: false,
+                runId: entry.runId,
+                instanceId: entry.instanceId,
+                streamKey: entry.streamKey,
+                partIndex: thinkingEntry.key,
+            });
             thinkingEntry.finished = true;
         });
     }
     if (entry.thinkingActiveByPart) {
         entry.thinkingActiveByPart.clear();
     }
+    applyTimelineAction({
+        type: 'stream_finished',
+        scope: streamScope(entry),
+    });
 }
 
 function matchesFinalizeTarget(entry, target) {
@@ -794,6 +986,7 @@ function createStreamState({
         roleId: String(roleId || '').trim(),
         streamKey,
     });
+    bindHeightObserver(container, wrapper);
     return {
         container,
         wrapper,
@@ -846,6 +1039,7 @@ function findReusableStreamState({
     }
     const thinkingBinding = bindReusableThinkingState(contentEl, overlayEntry);
     const pendingToolBlocks = bindReusableToolBlocks(contentEl, overlayEntry);
+    bindHeightObserver(container, wrapper);
     return {
         container,
         wrapper,
@@ -1064,6 +1258,7 @@ function escapeSelectorValue(value) {
 function endActiveText(st) {
     if (!st) return;
     if (st.activeTextEl) {
+        flushRichTextUpdate(st.activeTextEl);
         if (st.activeTextIsIdle === true && isIdleCursorPlaceholder(st.activeTextEl)) {
             syncStreamingCursor(st.activeTextEl, false);
             st.activeTextEl.remove?.();
@@ -1182,6 +1377,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
             parts: [],
             thinkingActiveByPart: new Map(),
             thinkingSequence: 0,
+            toolSequence: 0,
             textStreaming: false,
             idleCursor: false,
         };
@@ -1194,6 +1390,7 @@ function ensureOverlayEntry(runId, instanceId, roleId, label) {
         if (typeof entry.thinkingSequence !== 'number') entry.thinkingSequence = 0;
         if (typeof entry.textStreaming !== 'boolean') entry.textStreaming = false;
         if (typeof entry.idleCursor !== 'boolean') entry.idleCursor = false;
+        if (typeof entry.toolSequence !== 'number') entry.toolSequence = 0;
     }
     return entry;
 }
@@ -1403,6 +1600,7 @@ function updateOverlayToolCall(runId, instanceId, roleId, label, toolPart) {
         toolPart.tool_name,
         toolPart.tool_call_id || null,
         toolPart.args || {},
+        { createForCall: true },
     );
     part.args = normalizeOverlayToolArgs(toolPart.args);
     part.status = String(toolPart.status || 'pending');
@@ -1439,12 +1637,19 @@ function updateOverlayToolApproval(runId, instanceId, roleId, toolName, payload,
     part.approvalStatus = approvalStatus;
 }
 
-function upsertOverlayToolPart(entry, toolName, toolCallId, args = {}) {
-    let part = findOverlayToolPart(entry, toolName, toolCallId);
+function upsertOverlayToolPart(entry, toolName, toolCallId, args = {}, options = {}) {
+    let part = findOverlayToolPart(entry, toolName, toolCallId, {
+        preferUnresolved: !toolCallId && options.createForCall !== true,
+    });
     if (!part) {
+        const safeToolCallId = String(toolCallId || '').trim();
+        const localKey = safeToolCallId
+            ? ''
+            : `${String(toolName || 'unknown_tool')}:${entry.toolSequence++}`;
         part = {
             kind: 'tool',
-            tool_call_id: String(toolCallId || ''),
+            tool_call_id: safeToolCallId,
+            local_tool_key: localKey,
             tool_name: String(toolName || 'unknown_tool'),
             args: normalizeOverlayToolArgs(args),
             status: 'pending',
@@ -1533,7 +1738,7 @@ function findOverlayThinkingPart(entry, partIndex, options = {}) {
     return fallback;
 }
 
-function findOverlayToolPart(entry, toolName, toolCallId) {
+function findOverlayToolPart(entry, toolName, toolCallId, options = {}) {
     const safeToolCallId = String(toolCallId || '').trim();
     if (safeToolCallId) {
         for (let index = entry.parts.length - 1; index >= 0; index -= 1) {
@@ -1546,6 +1751,22 @@ function findOverlayToolPart(entry, toolName, toolCallId) {
     }
     const safeToolName = String(toolName || '').trim();
     if (!safeToolName) return null;
+    if (options.preferUnresolved === true) {
+        const unresolved = entry.parts.filter(part => (
+            part.kind === 'tool'
+            && String(part.tool_name || '') === safeToolName
+            && !String(part.tool_call_id || '').trim()
+            && part.result === undefined
+            && part.validation === undefined
+            && !['completed', 'error', 'validation_failed'].includes(String(part.status || '').trim().toLowerCase())
+        ));
+        if (unresolved.length === 1) {
+            return unresolved[0];
+        }
+        if (unresolved.length > 1) {
+            return null;
+        }
+    }
     for (let index = entry.parts.length - 1; index >= 0; index -= 1) {
         const part = entry.parts[index];
         if (part.kind !== 'tool') continue;
@@ -1629,6 +1850,9 @@ function ensureThinkingEntry(st, partIndex, options = {}) {
     const textEl = appendThinkingText(st.contentEl, '', {
         partIndex: nextKey,
         streaming: true,
+        runId: st.runId,
+        instanceId: st.instanceId,
+        streamKey: st.streamKey,
     });
     const entry = {
         textEl,
@@ -1649,8 +1873,306 @@ function cloneOverlayEntry(entry) {
         instanceId: entry.instanceId,
         roleId: entry.roleId,
         label: entry.label,
-        parts: entry.parts.map(part => ({ ...part })),
+        parts: entry.parts.map(part => cloneOverlayPart(part)),
         textStreaming: entry.textStreaming === true,
         idleCursor: entry.idleCursor === true,
     };
+}
+
+function cloneOverlayPart(part) {
+    if (!part || typeof part !== 'object') return part;
+    const cloned = { ...part };
+    delete cloned.local_tool_key;
+    return cloned;
+}
+
+function applyTimelineAction() {
+    globalThis.__relayTeamsMessageTimelineApplyAction?.(...arguments);
+}
+
+function applyRunEventToTimeline() {
+    globalThis.__relayTeamsMessageTimelineApplyRunEvent?.(...arguments);
+}
+
+function clearTimelineRun(runId) {
+    globalThis.__relayTeamsMessageTimelineClearRun?.(runId);
+}
+
+function clearTimelineState(options = {}) {
+    globalThis.__relayTeamsMessageTimelineClearState?.(options);
+}
+
+function scheduleRichTextUpdate(targetEl, text, options, renderFn) {
+    if (!targetEl || typeof renderFn !== 'function') {
+        return;
+    }
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+        renderFn(targetEl, String(text || ''), { ...(options || {}) });
+        return;
+    }
+    pendingTextUpdates.set(targetEl, {
+        text: String(text || ''),
+        options: { ...(options || {}) },
+        renderFn,
+    });
+    if (pendingTextFrame) {
+        return;
+    }
+    pendingTextFrame = window.requestAnimationFrame(flushRichTextUpdates);
+}
+
+function flushRichTextUpdate(targetEl) {
+    const update = pendingTextUpdates.get(targetEl);
+    if (!update) {
+        return;
+    }
+    pendingTextUpdates.delete(targetEl);
+    update.renderFn(targetEl, update.text, update.options);
+}
+
+function flushRichTextUpdates() {
+    pendingTextFrame = 0;
+    const updates = Array.from(pendingTextUpdates.entries());
+    pendingTextUpdates.clear();
+    updates.forEach(([targetEl, update]) => {
+        update.renderFn(targetEl, update.text, update.options);
+    });
+}
+
+function shouldAppendPlainTextDelta(textEl) {
+    if (!textEl) {
+        return false;
+    }
+    if (textEl.__plainTextRenderState || textEl.dataset?.renderMode === 'plain-stream') {
+        return true;
+    }
+    return false;
+}
+
+function captureStreamFollow(container) {
+    if (!container) {
+        return { shouldFollow: false };
+    }
+    const state = ensureStreamFollowState(container);
+    const nearBottom = isStreamNearBottom(container);
+    if (nearBottom) {
+        state.sticky = true;
+        state.userScrollLockUntil = 0;
+        return {
+            shouldFollow: true,
+            wasNearBottom: true,
+        };
+    }
+    if (isStreamUserScrollLocked(state)) {
+        return {
+            shouldFollow: false,
+            wasNearBottom: false,
+        };
+    }
+    return {
+        shouldFollow: false,
+        wasNearBottom: false,
+    };
+}
+
+function scheduleStreamScrollBottom(container, follow = null) {
+    if (!container) {
+        return;
+    }
+    if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
+        applyStreamFollowBottom(container, follow);
+        return;
+    }
+    const previous = pendingScrollContainers.get(container);
+    pendingScrollContainers.set(container, {
+        container,
+        follow: mergeFollowIntent(previous?.follow, follow),
+    });
+    if (pendingScrollFrame) {
+        return;
+    }
+    pendingScrollFrame = window.requestAnimationFrame(flushStreamScrollBottom);
+}
+
+function flushStreamScrollBottom() {
+    pendingScrollFrame = 0;
+    const containers = Array.from(pendingScrollContainers.values());
+    pendingScrollContainers.clear();
+    containers.forEach(item => {
+        applyStreamFollowBottom(item.container, item.follow);
+    });
+}
+
+function bindHeightObserver(container, target = container) {
+    if (!container || !target || typeof ResizeObserver !== 'function') return;
+    const state = ensureStreamFollowState(container);
+    if (!state.resizeObserver) {
+        state.resizeObserver = new ResizeObserver(() => {
+            const nearBottom = isStreamNearBottom(container);
+            if (nearBottom) {
+                state.sticky = true;
+                state.userScrollLockUntil = 0;
+            }
+            if (isStreamUserScrollLocked(state)) {
+                return;
+            }
+            if (state.sticky === true || nearBottom) {
+                scheduleStreamScrollBottom(container, { shouldFollow: true });
+            }
+        });
+        state.observedTargets = new WeakSet();
+    }
+    if (!state.observedTargets.has(target)) {
+        state.resizeObserver.observe(target);
+        state.observedTargets.add(target);
+    }
+}
+
+function applyStreamFollowBottom(container, follow = null) {
+    if (!container) return;
+    const state = ensureStreamFollowState(container);
+    const nearBottom = isStreamNearBottom(container);
+    if (nearBottom) {
+        state.sticky = true;
+        state.userScrollLockUntil = 0;
+    }
+    if (isStreamUserScrollLocked(state)) {
+        return;
+    }
+    const shouldFollow = follow?.shouldFollow === true
+        || state.sticky === true
+        || nearBottom;
+    if (!shouldFollow) return;
+    state.sticky = true;
+    const scroll = () => scrollStreamToBottom(container);
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => {
+            scroll();
+            window.requestAnimationFrame(scroll);
+        });
+        return;
+    }
+    scroll();
+}
+
+function ensureStreamFollowState(container) {
+    let state = streamFollowState.get(container);
+    if (state) return state;
+    state = {
+        sticky: isStreamNearBottom(container),
+        programmaticUntil: 0,
+        userScrollLockUntil: 0,
+        resizeObserver: null,
+        observedTargets: null,
+    };
+    streamFollowState.set(container, state);
+    bindStreamUserScrollIntent(container, state);
+    return state;
+}
+
+function bindStreamUserScrollIntent(container, followState) {
+    if (container.dataset?.streamBottomFollowBound === 'true') return;
+    if (container.dataset) {
+        container.dataset.streamBottomFollowBound = 'true';
+    }
+    container.addEventListener?.('wheel', event => {
+        const deltaY = Number(event?.deltaY || 0);
+        if (Math.abs(deltaY) <= 1) {
+            return;
+        }
+        if (deltaY > 0 && isStreamNearBottom(container)) {
+            followState.sticky = true;
+            followState.userScrollLockUntil = 0;
+            return;
+        }
+        pauseStreamAutoFollow(container, followState);
+    }, { passive: true });
+    container.addEventListener?.('touchstart', () => {
+        if (isStreamNearBottom(container)) {
+            followState.sticky = true;
+            followState.userScrollLockUntil = 0;
+            return;
+        }
+        pauseStreamAutoFollow(container, followState);
+    }, { passive: true });
+    container.addEventListener?.('pointerdown', event => {
+        const target = event?.target;
+        if (target?.closest?.('summary, .thinking-summary, .tool-summary')) {
+            pauseStreamAutoFollow(container, followState);
+        }
+    }, { passive: true });
+    container.addEventListener?.('scroll', () => {
+        if (nowMs() < Number(followState.programmaticUntil || 0)) return;
+        const nearBottom = isStreamNearBottom(container);
+        followState.sticky = nearBottom;
+        if (nearBottom) {
+            followState.userScrollLockUntil = 0;
+        } else {
+            pauseStreamAutoFollow(container, followState);
+        }
+    }, { passive: true });
+}
+
+function pauseStreamAutoFollow(container, followState = null) {
+    const state = followState || ensureStreamFollowState(container);
+    state.sticky = false;
+    state.userScrollLockUntil = nowMs() + STREAM_USER_SCROLL_LOCK_MS;
+}
+
+function isStreamUserScrollLocked(state) {
+    return nowMs() < Number(state?.userScrollLockUntil || 0);
+}
+
+function scrollStreamToBottom(container) {
+    const state = ensureStreamFollowState(container);
+    state.programmaticUntil = nowMs() + 120;
+    container.scrollTop = Math.max(
+        0,
+        Number(container.scrollHeight || 0) - Number(container.clientHeight || 0),
+    );
+}
+
+function isStreamNearBottom(container) {
+    const distance = Number(container?.scrollHeight || 0)
+        - Number(container?.scrollTop || 0)
+        - Number(container?.clientHeight || 0);
+    return distance <= BOTTOM_FOLLOW_THRESHOLD_PX;
+}
+
+function nowMs() {
+    return globalThis.performance?.now?.() || Date.now();
+}
+
+function mergeFollowIntent(previous, next) {
+    if (!previous) return next || null;
+    if (!next) return previous;
+    return {
+        ...next,
+        shouldFollow: previous.shouldFollow === true || next.shouldFollow === true,
+        wasNearBottom: previous.wasNearBottom === true || next.wasNearBottom === true,
+    };
+}
+
+function streamScope(st, fallback = {}) {
+    const runId = String(st?.runId || fallback.runId || '').trim();
+    const instanceId = String(st?.instanceId || fallback.instanceId || '').trim();
+    const roleId = String(st?.roleId || fallback.roleId || '').trim();
+    const streamKey = String(st?.streamKey || resolveStreamKey(instanceId, roleId, runId)).trim();
+    return {
+        runId,
+        instanceId,
+        roleId,
+        streamKey,
+        view: resolveTimelineView(runId, instanceId),
+    };
+}
+
+function resolveTimelineView(runId, instanceId) {
+    const safeRunId = String(runId || '').trim();
+    if (safeRunId.startsWith('subagent_run_')) {
+        return 'normal-child-session';
+    }
+    return String(instanceId || '').trim() && String(instanceId || '').trim() !== PRIMARY_KEY
+        ? 'orchestration-panel'
+        : 'main';
 }

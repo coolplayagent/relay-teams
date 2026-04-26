@@ -470,6 +470,47 @@ def test_message_repo_filters_active_segment_after_clear_marker(tmp_path: Path) 
     assert active_history_part.content == "after clear"
 
 
+def test_message_repo_returns_user_messages_for_timeline_after_clear_marker(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_user_messages_timeline.db"
+    marker_repo = SessionHistoryMarkerRepository(db_path)
+    repo = MessageRepository(
+        db_path,
+        session_history_marker_repo=marker_repo,
+    )
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="before clear")])],
+    )
+    marker_repo.create_clear_marker("session-1")
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-2",
+        task_id="task-2",
+        trace_id="run-2",
+        messages=[ModelRequest(parts=[UserPromptPart(content="after clear")])],
+    )
+
+    active_messages = repo.get_user_messages_by_session("session-1")
+    all_messages = repo.get_user_messages_by_session(
+        "session-1",
+        include_cleared=True,
+    )
+
+    assert [message["trace_id"] for message in active_messages] == ["run-2"]
+    assert [message["trace_id"] for message in all_messages] == ["run-1", "run-2"]
+    payload = cast(dict[str, object], active_messages[0]["message"])
+    parts = cast(list[dict[str, object]], payload["parts"])
+    assert parts[0]["content"] == "after clear"
+
+
 def test_compact_conversation_history_marks_messages_hidden_from_context(
     tmp_path: Path,
 ) -> None:

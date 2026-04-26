@@ -167,6 +167,7 @@ async def get_session_rounds(
     session_id: RequiredIdentifierStr,
     limit: int = 8,
     cursor_run_id: OptionalIdentifierStr = None,
+    timeline: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     def _get_session_rounds() -> dict[str, object]:
@@ -174,6 +175,7 @@ async def get_session_rounds(
             session_id,
             limit=limit,
             cursor_run_id=cursor_run_id,
+            timeline=timeline,
         )
 
     return await run_in_threadpool(_get_session_rounds)

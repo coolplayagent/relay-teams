@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 
@@ -95,9 +97,10 @@ def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
     ).read_text(encoding="utf-8")
 
     assert (
-        "if (shouldCollapseIntermediateMessages(streamOverlayEntry, options)) {"
+        "if (shouldCollapseIntermediateMessages(filteredOverlayEntry, options)) {"
         in history_script
     )
+    assert "const filteredOverlayEntry = filterPersistedOverlayParts(" in history_script
     assert (
         "function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {"
         in history_script
@@ -114,6 +117,75 @@ def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
     assert "approvalStatus === 'requested'" in history_script
     assert "function isApprovedApprovalStatus(value)" in history_script
     assert "approvalStatus === 'approve_exact'" in history_script
+
+
+def test_pending_tool_block_name_fallback_does_not_merge_parallel_calls(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path("frontend/dist/js/components/messageRenderer/helpers/toolBlocks.js")
+        .read_text(encoding="utf-8")
+        .replace("import { syncApprovalStateFromEnvelope } from './approval.js';", "")
+        .replace(
+            "import { appendStructuredContentPart, renderRichContent } from './content.js';",
+            "",
+        )
+        .replace(
+            "import { t, formatMessage } from '../../../utils/i18n.js';",
+            "const t = key => key; const formatMessage = (key, values = {}) => `${key}:${JSON.stringify(values)}`;",
+        )
+    )
+    temp_dir = tmp_path / "tool_block_parallel_fallback"
+    temp_dir.mkdir()
+    (temp_dir / "toolBlocks.js").write_text(source, encoding="utf-8")
+
+    runner = """
+import {
+  findToolBlockInContainer,
+  indexPendingToolBlock,
+  resolvePendingToolBlock,
+} from "./toolBlocks.js";
+
+const pending = {};
+const first = { id: "first", dataset: { status: "running" } };
+const second = { id: "second", dataset: { status: "running" } };
+indexPendingToolBlock(pending, first, "shell", null);
+indexPendingToolBlock(pending, second, "shell", null);
+const ambiguous = resolvePendingToolBlock(pending, "shell", null);
+first.dataset.status = "completed";
+const singleLive = resolvePendingToolBlock(pending, "shell", null);
+
+const container = {
+  querySelectorAll(selector) {
+    if (selector === '.tool-block[data-tool-name="shell"]') {
+      return [first, second];
+    }
+    return [];
+  },
+};
+
+console.log(JSON.stringify({
+  ambiguous: ambiguous ? ambiguous.id : null,
+  singleLive: singleLive ? singleLive.id : null,
+  containerFallback: findToolBlockInContainer(container, "shell", null),
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    assert json.loads(result.stdout) == {
+        "ambiguous": None,
+        "singleLive": "second",
+        "containerFallback": None,
+    }
 
 
 def test_tool_blocks_extract_effective_inputs_instead_of_footer_status() -> None:

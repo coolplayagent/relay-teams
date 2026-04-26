@@ -2402,10 +2402,10 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["initialParentId"] == "profile-primary-credentials-row"
+    assert payload["initialParentId"] == "profile-model-field-home"
     assert payload["maasParentId"] == "profile-maas-model-slot"
     assert payload["maasPrimaryRowDisplay"] == "none"
-    assert payload["finalParentId"] == "profile-primary-credentials-row"
+    assert payload["finalParentId"] == "profile-model-field-home"
     assert payload["primaryRowDisplay"] == "grid"
 
 

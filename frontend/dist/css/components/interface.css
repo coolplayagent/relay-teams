@@ -547,7 +547,6 @@
 }
 
 .round-detail-header,
-.round-nav-float,
 .recovery-banner,
 .gate-card {
     border-radius: 10px;
@@ -564,11 +563,6 @@
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-left: 1px solid var(--border-color);
-}
-
-.round-detail-label {
-    color: var(--text-primary);
-    font-size: 0.82rem;
 }
 
 .round-detail-time {
@@ -595,24 +589,6 @@
     padding: 0.08rem 0.35rem;
     border-radius: 6px;
     font-size: 0.64rem;
-}
-
-.round-nav-float {
-    right: 1.25rem;
-    top: 1rem;
-    width: 240px;
-    max-height: 40%;
-    border: 1px solid var(--border-color);
-    background: var(--bg-surface);
-}
-
-.round-nav-item {
-    border-radius: 8px;
-}
-
-.round-nav-item.active {
-    background: color-mix(in srgb, var(--primary) 6%, transparent);
-    border-color: color-mix(in srgb, var(--primary) 22%, var(--border-color) 78%);
 }
 
 .round-token-summary,
@@ -695,7 +671,6 @@ body.light-theme .round-history-divider-chip,
 body.light-theme .message-history-divider-chip,
 body.light-theme .system-intro,
 body.light-theme .gate-card,
-body.light-theme .round-nav-float,
 body.light-theme .recovery-banner,
 body.light-theme .round-token-summary,
 body.light-theme .token-badge {
@@ -712,7 +687,6 @@ body.light-theme .session-item:hover {
 }
 
 body.light-theme .round-state-pill,
-body.light-theme .round-nav-state,
 body.light-theme .recovery-status-pill,
 body.light-theme .subagent-meta-status {
     background: transparent;
@@ -726,8 +700,7 @@ body.light-theme .subagent-task-empty {
 }
 
 body.light-theme .session-item.active,
-body.light-theme .round-item.active,
-body.light-theme .round-nav-item.active {
+body.light-theme .round-item.active {
     background: color-mix(in srgb, var(--primary) 8%, transparent);
 }
 

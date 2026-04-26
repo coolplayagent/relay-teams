@@ -1326,7 +1326,7 @@ body.is-resizing-rails .right-rail-resizer {
 }
 
 .chat-scroll > * {
-  width: min(920px, 100%);
+  width: min(1264px, 100%);
   margin-left: auto;
   margin-right: auto;
 }

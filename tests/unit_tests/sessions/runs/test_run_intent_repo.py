@@ -64,6 +64,100 @@ def test_run_intent_repo_round_trips_display_input(tmp_path: Path) -> None:
     assert record.skills == ("time",)
 
 
+def test_run_intent_repo_lists_intents_by_session(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_intent_list_by_session.db"
+    repo = RunIntentRepository(db_path)
+
+    repo.upsert(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+            display_input=content_parts_from_text("display first"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-2",
+        session_id="session-2",
+        intent=IntentInput(
+            session_id="session-2", input=content_parts_from_text("other")
+        ),
+    )
+
+    records = repo.list_by_session("session-1")
+
+    assert tuple(records) == ("run-1",)
+    assert records["run-1"].display_intent == "display first"
+
+
+def test_run_intent_repo_list_by_session_skips_invalid_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_list_skips_invalid.db"
+    repo = RunIntentRepository(db_path)
+    repo.upsert(
+        run_id="run-good",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("good intent"),
+        ),
+    )
+    now = "2026-03-20T00:00:00Z"
+    repo._conn.execute(
+        """
+        INSERT INTO run_intents(
+            run_id,
+            session_id,
+            intent,
+            input_json,
+            run_kind,
+            generation_config_json,
+            execution_mode,
+            yolo,
+            reuse_root_instance,
+            thinking_enabled,
+            thinking_effort,
+            target_role_id,
+            skills_json,
+            session_mode,
+            topology_json,
+            conversation_context_json,
+            created_at,
+            updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "run-bad",
+            "session-1",
+            "bad intent",
+            None,
+            "conversation",
+            None,
+            "not-a-valid-mode",
+            "false",
+            "true",
+            "false",
+            None,
+            None,
+            None,
+            "normal",
+            None,
+            None,
+            now,
+            now,
+        ),
+    )
+    repo._conn.commit()
+
+    records = repo.list_by_session("session-1")
+
+    assert tuple(records) == ("run-good",)
+    assert records["run-good"].intent == "good intent"
+
+
 def test_run_intent_repo_does_not_backfill_yolo_from_legacy_approval_mode(
     tmp_path: Path,
 ) -> None:
