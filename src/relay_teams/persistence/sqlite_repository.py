@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from threading import RLock
-from typing import Awaitable, Callable, Optional, ParamSpec, TypeVar, cast
+from typing import Awaitable, Callable, Optional, ParamSpec, TypeVar
 from weakref import WeakKeyDictionary
 
 import aiosqlite
@@ -63,14 +63,13 @@ class BlockingAsyncSqliteCursor:
         return self._lastrowid
 
     def fetchone(self) -> sqlite3.Row | None:
-        return cast(sqlite3.Row | None, run_async_blocking(self._fetchone()))
+        return run_async_blocking(self._fetchone())
 
     def fetchall(self) -> list[sqlite3.Row]:
-        rows = run_async_blocking(self._fetchall())
-        return [cast(sqlite3.Row, row) for row in rows]
+        return run_async_blocking(self._fetchall())
 
     def close(self) -> None:
-        run_async_blocking(self._close())
+        run_async_blocking(self.close_async())
 
     def __iter__(self) -> Iterator[sqlite3.Row]:
         return iter(self.fetchall())
@@ -80,9 +79,9 @@ class BlockingAsyncSqliteCursor:
         if cursor is None:
             return None
         try:
-            return cast(sqlite3.Row | None, await cursor.fetchone())
+            return await cursor.fetchone()
         finally:
-            await self._close()
+            await self.close_async()
 
     async def _fetchall(self) -> list[sqlite3.Row]:
         cursor = self._cursor
@@ -90,11 +89,11 @@ class BlockingAsyncSqliteCursor:
             return []
         try:
             rows = await cursor.fetchall()
-            return [cast(sqlite3.Row, row) for row in rows]
+            return list(rows)
         finally:
-            await self._close()
+            await self.close_async()
 
-    async def _close(self) -> None:
+    async def close_async(self) -> None:
         cursor = self._cursor
         if cursor is None:
             return
@@ -131,10 +130,10 @@ class BlockingAsyncSqliteConnection:
         sql: str,
         parameters: SqliteParameters,
     ) -> BlockingAsyncSqliteCursor:
-        conn = await self._repository._get_async_conn()
+        conn = await self._repository.get_async_connection()
         cursor = BlockingAsyncSqliteCursor(await conn.execute(sql, tuple(parameters)))
         if _closes_without_fetch(sql):
-            await cursor._close()
+            await cursor.close_async()
         return cursor
 
     async def _executemany(
@@ -142,17 +141,17 @@ class BlockingAsyncSqliteConnection:
         sql: str,
         parameters: tuple[SqliteParameters, ...],
     ) -> BlockingAsyncSqliteCursor:
-        conn = await self._repository._get_async_conn()
+        conn = await self._repository.get_async_connection()
         cursor = BlockingAsyncSqliteCursor(await conn.executemany(sql, parameters))
-        await cursor._close()
+        await cursor.close_async()
         return cursor
 
     async def _commit(self) -> None:
-        conn = await self._repository._get_async_conn()
+        conn = await self._repository.get_async_connection()
         await conn.commit()
 
     async def _rollback(self) -> None:
-        conn = await self._repository._get_async_conn()
+        conn = await self._repository.get_async_connection()
         await conn.rollback()
 
 
@@ -219,6 +218,9 @@ class SharedSqliteRepository:
                 )
             else:
                 await conn.close()
+
+    async def get_async_connection(self) -> aiosqlite.Connection:
+        return await self._get_async_conn()
 
     async def _get_async_conn(self) -> aiosqlite.Connection:
         loop = asyncio.get_running_loop()
