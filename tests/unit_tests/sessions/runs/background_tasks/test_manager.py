@@ -257,6 +257,18 @@ class _CloseFailingWaitableTransport(_WaitableTransport):
         raise RuntimeError("close failed")
 
 
+class _BlockingCloseTransport(_FakeTransport):
+    def __init__(self) -> None:
+        super().__init__(returncode=0)
+        self.close_started = asyncio.Event()
+        self.close_release = asyncio.Event()
+
+    async def close(self) -> None:
+        self.close_started.set()
+        await self.close_release.wait()
+        self.closed = True
+
+
 class _FakeMonitorSink:
     def __init__(self) -> None:
         self.body_texts: list[str] = []
@@ -530,6 +542,61 @@ async def test_background_task_manager_finalizes_runtime_when_listener_fails(
     assert waited.status == BackgroundTaskStatus.COMPLETED
     assert runtime.completed.is_set()
     assert record.background_task_id not in manager._runtimes
+
+
+@pytest.mark.asyncio
+async def test_background_task_manager_signals_completion_before_transport_close(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.sessions.runs.background_tasks import manager as manager_module
+
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-blocking-close.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-1",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            command="printf ready",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            log_path=str(tmp_path / "exec-1.log"),
+        )
+    )
+    transport = _BlockingCloseTransport()
+    runtime = manager_module._BackgroundTaskRuntime(
+        record=record,
+        transport=cast(manager_module._BackgroundTaskTransport, transport),
+        log_file_path=tmp_path / "exec-1.log",
+        queue=asyncio.Queue(),
+    )
+    manager._runtimes[record.background_task_id] = runtime
+    finalize_task = asyncio.create_task(
+        manager._finalize_runtime(runtime, timed_out=False)
+    )
+
+    try:
+        await asyncio.wait_for(transport.close_started.wait(), timeout=1.0)
+        waited, completed = await asyncio.wait_for(
+            manager.wait_for_run(
+                run_id="run-1",
+                background_task_id=record.background_task_id,
+            ),
+            timeout=1.0,
+        )
+    finally:
+        transport.close_release.set()
+        await asyncio.wait_for(finalize_task, timeout=1.0)
+        await manager.close()
+
+    assert completed is True
+    assert waited.status == BackgroundTaskStatus.COMPLETED
+    assert runtime.completed.is_set()
+    assert record.background_task_id not in manager._runtimes
+    assert transport.closed is True
 
 
 @pytest.mark.asyncio

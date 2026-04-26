@@ -1395,14 +1395,10 @@ class BackgroundTaskManager:
                     }
                 ),
             )
-            try:
-                await runtime.transport.close()
-            except Exception:
-                LOGGER.warning(
-                    "Failed to close background task transport",
-                    extra={"background_task_id": runtime.record.background_task_id},
-                    exc_info=True,
-                )
+            runtime_id = runtime.record.background_task_id
+            self._runtimes.pop(runtime_id, None)
+            runtime.completed.set()
+            completion_error: Exception | None = None
             try:
                 await self._mark_runtime_changed(runtime)
                 self._publish_background_task_event(
@@ -1417,11 +1413,20 @@ class BackgroundTaskManager:
                     record=runtime.record,
                     event_name=_background_task_state_event_name(status),
                 )
-                if self._completion_listener is not None:
-                    await self._completion_listener(runtime.record)
-            finally:
-                self._runtimes.pop(runtime.record.background_task_id, None)
-                runtime.completed.set()
+            except Exception as exc:
+                completion_error = exc
+            try:
+                await runtime.transport.close()
+            except Exception:
+                LOGGER.warning(
+                    "Failed to close background task transport",
+                    extra={"background_task_id": runtime.record.background_task_id},
+                    exc_info=True,
+                )
+            if completion_error is not None:
+                raise completion_error
+            if self._completion_listener is not None:
+                await self._completion_listener(runtime.record)
 
     async def _signal_runtime_stop(self, runtime: _BackgroundTaskRuntime) -> None:
         for _ in range(runtime.stream_count):

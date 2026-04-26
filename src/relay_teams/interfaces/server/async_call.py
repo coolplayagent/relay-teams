@@ -9,6 +9,11 @@ from typing import ParamSpec, TypeVar
 
 ParamT = ParamSpec("ParamT")
 ResultT = TypeVar("ResultT")
+ISOLATED_THREAD_WORKER_COUNT = 8
+_ISOLATED_THREAD_EXECUTOR = ThreadPoolExecutor(
+    max_workers=ISOLATED_THREAD_WORKER_COUNT,
+    thread_name_prefix="server-isolated-route",
+)
 
 
 async def call_maybe_async(
@@ -36,17 +41,10 @@ async def call_maybe_async_in_isolated_thread(
         result = function(*args, **kwargs)
     else:
         loop = asyncio.get_running_loop()
-        executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="server-isolated-route",
+        result = await loop.run_in_executor(
+            _ISOLATED_THREAD_EXECUTOR,
+            partial(function, *args, **kwargs),
         )
-        try:
-            result = await loop.run_in_executor(
-                executor,
-                partial(function, *args, **kwargs),
-            )
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
     if inspect.isawaitable(result):
         return await result
     return result
