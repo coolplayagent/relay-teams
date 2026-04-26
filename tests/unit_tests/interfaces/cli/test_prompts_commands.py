@@ -57,9 +57,13 @@ class _FakePromptHttpClient:
         lines: list[str],
         *,
         error_response: httpx.Response | None = None,
+        post_status_code: int = 200,
+        post_error: httpx.RequestError | None = None,
     ) -> None:
         self._lines = lines
         self._error_response = error_response
+        self._post_status_code = post_status_code
+        self._post_error = post_error
         self.streams: list[tuple[str, str, dict[str, str]]] = []
         self.posts: list[tuple[str, dict[str, str], dict[str, object]]] = []
 
@@ -95,7 +99,12 @@ class _FakePromptHttpClient:
         json: dict[str, object],
     ) -> httpx.Response:
         self.posts.append((url, headers, json))
-        return httpx.Response(200, request=httpx.Request("POST", url))
+        if self._post_error is not None:
+            raise self._post_error
+        return httpx.Response(
+            self._post_status_code,
+            request=httpx.Request("POST", url),
+        )
 
 
 class _FakeAsyncByteStream(httpx.AsyncByteStream):
@@ -425,3 +434,85 @@ def test_run_prompt_stream_events_requests_stop_on_keyboard_interrupt(
         )
     ]
     assert "Run stop requested." in capsys.readouterr().err
+
+
+def test_request_run_stop_after_interrupt_returns_false_on_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_stop_request(*, base_url: str, run_id: str) -> bool:
+        _ = (base_url, run_id)
+        raise RuntimeError("server stopped")
+
+    monkeypatch.setattr(
+        prompt_cli,
+        "_request_run_stop_after_interrupt_async",
+        fail_stop_request,
+    )
+
+    assert (
+        prompt_cli._request_run_stop_after_interrupt(
+            base_url="http://127.0.0.1:8000/",
+            run_id="run-1",
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_run_stop_after_interrupt_async_returns_false_for_missing_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_client = _FakePromptHttpClient([], post_status_code=404)
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakePromptHttpClient:
+        _ = kwargs
+        return fake_client
+
+    monkeypatch.setattr(
+        prompt_cli,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    requested = await prompt_cli._request_run_stop_after_interrupt_async(
+        base_url="http://127.0.0.1:8000/",
+        run_id="run-1",
+    )
+
+    assert requested is False
+    assert fake_client.posts == [
+        (
+            "http://127.0.0.1:8000/api/runs/run-1/stop",
+            {"Accept": "application/json"},
+            {"scope": "main"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_run_stop_after_interrupt_async_returns_false_on_request_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "http://127.0.0.1:8000/api/runs/run-1/stop")
+    fake_client = _FakePromptHttpClient(
+        [],
+        post_error=httpx.ConnectError("offline", request=request),
+    )
+
+    def fake_create_async_http_client(**kwargs: object) -> _FakePromptHttpClient:
+        _ = kwargs
+        return fake_client
+
+    monkeypatch.setattr(
+        prompt_cli,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    requested = await prompt_cli._request_run_stop_after_interrupt_async(
+        base_url="http://127.0.0.1:8000/",
+        run_id="run-1",
+    )
+
+    assert requested is False
+    assert len(fake_client.posts) == 1

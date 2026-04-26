@@ -118,7 +118,7 @@ class TaskPersistenceHarness(BaseModel):
             result=assistant_message,
             error_message=error_message or assistant_message,
         )
-        _ = agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
+        agent_repo.mark_status(instance_id, InstanceStatus.FAILED)
         self.mark_runtime_after_terminal_task_update(
             run_id=task.trace_id,
             terminal_task_id=task.task_id,

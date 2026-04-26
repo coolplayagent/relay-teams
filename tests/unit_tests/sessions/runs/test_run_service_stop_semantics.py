@@ -334,6 +334,41 @@ def test_stop_active_runs_for_shutdown_requests_running_run_stop() -> None:
     asyncio.run(scenario())
 
 
+def test_stop_active_runs_for_shutdown_skips_missing_and_failed_stops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    control = RunControlManager()
+    manager = _make_run_service(control)
+    stopped_run_ids: list[str] = []
+    manager._running_run_ids.update({"ok-run", "missing-run"})
+    manager._pending_runs["ok-run"] = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("hello"),
+    )
+    manager._pending_runs["broken-run"] = IntentInput(
+        session_id="session-1",
+        input=content_parts_from_text("hello"),
+    )
+
+    async def fake_stop_run_local_async(run_id: str) -> None:
+        stopped_run_ids.append(run_id)
+        if run_id == "missing-run":
+            raise KeyError(run_id)
+        if run_id == "broken-run":
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        manager,
+        "_stop_run_local_async",
+        fake_stop_run_local_async,
+    )
+
+    stopped_count = asyncio.run(manager.stop_active_runs_for_shutdown_async())
+
+    assert stopped_count == 1
+    assert set(stopped_run_ids) == {"ok-run", "missing-run", "broken-run"}
+
+
 def test_completed_notification_uses_final_run_output() -> None:
     control = RunControlManager()
     hub = RunEventHub()
