@@ -237,6 +237,42 @@ def test_sqlite_store_applies_title_weight_to_ranking(tmp_path: Path) -> None:
     assert hits[0].document_id == "title-match"
 
 
+def test_sqlite_store_unicode61_search_handles_cjk_prompt_without_phrase_query(
+    tmp_path: Path,
+) -> None:
+    store = SqliteFts5RetrievalStore(tmp_path / "cjk-prompt.db")
+    store.replace_scope(
+        config=RetrievalScopeConfig(
+            scope_kind=RetrievalScopeKind.SKILL,
+            scope_id="skills",
+        ),
+        documents=(
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.SKILL,
+                scope_id="skills",
+                document_id="shell-guard",
+                title="Shell Guard",
+                body="Guidance for shell execution safety",
+                keywords=("shell",),
+            ),
+        ),
+    )
+
+    hits = store.search(
+        query=RetrievalQuery(
+            scope_kind=RetrievalScopeKind.SKILL,
+            scope_id="skills",
+            text=(
+                "编排模式真实 LLM E2E 测试。请不要访问文件、不要执行 shell、"
+                "不要修改任何内容；只需要回复 ORCH_E2E_OK。"
+            ),
+            limit=5,
+        )
+    )
+
+    assert [hit.document_id for hit in hits] == ["shell-guard"]
+
+
 def test_sqlite_store_requires_fts5_support(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

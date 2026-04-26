@@ -24,8 +24,9 @@ from relay_teams.retrieval.retrieval_models import (
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
-_UNICODE61_SPLIT_PATTERN = re.compile(r"[^\w]+", re.UNICODE)
+_UNICODE61_SPLIT_PATTERN = re.compile(r"(?:[^\w]+|_+)", re.UNICODE)
 _MATCH_SANITIZE_PATTERN = re.compile(r'["\'`(){}\[\]:^*]+')
+_CJK_CHARACTER_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 class SqliteFts5RetrievalStore(SharedSqliteRepository):
@@ -823,13 +824,32 @@ def _build_match_expression(
     if tokenizer == RetrievalTokenizer.TRIGRAM:
         return _build_trigram_match_expression(sanitized)
     tokens = tuple(
-        token.lower()
+        expanded_token
         for token in _UNICODE61_SPLIT_PATTERN.split(sanitized)
-        if token.strip()
+        for expanded_token in _expand_unicode61_match_terms(token)
     )
     if not tokens:
         return ""
-    return " OR ".join(f'"{token}"' for token in tokens)
+    return " OR ".join(tokens)
+
+
+def _expand_unicode61_match_terms(token: str) -> tuple[str, ...]:
+    cleaned = token.strip().lower()
+    if not cleaned:
+        return ()
+    terms: list[str] = []
+    current_word: list[str] = []
+    for char in cleaned:
+        if _CJK_CHARACTER_PATTERN.fullmatch(char):
+            if current_word:
+                terms.append("".join(current_word))
+                current_word.clear()
+            terms.append(char)
+            continue
+        current_word.append(char)
+    if current_word:
+        terms.append("".join(current_word))
+    return tuple(terms)
 
 
 def _build_trigram_match_expression(raw_query: str) -> str:
