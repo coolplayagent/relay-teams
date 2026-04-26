@@ -275,9 +275,7 @@ class SessionRunService:
             resume_run=lambda run_id: self.resume_run(run_id),
             resume_run_async=self.resume_run_async,
             ensure_run_started=lambda run_id: self.ensure_run_started(run_id),
-            ensure_run_started_async=lambda run_id: self.ensure_run_started_async(
-                run_id
-            ),
+            ensure_run_started_async=self._ensure_run_started_for_interaction_async,
             event_publisher=self._event_publisher,
         )
         self._pending_runs: dict[str, IntentInput] = {}
@@ -488,6 +486,9 @@ class SessionRunService:
             if runtime is not None:
                 return runtime
         return None
+
+    async def _ensure_run_started_for_interaction_async(self, run_id: str) -> None:
+        await self.ensure_run_started_async(run_id)
 
     def _active_recoverable_run(
         self, session_id: str

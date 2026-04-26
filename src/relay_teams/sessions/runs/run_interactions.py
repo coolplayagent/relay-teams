@@ -8,6 +8,7 @@ from typing import cast
 
 from pydantic import JsonValue
 
+from relay_teams.logger import get_logger
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_event_publisher import RunEventPublisher
@@ -47,6 +48,8 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalScope,
 )
 from relay_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
+
+LOGGER = get_logger(__name__)
 
 type ShellApprovalGrantSpec = tuple[
     str,
@@ -386,9 +389,10 @@ class RunInteractionService:
                     feedback=feedback,
                 )
             except KeyError:
-                # Approval can already be absent from in-memory tracking after
-                # expiry, restart, or duplicate resolution.
-                pass  # pragma: no cover
+                LOGGER.debug(  # pragma: no cover
+                    "Tool approval was already absent from in-memory tracking",
+                    extra={"run_id": run_id, "tool_call_id": tool_call_id},
+                )
         if self._is_running_run(run_id) or runtime is None:
             return
 
@@ -919,9 +923,10 @@ class RunInteractionService:
                     expected_status=UserQuestionRequestStatus.REQUESTED,
                 )
             except UserQuestionStatusConflictError:
-                # Concurrent resolution is acceptable; later closure logic still
-                # reconciles the run state from the persisted question records.
-                pass  # pragma: no cover
+                LOGGER.debug(  # pragma: no cover
+                    "User question was already resolved concurrently",
+                    extra={"run_id": run_id, "question_id": record.question_id},
+                )
             if resolved_record is not None:
                 self._event_publisher.safe_publish_run_event(
                     RunEvent(
