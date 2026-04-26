@@ -5,7 +5,6 @@ import asyncio
 from collections.abc import Awaitable
 from collections.abc import Callable
 from pathlib import Path
-import sqlite3
 import threading
 
 import aiosqlite
@@ -14,8 +13,9 @@ from pytest import MonkeyPatch
 
 import relay_teams.persistence.sqlite_repository as sqlite_repository_module
 from relay_teams.persistence.sqlite_repository import (
-    AsyncSharedSqliteRepository,
+    BlockingAsyncSqliteConnection,
     SharedSqliteRepository,
+    async_fetchone,
 )
 from relay_teams.retrieval.sqlite_store import SqliteFts5RetrievalStore
 
@@ -23,10 +23,6 @@ from relay_teams.retrieval.sqlite_store import SqliteFts5RetrievalStore
 class _DummyRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path, *, repository_name: str | None = None) -> None:
         super().__init__(db_path, repository_name=repository_name)
-
-
-class _AsyncDummyRepository(AsyncSharedSqliteRepository):
-    pass
 
 
 def test_shared_sqlite_repository_run_write_uses_retry_helper(
@@ -38,7 +34,7 @@ def test_shared_sqlite_repository_run_write_uses_retry_helper(
 
     def fake_run_sqlite_write_with_retry(
         *,
-        conn: sqlite3.Connection,
+        conn: BlockingAsyncSqliteConnection,
         db_path: Path,
         operation: Callable[[], str],
         lock: object,
@@ -104,12 +100,13 @@ def test_sqlite_retrieval_store_uses_stable_repository_name(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_async_shared_sqlite_repository_run_write_uses_retry_helper(
+async def test_shared_sqlite_repository_run_async_write_uses_retry_helper(
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
 ) -> None:
-    repo = await _AsyncDummyRepository.open(tmp_path / "async_shared_repo.db")
-    calls: list[tuple[Path, asyncio.Lock, str, str]] = []
+    repo = _DummyRepository(tmp_path / "async_shared_repo.db")
+    calls: list[tuple[Path, str, str]] = []
+    locks: list[asyncio.Lock] = []
 
     async def fake_run_async_sqlite_write_with_retry(
         *,
@@ -123,7 +120,8 @@ async def test_async_shared_sqlite_repository_run_write_uses_retry_helper(
     ) -> str:
         _ = conn
         _ = max_retries
-        calls.append((db_path, lock, repository_name, operation_name))
+        locks.append(lock)
+        calls.append((db_path, repository_name, operation_name))
         return await operation()
 
     monkeypatch.setattr(
@@ -133,33 +131,34 @@ async def test_async_shared_sqlite_repository_run_write_uses_retry_helper(
     )
 
     try:
-        result = await repo._run_write(
+        result = await repo._run_async_write(
             operation_name="insert_item",
-            operation=lambda: _async_value("ok"),
+            operation=lambda _conn: _async_value("ok"),
         )
     finally:
-        await repo.close()
+        await repo.close_async()
 
     assert result == "ok"
     assert calls == [
         (
             tmp_path / "async_shared_repo.db",
-            repo._lock,
-            "_AsyncDummyRepository",
+            "_DummyRepository",
             "insert_item",
         )
     ]
+    assert len(locks) == 1
+    assert not locks[0].locked()
 
 
 @pytest.mark.asyncio
-async def test_async_shared_sqlite_repository_run_read_uses_lock(
+async def test_shared_sqlite_repository_run_async_read_uses_lock(
     tmp_path: Path,
 ) -> None:
-    repo = await _AsyncDummyRepository.open(tmp_path / "async_shared_repo_read.db")
+    repo = _DummyRepository(tmp_path / "async_shared_repo_read.db")
     try:
-        result = await repo._run_read(lambda: _async_value("ok"))
+        result = await repo._run_async_read(lambda _conn: _async_value("ok"))
     finally:
-        await repo.close()
+        await repo.close_async()
 
     assert result == "ok"
 
@@ -170,7 +169,8 @@ async def test_shared_sqlite_repository_async_helpers_use_retry_helper(
     monkeypatch: MonkeyPatch,
 ) -> None:
     repo = _DummyRepository(tmp_path / "shared_repo_async.db")
-    calls: list[tuple[Path, asyncio.Lock, str, str]] = []
+    calls: list[tuple[Path, str, str]] = []
+    locks: list[asyncio.Lock] = []
 
     async def fake_run_async_sqlite_write_with_retry(
         *,
@@ -184,7 +184,8 @@ async def test_shared_sqlite_repository_async_helpers_use_retry_helper(
     ) -> str:
         _ = conn
         _ = max_retries
-        calls.append((db_path, lock, repository_name, operation_name))
+        locks.append(lock)
+        calls.append((db_path, repository_name, operation_name))
         return await operation()
 
     monkeypatch.setattr(
@@ -205,11 +206,32 @@ async def test_shared_sqlite_repository_async_helpers_use_retry_helper(
     assert calls == [
         (
             tmp_path / "shared_repo_async.db",
-            repo._async_lock,
             "_DummyRepository",
             "insert_item_async",
         )
     ]
+    assert len(locks) == 1
+    assert not locks[0].locked()
+
+
+@pytest.mark.asyncio
+async def test_shared_sqlite_repository_sync_facade_writes_are_visible_to_async_helpers(
+    tmp_path: Path,
+) -> None:
+    repo = _DummyRepository(tmp_path / "shared_repo_unified.db")
+    try:
+        repo._conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+        repo._conn.execute("INSERT INTO items(value) VALUES(?)", ("sync",))
+        repo._conn.commit()
+
+        row = await repo._run_async_read(
+            lambda conn: async_fetchone(conn, "SELECT value FROM items")
+        )
+    finally:
+        await repo.close_async()
+
+    assert row is not None
+    assert row["value"] == "sync"
 
 
 async def _async_value(value: str) -> str:

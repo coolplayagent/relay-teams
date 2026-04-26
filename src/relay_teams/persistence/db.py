@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine, Sequence
 import logging
 import sqlite3
 import time
 from pathlib import Path
-from threading import Condition, RLock, get_ident
-from typing import Awaitable, Callable, Optional, TypeVar
+from threading import Condition, Event, RLock, Thread, get_ident
+from typing import Awaitable, Callable, Optional, Protocol, TypeVar
 from weakref import WeakKeyDictionary
 
 import aiosqlite
@@ -22,6 +23,7 @@ SQLITE_WRITE_RETRY_MAX_DELAY_SECONDS = 0.2
 
 LOGGER = get_logger(__name__)
 type _WriteOwnerToken = tuple[str, int]
+type SqliteParameters = Sequence[object]
 _CROSS_WRITE_COORDINATORS: dict[str, CrossModeWriteCoordinator] = {}
 _WRITE_COORDINATORS: dict[str, RLock] = {}
 _WRITE_COORDINATORS_LOCK = RLock()
@@ -29,7 +31,64 @@ _ASYNC_WRITE_COORDINATORS: dict[
     str, WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]
 ] = {}
 _RESOLVED_DB_PATH_KEYS: dict[str, str] = {}
+_ASYNC_BLOCKING_RUNNER: _AsyncBlockingRunner | None = None
 ResultT = TypeVar("ResultT")
+
+
+class BlockingSqliteCursor(Protocol):
+    @property
+    def rowcount(self) -> int:
+        raise NotImplementedError
+
+    def fetchall(self) -> list[sqlite3.Row]:
+        raise NotImplementedError
+
+
+class BlockingSqliteConnection(Protocol):
+    def execute(
+        self,
+        sql: str,
+        parameters: SqliteParameters = (),
+    ) -> BlockingSqliteCursor:
+        raise NotImplementedError
+
+    def commit(self) -> None:
+        raise NotImplementedError
+
+    def rollback(self) -> None:
+        raise NotImplementedError
+
+
+class _AsyncBlockingRunner:
+    def __init__(self) -> None:
+        self._ready = Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread = Thread(
+            target=self._run_loop,
+            name="relay-teams-sqlite-async-bridge",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ready.wait()
+
+    def run(self, coro: Coroutine[object, object, ResultT]) -> ResultT:
+        loop = self._loop
+        if loop is None:
+            raise RuntimeError("SQLite async bridge loop did not start")
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            raise RuntimeError("Cannot block on SQLite async bridge from its own loop")
+        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+    def _run_loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
+        loop.run_forever()
 
 
 class CrossModeWriteCoordinator:
@@ -95,50 +154,6 @@ class CrossModeWriteCoordinator:
         self.release(token)
 
 
-def _configure_connection(
-    conn: sqlite3.Connection,
-    *,
-    enable_wal: bool,
-) -> sqlite3.Connection:
-    conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA temp_store = MEMORY")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    try:
-        if enable_wal:
-            conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.OperationalError:
-        # WAL is best-effort. In-memory fallback and some filesystems do not support it.
-        pass
-    return conn
-
-
-def open_sqlite(db_path: Path) -> sqlite3.Connection:
-    file_path = Path(db_path)
-    try:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        return _configure_connection(
-            sqlite3.connect(
-                str(file_path),
-                timeout=SQLITE_TIMEOUT_SECONDS,
-                check_same_thread=False,
-            ),
-            enable_wal=True,
-        )
-    except sqlite3.OperationalError:
-        pass
-
-    return _configure_connection(
-        sqlite3.connect(
-            MEMORY_DSN,
-            uri=True,
-            timeout=SQLITE_TIMEOUT_SECONDS,
-            check_same_thread=False,
-        ),
-        enable_wal=False,
-    )
-
-
 async def _configure_async_connection(
     conn: aiosqlite.Connection,
     *,
@@ -181,12 +196,24 @@ async def open_async_sqlite(db_path: Path) -> aiosqlite.Connection:
     )
 
 
-def sqlite_compile_options(conn: sqlite3.Connection) -> frozenset[str]:
+def run_async_blocking(coro: Coroutine[object, object, ResultT]) -> ResultT:
+    return _async_blocking_runner().run(coro)
+
+
+def _async_blocking_runner() -> _AsyncBlockingRunner:
+    global _ASYNC_BLOCKING_RUNNER
+    with _WRITE_COORDINATORS_LOCK:
+        if _ASYNC_BLOCKING_RUNNER is None:
+            _ASYNC_BLOCKING_RUNNER = _AsyncBlockingRunner()
+        return _ASYNC_BLOCKING_RUNNER
+
+
+def sqlite_compile_options(conn: BlockingSqliteConnection) -> frozenset[str]:
     rows = conn.execute("PRAGMA compile_options").fetchall()
     return frozenset(str(row[0]) for row in rows)
 
 
-def sqlite_supports_fts5(conn: sqlite3.Connection) -> bool:
+def sqlite_supports_fts5(conn: BlockingSqliteConnection) -> bool:
     return "ENABLE_FTS5" in sqlite_compile_options(conn)
 
 
@@ -275,7 +302,7 @@ async def run_async_sqlite_write_with_retry(
 # noinspection PyTypeHints
 def run_sqlite_write_with_retry(
     *,
-    conn: sqlite3.Connection,
+    conn: BlockingSqliteConnection,
     db_path: Path,
     operation: Callable[[], ResultT],
     lock: Optional[RLock] = None,
@@ -385,7 +412,7 @@ def _async_write_coordinator_for(db_path: Path) -> asyncio.Lock:
     return coordinator
 
 
-def _rollback_quietly(conn: sqlite3.Connection) -> None:
+def _rollback_quietly(conn: BlockingSqliteConnection) -> None:
     try:
         conn.rollback()
     except sqlite3.Error:

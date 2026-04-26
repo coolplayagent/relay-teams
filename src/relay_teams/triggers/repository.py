@@ -9,7 +9,10 @@ from pathlib import Path
 from pydantic import JsonValue, TypeAdapter
 
 from relay_teams.logger import get_logger
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    BlockingAsyncSqliteConnection,
+    SharedSqliteRepository,
+)
 from relay_teams.triggers.models import (
     GitHubActionSpec,
     GitHubActionType,
@@ -1459,7 +1462,7 @@ def _json_dumps(value: object) -> str:
 
 
 def _column_exists(
-    conn: sqlite3.Connection,
+    conn: BlockingAsyncSqliteConnection,
     *,
     table_name: str,
     column_name: str,
