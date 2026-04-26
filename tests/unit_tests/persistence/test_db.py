@@ -15,73 +15,55 @@ from relay_teams.persistence.db import (
     async_sqlite_supports_fts5,
     is_retryable_sqlite_error,
     open_async_sqlite,
-    open_sqlite,
+    run_async_blocking,
     run_async_sqlite_write_with_retry,
     run_sqlite_write_with_retry,
     sqlite_compile_options,
     sqlite_supports_fts5,
 )
+from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
 
-def test_open_sqlite_enables_busy_timeout_and_wal_for_file_db(tmp_path: Path) -> None:
-    conn = open_sqlite(tmp_path / "relay_teams.db")
-    try:
-        foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
-        busy_timeout = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
-        journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-
-        assert foreign_keys == 1
-        assert busy_timeout == SQLITE_BUSY_TIMEOUT_MS
-        assert journal_mode == "wal"
-    finally:
-        conn.close()
-
-
-def test_open_sqlite_falls_back_to_shared_memory_when_file_open_fails(
+@pytest.mark.asyncio
+async def test_open_async_sqlite_falls_back_to_shared_memory_when_file_open_fails(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    real_connect = sqlite3.connect
+    real_connect = aiosqlite.connect
     calls: list[tuple[str, bool]] = []
 
-    def fake_connect(
+    async def fake_connect(
         database: str,
         *,
         timeout: float,
-        check_same_thread: bool = True,
         uri: bool = False,
-    ) -> sqlite3.Connection:
-        _ = (timeout, check_same_thread)
+    ) -> aiosqlite.Connection:
+        _ = timeout
         calls.append((database, uri))
         if len(calls) == 1:
             raise sqlite3.OperationalError("readonly")
-        return real_connect(
-            database,
-            timeout=timeout,
-            check_same_thread=check_same_thread,
-            uri=uri,
-        )
+        return await real_connect(database, timeout=timeout, uri=uri)
 
-    monkeypatch.setattr(db_module.sqlite3, "connect", fake_connect)
+    monkeypatch.setattr(db_module.aiosqlite, "connect", fake_connect)
 
-    conn = open_sqlite(tmp_path / "readonly" / "relay_teams.db")
+    conn = await open_async_sqlite(tmp_path / "readonly" / "relay_teams.db")
     try:
         assert calls == [
             (str(tmp_path / "readonly" / "relay_teams.db"), False),
             (db_module.MEMORY_DSN, True),
         ]
     finally:
-        conn.close()
+        await conn.close()
 
 
 def test_sqlite_compile_options_reports_fts5_support(tmp_path: Path) -> None:
-    conn = open_sqlite(tmp_path / "compile-options.db")
+    repo = SharedSqliteRepository(tmp_path / "compile-options.db")
     try:
-        options = sqlite_compile_options(conn)
+        options = sqlite_compile_options(repo._conn)
         assert "ENABLE_FTS5" in options
-        assert sqlite_supports_fts5(conn) is True
+        assert sqlite_supports_fts5(repo._conn) is True
     finally:
-        conn.close()
+        run_async_blocking(repo.close_async())
 
 
 def test_is_retryable_sqlite_error_matches_lock_contention() -> None:
@@ -259,7 +241,8 @@ def test_run_sqlite_write_with_retry_retries_transient_lock_errors(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "retry.db"
-    conn = open_sqlite(db_path)
+    repo = SharedSqliteRepository(db_path)
+    conn = repo._conn
     try:
         conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
         conn.commit()
@@ -286,14 +269,15 @@ def test_run_sqlite_write_with_retry_retries_transient_lock_errors(
         assert attempts == 3
         assert [row[0] for row in stored] == ["ok"]
     finally:
-        conn.close()
+        run_async_blocking(repo.close_async())
 
 
 def test_run_sqlite_write_with_retry_rolls_back_failed_operation(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "rollback.db"
-    conn = open_sqlite(db_path)
+    repo = SharedSqliteRepository(db_path)
+    conn = repo._conn
     try:
         conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
         conn.commit()
@@ -325,7 +309,7 @@ def test_run_sqlite_write_with_retry_rolls_back_failed_operation(
         stored = conn.execute("SELECT value FROM items").fetchall()
         assert [row[0] for row in stored] == ["ok"]
     finally:
-        conn.close()
+        run_async_blocking(repo.close_async())
 
 
 @pytest.mark.asyncio

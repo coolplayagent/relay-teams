@@ -9,6 +9,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC_ROOT = _REPO_ROOT / "src" / "relay_teams"
 _ALLOWED_COMMIT_FILES = {
     Path("src/relay_teams/persistence/db.py"),
+    Path("src/relay_teams/persistence/sqlite_repository.py"),
 }
 _SHARED_SQLITE_WRITERS = {
     Path("src/relay_teams/agents/execution/message_repository.py"): "MessageRepository",

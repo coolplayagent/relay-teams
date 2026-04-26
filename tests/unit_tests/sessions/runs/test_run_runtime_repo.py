@@ -16,6 +16,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 
 
+@pytest.mark.timeout(10)
 def test_run_runtime_repo_handles_concurrent_reads_and_writes(
     tmp_path: Path,
 ) -> None:

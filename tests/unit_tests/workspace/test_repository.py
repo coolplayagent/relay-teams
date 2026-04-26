@@ -16,6 +16,7 @@ from relay_teams.workspace import (
 )
 
 
+@pytest.mark.timeout(10)
 def test_workspace_repository_supports_concurrent_reads(tmp_path: Path) -> None:
     root_path = tmp_path / "workspace-root"
     root_path.mkdir()
