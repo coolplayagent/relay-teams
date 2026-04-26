@@ -81,6 +81,7 @@ MAX_RECENT_OUTPUT_LINES = 3
 MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024
 MAX_DELTA_BYTES = 8192
 COMMAND_BLOCKING_WORKER_COUNT = 8
+COMMAND_PTY_WORKER_COUNT = MAX_BACKGROUND_TASKS * 2
 _DEFAULT_PTY_COLUMNS = 120
 _DEFAULT_PTY_ROWS = 40
 _STOP_WAIT_TIMEOUT_SECONDS = 10.0
@@ -361,10 +362,12 @@ class _WindowsConPtyTransport(_BackgroundTaskTransport):
         proc: _WindowsPtyProcessProtocol,
         *,
         blocking_executor: ThreadPoolExecutor,
+        pty_executor: ThreadPoolExecutor,
         cleanup_root: Path | None = None,
     ) -> None:
         self._proc = proc
         self._blocking_executor = blocking_executor
+        self._pty_executor = pty_executor
         self._cached_returncode: int | None = None
         self._cleanup_root = cleanup_root
 
@@ -378,6 +381,19 @@ class _WindowsConPtyTransport(_BackgroundTaskTransport):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._blocking_executor,
+            partial(function, *args, **kwargs),
+        )
+
+    async def _run_pty_blocking(
+        self,
+        function: Callable[ParamT, ResultT],
+        /,
+        *args: ParamT.args,
+        **kwargs: ParamT.kwargs,
+    ) -> ResultT:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._pty_executor,
             partial(function, *args, **kwargs),
         )
 
@@ -410,7 +426,7 @@ class _WindowsConPtyTransport(_BackgroundTaskTransport):
     async def wait(self) -> int | None:
         if self._cached_returncode is not None:
             return self._cached_returncode
-        self._cached_returncode = await self._run_blocking(self._proc.wait)
+        self._cached_returncode = await self._run_pty_blocking(self._proc.wait)
         return self._cached_returncode
 
     async def write(self, chars: str) -> None:
@@ -477,7 +493,11 @@ class BackgroundTaskManager:
         self._completion_listener: _BackgroundTaskCompletionListener | None = None
         self._blocking_executor = ThreadPoolExecutor(
             max_workers=COMMAND_BLOCKING_WORKER_COUNT,
-            thread_name_prefix="background-task-io",
+            thread_name_prefix="background-task-control",
+        )
+        self._pty_executor = ThreadPoolExecutor(
+            max_workers=COMMAND_PTY_WORKER_COUNT,
+            thread_name_prefix="background-task-pty",
         )
 
     async def _run_blocking(
@@ -490,6 +510,19 @@ class BackgroundTaskManager:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._blocking_executor,
+            partial(function, *args, **kwargs),
+        )
+
+    async def _run_pty_blocking(
+        self,
+        function: Callable[ParamT, ResultT],
+        /,
+        *args: ParamT.args,
+        **kwargs: ParamT.kwargs,
+    ) -> ResultT:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._pty_executor,
             partial(function, *args, **kwargs),
         )
 
@@ -832,6 +865,7 @@ class BackgroundTaskManager:
                     reason="server_shutdown",
                 )
         self._blocking_executor.shutdown(wait=False, cancel_futures=True)
+        self._pty_executor.shutdown(wait=False, cancel_futures=True)
 
     async def _spawn_runtime(
         self,
@@ -1029,6 +1063,7 @@ class BackgroundTaskManager:
         return _WindowsConPtyTransport(
             process,
             blocking_executor=self._blocking_executor,
+            pty_executor=self._pty_executor,
             cleanup_root=prepared.temp_root,
         )
 
@@ -1166,6 +1201,7 @@ class BackgroundTaskManager:
         return _WindowsConPtyTransport(
             process,
             blocking_executor=self._blocking_executor,
+            pty_executor=self._pty_executor,
         )
 
     async def _pump_stream(
@@ -1194,7 +1230,7 @@ class BackgroundTaskManager:
         try:
             while True:
                 try:
-                    chunk = await self._run_blocking(self._read_master_fd, fd)
+                    chunk = await self._run_pty_blocking(self._read_master_fd, fd)
                 except OSError as exc:
                     if exc.errno == errno.EIO:
                         break
@@ -1218,7 +1254,7 @@ class BackgroundTaskManager:
         try:
             while True:
                 try:
-                    chunk = await self._run_blocking(proc.read, MAX_DELTA_BYTES)
+                    chunk = await self._run_pty_blocking(proc.read, MAX_DELTA_BYTES)
                 except EOFError:
                     break
                 if not chunk:

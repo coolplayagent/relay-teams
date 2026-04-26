@@ -14,7 +14,7 @@ from relay_teams.agents.orchestration.task_execution_service import (
 )
 from relay_teams.agents.orchestration.task_execution_service import (
     TASK_MEMORY_RESULT_EXCERPT_CHARS,
-    _truncate_task_memory_result,
+    truncate_task_memory_result,
 )
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.enums import TaskStatus
@@ -68,7 +68,7 @@ def _task_envelope(
 def test_truncate_task_memory_result_limits_long_normalized_results() -> None:
     result = "alpha\n" + ("x" * (TASK_MEMORY_RESULT_EXCERPT_CHARS + 10))
 
-    truncated = _truncate_task_memory_result(result)
+    truncated = truncate_task_memory_result(result)
 
     assert len(truncated) == TASK_MEMORY_RESULT_EXCERPT_CHARS + 3
     assert truncated.endswith("...")

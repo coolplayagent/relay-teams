@@ -5,7 +5,6 @@ from relay_teams.agents.orchestration.harnesses.llm_harness import TaskLlmHarnes
 from relay_teams.agents.orchestration.harnesses.persistence_harness import (
     TASK_MEMORY_RESULT_EXCERPT_CHARS,
     TaskPersistenceHarness,
-    _truncate_task_memory_result,
     truncate_task_memory_result,
 )
 from relay_teams.agents.orchestration.harnesses.prompt_harness import (
@@ -21,6 +20,5 @@ __all__ = [
     "TaskPersistenceHarness",
     "TaskPromptHarness",
     "TaskToolHarness",
-    "_truncate_task_memory_result",
     "truncate_task_memory_result",
 ]

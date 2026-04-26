@@ -672,6 +672,3 @@ def truncate_task_memory_result(result: str) -> str:
     if len(normalized) <= TASK_MEMORY_RESULT_EXCERPT_CHARS:
         return normalized
     return normalized[:TASK_MEMORY_RESULT_EXCERPT_CHARS].rstrip() + "..."
-
-
-_truncate_task_memory_result = truncate_task_memory_result

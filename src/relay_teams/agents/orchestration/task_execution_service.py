@@ -78,11 +78,8 @@ LOGGER = get_logger(__name__)
 __all__ = [
     "TASK_MEMORY_RESULT_EXCERPT_CHARS",
     "TaskExecutionService",
-    "_truncate_task_memory_result",
     "truncate_task_memory_result",
 ]
-
-_truncate_task_memory_result = truncate_task_memory_result
 
 
 class TaskExecutionService(BaseModel):

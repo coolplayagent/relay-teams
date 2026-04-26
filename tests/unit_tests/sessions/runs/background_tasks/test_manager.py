@@ -582,6 +582,47 @@ async def test_background_task_manager_writes_logs_via_dedicated_executor(
 
 
 @pytest.mark.asyncio
+async def test_background_task_manager_control_executor_runs_when_pty_executor_busy(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-pty-executor.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    manager._pty_executor.shutdown(wait=False, cancel_futures=True)
+    manager._pty_executor = ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="test-pty",
+    )
+    loop = asyncio.get_running_loop()
+    pty_started = threading.Event()
+    pty_release = threading.Event()
+
+    def _block_pty_executor() -> bool:
+        pty_started.set()
+        return pty_release.wait(timeout=5.0)
+
+    pty_blocker = loop.run_in_executor(manager._pty_executor, _block_pty_executor)
+
+    try:
+        for _ in range(50):
+            if pty_started.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert pty_started.is_set() is True
+
+        result = await asyncio.wait_for(
+            manager._run_blocking(lambda: "control-ready"),
+            timeout=1.0,
+        )
+
+        assert result == "control-ready"
+    finally:
+        pty_release.set()
+        await asyncio.wait_for(pty_blocker, timeout=1.0)
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_background_task_manager_emits_monitor_line_events(
     tmp_path: Path,
 ) -> None:
