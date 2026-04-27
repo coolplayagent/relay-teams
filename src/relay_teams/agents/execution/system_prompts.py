@@ -10,6 +10,7 @@ import platform
 from collections.abc import Sequence
 from pathlib import Path
 import shutil
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,12 @@ from relay_teams.agents.execution.prompt_instructions import (
     PromptInstructionResolver,
 )
 from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookEventInput,
+    HookEventName,
+    InstructionsLoadedInput,
+)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
@@ -30,8 +37,10 @@ from relay_teams.roles.role_registry import (
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.run_models import (
     RuntimePromptConversationContext,
+    RunKind,
     RunTopologySnapshot,
 )
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import (
     WorkspaceHandle,
@@ -43,6 +52,18 @@ from relay_teams.workspace import (
 from relay_teams.workspace.ssh_profile_service import SshProfileService
 
 LOGGER = get_logger(__name__)
+
+
+@runtime_checkable
+class RuntimePromptHookService(Protocol):
+    async def execute(
+        self,
+        *,
+        event_input: HookEventInput,
+        run_event_hub: RunEventHub | None,
+    ) -> HookDecisionBundle:
+        raise NotImplementedError
+
 
 COMMON_MODE_PROMPT = (
     "## Runtime Rules\n"
@@ -570,6 +591,8 @@ async def build_runtime_system_prompt(
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
+    hook_service: RuntimePromptHookService | None = None,
+    run_event_hub: RunEventHub | None = None,
 ) -> str:
     sections = await build_runtime_system_prompt_result(
         data,
@@ -577,6 +600,8 @@ async def build_runtime_system_prompt(
         runtime_role_resolver=runtime_role_resolver,
         mcp_registry=mcp_registry,
         instruction_resolver=instruction_resolver,
+        hook_service=hook_service,
+        run_event_hub=run_event_hub,
     )
     return sections.prompt
 
@@ -588,6 +613,8 @@ async def build_runtime_system_prompt_result(
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
+    hook_service: RuntimePromptHookService | None = None,
+    run_event_hub: RunEventHub | None = None,
 ) -> RuntimePromptSections:
     base_instruction_sections: list[str] = [data.role.system_prompt, COMMON_MODE_PROMPT]
     capability_summary_sections: list[str] = []
@@ -611,6 +638,12 @@ async def build_runtime_system_prompt_result(
         instruction_resolver=instruction_resolver,
         working_directory=data.working_directory,
         worktree_root=data.worktree_root,
+    )
+    await _emit_instructions_loaded_hook(
+        data=data,
+        loaded_instructions=loaded_instructions,
+        hook_service=hook_service,
+        run_event_hub=run_event_hub,
     )
     workspace_context_sections.extend(loaded_instructions.sections)
     if _is_feishu_group_conversation(data.conversation_context):
@@ -835,6 +868,59 @@ async def _load_runtime_prompt_instructions(
     )
 
 
+async def _emit_instructions_loaded_hook(
+    *,
+    data: RuntimePromptBuildInput,
+    loaded_instructions: LoadedPromptInstructions,
+    hook_service: RuntimePromptHookService | None,
+    run_event_hub: RunEventHub | None,
+) -> None:
+    if hook_service is None or run_event_hub is None or data.task is None:
+        return
+    for source in loaded_instructions.sources:
+        file_path = str(source.local_path) if source.local_path is not None else ""
+        local_paths = (file_path,) if file_path else ()
+        _ = await hook_service.execute(
+            event_input=InstructionsLoadedInput(
+                event_name=HookEventName.INSTRUCTIONS_LOADED,
+                session_id=data.task.session_id,
+                run_id=data.task.trace_id,
+                trace_id=data.task.trace_id,
+                task_id=data.task.task_id,
+                role_id=data.role.role_id,
+                session_mode=_hook_session_mode(data),
+                run_kind=RunKind.CONVERSATION.value,
+                instruction_source_count=1,
+                local_instruction_paths=local_paths,
+                mode="source",
+                source=source.source,
+                source_type=source.source_type,
+                file_path=file_path,
+                load_reason=source.load_reason,
+                memory_type=source.memory_type,
+            ),
+            run_event_hub=run_event_hub,
+        )
+    _ = await hook_service.execute(
+        event_input=InstructionsLoadedInput(
+            event_name=HookEventName.INSTRUCTIONS_LOADED,
+            session_id=data.task.session_id,
+            run_id=data.task.trace_id,
+            trace_id=data.task.trace_id,
+            task_id=data.task.task_id,
+            role_id=data.role.role_id,
+            session_mode=_hook_session_mode(data),
+            run_kind=RunKind.CONVERSATION.value,
+            instruction_source_count=len(loaded_instructions.sections),
+            local_instruction_paths=tuple(
+                str(path) for path in loaded_instructions.local_paths
+            ),
+            mode="aggregate",
+        ),
+        run_event_hub=run_event_hub,
+    )
+
+
 async def _build_available_role_block(
     *,
     role: RoleDefinition,
@@ -889,6 +975,12 @@ def _tool_names(entries: Sequence[object]) -> tuple[str, ...]:
         if isinstance(name, str) and name.strip():
             names.append(name)
     return tuple(names)
+
+
+def _hook_session_mode(data: RuntimePromptBuildInput) -> str:
+    if data.topology is None:
+        return SessionMode.NORMAL.value
+    return data.topology.session_mode.value
 
 
 def _append_available_subagents_prompt(
@@ -980,6 +1072,8 @@ class RuntimePromptBuilder(BaseModel):
     runtime_role_resolver: RuntimeRoleResolver | None = None
     mcp_registry: McpRegistry | None = None
     instruction_resolver: PromptInstructionResolver | None = None
+    hook_service: RuntimePromptHookService | None = None
+    run_event_hub: RunEventHub | None = None
 
     async def build(self, data: PromptBuildInput) -> str:
         sections = await self.build_sections(data)
@@ -995,6 +1089,8 @@ class RuntimePromptBuilder(BaseModel):
             runtime_role_resolver=self.runtime_role_resolver,
             mcp_registry=self.mcp_registry,
             instruction_resolver=self.instruction_resolver,
+            hook_service=self.hook_service,
+            run_event_hub=self.run_event_hub,
         )
 
     async def build_details(

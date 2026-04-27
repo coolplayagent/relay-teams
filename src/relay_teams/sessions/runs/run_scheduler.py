@@ -78,7 +78,7 @@ class RunScheduler:
         resume_existing_run: Callable[[str], Awaitable[RunResult]],
         complete_pending_user_questions: Callable[[str, str], None],
         emit_notification: Callable[
-            [NotificationType, str, str, str, str, str],
+            [NotificationType, str, str, str, str, str, str, str],
             None,
         ],
     ) -> None:
@@ -517,6 +517,8 @@ class RunScheduler:
                 run_id,
                 "Run Stopped",
                 f"Run {run_id} was stopped before start.",
+                intent.session_mode.value,
+                intent.run_kind.value,
             )
             with bind_trace_context(
                 trace_id=run_id, run_id=run_id, session_id=session_id

@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
+from os import stat_result
 from pathlib import Path
+
+import pytest
 
 from relay_teams.hooks.hook_models import HookEventName
 from relay_teams.hooks.hook_models import HooksConfig
@@ -447,6 +451,60 @@ def test_discover_uses_later_sources_to_override_duplicate_names(
     }
 
 
+def test_discover_aggregates_duplicate_skill_logs(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first_dir = tmp_path / "first" / "skills"
+    second_dir = tmp_path / "second" / "skills"
+    third_dir = tmp_path / "third" / "skills"
+    _write_skill(
+        first_dir / "shared",
+        name="shared",
+        description="first shared skill",
+        instructions="Use the first shared skill.",
+    )
+    _write_skill(
+        second_dir / "shared",
+        name="shared",
+        description="second shared skill",
+        instructions="Use the second shared skill.",
+    )
+    _write_skill(
+        third_dir / "shared",
+        name="shared",
+        description="third shared skill",
+        instructions="Use the third shared skill.",
+    )
+    directory = SkillsDirectory(
+        sources=(
+            (SkillSource.USER_CODEX, first_dir),
+            (SkillSource.USER_CLAUDE, second_dir),
+            (SkillSource.USER_AGENTS, third_dir),
+        )
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="relay_teams.backend.skills.discovery",
+    ):
+        directory.discover()
+        messages = [record.getMessage() for record in caplog.records]
+        caplog.clear()
+        directory.discover()
+        repeat_messages = [record.getMessage() for record in caplog.records]
+
+    assert any(
+        "Resolved 2 duplicate skill definitions by source precedence" in message
+        and "shared:" in message
+        and "user_claude" in message
+        and "user_agents" in message
+        for message in messages
+    )
+    assert all("Overriding duplicate skill" not in message for message in messages)
+    assert repeat_messages == []
+
+
 def test_default_scope_discovery_prefers_project_and_native_skill_sources(
     tmp_path: Path,
     monkeypatch,
@@ -722,6 +780,202 @@ def test_discover_skips_invalid_and_excessively_nested_skills(tmp_path: Path) ->
     assert directory.get_skill("too-deep") is None
 
 
+def test_discover_aggregates_invalid_skill_warnings_and_skips_unchanged_scan(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir / "valid",
+        name="valid",
+        description="valid skill",
+        instructions="Use the valid skill.",
+    )
+    for index in range(6):
+        invalid_dir = skills_dir / f"invalid-{index}"
+        invalid_dir.mkdir(parents=True)
+        (invalid_dir / "SKILL.md").write_text("name: invalid\n", encoding="utf-8")
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="relay_teams.backend.skills.discovery",
+    ):
+        directory.discover()
+        messages = [record.getMessage() for record in caplog.records]
+        caplog.clear()
+        directory.discover()
+        repeat_messages = [record.getMessage() for record in caplog.records]
+
+    assert tuple(skill.ref for skill in directory.list_skills()) == ("valid",)
+    assert any(
+        "Skipped 6 invalid skill manifests during discovery" in message
+        and "invalid-0" in message
+        and "1 more omitted" in message
+        for message in messages
+    )
+    assert all("due to parsing error" not in message for message in messages)
+    assert repeat_messages == []
+
+
+def test_discover_refreshes_cache_when_autodiscovered_resource_changes(
+    tmp_path: Path,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "valid"
+    _write_skill(
+        skill_dir,
+        name="valid",
+        description="valid skill",
+        instructions="Use the valid skill.",
+    )
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+    first_skill = directory.get_skill("valid")
+
+    resources_dir = skill_dir / "resources"
+    resources_dir.mkdir()
+    (resources_dir / "usage.txt").write_text("Usage\n", encoding="utf-8")
+    directory.discover()
+    refreshed_skill = directory.get_skill("valid")
+
+    assert first_skill is not None
+    assert "usage.txt" not in first_skill.metadata.resources
+    assert refreshed_skill is not None
+    assert "usage.txt" in refreshed_skill.metadata.resources
+
+
+def test_discover_retries_when_manifest_read_fails_transiently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "valid"
+    _write_skill(
+        skill_dir,
+        name="valid",
+        description="valid skill",
+        instructions="Use the valid skill.",
+    )
+    manifest_path = skill_dir / "SKILL.md"
+    original_read_text = Path.read_text
+    failed_reads = 0
+
+    def flaky_read_text(
+        self: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        nonlocal failed_reads
+        if self == manifest_path and failed_reads == 0:
+            failed_reads += 1
+            raise OSError("temporarily unavailable")
+        return original_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+    first_skill = directory.get_skill("valid")
+    directory.discover()
+    retried_skill = directory.get_skill("valid")
+
+    assert failed_reads == 1
+    assert first_skill is None
+    assert retried_skill is not None
+
+
+def test_discover_signature_tolerates_unresolvable_autodiscovered_script(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    skill_dir = skills_dir / "valid"
+    scripts_dir = skill_dir / "scripts"
+    _write_skill(
+        skill_dir,
+        name="valid",
+        description="valid skill",
+        instructions="Use the valid skill.",
+    )
+    scripts_dir.mkdir()
+    script_path = scripts_dir / "loop.py"
+    script_path.write_text("print('loop')\n", encoding="utf-8")
+    original_stat = Path.stat
+    original_resolve = Path.resolve
+
+    def broken_stat(self: Path, *, follow_symlinks: bool = True) -> stat_result:
+        if self == script_path:
+            raise OSError("symlink loop")
+        return original_stat(self, follow_symlinks=follow_symlinks)
+
+    def loop_resolve(self: Path, strict: bool = False) -> Path:
+        if self == script_path:
+            raise RuntimeError("Symlink loop from loop.py")
+        return original_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "stat", broken_stat)
+    monkeypatch.setattr(Path, "resolve", loop_resolve)
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+    skill = directory.get_skill("valid")
+
+    assert skill is not None
+    assert "scripts/loop.py" in skill.metadata.resources
+
+
+def test_discover_signature_scan_error_skips_only_that_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skills_dir = tmp_path / "skills"
+    _write_skill(
+        skills_dir / "valid",
+        name="valid",
+        description="valid skill",
+        instructions="Use the valid skill.",
+    )
+    bad_dir = skills_dir / "bad"
+    bad_dir.mkdir(parents=True)
+    bad_manifest = bad_dir / "SKILL.md"
+    bad_manifest.write_text("name: bad\n", encoding="utf-8")
+    original_iter_discovery_paths = discovery._iter_skill_discovery_paths
+
+    def broken_iter_discovery_paths(manifest_path: Path) -> tuple[Path, ...]:
+        if manifest_path == bad_manifest:
+            raise PermissionError("resources unavailable")
+        return original_iter_discovery_paths(manifest_path)
+
+    monkeypatch.setattr(
+        discovery,
+        "_iter_skill_discovery_paths",
+        broken_iter_discovery_paths,
+    )
+    directory = SkillsDirectory(
+        sources=((SkillSource.USER_RELAY_TEAMS, skills_dir),),
+        max_depth=3,
+    )
+
+    directory.discover()
+
+    assert directory.get_skill("valid") is not None
+    assert directory.get_skill("bad") is None
+
+
 def test_discover_keeps_skill_when_one_frontmatter_hook_group_is_empty(
     tmp_path: Path,
 ) -> None:
@@ -755,7 +1009,7 @@ def test_discover_keeps_skill_when_one_frontmatter_hook_group_is_empty(
     groups = skill.metadata.hooks.hooks[HookEventName.PRE_TOOL_USE]
     assert len(groups) == 2
     assert groups[0].hooks == ()
-    assert groups[1].matcher == "Read"
+    assert groups[1].matcher == "read"
     assert groups[1].hooks[0].command == "echo ok"
 
 
@@ -791,7 +1045,7 @@ def test_discover_normalizes_legacy_frontmatter_hook_fields(tmp_path: Path) -> N
     skill = directory.get_skill("valid")
     assert skill is not None
     groups = skill.metadata.hooks.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert [group.matcher for group in groups] == ["read", "write"]
     assert all(group.hooks[0].if_rule == "Bash(git *)" for group in groups)
 
 

@@ -522,6 +522,7 @@ class ServerContainer:
             _ = self.run_runtime_repo.mark_transient_runs_interrupted()
             self._interrupt_transient_background_tasks()
         self.injection_manager: RunInjectionManager = RunInjectionManager()
+        self.hook_service.set_injection_manager(self.injection_manager)
         self.run_control_manager: RunControlManager = RunControlManager()
         self.active_run_registry: ActiveSessionRunRegistry = ActiveSessionRunRegistry(
             run_runtime_repo=self.run_runtime_repo
@@ -613,6 +614,8 @@ class ServerContainer:
         self.notification_service: NotificationService = NotificationService(
             run_event_hub=self.run_event_hub,
             get_config=self.notification_config_manager.get_notification_config,
+            hook_service=self.hook_service,
+            injection_manager=self.injection_manager,
             dispatchers=(
                 FeishuNotificationDispatcher(
                     session_repo=self.session_repo,
@@ -702,6 +705,8 @@ class ServerContainer:
                     app_config_dir=runtime.paths.config_dir,
                     instructions=runtime.prompt_instructions.instructions,
                 ),
+                hook_service=self.hook_service,
+                run_event_hub=self.run_event_hub,
             ),
             provider_factory=self._provider_factory,
             task_execution_service=self.task_execution_service,
@@ -859,6 +864,8 @@ class ServerContainer:
         self.notification_service = NotificationService(
             run_event_hub=self.run_event_hub,
             get_config=self.notification_config_manager.get_notification_config,
+            hook_service=self.hook_service,
+            injection_manager=self.injection_manager,
             dispatchers=(
                 FeishuNotificationDispatcher(
                     session_repo=self.session_repo,
@@ -1284,6 +1291,8 @@ class ServerContainer:
                 app_config_dir=self.runtime.paths.config_dir,
                 instructions=self.runtime.prompt_instructions.instructions,
             ),
+            hook_service=self.hook_service,
+            run_event_hub=self.run_event_hub,
         )
         self.meta_agent.coordinator.provider_factory = self._provider_factory
         self.meta_agent.coordinator.task_execution_service = self.task_execution_service

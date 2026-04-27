@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Awaitable
 from typing import Dict, List, Optional, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -68,15 +67,6 @@ class TaskOrchestrationServiceLike(Protocol):
     ) -> Dict[str, JsonValue]:
         raise NotImplementedError  # pragma: no cover
 
-    def update_task(
-        self,
-        *,
-        run_id: Optional[str],
-        task_id: str,
-        update: TaskUpdate,
-    ) -> Dict[str, JsonValue]:
-        raise NotImplementedError  # pragma: no cover
-
     async def update_task_async(
         self,
         *,
@@ -86,23 +76,7 @@ class TaskOrchestrationServiceLike(Protocol):
     ) -> Dict[str, JsonValue]:
         raise NotImplementedError  # pragma: no cover
 
-    def list_delegated_tasks(
-        self,
-        *,
-        run_id: str,
-        include_root: bool = False,
-    ) -> Dict[str, JsonValue]:
-        raise NotImplementedError  # pragma: no cover
-
     async def list_delegated_tasks_async(
-        self,
-        *,
-        run_id: str,
-        include_root: bool = False,
-    ) -> Dict[str, JsonValue]:
-        raise NotImplementedError  # pragma: no cover
-
-    def list_run_tasks(
         self,
         *,
         run_id: str,
@@ -118,14 +92,14 @@ class TaskOrchestrationServiceLike(Protocol):
     ) -> Dict[str, JsonValue]:
         raise NotImplementedError  # pragma: no cover
 
-    def dispatch_task(
+    async def dispatch_task(
         self,
         *,
         run_id: Optional[str],
         task_id: str,
         role_id: str,
         prompt: str = "",
-    ) -> Awaitable[Dict[str, JsonValue]]:
+    ) -> Dict[str, JsonValue]:
         raise NotImplementedError  # pragma: no cover
 
 

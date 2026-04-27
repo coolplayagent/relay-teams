@@ -384,6 +384,54 @@ async def test_maybe_compact_history_emits_pre_and_post_compact_hooks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_maybe_compact_history_skips_compaction_when_precompact_denies() -> None:
+    session = object.__new__(AgentLlmSession)
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="summarize the file")]),
+        ModelResponse(parts=[]),
+    ]
+    hook_service = _FakePromptHookService(
+        HookDecisionBundle(
+            decision=HookDecisionType.DENY,
+            reason="keep full context",
+        )
+    )
+    compaction_service = _FakeCompactionService(
+        applied=True,
+        messages=(history[-1],),
+    )
+    session._conversation_compaction_service = cast(
+        ConversationCompactionService,
+        compaction_service,
+    )
+    session._conversation_microcompact_service = cast(
+        ConversationMicrocompactService,
+        None,
+    )
+    session._hook_service = cast(Any, hook_service)
+    session._run_event_hub = cast(Any, None)
+
+    result = await AgentLlmSession._maybe_compact_history(
+        session,
+        request=_build_request(),
+        history=history,
+        source_history=list(history),
+        conversation_id="conv-1",
+        budget=ConversationCompactionBudget(
+            context_window=100,
+            history_trigger_tokens=80,
+            history_target_tokens=40,
+        ),
+        estimated_tokens_before_microcompact=120,
+        estimated_tokens_after_microcompact=80,
+    )
+
+    assert result is history
+    assert compaction_service.calls == []
+    assert hook_service.events == [HookEventName.PRE_COMPACT]
+
+
+@pytest.mark.asyncio
 async def test_prepare_prompt_context_inserts_replay_bridge_for_resume_history() -> (
     None
 ):

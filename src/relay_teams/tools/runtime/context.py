@@ -103,6 +103,8 @@ class ToolDeps(BaseModel):
     trace_id: str
     task_id: str
     session_id: str
+    session_mode: str = "normal"
+    run_kind: str = "conversation"
     workspace_id: str
     conversation_id: str
     instance_id: str

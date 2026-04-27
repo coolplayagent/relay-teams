@@ -26,6 +26,11 @@ _SCRIPT_DESCRIPTION_PATTERN = re.compile(
     r"^- ([\w-]+):\s*(.*?)(?:\s*\((.*?)\))?$",
     re.MULTILINE,
 )
+_DISCOVERY_WARNING_SAMPLE_LIMIT = 5
+
+_SkillDiscoverySignature = tuple[tuple[str, str, int, int], ...]
+_SkillLoadWarningEntry = tuple[Path, str]
+_SkillDuplicateWarningEntry = tuple[str, Path, SkillSource, Path, SkillSource]
 
 
 def get_builtin_skills_dir_path() -> Path:
@@ -77,6 +82,7 @@ class SkillsDirectory:
             (source, _resolve_dir(base_dir)) for source, base_dir in sources
         )
         self._skills: dict[str, Skill] = {}
+        self._discovery_signature: _SkillDiscoverySignature | None = None
         self._lock = RLock()
 
     @classmethod
@@ -154,33 +160,132 @@ class SkillsDirectory:
                 "max_depth": self.max_depth,
             },
         ):
+            discovery_signature = self._build_discovery_signature()
+            with self._lock:
+                if discovery_signature == self._discovery_signature:
+                    return
+
             discovered_skills: dict[str, Skill] = {}
+            duplicate_warnings: list[_SkillDuplicateWarningEntry] = []
+            load_warnings: list[_SkillLoadWarningEntry] = []
+            had_transient_load_failure = False
             for source, base_dir in self.sources:
                 if not base_dir.exists():
                     continue
-                for path in sorted(base_dir.rglob("SKILL.md")):
+                for path in self._iter_skill_manifest_paths(base_dir):
                     try:
-                        rel = path.relative_to(base_dir)
-                        if len(rel.parts) > self.max_depth + 1:
-                            continue
-                        skill = self._load_skill(path=path, source=source)
+                        skill = self._load_skill(
+                            path=path,
+                            source=source,
+                            load_warnings=load_warnings,
+                        )
                         if skill is None:
                             continue
                         existing_skill = discovered_skills.get(skill.metadata.name)
                         if existing_skill is not None:
-                            logger.warning(
-                                "Overriding duplicate skill %s from %s (%s) with %s (%s)",
-                                skill.metadata.name,
-                                existing_skill.directory,
-                                existing_skill.source.value,
-                                skill.directory,
-                                skill.source.value,
+                            duplicate_warnings.append(
+                                (
+                                    skill.metadata.name,
+                                    existing_skill.directory,
+                                    existing_skill.source,
+                                    skill.directory,
+                                    skill.source,
+                                )
                             )
                         discovered_skills[skill.metadata.name] = skill
+                    except OSError as exc:
+                        had_transient_load_failure = True
+                        load_warnings.append((path, str(exc)))
                     except Exception as exc:
-                        logger.warning("Failed to load skill at %s: %s", path, exc)
+                        load_warnings.append((path, str(exc)))
             with self._lock:
                 self._skills = discovered_skills
+                if had_transient_load_failure:
+                    self._discovery_signature = None
+                else:
+                    self._discovery_signature = discovery_signature
+            self._log_discovery_warnings(
+                duplicate_warnings=duplicate_warnings,
+                load_warnings=load_warnings,
+            )
+
+    def _build_discovery_signature(self) -> _SkillDiscoverySignature:
+        signature: list[tuple[str, str, int, int]] = []
+        for source, base_dir in self.sources:
+            if not base_dir.exists():
+                continue
+            for manifest_path in self._iter_skill_manifest_paths(base_dir):
+                try:
+                    discovery_paths = _iter_skill_discovery_paths(manifest_path)
+                except (OSError, RuntimeError):
+                    signature.append(
+                        (source.value, _safe_signature_path(manifest_path), -1, -1)
+                    )
+                    continue
+                for path in discovery_paths:
+                    signature_path = _safe_signature_path(path)
+                    try:
+                        stat_result = path.stat()
+                        signature.append(
+                            (
+                                source.value,
+                                signature_path,
+                                stat_result.st_mtime_ns,
+                                stat_result.st_size,
+                            )
+                        )
+                    except OSError:
+                        signature.append((source.value, signature_path, -1, -1))
+        return tuple(signature)
+
+    def _iter_skill_manifest_paths(self, base_dir: Path) -> tuple[Path, ...]:
+        return tuple(
+            path
+            for path in sorted(base_dir.rglob("SKILL.md"))
+            if len(path.relative_to(base_dir).parts) <= self.max_depth + 1
+        )
+
+    @staticmethod
+    def _log_discovery_warnings(
+        *,
+        duplicate_warnings: list[_SkillDuplicateWarningEntry],
+        load_warnings: list[_SkillLoadWarningEntry],
+    ) -> None:
+        if duplicate_warnings:
+            samples = tuple(
+                (
+                    f"{name}: {previous_path} ({previous_source.value}) -> "
+                    f"{selected_path} ({selected_source.value})"
+                )
+                for (
+                    name,
+                    previous_path,
+                    previous_source,
+                    selected_path,
+                    selected_source,
+                ) in duplicate_warnings[:_DISCOVERY_WARNING_SAMPLE_LIMIT]
+            )
+            logger.info(
+                "Resolved %s duplicate skill definitions by source precedence. %s",
+                len(duplicate_warnings),
+                _format_discovery_warning_samples(
+                    samples=samples,
+                    total_count=len(duplicate_warnings),
+                ),
+            )
+        if load_warnings:
+            samples = tuple(
+                f"{path}: {message}"
+                for path, message in load_warnings[:_DISCOVERY_WARNING_SAMPLE_LIMIT]
+            )
+            logger.warning(
+                "Skipped %s invalid skill manifests during discovery. %s",
+                len(load_warnings),
+                _format_discovery_warning_samples(
+                    samples=samples,
+                    total_count=len(load_warnings),
+                ),
+            )
 
     def list_skills(self) -> list[Skill]:
         with self._lock:
@@ -211,7 +316,13 @@ class SkillsDirectory:
         body = "".join(lines[end_index + 1 :])
         return front_matter, body
 
-    def _load_skill(self, *, path: Path, source: SkillSource) -> Skill | None:
+    def _load_skill(
+        self,
+        *,
+        path: Path,
+        source: SkillSource,
+        load_warnings: list[_SkillLoadWarningEntry] | None = None,
+    ) -> Skill | None:
         with trace_span(
             logger,
             component="skills.discovery",
@@ -223,7 +334,8 @@ class SkillsDirectory:
                 front_matter, body = self._split_front_matter(raw)
                 data = _as_object_mapping(yaml.safe_load(front_matter))
             except Exception as exc:
-                logger.warning("Skipping %s due to parsing error: %s", path, exc)
+                if load_warnings is not None:
+                    load_warnings.append((path, str(exc)))
                 return None
 
             if data is None:
@@ -388,6 +500,42 @@ def _resolve_optional_path(base_dir: Path, value: object) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return base_dir / value
+
+
+def _safe_signature_path(path: Path) -> str:
+    try:
+        return path.resolve().as_posix()
+    except (OSError, RuntimeError):
+        return path.absolute().as_posix()
+
+
+def _iter_skill_discovery_paths(manifest_path: Path) -> tuple[Path, ...]:
+    skill_dir = manifest_path.parent
+    paths: list[Path] = [manifest_path]
+    for resource_dir_name in ("resources", "assets"):
+        resource_dir = skill_dir / resource_dir_name
+        if resource_dir.exists() and resource_dir.is_dir():
+            paths.extend(
+                path for path in sorted(resource_dir.glob("*")) if path.is_file()
+            )
+    scripts_dir = skill_dir / "scripts"
+    if scripts_dir.exists() and scripts_dir.is_dir():
+        paths.extend(sorted(scripts_dir.glob("*.py")))
+    return tuple(paths)
+
+
+def _format_discovery_warning_samples(
+    *,
+    samples: tuple[str, ...],
+    total_count: int,
+) -> str:
+    if not samples:
+        return "No examples available."
+    examples = "; ".join(samples)
+    omitted_count = total_count - len(samples)
+    if omitted_count <= 0:
+        return f"Examples: {examples}."
+    return f"Examples: {examples}; {omitted_count} more omitted."
 
 
 def _parse_frontmatter_hooks(value: object) -> HooksConfig:

@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 
@@ -134,3 +136,118 @@ def test_upsert_preserves_existing_lifecycle_when_not_explicit(
     refreshed = repository.get_instance("inst-1")
     assert refreshed.lifecycle == InstanceLifecycle.REUSABLE
     assert refreshed.parent_instance_id == "inst-new-parent"
+
+
+@pytest.mark.asyncio
+async def test_async_repository_methods_use_direct_sqlite_paths(
+    tmp_path: Path,
+) -> None:
+    repository = AgentInstanceRepository(tmp_path / "agent_instances_async.db")
+    try:
+        await repository.upsert_instance_async(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id="inst-coordinator",
+            role_id="Coordinator",
+            workspace_id="workspace-1",
+            conversation_id="conversation-coordinator",
+            status=InstanceStatus.RUNNING,
+        )
+        await repository.upsert_instance_async(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id="inst-reviewer",
+            role_id="reviewer",
+            workspace_id="workspace-1",
+            conversation_id="conversation-reviewer",
+            status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.REUSABLE,
+        )
+        await repository.upsert_instance_async(
+            run_id="subagent_run_1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id="inst-ephemeral",
+            role_id="worker",
+            workspace_id="workspace-1",
+            conversation_id="conversation-worker",
+            status=InstanceStatus.RUNNING,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
+            parent_instance_id="inst-coordinator",
+        )
+
+        await repository.update_session_workspace_async(
+            "session-1",
+            workspace_id="workspace-updated",
+        )
+
+        all_records = await repository.list_all_async()
+        assert [record.instance_id for record in all_records] == [
+            "inst-coordinator",
+            "inst-reviewer",
+            "inst-ephemeral",
+        ]
+        assert {record.workspace_id for record in all_records} == {"workspace-updated"}
+        assert [
+            record.instance_id for record in await repository.list_by_run_async("run-1")
+        ] == ["inst-coordinator", "inst-reviewer"]
+        assert [
+            record.instance_id
+            for record in await repository.list_by_session_async("session-1")
+        ] == ["inst-coordinator", "inst-reviewer", "inst-ephemeral"]
+        assert [
+            record.instance_id
+            for record in await repository.list_running_async("run-1")
+        ] == ["inst-coordinator"]
+
+        assert (
+            await repository.count_normal_mode_subagents_by_session_ids_async(()) == {}
+        )
+        assert await repository.count_normal_mode_subagents_by_session_ids_async(
+            ("session-1", "missing-session")
+        ) == {"session-1": 1}
+
+        assert [
+            record.role_id
+            for record in await repository.list_session_role_instances_async(
+                "session-1"
+            )
+        ] == ["Coordinator", "reviewer"]
+        reviewer = await repository.get_session_role_instance_async(
+            "session-1",
+            "reviewer",
+        )
+        assert reviewer is not None
+        assert reviewer.instance_id == "inst-reviewer"
+        assert (
+            await repository.get_session_role_instance_id_async(
+                "session-1",
+                "reviewer",
+            )
+            == "inst-reviewer"
+        )
+        assert (
+            await repository.get_session_role_instance_id_async(
+                "session-1",
+                "missing-role",
+            )
+            is None
+        )
+
+        failed_instances = await repository.mark_running_instances_failed_async()
+        assert failed_instances == ("inst-coordinator", "inst-ephemeral")
+        assert await repository.mark_running_instances_failed_async() == ()
+        assert (
+            await repository.get_instance_async("inst-coordinator")
+        ).status == InstanceStatus.FAILED
+
+        await repository.delete_instance_async("inst-reviewer")
+        with pytest.raises(KeyError):
+            await repository.get_instance_async("inst-reviewer")
+
+        await repository.delete_by_session_async("session-1")
+        assert await repository.list_all_async() == ()
+    finally:
+        await repository.close_async()

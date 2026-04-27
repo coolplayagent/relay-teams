@@ -10,7 +10,7 @@ from typing import cast
 
 import pytest
 import pytest_asyncio
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, UserPromptPart
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
@@ -23,7 +23,7 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.hooks import HookService
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.media import (
     MediaAssetRepository,
     MediaAssetService,
@@ -85,7 +85,7 @@ async def _close_async_sqlite_repositories_after_test() -> AsyncIterator[None]:
     repositories = tuple(
         repository
         for repository in gc.get_objects()
-        if isinstance(repository, SharedSqliteRepository)
+        if issubclass(type(repository), SharedSqliteRepository)
     )
     for repository in repositories:
         await repository.close_async()
@@ -159,7 +159,8 @@ class _RecoverablePauseProvider:
 
 
 class _CapturingHookService:
-    def __init__(self) -> None:
+    def __init__(self, decision: HookDecisionType = HookDecisionType.ALLOW) -> None:
+        self.decision = decision
         self.calls: list[tuple[object, object | None]] = []
 
     async def execute(
@@ -167,9 +168,9 @@ class _CapturingHookService:
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
-        return object()
+        return HookDecisionBundle(decision=self.decision)
 
 
 class _StaticPromptBuilder(RuntimePromptBuilder):
@@ -232,6 +233,30 @@ class _StaticSkillRuntimeService:
                     authorized_count=len(visible_skills),
                     visible_skills=tuple(visible_skills),
                 ),
+            ),
+        )
+
+
+class _PartiallyFailingToolSchemaMcpRegistry(McpRegistry):
+    def resolve_server_names(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+        expand_wildcards: bool = True,
+    ) -> tuple[str, ...]:
+        _ = strict, consumer, expand_wildcards
+        return tuple(name for name in names if name != "missing")
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        if name == "broken":
+            raise RuntimeError("MCP startup failed")
+        return (
+            McpToolSchema(
+                name=f"{name}_search",
+                description="Search docs",
+                input_schema={"type": "object"},
             ),
         )
 
@@ -494,10 +519,12 @@ async def test_execute_retries_root_completion_when_todos_are_incomplete(
 
     refreshed = task_repo.get("task-1")
     messages = message_repo.get_messages_for_instance("session-1", instance.instance_id)
-    serialized_messages = json.dumps(messages, ensure_ascii=False)
+    history = message_repo.get_history_for_conversation(instance.conversation_id)
+    serialized_messages = ModelMessagesTypeAdapter.dump_json(history).decode()
     assert provider.calls == 2
     assert result.output == "ok-2"
     assert refreshed.status == TaskStatus.COMPLETED
+    assert "<system-reminder>" not in json.dumps(messages, ensure_ascii=False)
     assert "<system-reminder>" in serialized_messages
     assert "finish verification" in serialized_messages
 
@@ -588,6 +615,36 @@ async def test_execute_does_not_emit_task_completed_hook_for_root_task(
     )
 
     assert hook_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_task_completed_hook_denial_prevents_completed_state(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_service_completion_hook_deny.db",
+        provider,
+    )
+    hook_service = _CapturingHookService(HookDecisionType.DENY)
+    service.hook_service = cast(HookService, hook_service)
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.FAILED
+    assert "Task completion denied" in result.output
+    assert provider.prompts == [None]
+    assert len(hook_service.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -1487,30 +1544,6 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
     assert writer_tools["write"].startswith(
         "Write full file contents to the workspace."
     )
-
-
-class _PartiallyFailingToolSchemaMcpRegistry(McpRegistry):
-    def resolve_server_names(
-        self,
-        names: tuple[str, ...],
-        *,
-        strict: bool = True,
-        consumer: str | None = None,
-        expand_wildcards: bool = True,
-    ) -> tuple[str, ...]:
-        _ = strict, consumer, expand_wildcards
-        return tuple(name for name in names if name != "missing")
-
-    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
-        if name == "broken":
-            raise RuntimeError("MCP startup failed")
-        return (
-            McpToolSchema(
-                name=f"{name}_search",
-                description="Search docs",
-                input_schema={"type": "object"},
-            ),
-        )
 
 
 @pytest.mark.asyncio

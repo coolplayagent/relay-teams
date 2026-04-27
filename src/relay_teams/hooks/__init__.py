@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from relay_teams.hooks.hook_event_models import (
     HookEventInput,
+    InstructionsLoadedInput,
+    NotificationInput,
+    PermissionDeniedInput,
     PermissionRequestInput,
     PostCompactInput,
     PostToolUseFailureInput,
@@ -67,6 +70,9 @@ __all__ = [
     "normalize_hooks_payload",
     "parse_tolerant_hooks_payload",
     "validate_hook_event_capabilities",
+    "InstructionsLoadedInput",
+    "NotificationInput",
+    "PermissionDeniedInput",
     "PermissionRequestInput",
     "PostCompactInput",
     "PostToolUseFailureInput",

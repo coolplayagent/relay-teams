@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from threading import Lock
 
-from relay_teams.media import UserPromptContent
+from relay_teams.media import UserPromptContent, user_prompt_content_to_text
 from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.run_models import InjectionMessage
+from relay_teams.system_reminder_text import is_rendered_system_reminder_text
 
 
 class RunInjectionManager:
@@ -65,6 +66,27 @@ class RunInjectionManager:
             self._queues.setdefault(run_id, {})[recipient_instance_id] = []
         return tuple(ordered)
 
+    def drain_system_reminders_at_start(
+        self, run_id: str, recipient_instance_id: str
+    ) -> tuple[InjectionMessage, ...]:
+        with self._lock:
+            queue = self._queues.get(run_id, {}).get(recipient_instance_id, [])
+            if not queue:
+                return ()
+            reminders: list[InjectionMessage] = []
+            remaining: list[InjectionMessage] = []
+            for message in queue:
+                if _is_system_reminder_injection(message):
+                    reminders.append(message)
+                else:
+                    remaining.append(message)
+            if not reminders:
+                return ()
+            self._queues.setdefault(run_id, {})[recipient_instance_id] = remaining
+        return tuple(
+            sorted(reminders, key=lambda item: (item.priority, item.created_at))
+        )
+
 
 def _priority_for(source: InjectionSource) -> int:
     if source == InjectionSource.SYSTEM:
@@ -72,3 +94,10 @@ def _priority_for(source: InjectionSource) -> int:
     if source == InjectionSource.USER:
         return 1
     return 2
+
+
+def _is_system_reminder_injection(message: InjectionMessage) -> bool:
+    if message.source != InjectionSource.SYSTEM:
+        return False
+    text = user_prompt_content_to_text(message.content).strip()
+    return is_rendered_system_reminder_text(text)

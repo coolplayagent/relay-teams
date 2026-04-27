@@ -1618,9 +1618,239 @@
     text-align: left;
 }
 
+.hooks-config-card-editing {
+    background: var(--settings-surface-bg);
+}
+
+.hooks-config-card-editing .mcp-status-card-header {
+    padding: 1.15rem 1.25rem 0.95rem;
+}
+
+.hooks-config-card > .proxy-form-grid,
+.hooks-handler-card-body > .proxy-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 1rem 1.25rem;
+}
+
+.hooks-config-card > .proxy-form-grid {
+    padding: 1rem 1.25rem 1.2rem;
+    border-top: 1px solid var(--settings-divider);
+}
+
+.hooks-config-card > .proxy-form-grid > .form-group,
+.hooks-handler-card-body > .proxy-form-grid > .form-group {
+    min-width: 0;
+    margin-bottom: 0;
+}
+
+.hooks-config-card > .proxy-form-grid > .form-group.form-group-span-2,
+.hooks-handler-card-body > .proxy-form-grid > .form-group.form-group-span-2 {
+    grid-column: 1 / -1;
+}
+
+.hooks-config-card > .proxy-form-grid > .form-group > label,
+.hooks-handler-card-body > .proxy-form-grid > .form-group > label,
+.hooks-handler-card-body > .form-group > label {
+    display: block;
+    min-height: auto;
+    margin-bottom: 0.375rem;
+}
+
+.hooks-config-card > .proxy-form-grid > .form-group > .status-list-description,
+.hooks-handler-card-body > .proxy-form-grid > .form-group > .status-list-description {
+    display: flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 0.65rem 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--settings-border-strong) 72%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--settings-row-bg) 78%, transparent);
+    color: var(--text-primary);
+    box-sizing: border-box;
+}
+
+.hooks-handler-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding: 1rem 1.25rem 1.25rem;
+    border-top: 1px solid var(--settings-divider);
+}
+
+.hooks-handler-stack .proxy-form-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.85rem;
+    margin-bottom: 0.1rem;
+}
+
+.hooks-handler-stack .proxy-form-section-header h6 {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.86rem;
+    font-weight: 650;
+}
+
+.hooks-handler-card {
+    display: flex;
+    flex-direction: column;
+    padding: 1rem;
+    border: 1px solid var(--settings-border-soft);
+    border-radius: 8px;
+    background: var(--settings-surface-muted-bg);
+}
+
+.hooks-handler-card-collapsed {
+    background: color-mix(in srgb, var(--settings-surface-muted-bg) 56%, var(--settings-surface-bg));
+}
+
+.hooks-handler-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.hooks-handler-toggle {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.6rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 30px;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    text-align: left;
+    background: transparent;
+    cursor: pointer;
+}
+
+.hooks-handler-toggle:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--primary) 58%, transparent);
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+.hooks-handler-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    width: 18px;
+    height: 18px;
+    border: 1px solid color-mix(in srgb, var(--settings-border-soft) 72%, transparent);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--settings-surface-bg) 74%, transparent);
+    color: var(--text-secondary);
+}
+
+.hooks-handler-chevron::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    border-radius: 1px;
+    transform: translateY(-1px) rotate(45deg);
+    transition: transform 0.14s ease;
+}
+
+.hooks-handler-card-collapsed .hooks-handler-chevron::before {
+    transform: translateX(-1px) rotate(-45deg);
+}
+
+.hooks-handler-title {
+    min-width: 0;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hooks-handler-hint {
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    white-space: nowrap;
+}
+
+.hooks-handler-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    padding-top: 0.85rem;
+}
+
+.hooks-handler-card-body[hidden] {
+    display: none;
+}
+
+.hooks-handler-card-body > .form-group {
+    margin-bottom: 0;
+}
+
+.hooks-handler-card .config-textarea {
+    min-height: 150px;
+    background: var(--settings-input-bg);
+    border-color: var(--settings-border-strong);
+    border-radius: 6px;
+}
+
 @media (max-width: 720px) {
     .hooks-runtime-card .hooks-runtime-detail-row {
         gap: 0.75rem;
+    }
+
+    .hooks-config-card-editing .mcp-status-card-header {
+        padding: 1rem;
+    }
+
+    .hooks-config-card > .proxy-form-grid,
+    .hooks-handler-card-body > .proxy-form-grid {
+        grid-template-columns: 1fr;
+        gap: 0.85rem;
+    }
+
+    .hooks-config-card > .proxy-form-grid {
+        padding: 1rem;
+    }
+
+    .hooks-config-card > .proxy-form-grid > .form-group,
+    .hooks-config-card > .proxy-form-grid > .form-group.form-group-span-2,
+    .hooks-handler-card-body > .proxy-form-grid > .form-group,
+    .hooks-handler-card-body > .proxy-form-grid > .form-group.form-group-span-2 {
+        grid-column: 1 / -1;
+    }
+
+    .hooks-handler-stack {
+        padding: 1rem;
+    }
+
+    .hooks-handler-stack .proxy-form-section-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .hooks-handler-card {
+        padding: 0.9rem;
+    }
+
+    .hooks-handler-card-header {
+        align-items: flex-start;
+    }
+
+    .hooks-handler-toggle {
+        grid-template-columns: 18px minmax(0, 1fr);
+        gap: 0.5rem;
+    }
+
+    .hooks-handler-hint {
+        grid-column: 2;
     }
 }
 

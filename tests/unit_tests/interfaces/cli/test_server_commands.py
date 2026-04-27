@@ -427,6 +427,14 @@ def test_health_check_host_resolves_wildcard_addresses() -> None:
     assert server_cli._health_check_host("10.0.1.5") == "10.0.1.5"
 
 
+def test_server_bind_base_url_preserves_advertised_bind_host() -> None:
+    assert server_cli._server_bind_base_url("0.0.0.0", 8000) == "http://0.0.0.0:8000"
+    assert server_cli._server_bind_base_url("::", 8000) == "http://[::]:8000"
+    assert (
+        server_cli._server_bind_base_url("127.0.0.1", 8000) == "http://127.0.0.1:8000"
+    )
+
+
 def test_server_cli_get_server_health_async_uses_async_http_client(monkeypatch) -> None:
     response = httpx.Response(
         200,

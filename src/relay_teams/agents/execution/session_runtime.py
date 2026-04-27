@@ -7,18 +7,24 @@ from collections.abc import AsyncIterator, Sequence
 from json import dumps
 from typing import Protocol, cast
 
-from pydantic_ai._agent_graph import ModelRequestNode
+from pydantic_ai._agent_graph import CallToolsNode, ModelRequestNode
 from pydantic import JsonValue
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
+    FunctionToolResultEvent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     ToolCallPart,
     ToolCallPartDelta,
+    ToolReturnPart,
 )
 from pydantic_ai.usage import UsageLimits
 
+from relay_teams.agents.execution.message_commit import (
+    tool_input_validation_failure_to_tool_return,
+)
 from relay_teams.agents.execution.prompt_history import PreparedPromptContext
 from relay_teams.agents.execution.session_mixin_base import AgentLlmSessionMixinBase
 from relay_teams.logger import (
@@ -36,6 +42,7 @@ from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
@@ -76,6 +83,29 @@ class AgentNodeStreamContext(Protocol):
 
 class StreamableModelRequestNode(Protocol):
     def stream(self, ctx: object) -> AgentNodeStreamContext: ...
+
+
+class AgentToolEventStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[object]:
+        raise NotImplementedError  # pragma: no cover
+
+
+class AgentToolEventStreamContext(Protocol):
+    async def __aenter__(self) -> AgentToolEventStream:
+        raise NotImplementedError  # pragma: no cover
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> bool | None:
+        raise NotImplementedError  # pragma: no cover
+
+
+class StreamableToolCallNode(Protocol):
+    def stream(self, ctx: object) -> AgentToolEventStreamContext:
+        raise NotImplementedError  # pragma: no cover
 
 
 class AgentRun(Protocol):
@@ -173,6 +203,28 @@ def model_step_payload(
 
 
 class SessionRuntimeMixin(AgentLlmSessionMixinBase):
+    async def _publish_tool_outcome_event_from_stream_async(
+        self,
+        *,
+        request: LLMRequest,
+        stream_event: object,
+        published_tool_outcome_ids: set[str],
+    ) -> bool:
+        if not isinstance(stream_event, FunctionToolResultEvent):
+            return False
+        result = stream_event.result
+        if not isinstance(result, (ToolReturnPart, RetryPromptPart)):
+            return False
+        if isinstance(result, RetryPromptPart):
+            if not result.tool_name:
+                return False
+            result = tool_input_validation_failure_to_tool_return(result)
+        return await self._publish_committed_tool_outcome_events_from_messages_async(
+            request=request,
+            messages=[ModelRequest(parts=[result])],
+            published_tool_outcome_ids=published_tool_outcome_ids,
+        )
+
     async def run(self, request: LLMRequest) -> str:
         return await self._generate_async(request)
 
@@ -287,6 +339,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 trace_id=request.trace_id,
                 task_id=request.task_id,
                 session_id=request.session_id,
+                session_mode=request.session_mode,
+                run_kind=request.run_kind.value,
                 workspace_id=resolved_workspace_id,
                 conversation_id=resolved_conversation_id,
                 instance_id=request.instance_id,
@@ -325,6 +379,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             attempt_tool_outcome_event_emitted = False
             attempt_messages_committed = False
             published_tool_call_ids: set[str] = set()
+            published_tool_outcome_ids: set[str] = set()
             log_event(
                 LOGGER,
                 logging.DEBUG,
@@ -377,6 +432,59 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     coordination_agent = cast(CoordinationAgent, agent)
                 else:
                     history = persisted_history
+            startup_injections = (
+                self._injection_manager.drain_system_reminders_at_start(
+                    request.run_id, request.instance_id
+                )
+                if isinstance(self._injection_manager, RunInjectionManager)
+                else ()
+            )
+            if startup_injections:
+                startup_injection_appended = False
+                for msg in startup_injections:
+                    await publish_run_event_async(
+                        self._run_event_hub,
+                        RunEvent(
+                            session_id=request.session_id,
+                            run_id=request.run_id,
+                            trace_id=request.trace_id,
+                            task_id=request.task_id,
+                            instance_id=request.instance_id,
+                            role_id=request.role_id,
+                            event_type=RunEventType.INJECTION_APPLIED,
+                            payload_json=msg.model_dump_json(),
+                        ),
+                    )
+                    appended = (
+                        await self._message_repo.append_user_prompt_if_missing_async(
+                            session_id=request.session_id,
+                            workspace_id=resolved_workspace_id,
+                            conversation_id=resolved_conversation_id,
+                            agent_role_id=request.role_id,
+                            instance_id=request.instance_id,
+                            task_id=request.task_id,
+                            trace_id=request.trace_id,
+                            content=msg.content,
+                        )
+                    )
+                    if appended:
+                        startup_injection_appended = True
+                if startup_injection_appended:
+                    (
+                        prepared_prompt,
+                        history,
+                        agent_system_prompt,
+                        agent,
+                    ) = await self._build_agent_iteration_context(
+                        request=request,
+                        conversation_id=resolved_conversation_id,
+                        system_prompt=agent_system_prompt,
+                        reserve_user_prompt_tokens=False,
+                        allowed_tools=allowed_tools,
+                        allowed_mcp_servers=self._allowed_mcp_servers,
+                        allowed_skills=self._allowed_skills,
+                    )
+                    coordination_agent = cast(CoordinationAgent, agent)
             seen_count = 0
             buffered_messages: list[ModelRequest | ModelResponse] = []
             restarted = False
@@ -505,6 +613,23 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     emitted_text_chunks[streamed_text_start:]
                                 )
                                 latest_streamed_text = streamed_node_text
+                            elif isinstance(node, CallToolsNode):
+                                tool_node = cast(
+                                    StreamableToolCallNode, cast(object, node)
+                                )
+                                async with tool_node.stream(
+                                    agent_run.ctx
+                                ) as tool_stream:
+                                    async for tool_stream_event in tool_stream:
+                                        control_ctx.raise_if_cancelled()
+                                        tool_outcome_emitted = await self._publish_tool_outcome_event_from_stream_async(
+                                            request=request,
+                                            stream_event=tool_stream_event,
+                                            published_tool_outcome_ids=published_tool_outcome_ids,
+                                        )
+                                        if tool_outcome_emitted:
+                                            attempt_tool_outcome_event_emitted = True
+                                streamed_node_text = ""
                             else:
                                 streamed_node_text = ""
 
@@ -542,6 +667,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     request=request,
                                     history=history,
                                     pending_messages=buffered_messages,
+                                    published_tool_outcome_ids=published_tool_outcome_ids,
                                 )
                                 if committed_tool_events_published:
                                     attempt_tool_outcome_event_emitted = True
@@ -668,6 +794,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             request=request,
                             history=history,
                             pending_messages=buffered_messages,
+                            published_tool_outcome_ids=published_tool_outcome_ids,
                         )
                         if committed_tool_events_published:
                             attempt_tool_outcome_event_emitted = True

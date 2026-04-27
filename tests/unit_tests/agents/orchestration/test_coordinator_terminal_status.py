@@ -48,7 +48,12 @@ from relay_teams.workspace import (
     build_conversation_id,
     build_instance_conversation_id,
 )
-from relay_teams.hooks import HookService
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookService,
+    TaskCreatedInput,
+)
 
 
 class _RecordingTaskExecutionService:
@@ -126,17 +131,24 @@ class _CancellingTaskExecutionService:
 
 
 class _CapturingHookService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        decision: HookDecisionType = HookDecisionType.ALLOW,
+        *,
+        reason: str = "",
+    ) -> None:
         self.calls: list[tuple[object, object | None]] = []
+        self._decision = decision
+        self._reason = reason
 
     async def execute(
         self,
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
-        return object()
+        return HookDecisionBundle(decision=self._decision, reason=self._reason)
 
 
 def _build_coordinator(
@@ -328,7 +340,8 @@ async def test_verification_tool_policy_falls_back_when_intent_lookup_fails(
     assert policy.yolo is False
 
 
-def test_terminal_status_from_verification_completes_with_assistant_error(
+@pytest.mark.asyncio
+async def test_terminal_status_from_verification_completes_with_assistant_error(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "coordinator_terminal_status.db"
@@ -353,7 +366,7 @@ def test_terminal_status_from_verification_completes_with_assistant_error(
         event_bus=event_log,
     )
 
-    result = coordinator._terminal_status_from_verification(
+    result = await coordinator._terminal_status_from_verification_async(
         trace_id="run-1",
         root_task=root_task,
         verification=VerificationResult(
@@ -400,6 +413,41 @@ async def test_root_task_created_hook_is_not_emitted_for_normal_run(
     await coordinator._execute_task_created_hooks(root_task=root_task)
 
     assert hook_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_root_task_created_hook_denial_blocks_delegated_root_task(
+    tmp_path: Path,
+) -> None:
+    hook_service = _CapturingHookService(
+        HookDecisionType.DENY,
+        reason="blocked by policy",
+    )
+    run_event_hub = RunEventHub()
+    coordinator = CoordinatorGraph.model_construct(
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=run_event_hub,
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id="parent-task-1",
+        trace_id="run-1",
+        role_id="Coordinator",
+        title="Delegated root",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+
+    with pytest.raises(ValueError, match="blocked by policy"):
+        await coordinator._execute_task_created_hooks(root_task=root_task)
+
+    assert len(hook_service.calls) == 1
+    event_input, captured_run_event_hub = hook_service.calls[0]
+    assert captured_run_event_hub is run_event_hub
+    assert isinstance(event_input, TaskCreatedInput)
+    assert event_input.created_task_id == "task-root-1"
+    assert event_input.parent_task_id == "parent-task-1"
 
 
 @pytest.mark.asyncio
@@ -755,7 +803,8 @@ async def test_pending_delegated_task_cancellation_raises_without_stop_request(
         (RunRuntimePhase.AWAITING_RECOVERY, RunRuntimeStatus.PAUSED),
     ],
 )
-def test_prepare_recovery_preserves_paused_subagent_state(
+@pytest.mark.asyncio
+async def test_prepare_recovery_preserves_paused_subagent_state(
     tmp_path: Path,
     phase: RunRuntimePhase,
     runtime_status: RunRuntimeStatus,
@@ -838,7 +887,7 @@ def test_prepare_recovery_preserves_paused_subagent_state(
         )
     )
 
-    coordinator._prepare_recovery(
+    await coordinator._prepare_recovery_async(
         trace_id="run-1",
         coordinator_instance_id=coordinator_instance.instance_id,
     )
@@ -851,7 +900,7 @@ def test_prepare_recovery_preserves_paused_subagent_state(
         == InstanceStatus.STOPPED
     )
     assert (
-        coordinator._has_resumable_delegated_work(
+        await coordinator._has_resumable_delegated_work_async(
             trace_id="run-1",
             root_task_id=root_task.task_id,
         )

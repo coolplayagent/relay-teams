@@ -291,7 +291,7 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,
@@ -346,7 +346,7 @@ def test_build_coordination_agent_skips_mcp_toolsets_that_fail_to_initialize(
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,
@@ -394,7 +394,7 @@ def test_build_coordination_agent_skips_mcp_servers_marked_runtime_failed(
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,
@@ -454,7 +454,7 @@ def test_build_coordination_agent_injects_subagent_capabilities_into_spawn_subag
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,

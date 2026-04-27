@@ -78,6 +78,37 @@ Response fields:
 Notes:
 - Health stays `200 ok` for a reachable server even when builtin roles or local
   tools are degraded; inspect the `*_sanity` fields for diagnosis.
+- This endpoint is a diagnostic/readiness contract. UI liveness should use the
+  control-plane endpoints below so high task or tool concurrency cannot make the
+  browser misclassify a busy server as offline.
+
+### `GET /system/live`
+
+Returns a lightweight liveness payload from the main API process:
+
+- `status`: `alive`
+- `version`
+- `pid`
+- `uptime_seconds`
+- `main_base_url`
+
+This route intentionally avoids registry, filesystem, provider, and tool checks.
+
+### `GET /system/control-plane`
+
+Returns the out-of-band liveness endpoint published by `relay-teams server start`.
+
+Response fields:
+- `enabled`
+- `live_url`
+- `host`
+- `port`
+- `main_base_url`
+
+When `enabled` is true, `live_url` points at the sidecar control-plane HTTP
+server. The browser status indicator probes that endpoint first. If the sidecar
+is alive but the main API liveness probe times out, the UI reports the backend as
+busy rather than offline.
 
 ### `GET /system/commands`
 

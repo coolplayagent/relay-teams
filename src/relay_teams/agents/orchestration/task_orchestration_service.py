@@ -28,7 +28,13 @@ from relay_teams.agents.tasks.models import (
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCreatedInput,
+)
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -79,22 +85,21 @@ class TaskOrchestrationService:
         root = await self._get_root_task_async(run_id)
         created_records: list[TaskRecord] = []
         for draft in tasks:
-            record = await self._task_repo.create_async(
-                TaskEnvelope(
-                    task_id=new_task_id().value,
-                    session_id=root.envelope.session_id,
-                    parent_task_id=root.envelope.task_id,
-                    trace_id=root.envelope.trace_id,
-                    role_id=None,
-                    title=_resolved_title(draft.title, draft.objective),
-                    objective=draft.objective,
-                    verification=_verification_for_task_draft(draft),
-                    spec=draft.spec,
-                    lifecycle=draft.lifecycle,
-                )
+            envelope = TaskEnvelope(
+                task_id=new_task_id().value,
+                session_id=root.envelope.session_id,
+                parent_task_id=root.envelope.task_id,
+                trace_id=root.envelope.trace_id,
+                role_id=None,
+                title=_resolved_title(draft.title, draft.objective),
+                objective=draft.objective,
+                verification=_verification_for_task_draft(draft),
+                spec=draft.spec,
+                lifecycle=draft.lifecycle,
             )
+            await self._execute_task_created_hooks(envelope=envelope)
+            record = await self._task_repo.create_async(envelope)
             created_records.append(record)
-            await self._execute_task_created_hooks(record=record)
 
         response: dict[str, JsonValue] = {
             "created_count": len(created_records),
@@ -102,11 +107,10 @@ class TaskOrchestrationService:
         }
         return response
 
-    async def _execute_task_created_hooks(self, *, record: TaskRecord) -> None:
+    async def _execute_task_created_hooks(self, *, envelope: TaskEnvelope) -> None:
         if self._hook_service is None:
             return
-        envelope = record.envelope
-        _ = await self._hook_service.execute(
+        bundle = await self._hook_service.execute(
             event_input=TaskCreatedInput(
                 event_name=HookEventName.TASK_CREATED,
                 session_id=envelope.session_id,
@@ -121,69 +125,11 @@ class TaskOrchestrationService:
             ),
             run_event_hub=self._run_event_hub,
         )
-
-    def update_task(
-        self,
-        *,
-        run_id: str | None,
-        task_id: str,
-        update: TaskUpdate,
-    ) -> dict[str, JsonValue]:
-        record = self.get_task(task_id=task_id, run_id=run_id)
-        if record.envelope.parent_task_id is None:
-            raise ValueError("root coordinator task cannot be updated via task APIs")
-        if record.status != TaskStatus.CREATED and not _is_handoff_only_update(update):
-            raise ValueError("only created tasks can be updated")
-
-        current = record.envelope
-        next_objective = (
-            str(update.objective).strip()
-            if update.objective is not None
-            else current.objective
-        )
-        if not next_objective:
-            raise ValueError("objective must not be empty")
-
-        handoff_only_update = _is_handoff_only_update(update)
-        next_title = (
-            current.title
-            if handoff_only_update
-            else (
-                _resolved_title(update.title, next_objective)
-                if update.title is not None
-                else current.title or _resolved_title(None, next_objective)
-            )
-        )
-        updated = self._task_repo.update_envelope(
-            task_id,
-            current.model_copy(
-                update=_task_update_fields(update, next_objective, next_title),
-            ),
-        )
-        return {"task": _task_projection(updated)}
-
-    def list_delegated_tasks(
-        self,
-        *,
-        run_id: str,
-        include_root: bool = False,
-    ) -> dict[str, JsonValue]:
-        records = [
-            record
-            for record in self._task_repo.list_by_trace(run_id)
-            if include_root or record.envelope.parent_task_id is not None
-        ]
-        return {
-            "tasks": [_task_projection(record) for record in records],
-        }
-
-    def list_run_tasks(
-        self,
-        *,
-        run_id: str,
-        include_root: bool = False,
-    ) -> dict[str, JsonValue]:
-        return self.list_delegated_tasks(run_id=run_id, include_root=include_root)
+        if (
+            isinstance(bundle, HookDecisionBundle)
+            and bundle.decision == HookDecisionType.DENY
+        ):
+            raise ValueError(bundle.reason or "Task creation denied by runtime hooks.")
 
     async def update_task_async(
         self,
@@ -251,8 +197,8 @@ class TaskOrchestrationService:
             include_root=include_root,
         )
 
-    def list_tasks(self) -> tuple[TaskRecord, ...]:
-        return self._task_repo.list_all()
+    async def list_tasks_async(self) -> tuple[TaskRecord, ...]:
+        return await self._task_repo.list_all_async()
 
     async def dispatch_task(
         self,
@@ -447,64 +393,6 @@ class TaskOrchestrationService:
                 return
             self._assignment_lock_ref_counts[key] = remaining
 
-    def _ensure_execution_instance(
-        self,
-        *,
-        session_id: str,
-        run_id: str,
-        role_id: str,
-        task_id: str,
-    ) -> str:
-        existing = self._agent_repo.get_session_role_instance(session_id, role_id)
-        if existing is not None:
-            if self._instance_has_blocking_task(
-                session_id=session_id,
-                instance_id=existing.instance_id,
-                task_id=task_id,
-            ):
-                return self._create_ephemeral_role_clone(
-                    session_id=session_id,
-                    run_id=run_id,
-                    role_id=role_id,
-                    workspace_id=existing.workspace_id,
-                    parent_instance_id=existing.instance_id,
-                )
-            self._agent_repo.upsert_instance(
-                run_id=run_id,
-                trace_id=run_id,
-                session_id=session_id,
-                instance_id=existing.instance_id,
-                role_id=existing.role_id,
-                workspace_id=existing.workspace_id,
-                conversation_id=existing.conversation_id,
-                status=existing.status,
-                lifecycle=InstanceLifecycle.REUSABLE,
-            )
-            return existing.instance_id
-
-        session = self._session_repo.get(session_id) if self._session_repo else None
-        if session is None:
-            raise RuntimeError(
-                "TaskOrchestrationService requires session_repo to resolve workspace"
-            )
-        instance = create_subagent_instance(
-            role_id,
-            session_id=session_id,
-            workspace_id=session.workspace_id,
-        )
-        self._agent_repo.upsert_instance(
-            run_id=run_id,
-            trace_id=run_id,
-            session_id=session_id,
-            instance_id=instance.instance_id,
-            role_id=instance.role_id,
-            workspace_id=instance.workspace_id,
-            conversation_id=instance.conversation_id,
-            status=InstanceStatus.IDLE,
-            lifecycle=InstanceLifecycle.REUSABLE,
-        )
-        return instance.instance_id
-
     async def _ensure_execution_instance_async(
         self,
         *,
@@ -569,34 +457,6 @@ class TaskOrchestrationService:
         )
         return instance.instance_id
 
-    def _create_ephemeral_role_clone(
-        self,
-        *,
-        session_id: str,
-        run_id: str,
-        role_id: str,
-        workspace_id: str,
-        parent_instance_id: str,
-    ) -> str:
-        instance = create_subagent_instance(
-            role_id,
-            session_id=session_id,
-            workspace_id=workspace_id,
-        )
-        self._agent_repo.upsert_instance(
-            run_id=run_id,
-            trace_id=run_id,
-            session_id=session_id,
-            instance_id=instance.instance_id,
-            role_id=instance.role_id,
-            workspace_id=instance.workspace_id,
-            conversation_id=instance.conversation_id,
-            status=InstanceStatus.IDLE,
-            lifecycle=InstanceLifecycle.EPHEMERAL,
-            parent_instance_id=parent_instance_id,
-        )
-        return instance.instance_id
-
     async def _create_ephemeral_role_clone_async(
         self,
         *,
@@ -625,27 +485,6 @@ class TaskOrchestrationService:
         )
         return instance.instance_id
 
-    def _instance_has_blocking_task(
-        self,
-        *,
-        session_id: str,
-        instance_id: str,
-        task_id: str,
-    ) -> bool:
-        blocking_statuses = {
-            TaskStatus.ASSIGNED,
-            TaskStatus.RUNNING,
-            TaskStatus.STOPPED,
-        }
-        for candidate in self._task_repo.list_by_session(session_id):
-            if candidate.envelope.task_id == task_id:
-                continue
-            if candidate.assigned_instance_id != instance_id:
-                continue
-            if candidate.status in blocking_statuses:
-                return True
-        return False
-
     async def _instance_has_blocking_task_async(
         self,
         *,
@@ -666,25 +505,6 @@ class TaskOrchestrationService:
             if candidate.status in blocking_statuses:
                 return True
         return False
-
-    def _assert_instance_available(self, *, task: TaskRecord, instance_id: str) -> None:
-        blocking_statuses = {
-            TaskStatus.ASSIGNED,
-            TaskStatus.RUNNING,
-            TaskStatus.STOPPED,
-        }
-        for candidate in self._task_repo.list_by_session(task.envelope.session_id):
-            if candidate.envelope.task_id == task.envelope.task_id:
-                continue
-            if candidate.assigned_instance_id != instance_id:
-                continue
-            if candidate.status not in blocking_statuses:
-                continue
-            raise ValueError(
-                f"Role {candidate.envelope.role_id or 'unassigned'} is busy with task "
-                f"'{candidate.envelope.title}' (status={candidate.status.value}). "
-                f"Wait for it to complete or use a different role."
-            )
 
     async def _assert_instance_available_async(
         self, *, task: TaskRecord, instance_id: str
@@ -709,23 +529,11 @@ class TaskOrchestrationService:
                 f"Wait for it to complete or use a different role."
             )
 
-    def _get_root_task(self, run_id: str) -> TaskRecord:
-        for record in self._task_repo.list_by_trace(run_id):
-            if record.envelope.parent_task_id is None:
-                return record
-        raise KeyError(f"No root task found for run_id={run_id}")
-
     async def _get_root_task_async(self, run_id: str) -> TaskRecord:
         for record in await self._task_repo.list_by_trace_async(run_id):
             if record.envelope.parent_task_id is None:
                 return record
         raise KeyError(f"No root task found for run_id={run_id}")
-
-    def get_task(self, *, task_id: str, run_id: str | None = None) -> TaskRecord:
-        record = self._task_repo.get(task_id)
-        if run_id is not None and record.envelope.trace_id != run_id:
-            raise KeyError(f"Task {task_id} does not belong to run {run_id}")
-        return record
 
     async def get_task_async(
         self, *, task_id: str, run_id: str | None = None

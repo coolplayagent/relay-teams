@@ -14,7 +14,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
-from relay_teams.hooks import HookService
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
@@ -108,7 +108,8 @@ class _BlockingTaskExecutionService:
 
 
 class _CapturingHookService:
-    def __init__(self) -> None:
+    def __init__(self, decision: HookDecisionType = HookDecisionType.ALLOW) -> None:
+        self.decision = decision
         self.calls: list[tuple[object, object | None]] = []
 
     async def execute(
@@ -116,9 +117,9 @@ class _CapturingHookService:
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
-        return object()
+        return HookDecisionBundle(decision=self.decision)
 
 
 def _build_role_registry() -> RoleRegistry:
@@ -357,7 +358,40 @@ async def test_create_tasks_emits_task_created_hooks_with_created_task_identity(
     assert captured_run_event_hub is run_event_hub
 
 
-def test_update_task_allows_created_only(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_create_tasks_denied_by_hook_does_not_persist_task(
+    tmp_path: Path,
+) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hook_deny.db")
+    agent_repo = AgentInstanceRepository(tmp_path / "task_orchestration_hook_deny.db")
+    message_repo = MessageRepository(tmp_path / "task_orchestration_hook_deny.db")
+    session_repo = SessionRepository(tmp_path / "task_orchestration_hook_deny.db")
+    execution_service = _FakeTaskExecutionService(task_repo)
+    hook_service = _CapturingHookService(HookDecisionType.DENY)
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=cast(RunEventHub, object()),
+    )
+
+    with pytest.raises(ValueError, match="Task creation denied"):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[TaskDraft(objective="Implement the endpoint")],
+        )
+
+    assert [record.envelope.task_id for record in task_repo.list_all()] == ["task-root"]
+
+
+@pytest.mark.asyncio
+async def test_update_task_allows_created_only(tmp_path: Path) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
         tmp_path / "task_orchestration_update.db"
     )
@@ -374,7 +408,7 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
         )
     )
 
-    updated = service.update_task(
+    updated = await service.update_task_async(
         run_id="run-1",
         task_id=created.envelope.task_id,
         update=TaskUpdate(
@@ -393,14 +427,15 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
 
     task_repo.update_status(created.envelope.task_id, TaskStatus.ASSIGNED)
     with pytest.raises(ValueError, match="only created tasks can be updated"):
-        service.update_task(
+        await service.update_task_async(
             run_id="run-1",
             task_id=created.envelope.task_id,
             update=TaskUpdate(title="Should fail"),
         )
 
 
-def test_update_task_recomputes_verification_when_spec_changes(
+@pytest.mark.asyncio
+async def test_update_task_recomputes_verification_when_spec_changes(
     tmp_path: Path,
 ) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
@@ -423,7 +458,7 @@ def test_update_task_recomputes_verification_when_spec_changes(
         )
     )
 
-    updated = service.update_task(
+    updated = await service.update_task_async(
         run_id="run-1",
         task_id=created.envelope.task_id,
         update=TaskUpdate(
@@ -452,7 +487,8 @@ def test_update_task_recomputes_verification_when_spec_changes(
     assert verification_payload["evidence_expectations"] == ["pytest output"]
 
 
-def test_update_task_handoff_only_preserves_missing_title(
+@pytest.mark.asyncio
+async def test_update_task_handoff_only_preserves_missing_title(
     tmp_path: Path,
 ) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
@@ -472,7 +508,7 @@ def test_update_task_handoff_only_preserves_missing_title(
     )
     task_repo.update_status(created.envelope.task_id, TaskStatus.ASSIGNED)
 
-    updated = service.update_task(
+    updated = await service.update_task_async(
         run_id="run-1",
         task_id=created.envelope.task_id,
         update=TaskUpdate(
@@ -1020,7 +1056,8 @@ async def test_dispatch_task_rejects_invalid_statuses(
         )
 
 
-def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
         tmp_path / "task_orchestration_list.db"
     )
@@ -1037,7 +1074,7 @@ def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
         )
     )
 
-    payload = service.list_delegated_tasks(run_id="run-1")
+    payload = await service.list_delegated_tasks_async(run_id="run-1")
 
     assert "ok" not in payload
     tasks = cast(list[JsonValue], payload["tasks"])

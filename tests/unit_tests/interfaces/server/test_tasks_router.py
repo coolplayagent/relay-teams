@@ -28,7 +28,7 @@ class _FakeTaskService:
         )
         self.created_payload: tuple[str, list[TaskDraft]] | None = None
 
-    def list_tasks(self) -> tuple[TaskRecord, ...]:
+    async def list_tasks_async(self) -> tuple[TaskRecord, ...]:
         return (self.task,)
 
     async def create_tasks(
@@ -40,7 +40,7 @@ class _FakeTaskService:
         self.created_payload = (run_id, tasks)
         return {"created_count": len(tasks), "tasks": [{"task_id": "task_2"}]}
 
-    def list_delegated_tasks(
+    async def list_delegated_tasks_async(
         self,
         *,
         run_id: str,
@@ -56,12 +56,12 @@ class _FakeTaskService:
             ]
         }
 
-    def get_task(self, *, task_id: str) -> TaskRecord:
+    async def get_task_async(self, *, task_id: str) -> TaskRecord:
         if task_id != self.task.envelope.task_id:
             raise KeyError(task_id)
         return self.task
 
-    def update_task(
+    async def update_task_async(
         self,
         *,
         run_id: str | None,

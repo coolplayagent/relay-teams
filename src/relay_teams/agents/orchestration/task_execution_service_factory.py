@@ -82,6 +82,8 @@ def create_task_execution_service(
                 app_config_dir=app_config_dir,
                 instructions=prompt_instructions,
             ),
+            hook_service=hook_service,
+            run_event_hub=run_event_hub,
         ),
         provider_factory=provider_factory,
         tool_registry=tool_registry,

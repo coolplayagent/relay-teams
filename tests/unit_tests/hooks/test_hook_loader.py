@@ -20,7 +20,7 @@ from relay_teams.hooks.hook_models import (
     HookMatcherGroup,
     HooksConfig,
 )
-from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_models import Skill, SkillMetadata, SkillSource
 
@@ -353,6 +353,93 @@ def test_hook_loader_validate_payload_rejects_unknown_agent_role(
         )
 
 
+def test_hook_loader_validate_payload_rejects_non_subagent_agent_role(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="MainOnly",
+            name="Main Only",
+            description="normal mode only",
+            version="1",
+            tools=(),
+            system_prompt="verify",
+            mode=RoleMode.PRIMARY,
+        )
+    )
+    loader = HookLoader(
+        app_config_dir=app_config_dir,
+        project_root=None,
+        get_role_registry=lambda: role_registry,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Agent hook role_id must reference a subagent role: MainOnly",
+    ):
+        loader.validate_payload(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "agent",
+                                    "role_id": "MainOnly",
+                                    "prompt": "review $ARGUMENTS",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+
+
+def test_hook_loader_validate_payload_rejects_agent_without_role_id(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="Verifier",
+            name="Verifier",
+            description="verifies output",
+            version="1",
+            tools=(),
+            system_prompt="verify",
+        )
+    )
+    loader = HookLoader(
+        app_config_dir=app_config_dir,
+        project_root=None,
+        get_role_registry=lambda: role_registry,
+    )
+
+    with pytest.raises(ValueError, match="Agent hook role_id is required"):
+        loader.validate_payload(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "agent",
+                                    "prompt": "review $ARGUMENTS",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+
+
 def test_hook_loader_validate_payload_migrates_legacy_group_fields(
     tmp_path: Path,
 ) -> None:
@@ -381,8 +468,122 @@ def test_hook_loader_validate_payload_migrates_legacy_group_fields(
     )
 
     groups = config.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert [group.matcher for group in groups] == ["read", "write"]
     assert all(group.hooks[0].if_rule == "Bash(git *)" for group in groups)
+
+
+def test_hook_loader_validate_payload_normalizes_claude_tool_matcher_aliases(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
+
+    config = loader.validate_payload(
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Write|Edit|Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "echo ok",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+    groups = config.hooks[HookEventName.PRE_TOOL_USE]
+    assert [group.matcher for group in groups] == ["write|edit|shell"]
+
+
+def test_hook_loader_validate_payload_rejects_empty_tool_matcher_alternation(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
+
+    with pytest.raises(ValueError, match="tool hook matcher"):
+        loader.validate_payload(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "|",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "echo ok",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+
+
+def test_hook_loader_validate_payload_does_not_guess_ls_alias(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
+
+    config = loader.validate_payload(
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "LS",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "echo ok",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+    groups = config.hooks[HookEventName.PRE_TOOL_USE]
+    assert [group.matcher for group in groups] == ["LS"]
+
+
+def test_hook_loader_validate_payload_keeps_globbed_claude_tool_matcher(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
+
+    config = loader.validate_payload(
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Write*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "echo ok",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    )
+
+    groups = config.hooks[HookEventName.PRE_TOOL_USE]
+    assert [group.matcher for group in groups] == ["Write*"]
 
 
 def test_hook_loader_validate_payload_migrates_legacy_tool_names_when_matcher_is_wildcard(
@@ -412,7 +613,7 @@ def test_hook_loader_validate_payload_migrates_legacy_tool_names_when_matcher_is
     )
 
     groups = config.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert [group.matcher for group in groups] == ["read", "write"]
 
 
 def test_hook_loader_validate_payload_deduplicates_legacy_tool_names(
@@ -442,37 +643,35 @@ def test_hook_loader_validate_payload_deduplicates_legacy_tool_names(
     )
 
     groups = config.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert [group.matcher for group in groups] == ["read", "write"]
 
 
-def test_hook_loader_validate_payload_preserves_legacy_tool_names_matcher_intersection(
+def test_hook_loader_validate_payload_rejects_globbed_claude_alias_intersection(
     tmp_path: Path,
 ) -> None:
     app_config_dir = tmp_path / "app"
     app_config_dir.mkdir()
     loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
 
-    config = loader.validate_payload(
-        {
-            "hooks": {
-                "PreToolUse": [
-                    {
-                        "matcher": "Read*",
-                        "tool_names": ["Read", "Review", "Write"],
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": "echo ok",
-                            }
-                        ],
-                    }
-                ]
+    with pytest.raises(ValueError, match="tool_names"):
+        loader.validate_payload(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Read*",
+                            "tool_names": ["Read", "Review", "Write"],
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "echo ok",
+                                }
+                            ],
+                        }
+                    ]
+                }
             }
-        }
-    )
-
-    groups = config.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read"]
+        )
 
 
 def test_hook_loader_validate_payload_rejects_unrepresentable_legacy_tool_names(
@@ -731,7 +930,31 @@ def test_hook_loader_tolerant_load_skips_invalid_event_group_mappings(
     snapshot = loader.load_snapshot()
 
     assert tuple(snapshot.hooks) == (HookEventName.PRE_TOOL_USE,)
-    assert snapshot.hooks[HookEventName.PRE_TOOL_USE][0].group.matcher == "Read"
+    assert snapshot.hooks[HookEventName.PRE_TOOL_USE][0].group.matcher == "read"
+
+
+def test_hook_loader_tolerant_load_skips_empty_tool_matcher_group(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    (app_config_dir / "hooks.json").write_text(
+        (
+            '{"hooks":{"PreToolUse":['
+            '{"matcher":"|","hooks":[{"type":"command","command":"echo invalid"}]},'
+            '{"matcher":"Read","hooks":[{"type":"command","command":"echo ok"}]}'
+            "]}}"
+        ),
+        encoding="utf-8",
+    )
+    loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
+
+    snapshot = loader.load_snapshot()
+
+    groups = snapshot.hooks[HookEventName.PRE_TOOL_USE]
+    assert len(groups) == 1
+    assert groups[0].group.matcher == "read"
+    assert groups[0].group.hooks[0].command == "echo ok"
 
 
 def test_hook_loader_tolerant_load_skips_invalid_event_name_and_invalid_group_entries(
@@ -765,6 +988,7 @@ def test_hook_loader_tolerant_load_drops_invalid_agent_handlers_but_keeps_valid_
         (
             '{"hooks":{"Stop":[{"hooks":['
             '{"type":"agent","role_id":"MissingRole","prompt":"review"},'
+            '{"type":"agent","prompt":"review without role"},'
             '{"type":"command","command":"echo ok"}]}]}}'
         ),
         encoding="utf-8",
@@ -814,7 +1038,7 @@ def test_hook_loader_tolerant_load_keeps_valid_sibling_handlers_in_invalid_group
 
     groups = snapshot.hooks[HookEventName.PRE_TOOL_USE]
     assert len(groups) == 1
-    assert groups[0].group.matcher == "Read"
+    assert groups[0].group.matcher == "read"
     assert len(groups[0].group.hooks) == 1
     assert groups[0].group.hooks[0].command == "echo ok"
 
@@ -866,7 +1090,7 @@ def test_hook_loader_tolerant_load_preserves_group_order_for_valid_duplicate_mat
     snapshot = loader.load_snapshot()
 
     groups = snapshot.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.group.matcher for group in groups] == ["*", "Read", "*"]
+    assert [group.group.matcher for group in groups] == ["*", "read", "*"]
     assert [group.group.hooks[0].command for group in groups] == [
         "echo first",
         "echo middle",
@@ -993,6 +1217,23 @@ def test_normalize_hook_group_migrates_legacy_if_condition_to_all_handlers() -> 
     ]
 
 
+def test_normalize_hook_group_normalizes_claude_aliases_for_tool_events() -> None:
+    normalized_groups = _normalize_hook_group(
+        {
+            "matcher": "Write|Edit",
+            "hooks": [{"type": "command", "command": "echo ok"}],
+        },
+        raw_event_name="PreToolUse",
+    )
+
+    assert normalized_groups == [
+        {
+            "matcher": "write|edit",
+            "hooks": [{"type": "command", "command": "echo ok"}],
+        }
+    ]
+
+
 def test_hook_loader_validate_payload_rejects_unrepresentable_multi_handler_legacy_if_condition(
     tmp_path: Path,
 ) -> None:
@@ -1107,6 +1348,42 @@ def test_hook_loader_strict_single_file_returns_validated_config(
     )
 
 
+def test_hook_loader_save_user_config_omits_default_optional_fields(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    app_config_dir.mkdir()
+    loader = HookLoader(app_config_dir=app_config_dir, project_root=None)
+
+    loader.save_user_config(
+        HooksConfig.model_validate(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "echo ok",
+                                    "timeout": 5,
+                                    "async": False,
+                                    "on_error": "ignore",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    assert '"matcher"' not in loader.user_config_path.read_text(encoding="utf-8")
+    assert '"timeout"' not in loader.user_config_path.read_text(encoding="utf-8")
+    assert '"async"' not in loader.user_config_path.read_text(encoding="utf-8")
+    assert '"on_error"' not in loader.user_config_path.read_text(encoding="utf-8")
+
+
 def test_hook_loader_salvage_tolerant_group_handlers_rejects_non_dict_group(
     tmp_path: Path,
 ) -> None:
@@ -1166,9 +1443,9 @@ def test_parse_tolerant_hooks_payload_skips_invalid_groups_and_empty_group_error
         {
             "hooks": {
                 "PreToolUse": [
-                    {"matcher": "Read", "hooks": []},
+                    {"matcher": "read", "hooks": []},
                     {
-                        "matcher": "Bash",
+                        "matcher": "shell",
                         "hooks": [{"type": "command", "command": "ok"}],
                     },
                 ]

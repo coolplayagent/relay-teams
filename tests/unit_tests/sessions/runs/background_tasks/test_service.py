@@ -11,6 +11,8 @@ from typing import Literal, cast
 
 import pytest
 
+from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
@@ -19,6 +21,8 @@ from relay_teams.sessions.runs.background_tasks.command_runtime import (
 from relay_teams.sessions.runs.background_tasks.service import (
     BackgroundTaskService,
     SynchronousSubagentResult,
+    _append_subagent_start_context,
+    _raise_for_subagent_stop_decision,
 )
 from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager
 from relay_teams.sessions.runs.background_tasks.models import (
@@ -46,8 +50,13 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+)
 from relay_teams.hooks.hook_models import HookRuntimeSnapshot
-from relay_teams.hooks import HookService
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -251,12 +260,51 @@ class _FakeTaskExecutionService:
         return self._result
 
 
+class _FakeSubagentStartHookService:
+    def set_run_snapshot(
+        self,
+        run_id: str,
+        snapshot: HookRuntimeSnapshot,
+    ) -> None:
+        _ = (run_id, snapshot)
+
+    def clear_run(self, run_id: str) -> None:
+        _ = run_id
+
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object,
+    ) -> HookDecisionBundle:
+        _ = (event_input, run_event_hub)
+        return HookDecisionBundle(
+            decision=HookDecisionType.OBSERVE,
+            additional_context=("Use the latest failing test output.",),
+        )
+
+
+class _FailingSubagentStartHookService(_FakeSubagentStartHookService):
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object,
+    ) -> HookDecisionBundle:
+        _ = (event_input, run_event_hub)
+        raise RuntimeError("start hook failed")
+
+
 class _FakeAgentRepo:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.status_updates: list[dict[str, object]] = []
 
     def upsert_instance(self, **kwargs: object) -> None:
         self.calls.append(dict(kwargs))
+
+    def mark_status(self, instance_id: str, status: InstanceStatus) -> None:
+        self.status_updates.append({"instance_id": instance_id, "status": status})
 
 
 class _FakeTaskRepo:
@@ -412,10 +460,10 @@ class _CapturingHookService:
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         _ = run_event_hub
         self.executed_events.append(str(getattr(event_input, "event_name").value))
-        return object()
+        return HookDecisionBundle(decision=HookDecisionType.OBSERVE)
 
     def set_run_snapshot(self, run_id: str, snapshot: HookRuntimeSnapshot) -> None:
         _ = snapshot
@@ -423,6 +471,21 @@ class _CapturingHookService:
 
     def clear_run(self, run_id: str) -> None:
         self.cleared.append(run_id)
+
+
+class _FailingSubagentStopHookService(_CapturingHookService):
+    async def execute(
+        self,
+        *,
+        event_input: object,
+        run_event_hub: object | None,
+    ) -> HookDecisionBundle:
+        if getattr(event_input, "event_name") == HookEventName.SUBAGENT_STOP:
+            raise RuntimeError("stop hook failed")
+        return await super().execute(
+            event_input=event_input,
+            run_event_hub=run_event_hub,
+        )
 
 
 def _build_record(
@@ -1171,6 +1234,50 @@ async def test_background_task_service_run_subagent_returns_synchronous_result(
 
 
 @pytest.mark.asyncio
+async def test_background_task_service_run_subagent_injects_start_hook_context(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-start-hook-context.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-start-hook-context.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, _FakeSubagentStartHookService()),
+    )
+
+    _ = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+
+    user_prompt_override = executor.calls[0]["user_prompt_override"]
+    assert isinstance(user_prompt_override, str)
+    assert "Inspect the failing tests" in user_prompt_override
+    assert "Additional context from SubagentStart hooks" in user_prompt_override
+    assert "Use the latest failing test output." in user_prompt_override
+
+
+@pytest.mark.asyncio
 async def test_background_task_service_wait_for_subagent_run_reattaches_existing_sync_run(
     tmp_path: Path,
 ) -> None:
@@ -1412,6 +1519,56 @@ async def test_background_task_service_run_subagent_does_not_emit_task_created_f
 
 
 @pytest.mark.asyncio
+async def test_background_task_service_run_subagent_finalizes_when_stop_hook_fails(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-stop-hook-fail.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-stop-hook-fail.db"
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=_FakeTaskExecutionService(
+            result=TaskExecutionResult(
+                output="analysis complete",
+                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            )
+        ),
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, _FailingSubagentStopHookService()),
+    )
+
+    with pytest.raises(RuntimeError, match="stop hook failed"):
+        _ = await service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+
+    records = repo.list_all()
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == BackgroundTaskStatus.FAILED
+    assert record.output_excerpt == (
+        "analysis complete\n\nSubagent stop hook failed: stop hook failed"
+    )
+    runtime = runtime_repo.get(record.subagent_run_id or "")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.FAILED
+    assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
 async def test_background_task_service_stop_for_run_stops_subagent(
     tmp_path: Path,
 ) -> None:
@@ -1463,3 +1620,117 @@ async def test_background_task_service_stop_for_run_stops_subagent(
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.STOPPED
     assert runtime.phase == RunRuntimePhase.IDLE
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_start_subagent_marks_failed_when_start_hook_fails(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-start-hook-fail.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-start-hook-fail.db"
+    )
+    run_control = _FakeRunControlManager()
+    sink = _CapturingCompletionSink()
+    agent_repo = _FakeAgentRepo()
+    task_repo = _FakeTaskRepo()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=_FakeTaskExecutionService(
+            result=TaskExecutionResult(output="should not run")
+        ),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=run_control,
+        run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, _FailingSubagentStartHookService()),
+    )
+    service.bind_completion_sink(sink)
+
+    with pytest.raises(RuntimeError, match="start hook failed"):
+        _ = await service.start_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="MainAgent",
+            tool_call_id="call-1",
+            workspace_id="workspace-1",
+            cwd=Path("C:/workspace"),
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+
+    records = repo.list_all()
+    assert len(records) == 1
+    record = records[0]
+    assert record.status == BackgroundTaskStatus.FAILED
+    assert record.output_excerpt == "start hook failed"
+    persisted = repo.get(record.background_task_id)
+    assert persisted is not None
+    assert persisted.completion_notified_at is not None
+    assert [delivered.background_task_id for delivered, _ in sink.calls] == [
+        record.background_task_id
+    ]
+    runtime = runtime_repo.get(record.subagent_run_id or "")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.FAILED
+    assert run_control.registered_run_ids == []
+    assert task_repo.status_updates[-1] == {
+        "task_id": record.subagent_task_id,
+        "status": TaskStatus.FAILED,
+        "assigned_instance_id": record.subagent_instance_id,
+        "result": None,
+        "error_message": "start hook failed",
+    }
+    assert agent_repo.status_updates == [
+        {
+            "instance_id": record.subagent_instance_id,
+            "status": InstanceStatus.FAILED,
+        }
+    ]
+
+
+def test_append_subagent_start_context_handles_empty_prompt_and_context() -> None:
+    assert (
+        _append_subagent_start_context(prompt="delegate", contexts=(" ", "\n"))
+        == "delegate"
+    )
+    assert (
+        _append_subagent_start_context(prompt=" ", contexts=("review scope",))
+        == "review scope"
+    )
+    assert (
+        _append_subagent_start_context(
+            prompt="delegate",
+            contexts=("review scope",),
+        )
+        == "delegate\n\nAdditional context from SubagentStart hooks:\nreview scope"
+    )
+
+
+def test_raise_for_subagent_stop_decision_raises_retry_reason() -> None:
+    _raise_for_subagent_stop_decision(
+        HookDecisionBundle(decision=HookDecisionType.OBSERVE)
+    )
+
+    with pytest.raises(RuntimeError, match="deny requested"):
+        _raise_for_subagent_stop_decision(
+            HookDecisionBundle(
+                decision=HookDecisionType.DENY,
+                reason="deny requested",
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="retry requested"):
+        _raise_for_subagent_stop_decision(
+            HookDecisionBundle(
+                decision=HookDecisionType.RETRY,
+                reason="retry requested",
+                additional_context=("extra context",),
+            )
+        )

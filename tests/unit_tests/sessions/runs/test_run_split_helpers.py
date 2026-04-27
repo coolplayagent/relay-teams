@@ -16,6 +16,11 @@ from relay_teams.media import (
     TextContentPart,
 )
 from relay_teams.media.asset_service import MediaAssetService
+from relay_teams.notifications import (
+    NotificationContext,
+    NotificationService,
+    NotificationType,
+)
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.media_run_executor import MediaRunExecutor
@@ -93,6 +98,76 @@ async def test_run_event_publisher_async_tolerates_publish_failure() -> None:
         ),
         failure_event="run.event.publish_failed",
     )
+
+
+@pytest.mark.asyncio
+async def test_run_event_publisher_async_uses_async_notification_emit() -> None:
+    class _AsyncNotificationService:
+        def __init__(self) -> None:
+            self.calls: list[NotificationContext] = []
+
+        def emit(
+            self,
+            *,
+            notification_type: NotificationType,
+            title: str,
+            body: str,
+            context: NotificationContext,
+            dedupe_key: str | None = None,
+        ) -> bool:
+            _ = notification_type
+            _ = title
+            _ = body
+            _ = context
+            _ = dedupe_key
+            raise AssertionError("sync emit must not be used")
+
+        async def emit_async(
+            self,
+            *,
+            notification_type: NotificationType,
+            title: str,
+            body: str,
+            context: NotificationContext,
+            dedupe_key: str | None = None,
+        ) -> bool:
+            _ = notification_type
+            _ = title
+            _ = body
+            _ = dedupe_key
+            self.calls.append(context)
+            return True
+
+    notification_service = _AsyncNotificationService()
+    publisher = RunEventPublisher(
+        run_event_hub=RunEventHub(),
+        get_runtime=lambda _run_id: None,
+        get_run_runtime_repo=lambda: None,
+        get_notification_service=lambda: cast(
+            NotificationService, notification_service
+        ),
+    )
+
+    await publisher.emit_notification_async(
+        notification_type=NotificationType.RUN_COMPLETED,
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="trace-1",
+        title="Run Completed",
+        body="Done",
+        session_mode="orchestration",
+        run_kind="generate_image",
+    )
+
+    assert notification_service.calls == [
+        NotificationContext(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="trace-1",
+            session_mode="orchestration",
+            run_kind="generate_image",
+        )
+    ]
 
 
 def test_execute_native_generation_rejects_inline_media_output() -> None:

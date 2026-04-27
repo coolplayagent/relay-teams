@@ -241,13 +241,21 @@ class EventPublishingService:
         to_json_compatible: Callable[[object], JsonValue],
         maybe_enrich_tool_result_payload: Callable[..., JsonValue],
         tool_result_already_emitted_from_runtime: Callable[..., bool],
-    ) -> None:
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        emitted = False
         for msg in messages:
             if isinstance(msg, ModelResponse):
                 continue
             for part in msg.parts:
                 if isinstance(part, ToolReturnPart):
                     tool_call_id = str(part.tool_call_id or "").strip()
+                    if (
+                        tool_call_id
+                        and published_tool_outcome_ids is not None
+                        and tool_call_id in published_tool_outcome_ids
+                    ):
+                        continue
                     if tool_result_already_emitted_from_runtime(
                         request=request,
                         tool_name=str(part.tool_name),
@@ -277,20 +285,34 @@ class EventPublishingService:
                             "instance_id": request.instance_id,
                         },
                     )
+                    if tool_call_id and published_tool_outcome_ids is not None:
+                        published_tool_outcome_ids.add(tool_call_id)
+                    emitted = True
                     continue
                 if isinstance(part, RetryPromptPart) and part.tool_name:
+                    tool_call_id = str(part.tool_call_id or "").strip()
+                    if (
+                        tool_call_id
+                        and published_tool_outcome_ids is not None
+                        and tool_call_id in published_tool_outcome_ids
+                    ):
+                        continue
                     self._publish_run_event(
                         request=request,
                         event_type=RunEventType.TOOL_INPUT_VALIDATION_FAILED,
                         payload={
                             "tool_name": part.tool_name,
-                            "tool_call_id": part.tool_call_id,
+                            "tool_call_id": tool_call_id,
                             "reason": "Input validation failed before tool execution.",
                             "details": part.content,
                             "role_id": request.role_id,
                             "instance_id": request.instance_id,
                         },
                     )
+                    if tool_call_id and published_tool_outcome_ids is not None:
+                        published_tool_outcome_ids.add(tool_call_id)
+                    emitted = True
+        return emitted
 
     async def publish_committed_tool_outcome_events_from_messages_async(
         self,
@@ -300,13 +322,21 @@ class EventPublishingService:
         to_json_compatible: Callable[[object], JsonValue],
         maybe_enrich_tool_result_payload: Callable[..., JsonValue],
         tool_result_already_emitted_from_runtime: Callable[..., Awaitable[bool]],
-    ) -> None:
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        emitted = False
         for msg in messages:
             if isinstance(msg, ModelResponse):
                 continue
             for part in msg.parts:
                 if isinstance(part, ToolReturnPart):
                     tool_call_id = str(part.tool_call_id or "").strip()
+                    if (
+                        tool_call_id
+                        and published_tool_outcome_ids is not None
+                        and tool_call_id in published_tool_outcome_ids
+                    ):
+                        continue
                     already_emitted = await tool_result_already_emitted_from_runtime(
                         request=request,
                         tool_name=str(part.tool_name),
@@ -339,20 +369,34 @@ class EventPublishingService:
                             "instance_id": request.instance_id,
                         },
                     )
+                    if tool_call_id and published_tool_outcome_ids is not None:
+                        published_tool_outcome_ids.add(tool_call_id)
+                    emitted = True
                     continue
                 if isinstance(part, RetryPromptPart) and part.tool_name:
+                    tool_call_id = str(part.tool_call_id or "").strip()
+                    if (
+                        tool_call_id
+                        and published_tool_outcome_ids is not None
+                        and tool_call_id in published_tool_outcome_ids
+                    ):
+                        continue
                     await self._publish_run_event_async(
                         request=request,
                         event_type=RunEventType.TOOL_INPUT_VALIDATION_FAILED,
                         payload={
                             "tool_name": part.tool_name,
-                            "tool_call_id": part.tool_call_id,
+                            "tool_call_id": tool_call_id,
                             "reason": "Input validation failed before tool execution.",
                             "details": part.content,
                             "role_id": request.role_id,
                             "instance_id": request.instance_id,
                         },
                     )
+                    if tool_call_id and published_tool_outcome_ids is not None:
+                        published_tool_outcome_ids.add(tool_call_id)
+                    emitted = True
+        return emitted
 
     def _publish_run_event(
         self,

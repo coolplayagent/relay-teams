@@ -92,6 +92,8 @@ class NotificationContext(BaseModel):
     task_id: str | None = None
     instance_id: str | None = None
     role_id: str | None = None
+    session_mode: str = Field(default="normal", min_length=1)
+    run_kind: str = Field(default="conversation", min_length=1)
     tool_call_id: str | None = None
     tool_name: str | None = None
 
