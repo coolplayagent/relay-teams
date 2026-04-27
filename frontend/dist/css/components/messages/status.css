@@ -52,6 +52,12 @@
     opacity: 1;
 }
 
+.status-indicator.busy > span:first-child {
+    background-color: var(--warning);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--warning) 70%, transparent);
+    opacity: 1;
+}
+
 @keyframes roundSectionEmphasis {
     0% {
         box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 22%, transparent);

@@ -6,11 +6,16 @@ import { els } from './dom.js';
 import { t } from './i18n.js';
 
 const HEALTH_POLL_MS = 15000;
-const HEALTH_TIMEOUT_MS = 4000;
+const DISCOVERY_TIMEOUT_MS = 1500;
+const CONTROL_PLANE_TIMEOUT_MS = 1500;
+const MAIN_LIVE_TIMEOUT_MS = 1500;
+const CONTROL_PLANE_CACHE_KEY = 'relayTeams.controlPlaneLiveUrl';
 
 let healthPollTimer = null;
 let inFlightHealthCheck = null;
 let backendStatus = 'checking';
+let controlPlaneLiveUrl = readCachedControlPlaneLiveUrl();
+let controlPlaneDiscoveryAttempted = false;
 
 export function initBackendStatusMonitor() {
     applyBackendStatus('checking', t('backend.status.checking'));
@@ -29,6 +34,10 @@ export function markBackendOffline(label = t('backend.status.offline')) {
     applyBackendStatus('offline', label);
 }
 
+export function markBackendBusy(label = t('backend.status.busy')) {
+    applyBackendStatus('busy', label);
+}
+
 export async function refreshBackendStatus({ force = false } = {}) {
     if (inFlightHealthCheck && !force) {
         return inFlightHealthCheck;
@@ -41,10 +50,75 @@ export async function refreshBackendStatus({ force = false } = {}) {
 }
 
 async function probeBackendHealth() {
+    const controlUrl = await resolveControlPlaneLiveUrl();
+    if (controlUrl) {
+        const controlProbe = await probeJson(controlUrl, CONTROL_PLANE_TIMEOUT_MS);
+        if (controlProbe.ok && isControlPlaneLivePayload(controlProbe.payload)) {
+            rememberControlPlaneLiveUrl(controlUrl);
+            const mainProbe = await probeJson('/api/system/live', MAIN_LIVE_TIMEOUT_MS);
+            if (mainProbe.ok && isLivePayload(mainProbe.payload)) {
+                markBackendOnline(t('backend.status.connected'));
+                return true;
+            }
+            markBackendBusy(t('backend.status.busy'));
+            return true;
+        }
+        forgetControlPlaneLiveUrl(controlUrl);
+    }
+
+    const fallbackUrl = inferControlPlaneLiveUrl();
+    if (fallbackUrl && fallbackUrl !== controlUrl) {
+        const fallbackProbe = await probeJson(fallbackUrl, CONTROL_PLANE_TIMEOUT_MS);
+        if (fallbackProbe.ok && isControlPlaneLivePayload(fallbackProbe.payload)) {
+            rememberControlPlaneLiveUrl(fallbackUrl);
+            markBackendBusy(t('backend.status.busy'));
+            return true;
+        }
+    }
+
+    const mainProbe = await probeJson('/api/system/live', MAIN_LIVE_TIMEOUT_MS);
+    if (mainProbe.ok && isLivePayload(mainProbe.payload)) {
+        markBackendOnline(t('backend.status.connected'));
+        return true;
+    }
+    markBackendOffline(t('backend.status.offline'));
+    return false;
+}
+
+async function resolveControlPlaneLiveUrl() {
+    if (controlPlaneLiveUrl) {
+        return controlPlaneLiveUrl;
+    }
+    const discoveredUrl = await discoverControlPlaneLiveUrl();
+    if (discoveredUrl) {
+        rememberControlPlaneLiveUrl(discoveredUrl);
+        return discoveredUrl;
+    }
+    return null;
+}
+
+async function discoverControlPlaneLiveUrl() {
+    if (controlPlaneDiscoveryAttempted) {
+        return null;
+    }
+    controlPlaneDiscoveryAttempted = true;
+    const probe = await probeJson('/api/system/control-plane', DISCOVERY_TIMEOUT_MS);
+    if (!probe.ok) {
+        controlPlaneDiscoveryAttempted = false;
+        return null;
+    }
+    const payload = probe.payload || {};
+    if (payload.enabled !== true) {
+        return null;
+    }
+    return normalizeControlPlaneLiveUrl(payload.live_url);
+}
+
+async function probeJson(url, timeoutMs) {
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const response = await fetch('/api/system/health', {
+        const response = await fetch(url, {
             method: 'GET',
             cache: 'no-store',
             headers: {
@@ -52,21 +126,10 @@ async function probeBackendHealth() {
             },
             signal: controller.signal,
         });
-        if (!response.ok) {
-            markBackendOffline(t('backend.status.unavailable'));
-            return false;
-        }
-        const payload = await response.json();
-        const safeStatus = String(payload?.status || '').trim().toLowerCase();
-        if (safeStatus === 'ok') {
-            markBackendOnline(t('backend.status.connected'));
-            return true;
-        }
-        markBackendOffline(t('backend.status.unavailable'));
-        return false;
+        if (!response.ok) return { ok: false, payload: null };
+        return { ok: true, payload: await response.json() };
     } catch (_) {
-        markBackendOffline(t('backend.status.offline'));
-        return false;
+        return { ok: false, payload: null };
     } finally {
         window.clearTimeout(timeoutId);
     }
@@ -75,7 +138,7 @@ async function probeBackendHealth() {
 function applyBackendStatus(nextStatus, label) {
     backendStatus = nextStatus;
     if (!els.backendStatus) return;
-    els.backendStatus.classList.remove('online', 'offline', 'checking');
+    els.backendStatus.classList.remove('online', 'offline', 'checking', 'busy');
     els.backendStatus.classList.add(nextStatus);
     els.backendStatus.dataset.status = nextStatus;
     const safeLabel = String(label || defaultLabelForStatus(nextStatus));
@@ -90,9 +153,134 @@ function applyBackendStatus(nextStatus, label) {
 function defaultLabelForStatus(status) {
     if (status === 'online') return t('backend.status.connected');
     if (status === 'offline') return t('backend.status.offline');
+    if (status === 'busy') return t('backend.status.busy');
     return t('backend.status.checking');
 }
 
 export function getBackendStatus() {
     return backendStatus;
+}
+
+function isLivePayload(payload) {
+    const safeStatus = String(payload?.status || '').trim().toLowerCase();
+    return safeStatus === 'alive' || safeStatus === 'ok';
+}
+
+function isControlPlaneLivePayload(payload) {
+    if (!isLivePayload(payload)) {
+        return false;
+    }
+    const mainBaseUrl = String(payload?.main_base_url || '').trim();
+    return !mainBaseUrl || baseUrlMatchesCurrentOrigin(mainBaseUrl);
+}
+
+function normalizeControlPlaneLiveUrl(rawUrl) {
+    const safeUrl = String(rawUrl || '').trim();
+    if (!safeUrl) {
+        return null;
+    }
+    try {
+        const url = new URL(safeUrl, window.location.origin);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            return null;
+        }
+        if (shouldUseCurrentHostForControlPlane(url.hostname)) {
+            url.hostname = window.location.hostname;
+        }
+        return url.href;
+    } catch (_) {
+        return null;
+    }
+}
+
+function inferControlPlaneLiveUrl() {
+    const currentPort = Number(window.location.port);
+    if (!Number.isInteger(currentPort) || currentPort < 1 || currentPort >= 65535) {
+        return null;
+    }
+    try {
+        const url = new URL(window.location.origin);
+        url.port = String(currentPort + 1);
+        url.pathname = '/live';
+        url.search = '';
+        url.hash = '';
+        return url.href;
+    } catch (_) {
+        return null;
+    }
+}
+
+function shouldUseCurrentHostForControlPlane(hostname) {
+    if (isWildcardHost(hostname)) {
+        return true;
+    }
+    return isLoopbackHost(hostname) && !isLoopbackHost(window.location.hostname);
+}
+
+function baseUrlMatchesCurrentOrigin(rawUrl) {
+    try {
+        const expected = new URL(rawUrl);
+        const current = new URL(window.location.origin);
+        const expectedHost = isWildcardHost(expected.hostname)
+            ? normalizeComparableHost(current.hostname)
+            : normalizeComparableHost(expected.hostname);
+        return expected.protocol === current.protocol
+            && expectedHost === normalizeComparableHost(current.hostname)
+            && effectivePort(expected) === effectivePort(current);
+    } catch (_) {
+        return true;
+    }
+}
+
+function isWildcardHost(hostname) {
+    const normalized = String(hostname || '').toLowerCase();
+    return normalized === '0.0.0.0' || normalized === '::' || normalized === '[::]';
+}
+
+function normalizeComparableHost(hostname) {
+    return isLoopbackHost(hostname) ? 'loopback' : String(hostname || '').toLowerCase();
+}
+
+function isLoopbackHost(hostname) {
+    const normalized = String(hostname || '').toLowerCase();
+    return normalized === 'localhost'
+        || normalized === '127.0.0.1'
+        || normalized === '::1'
+        || normalized === '[::1]';
+}
+
+function effectivePort(url) {
+    if (url.port) return url.port;
+    return url.protocol === 'https:' ? '443' : '80';
+}
+
+function readCachedControlPlaneLiveUrl() {
+    try {
+        return normalizeControlPlaneLiveUrl(window.localStorage.getItem(CONTROL_PLANE_CACHE_KEY));
+    } catch (_) {
+        return null;
+    }
+}
+
+function rememberControlPlaneLiveUrl(liveUrl) {
+    controlPlaneLiveUrl = liveUrl;
+    try {
+        window.localStorage.setItem(CONTROL_PLANE_CACHE_KEY, liveUrl);
+    } catch (_) {
+        // Storage may be unavailable in private contexts; probing still works in memory.
+    }
+}
+
+function forgetControlPlaneLiveUrl(liveUrl) {
+    if (controlPlaneLiveUrl === liveUrl) {
+        controlPlaneLiveUrl = null;
+    }
+    controlPlaneDiscoveryAttempted = false;
+    try {
+        if (window.localStorage.getItem(CONTROL_PLANE_CACHE_KEY) === liveUrl) {
+            window.localStorage.removeItem(CONTROL_PLANE_CACHE_KEY);
+        }
+    } catch (_) {
+        // Storage may be unavailable in private contexts; the next poll will rediscover.
+    }
 }

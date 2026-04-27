@@ -85,6 +85,12 @@ from relay_teams.interfaces.server.deps import (
     get_web_connectivity_probe_service,
     get_hook_service,
 )
+from relay_teams.interfaces.server.control_plane import (
+    ControlPlaneDiscoveryPayload,
+    ControlPlaneLivePayload,
+    build_local_live_payload,
+    control_plane_discovery_from_env,
+)
 from relay_teams.interfaces.server.ui_language_models import UiLanguageSettings
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from relay_teams.agents.orchestration.settings_models import OrchestrationSettings
@@ -220,6 +226,16 @@ async def health_check(request: Request) -> ServerHealthPayload:
         skill_registry=container.skill_registry,
         tool_registry=container.tool_registry,
     )
+
+
+@router.get("/live")
+async def live_check() -> ControlPlaneLivePayload:
+    return build_local_live_payload()
+
+
+@router.get("/control-plane")
+async def get_control_plane() -> ControlPlaneDiscoveryPayload:
+    return control_plane_discovery_from_env()
 
 
 @router.get("/configs")

@@ -76,6 +76,13 @@ from relay_teams.interfaces.server.deps import (
     get_web_config_service,
     get_web_connectivity_probe_service,
 )
+from relay_teams.interfaces.server.control_plane import (
+    CONTROL_PLANE_HOST_ENV,
+    CONTROL_PLANE_MAIN_URL_ENV,
+    CONTROL_PLANE_PORT_ENV,
+    CONTROL_PLANE_STARTED_AT_ENV,
+    CONTROL_PLANE_URL_ENV,
+)
 from relay_teams.interfaces.server.ui_language_models import (
     UiLanguage,
     UiLanguageSettings,
@@ -928,6 +935,66 @@ def test_health_check_returns_runtime_identity_and_skill_sanity() -> None:
     tool_registry_sanity = payload["tool_registry_sanity"]
     assert tool_registry_sanity["available_tool_count"] >= 1
     assert "write" in tool_registry_sanity["available_tool_names"]
+
+
+def test_live_check_returns_lightweight_liveness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CONTROL_PLANE_MAIN_URL_ENV, "http://127.0.0.1:8000")
+    monkeypatch.setenv(CONTROL_PLANE_STARTED_AT_ENV, "100")
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/live")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "alive"
+    assert payload["version"] == "0.1.0"
+    assert payload["pid"]
+    assert payload["uptime_seconds"] >= 0
+    assert payload["main_base_url"] == "http://127.0.0.1:8000"
+
+
+def test_control_plane_discovery_route_returns_published_liveness_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CONTROL_PLANE_HOST_ENV, "127.0.0.1")
+    monkeypatch.setenv(CONTROL_PLANE_PORT_ENV, "8001")
+    monkeypatch.setenv(CONTROL_PLANE_URL_ENV, "http://127.0.0.1:8001/live")
+    monkeypatch.setenv(CONTROL_PLANE_MAIN_URL_ENV, "http://127.0.0.1:8000")
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/control-plane")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": True,
+        "live_url": "http://127.0.0.1:8001/live",
+        "host": "127.0.0.1",
+        "port": 8001,
+        "main_base_url": "http://127.0.0.1:8000",
+    }
+
+
+def test_control_plane_discovery_route_degrades_when_unpublished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CONTROL_PLANE_HOST_ENV, raising=False)
+    monkeypatch.delenv(CONTROL_PLANE_PORT_ENV, raising=False)
+    monkeypatch.delenv(CONTROL_PLANE_URL_ENV, raising=False)
+    monkeypatch.delenv(CONTROL_PLANE_MAIN_URL_ENV, raising=False)
+    client = _create_test_client(_FakeSystemService())
+
+    response = client.get("/api/system/control-plane")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "enabled": False,
+        "live_url": None,
+        "host": None,
+        "port": None,
+        "main_base_url": None,
+    }
 
 
 def test_health_check_builds_payload_in_worker_thread(

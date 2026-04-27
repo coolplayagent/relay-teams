@@ -80,6 +80,8 @@ def test_start_runs_uvicorn_and_tracks_managed_process(
         "pid": 4321,
         "host": "127.0.0.1",
         "port": 8911,
+        "control_plane_host": "127.0.0.1",
+        "control_plane_port": 8912,
         "python_executable": "D:/workspace/agent_teams/.venv/Scripts/python.exe",
         "package_root": "D:/workspace/agent_teams/src/relay_teams",
         "builtin_skills_dir": "D:/workspace/agent_teams/src/relay_teams/builtin/skills",
