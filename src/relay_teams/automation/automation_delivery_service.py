@@ -22,7 +22,6 @@ from relay_teams.automation.automation_models import (
 )
 from relay_teams.gateway.feishu import FEISHU_PLATFORM
 from relay_teams.gateway.feishu.models import FeishuEnvironment
-from relay_teams.gateway.xiaoluban import format_xiaoluban_notification_text
 from relay_teams.logger import get_logger, log_event
 from relay_teams.notifications import NotificationContext, NotificationType
 from relay_teams.sessions.session_models import SessionRecord
@@ -88,11 +87,14 @@ class NotificationServiceLike(Protocol):
 
 
 class XiaolubanGatewayServiceLike(Protocol):
-    def send_text_message(
+    def send_notification_message(
         self,
         *,
         account_id: str,
-        text: str,
+        workspace_id: str,
+        session_id: str,
+        status: str,
+        body: str,
         receiver_uid: Optional[str] = None,
     ) -> str: ...
 
@@ -492,16 +494,13 @@ class AutomationDeliveryService:
             )
         if self._xiaoluban_gateway_service is None:
             raise RuntimeError("xiaoluban_delivery_service_unavailable")
-        xiaoluban_text = format_xiaoluban_notification_text(
-            workspace_id=self._resolve_workspace_id(session_id),
-            session_id=session_id,
-            status=status,
-            body=text,
-        )
         try:
-            return self._xiaoluban_gateway_service.send_text_message(
+            return self._xiaoluban_gateway_service.send_notification_message(
                 account_id=binding.account_id,
-                text=xiaoluban_text,
+                workspace_id=self._resolve_workspace_id(session_id),
+                session_id=session_id,
+                status=status,
+                body=text,
             )
         except KeyError as exc:
             raise RuntimeError("missing_xiaoluban_account") from exc

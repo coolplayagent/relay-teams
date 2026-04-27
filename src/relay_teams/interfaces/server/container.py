@@ -219,9 +219,11 @@ from relay_teams.gateway.wechat.inbound_queue_repository import (
 from relay_teams.gateway.wechat.secret_store import get_wechat_secret_store
 from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.gateway.xiaoluban import (
+    CompositeXiaolubanTerminalNotificationSuppressor,
     XiaolubanAccountRepository,
     XiaolubanClient,
     XiaolubanGatewayService,
+    XiaolubanImListenerService,
     XiaolubanNotificationDispatcher,
     get_xiaoluban_secret_store,
 )
@@ -838,6 +840,13 @@ class ServerContainer:
             secret_store=get_xiaoluban_secret_store(),
             client=self.xiaoluban_client,
             workspace_lookup=self.workspace_service,
+            gateway_session_service=self.gateway_session_service,
+            run_service=self.run_service,
+            event_log=self.event_log,
+            session_ingress_service=self.session_ingress_service,
+        )
+        self.xiaoluban_im_listener_service = XiaolubanImListenerService(
+            service=self.xiaoluban_gateway_service
         )
         self.automation_feishu_binding_service = AutomationFeishuBindingService(
             external_session_binding_repo=self.external_session_binding_repo,
@@ -879,7 +888,10 @@ class ServerContainer:
                 XiaolubanNotificationDispatcher(
                     session_repo=self.session_repo,
                     account_lookup=self.xiaoluban_gateway_service,
-                    terminal_notification_suppressor=self.automation_delivery_service,
+                    terminal_notification_suppressor=CompositeXiaolubanTerminalNotificationSuppressor(
+                        self.automation_delivery_service,
+                        self.xiaoluban_gateway_service,
+                    ),
                 ),
             ),
         )
@@ -1203,6 +1215,7 @@ class ServerContainer:
         self.run_service.bind_event_loop(asyncio.get_running_loop())
         self.background_task_service.bind_completion_sink(self.run_service)
         self.wechat_gateway_service.start()
+        self.xiaoluban_im_listener_service.start()
         self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
         await self.automation_delivery_worker.start()
@@ -1218,6 +1231,7 @@ class ServerContainer:
         await self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
         self.feishu_subscription_service.stop()
+        self.xiaoluban_im_listener_service.stop()
         self.wechat_gateway_service.stop()
         self.localhost_run_tunnel_service.stop()
         stopped_runs = await self.run_service.stop_active_runs_for_shutdown_async()

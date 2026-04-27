@@ -4916,6 +4916,7 @@ import { els, flushTasks } from "./mockDom.mjs";
 
 globalThis.__showFormDialogResult = {
     token: "uid_self_1234567890abcdef1234567890ab",
+    xiaoluban_im_workspace_id: "workspace-1",
 };
 
 initializeProjectView();
@@ -4934,6 +4935,7 @@ console.log(JSON.stringify({
     title: els.projectViewTitle.textContent,
     contentHtml: els.projectViewContent.innerHTML,
     createdPayload: globalThis.__createdXiaolubanAccountPayload || null,
+    updatedImPayload: globalThis.__updatedXiaolubanImPayload || null,
     toastCalls: globalThis.__toastCalls || [],
     showFormDialogCalls: globalThis.__showFormDialogCalls || [],
     fieldIds: fields.map(field => field.id),
@@ -4944,6 +4946,10 @@ console.log(JSON.stringify({
         mock_api_source="""
 export async function fetchTriggers() {
     return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
 }
 
 export async function fetchXiaolubanGatewayAccounts() {
@@ -4997,6 +5003,9 @@ export async function createXiaolubanGatewayAccount(payload) {
         "notification_workspace_ids": [],
         "notification_receiver": None,
         "token": "uid_self_1234567890abcdef1234567890ab",
+        "im_config": {
+            "workspace_id": "workspace-1",
+        },
     }
     assert payload["showFormDialogCalls"] != []
     assert payload["fieldIds"] == [
@@ -5004,6 +5013,7 @@ export async function createXiaolubanGatewayAccount(payload) {
         "token",
         "notification_workspace_ids",
         "notification_receiver",
+        "xiaoluban_im_workspace_id",
     ]
     assert payload["displayNameValue"] == "Xiaoluban"
     workspace_field = cast(dict[str, object], payload["workspaceField"])
@@ -5024,7 +5034,10 @@ export async function createXiaolubanGatewayAccount(payload) {
         == "__no_xiaoluban_notification_workspaces__"
     )
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
-    assert toast_calls[-1]["message"] == "Xiaoluban account saved."
+    assert (
+        toast_calls[-1]["message"]
+        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_new?auth=secret-token g"
+    )
 
 
 def test_project_view_updates_toggles_and_deletes_xiaoluban_account(
@@ -5042,6 +5055,7 @@ import { els, flushTasks } from "./mockDom.mjs";
 globalThis.__showFormDialogResult = {
     display_name: "Self Notify Updated",
     token: "",
+    xiaoluban_im_workspace_id: "workspace-1",
 };
 
 initializeProjectView();
@@ -5065,6 +5079,7 @@ await flushTasks();
 
 console.log(JSON.stringify({
     updatedPayload: globalThis.__updatedXiaolubanAccountPayload || null,
+    updatedImPayload: globalThis.__updatedXiaolubanImPayload || null,
     disabledAccountId: globalThis.__disabledXiaolubanAccountId || null,
     deletedAccountId: globalThis.__deletedXiaolubanAccountId || null,
     editDialogMessage: dialogCall.message || "",
@@ -5080,6 +5095,10 @@ export async function fetchTriggers() {
     return [];
 }
 
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
+}
+
 export async function fetchXiaolubanGatewayAccounts() {
     return [
         {
@@ -5088,6 +5107,9 @@ export async function fetchXiaolubanGatewayAccounts() {
             base_url: "http://127.0.0.1:18080/send",
             status: "enabled",
             derived_uid: "uid_self",
+            im_config: {
+                workspace_id: "workspace-1",
+            },
             secret_status: { token_configured: true },
         },
     ];
@@ -5127,11 +5149,15 @@ export async function deleteXiaolubanGatewayAccount(accountId) {
             "display_name": "Self Notify Updated",
             "notification_workspace_ids": [],
             "notification_receiver": None,
+            "im_config": {
+                "workspace_id": "workspace-1",
+            },
         },
     }
     assert payload["disabledAccountId"] == "xlb_1"
     assert payload["deletedAccountId"] == "xlb_1"
-    assert payload["editDialogMessage"] == "Internal ID: xlb_1"
+    assert "Internal ID: xlb_1" in str(payload["editDialogMessage"])
+    assert "Trigger:" not in str(payload["editDialogMessage"])
     assert (
         payload["tokenFieldPlaceholder"] == "Personal token saved, re-enter to update"
     )
@@ -5145,8 +5171,228 @@ export async function deleteXiaolubanGatewayAccount(accountId) {
         == "Leave empty to notify yourself. Enter a group ID to notify a group after a selected workspace run completes."
     )
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
-    assert toast_calls[0]["message"] == "Xiaoluban account saved."
+    assert (
+        toast_calls[0]["message"]
+        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_1?auth=secret-token g"
+    )
     assert toast_calls[-1]["message"] == "Xiaoluban account deleted."
+
+
+def test_project_view_configures_xiaoluban_im_forwarding(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    display_name: "Self Notify",
+    token: "",
+    notification_workspace_ids: ["workspace-1"],
+    notification_receiver: "group-123",
+    xiaoluban_im_workspace_id: "workspace-2",
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+els.projectViewContent.querySelector('[data-feature-xiaoluban-edit]')?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    contentHtml: els.projectViewContent.innerHTML,
+    updatedAccountPayload: globalThis.__updatedXiaolubanAccountPayload || null,
+    updatedImPayload: globalThis.__updatedXiaolubanImPayload || null,
+    forwardingAccountId: globalThis.__xiaolubanForwardingAccountId || null,
+    dialogTitle: dialogCall.title || "",
+    dialogMessage: dialogCall.message || "",
+    fieldIds: fields.map(field => field.id),
+    workspaceOptions: (fields.find(field => field.id === "xiaoluban_im_workspace_id") || {}).options || [],
+    workspaceDescription: (fields.find(field => field.id === "xiaoluban_im_workspace_id") || {}).description || "",
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [
+        { workspace_id: "workspace-1", name: "Main Workspace" },
+        { workspace_id: "workspace-2", name: "IM Workspace" },
+    ];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [
+        {
+            account_id: "xlb_1",
+            display_name: "Self Notify",
+            status: "enabled",
+            derived_uid: "uid_self",
+            notification_workspace_ids: ["workspace-1"],
+            notification_receiver: "group-123",
+            im_config: {
+                workspace_id: "workspace-1",
+            },
+            secret_status: { token_configured: true },
+        },
+    ];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
+    globalThis.__xiaolubanForwardingAccountId = accountId;
+    return {
+        account_id: accountId,
+        forwarding_url: "http://10.88.1.23:9009/xlb_1?auth=secret-token",
+        forwarding_command: "http://10.88.1.23:9009/xlb_1?auth=secret-token g",
+        listener_running: true,
+    };
+}
+""".strip(),
+    )
+
+    assert "IM: ready" in str(payload["contentHtml"])
+    assert "IM plugin:" not in str(payload["contentHtml"])
+    assert "data-feature-xiaoluban-im" not in str(payload["contentHtml"])
+    assert payload["updatedAccountPayload"] == {
+        "accountId": "xlb_1",
+        "payload": {
+            "display_name": "Self Notify",
+            "notification_workspace_ids": ["workspace-1"],
+            "notification_receiver": "group-123",
+            "im_config": {
+                "workspace_id": "workspace-2",
+            },
+        },
+    }
+    assert payload["forwardingAccountId"] == "xlb_1"
+    assert payload["dialogTitle"] == "Xiaoluban Account"
+    assert "Callback URL:" not in str(payload["dialogMessage"])
+    assert "http://127.0.0.1" not in str(payload["dialogMessage"])
+    assert "enter forwarding mode" not in str(payload["dialogMessage"])
+    assert (
+        "Forwarding command: http://10.88.1.23:9009/xlb_1?auth=secret-token g"
+    ) in str(payload["workspaceDescription"])
+    assert "Send this in WeLink Xiaoluban" in str(payload["workspaceDescription"])
+    assert payload["fieldIds"] == [
+        "display_name",
+        "token",
+        "notification_workspace_ids",
+        "notification_receiver",
+        "xiaoluban_im_workspace_id",
+    ]
+    workspace_options = cast(list[dict[str, object]], payload["workspaceOptions"])
+    assert [option["value"] for option in workspace_options] == [
+        "workspace-1",
+        "workspace-2",
+    ]
+    toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
+    assert (
+        toast_calls[-1]["message"]
+        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_1?auth=secret-token g"
+    )
+
+
+def test_project_view_saves_xiaoluban_im_when_forwarding_command_fetch_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    display_name: "Self Notify",
+    token: "",
+    notification_workspace_ids: [],
+    notification_receiver: "",
+    xiaoluban_im_workspace_id: "workspace-1",
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+els.projectViewContent.querySelector('[data-feature-xiaoluban-edit]')?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    forwardingAccountId: globalThis.__xiaolubanForwardingAccountId || null,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [
+        {
+            account_id: "xlb_1",
+            display_name: "Self Notify",
+            status: "enabled",
+            derived_uid: "uid_self",
+            im_config: {
+                workspace_id: "",
+            },
+            secret_status: { token_configured: true },
+        },
+    ];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function updateXiaolubanGatewayAccount(accountId, payload) {
+    globalThis.__updatedXiaolubanAccountPayload = { accountId, payload };
+    return {
+        account_id: accountId,
+        display_name: payload?.display_name || "Self Notify",
+        status: "enabled",
+        derived_uid: "uid_self",
+        secret_status: { token_configured: true },
+    };
+}
+
+export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
+    globalThis.__xiaolubanForwardingAccountId = accountId;
+    throw new Error("xiaoluban_im_listener_host_unavailable");
+}
+""".strip(),
+    )
+
+    assert payload["forwardingAccountId"] == "xlb_1"
+    toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
+    assert toast_calls[-1]["message"] == "Xiaoluban account saved."
 
 
 def test_project_view_maps_xiaoluban_submit_errors_to_inline_messages(
@@ -5180,10 +5426,10 @@ const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
 const messages = [];
 
 for (const formValues of [
-    { display_name: "Xiaoluban", token: "bad" },
-    { display_name: "Xiaoluban", token: "p_bad_token_value_1234567890abcdef" },
-    { display_name: "Xiaoluban", token: "" },
-    { display_name: "Xiaoluban", token: "uid_self_1234567890abcdef1234567890ab" },
+    { display_name: "Xiaoluban", token: "bad", xiaoluban_im_workspace_id: "workspace-1" },
+    { display_name: "Xiaoluban", token: "p_bad_token_value_1234567890abcdef", xiaoluban_im_workspace_id: "workspace-1" },
+    { display_name: "Xiaoluban", token: "", xiaoluban_im_workspace_id: "workspace-1" },
+    { display_name: "Xiaoluban", token: "uid_self_1234567890abcdef1234567890ab", xiaoluban_im_workspace_id: "workspace-1" },
 ]) {
     try {
         await dialogCall.submitHandler(formValues);
@@ -5201,6 +5447,10 @@ console.log(JSON.stringify({
         mock_api_source="""
 export async function fetchTriggers() {
     return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
 }
 
 export async function fetchXiaolubanGatewayAccounts() {
@@ -5950,6 +6200,23 @@ export async function updateXiaolubanGatewayAccount(accountId, payload) {
     return { account_id: accountId, display_name: payload?.display_name || "Xiaoluban", derived_uid: "uid_self" };
 }
 """.strip(),
+        "updateXiaolubanGatewayImConfig": """
+export async function updateXiaolubanGatewayImConfig(accountId, payload) {
+    globalThis.__updatedXiaolubanImPayload = { accountId, payload };
+    return { account_id: accountId, display_name: "Xiaoluban", derived_uid: "uid_self", im_config: payload };
+}
+""".strip(),
+        "fetchXiaolubanGatewayImForwardingCommand": """
+export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
+    globalThis.__xiaolubanForwardingAccountId = accountId;
+    return {
+        account_id: accountId,
+        forwarding_url: `http://10.88.1.23:9009/${accountId}?auth=secret-token`,
+        forwarding_command: `http://10.88.1.23:9009/${accountId}?auth=secret-token g`,
+        listener_running: true,
+    };
+}
+""".strip(),
         "enableXiaolubanGatewayAccount": """
 export async function enableXiaolubanGatewayAccount(accountId) {
     globalThis.__enabledXiaolubanAccountId = accountId;
@@ -6220,6 +6487,22 @@ export const state = {
         "settings.gateway.xiaoluban_notification_receiver_copy": "Leave empty to notify yourself. Enter a group ID to notify a group after a selected workspace run completes.",
         "settings.gateway.xiaoluban_notification_receiver_self": "self",
         "settings.gateway.xiaoluban_notification_receiver_summary": "Notify: {receiver}",
+        "settings.gateway.xiaoluban_im_summary": "IM: {status}",
+        "settings.gateway.xiaoluban_im_action": "IM",
+        "settings.gateway.xiaoluban_im_editor": "Xiaoluban IM",
+        "settings.gateway.xiaoluban_im_workspace": "IM workspace",
+        "settings.gateway.xiaoluban_im_workspace_copy": "Required.",
+        "settings.gateway.xiaoluban_im_access_copy": "Access: only current account owner {uid}.",
+        "settings.gateway.xiaoluban_im_forwarding_copy": "Send this in WeLink Xiaoluban to enter the local Relay Teams session.\\nForwarding command: {command}\\nSend q to exit.",
+        "settings.gateway.xiaoluban_im_forwarding_after_save_copy": "Save to show the forwarding command.",
+        "settings.gateway.xiaoluban_im_forwarding_saved_message": "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: {command}",
+        "settings.gateway.xiaoluban_im_status_workspace_required": "workspace required",
+        "settings.gateway.xiaoluban_im_status_ready": "ready",
+        "settings.gateway.xiaoluban_im_missing_workspace_options": "Create a workspace before enabling Xiaoluban IM.",
+        "settings.gateway.xiaoluban_im_workspace_required": "Select an IM workspace.",
+        "settings.gateway.xiaoluban_im_saved_message": "Xiaoluban IM settings saved.",
+        "settings.gateway.xiaoluban_im_callback_url_local": "Relay Teams could not detect a reachable machine IP. Connect to a network or set RELAY_TEAMS_XIAOLUBAN_IM_PUBLIC_HOST.",
+        "settings.gateway.xiaoluban_im_workspace_unknown": "The selected IM workspace no longer exists. Choose another workspace and save again.",
         "settings.gateway.qr_title": "Scan To Connect",
         "settings.gateway.qr_copy": "Scan this QR code in WeChat.",
         "settings.gateway.login_waiting": "Waiting for QR scan confirmation...",
@@ -6232,6 +6515,7 @@ export const state = {
         "settings.gateway.delete_confirm_message": "Delete account {name}?",
         "settings.gateway.saved": "Saved",
         "settings.gateway.saved_message": "WeChat account saved.",
+        "settings.gateway.xiaoluban_saved_title": "Xiaoluban account saved",
         "settings.gateway.xiaoluban_saved_message": "Xiaoluban account saved.",
         "settings.gateway.xiaoluban_save_failed_message": "Unable to save the Xiaoluban account. Check the personal token and try again.",
         "settings.gateway.save_failed": "Save failed",

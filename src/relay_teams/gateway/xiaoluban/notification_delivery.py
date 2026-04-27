@@ -8,9 +8,6 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanAccountRecord,
     XiaolubanAccountStatus,
 )
-from relay_teams.gateway.xiaoluban.notification_format import (
-    format_xiaoluban_notification_text,
-)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.notifications.models import NotificationRequest, NotificationType
 from relay_teams.sessions.session_models import SessionRecord
@@ -27,11 +24,14 @@ class XiaolubanAccountLookup(Protocol):
 
     def has_usable_credentials(self, account_id: str) -> bool: ...
 
-    def send_text_message(
+    def send_notification_message(
         self,
         *,
         account_id: str,
-        text: str,
+        workspace_id: str,
+        session_id: str,
+        status: str,
+        body: str,
         receiver_uid: Optional[str] = None,
     ) -> str: ...
 
@@ -40,6 +40,24 @@ class XiaolubanTerminalNotificationSuppressor(Protocol):
     def should_suppress_xiaoluban_terminal_notification(
         self, run_id: Optional[str]
     ) -> bool: ...
+
+
+class CompositeXiaolubanTerminalNotificationSuppressor:
+    def __init__(
+        self,
+        *suppressors: XiaolubanTerminalNotificationSuppressor | None,
+    ) -> None:
+        self._suppressors = tuple(
+            suppressor for suppressor in suppressors if suppressor is not None
+        )
+
+    def should_suppress_xiaoluban_terminal_notification(
+        self, run_id: Optional[str]
+    ) -> bool:
+        return any(
+            suppressor.should_suppress_xiaoluban_terminal_notification(run_id)
+            for suppressor in self._suppressors
+        )
 
 
 class XiaolubanNotificationDispatcher:
@@ -76,12 +94,6 @@ class XiaolubanNotificationDispatcher:
         body = _build_text_payload(request)
         if not body:
             return
-        text = format_xiaoluban_notification_text(
-            workspace_id=workspace_id,
-            session_id=request.context.session_id,
-            status="completed",
-            body=body,
-        )
         for account in self._account_lookup.list_accounts():
             if not _should_notify_account(
                 account=account,
@@ -90,9 +102,12 @@ class XiaolubanNotificationDispatcher:
             ):
                 continue
             try:
-                _ = self._account_lookup.send_text_message(
+                _ = self._account_lookup.send_notification_message(
                     account_id=account.account_id,
-                    text=text,
+                    workspace_id=workspace_id,
+                    session_id=request.context.session_id,
+                    status="completed",
+                    body=body,
                 )
             except Exception as exc:
                 log_event(
@@ -132,4 +147,7 @@ def _build_text_payload(request: NotificationRequest) -> str:
     return "\n".join(line for line in lines if line.strip())
 
 
-__all__ = ["XiaolubanNotificationDispatcher"]
+__all__ = [
+    "CompositeXiaolubanTerminalNotificationSuppressor",
+    "XiaolubanNotificationDispatcher",
+]

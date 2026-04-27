@@ -13,6 +13,7 @@ from pydantic import JsonValue, ValidationError
 from relay_teams.gateway.xiaoluban.models import (
     XiaolubanAccountRecord,
     XiaolubanAccountStatus,
+    XiaolubanImConfig,
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
@@ -43,6 +44,7 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     derived_uid TEXT NOT NULL,
                     notification_workspace_ids_json TEXT NOT NULL DEFAULT '[]',
                     notification_receiver TEXT,
+                    im_config_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -57,6 +59,11 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                 "xiaoluban_accounts",
                 "notification_receiver",
                 "TEXT",
+            )
+            self._ensure_column(
+                "xiaoluban_accounts",
+                "im_config_json",
+                "TEXT NOT NULL DEFAULT '{}'",
             )
 
         run_sqlite_write_with_retry(
@@ -119,10 +126,11 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     derived_uid,
                     notification_workspace_ids_json,
                     notification_receiver,
+                    im_config_json,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET
                     display_name=excluded.display_name,
                     base_url=excluded.base_url,
@@ -130,6 +138,7 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     derived_uid=excluded.derived_uid,
                     notification_workspace_ids_json=excluded.notification_workspace_ids_json,
                     notification_receiver=excluded.notification_receiver,
+                    im_config_json=excluded.im_config_json,
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -140,6 +149,7 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     record.derived_uid,
                     _workspace_ids_to_json(record.notification_workspace_ids),
                     record.notification_receiver,
+                    _im_config_to_json(record.im_config),
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
                 ),
@@ -201,6 +211,7 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                 if row["notification_receiver"] is not None
                 else None
             ),
+            im_config=_im_config_from_json(str(row["im_config_json"] or "{}")),
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -223,6 +234,7 @@ def _log_invalid_row(*, row: sqlite3.Row, error: Exception) -> None:
         "notification_workspace_ids_json": _persisted_value_preview(
             row["notification_workspace_ids_json"]
         ),
+        "im_config_json": _persisted_value_preview(row["im_config_json"]),
         "created_at": _persisted_value_preview(row["created_at"]),
         "updated_at": _persisted_value_preview(row["updated_at"]),
         "error_type": type(error).__name__,
@@ -248,6 +260,17 @@ def _workspace_ids_from_json(value: str) -> tuple[str, ...]:
         field_name="notification_workspace_ids",
     )
     return () if normalized is None else normalized
+
+
+def _im_config_to_json(config: XiaolubanImConfig) -> str:
+    return config.model_dump_json()
+
+
+def _im_config_from_json(value: str) -> XiaolubanImConfig:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("Invalid persisted im_config_json")
+    return XiaolubanImConfig.model_validate(parsed)
 
 
 __all__ = ["XiaolubanAccountRepository"]

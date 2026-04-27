@@ -160,6 +160,7 @@ export {
     disableXiaolubanGatewayAccount,
     enableXiaolubanGatewayAccount,
     deleteWeChatGatewayAccount,
+    fetchXiaolubanGatewayImForwardingCommand,
     fetchXiaolubanGatewayAccounts,
     disableWeChatGatewayAccount,
     enableWeChatGatewayAccount,
@@ -167,6 +168,7 @@ export {
     reloadWeChatGateway,
     startWeChatGatewayLogin,
     updateXiaolubanGatewayAccount,
+    updateXiaolubanGatewayImConfig,
     updateWeChatGatewayAccount,
     waitWeChatGatewayLogin,
 } from './gateway.js';
