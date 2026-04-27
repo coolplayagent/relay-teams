@@ -52,7 +52,7 @@ class ControlPlaneServerConfig(BaseModel):
 
     @property
     def live_url(self) -> str:
-        return f"{_format_base_url(self.host, self.port)}/live"
+        return f"{_format_base_url(self.host, self.port, scheme=_live_url_scheme(self.main_base_url))}/live"
 
 
 class ControlPlaneServerHandle:
@@ -286,9 +286,13 @@ def _is_ipv6_host(host: str) -> bool:
     return ":" in _bind_host(host)
 
 
-def _format_base_url(host: str, port: int) -> str:
+def _format_base_url(host: str, port: int, *, scheme: str = "http") -> str:
     url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
-    return f"http://{url_host}:{port}"
+    return f"{scheme}://{url_host}:{port}"
+
+
+def _live_url_scheme(main_base_url: str) -> str:
+    return "https" if urlsplit(main_base_url).scheme == "https" else "http"
 
 
 def _env_int(env: Mapping[str, str], key: str) -> int | None:

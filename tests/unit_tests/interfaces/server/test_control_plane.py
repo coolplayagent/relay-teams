@@ -208,6 +208,17 @@ def test_control_plane_helpers_normalize_bracketed_ipv6() -> None:
     assert config.live_url == "http://[::1]:8011/live"
 
 
+def test_control_plane_live_url_uses_https_scheme_from_main_base_url() -> None:
+    config = ControlPlaneServerConfig(
+        host="0.0.0.0",
+        port=8011,
+        main_base_url="https://relay.example",
+        started_at=123.0,
+    )
+
+    assert config.live_url == "https://0.0.0.0:8011/live"
+
+
 @pytest.mark.parametrize("raw_port", ["not-a-port", "0", "65536"])
 def test_allocate_control_plane_config_ignores_invalid_explicit_port(
     monkeypatch: pytest.MonkeyPatch,

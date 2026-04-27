@@ -204,12 +204,12 @@ function normalizeControlPlaneLiveUrl(rawUrl) {
 }
 
 function inferControlPlaneLiveUrl() {
-    const currentPort = Number(window.location.port);
-    if (!Number.isInteger(currentPort) || currentPort < 1 || currentPort >= 65535) {
-        return null;
-    }
     try {
         const url = new URL(window.location.origin);
+        const currentPort = Number(effectivePort(url));
+        if (!Number.isInteger(currentPort) || currentPort < 1 || currentPort >= 65535) {
+            return null;
+        }
         url.port = String(currentPort + 1);
         url.pathname = '/live';
         url.search = '';
