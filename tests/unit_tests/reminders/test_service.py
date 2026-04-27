@@ -36,6 +36,7 @@ class _CapturingSink:
 
     def append_and_enqueue(self, **kwargs: object) -> SystemInjectionResult:
         self.appended.append(str(kwargs["content"]))
+        self.enqueued.append(str(kwargs["content"]))
         return SystemInjectionResult(appended=True, enqueued=True)
 
     def append_only(self, **kwargs: object) -> SystemInjectionResult:
@@ -49,6 +50,11 @@ class _CapturingSink:
     async def append_only_async(self, **kwargs: object) -> SystemInjectionResult:
         self.appended.append(str(kwargs["content"]))
         return SystemInjectionResult(appended=True)
+
+    async def append_and_enqueue_async(self, **kwargs: object) -> SystemInjectionResult:
+        self.appended.append(str(kwargs["content"]))
+        self.enqueued.append(str(kwargs["content"]))
+        return SystemInjectionResult(appended=True, enqueued=True)
 
 
 class _FailingStateRepository(ReminderStateRepository):
@@ -149,8 +155,9 @@ def test_service_appends_completion_retry_reminder(tmp_path: Path) -> None:
 
     assert decision.retry_completion is True
     assert len(sink.appended) == 1
-    assert sink.enqueued == []
+    assert len(sink.enqueued) == 1
     assert "finish tests" in sink.appended[0]
+    assert sink.enqueued[0] == sink.appended[0]
 
 
 def test_service_enqueues_context_pressure_reminder(tmp_path: Path) -> None:
@@ -364,8 +371,9 @@ async def test_service_async_appends_completion_retry_reminder(
 
     assert decision.retry_completion is True
     assert len(sink.appended) == 1
-    assert sink.enqueued == []
+    assert len(sink.enqueued) == 1
     assert "finish tests" in sink.appended[0]
+    assert sink.enqueued[0] == sink.appended[0]
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ from pydantic import ValidationError
 from pydantic_ai.messages import ImageUrl
 
 from relay_teams.media import user_prompt_content_to_text
+from relay_teams.reminders import render_system_reminder
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.run_models import InjectionMessage
@@ -61,6 +62,48 @@ def test_injection_manager_preserves_structured_prompt_content() -> None:
     assert user_prompt_content_to_text(injected[0].content) == (
         "inspect this image\n\n[image: file]"
     )
+
+
+def test_injection_manager_drains_system_reminders_at_start_only() -> None:
+    mgr = RunInjectionManager()
+    mgr.activate("run1")
+    reminder = render_system_reminder("Check todos.")
+
+    mgr.enqueue("run1", "a1", InjectionSource.USER, "follow up")
+    mgr.enqueue("run1", "a1", InjectionSource.SYSTEM, reminder)
+    mgr.enqueue("run1", "a1", InjectionSource.SYSTEM, "plain system note")
+    mgr.enqueue(
+        "run1",
+        "a1",
+        InjectionSource.SYSTEM,
+        "<system-reminder>\nUser-authored wrapper.\n</system-reminder>",
+    )
+
+    startup = mgr.drain_system_reminders_at_start("run1", "a1")
+    remaining = mgr.drain_at_boundary("run1", "a1")
+
+    assert [message.content for message in startup] == [reminder]
+    assert [message.content for message in remaining] == [
+        "plain system note",
+        "<system-reminder>\nUser-authored wrapper.\n</system-reminder>",
+        "follow up",
+    ]
+
+
+def test_injection_manager_startup_drain_returns_empty_without_runtime_reminders() -> (
+    None
+):
+    mgr = RunInjectionManager()
+    mgr.activate("run1")
+
+    assert mgr.drain_system_reminders_at_start("run1", "a1") == ()
+
+    mgr.enqueue("run1", "a1", InjectionSource.SYSTEM, "plain system note")
+
+    assert mgr.drain_system_reminders_at_start("run1", "a1") == ()
+    assert [message.content for message in mgr.drain_at_boundary("run1", "a1")] == [
+        "plain system note"
+    ]
 
 
 def test_injection_message_serializes_structured_prompt_content() -> None:

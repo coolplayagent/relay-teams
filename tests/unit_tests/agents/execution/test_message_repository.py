@@ -14,7 +14,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.message_repository import (
+    MessageRepository,
+    _is_system_reminder_projection_message,
+)
+from relay_teams.reminders import render_system_reminder
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
@@ -121,6 +125,84 @@ def test_message_repo_hides_duplicate_task_objective_messages(tmp_path: Path) ->
     messages = repo.get_messages_by_session("session-1")
 
     assert len(messages) == 1
+
+
+def test_message_repo_filters_system_reminders_from_public_message_reads(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_system_reminder.db"
+    repo = MessageRepository(db_path)
+    reminder = render_system_reminder("Check todos.")
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="query time")])],
+    )
+    repo.append_user_prompt_if_missing(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        content=reminder,
+    )
+
+    session_messages = repo.get_messages_by_session("session-1")
+    user_messages = repo.get_user_messages_by_session("session-1")
+    instance_messages = repo.get_messages_for_instance("session-1", "inst-1")
+    history = repo.get_history_for_conversation("conversation-1")
+
+    assert len(session_messages) == 1
+    assert len(user_messages) == 1
+    assert len(instance_messages) == 1
+    assert len(history) == 2
+    assert isinstance(history[-1], ModelRequest)
+    assert history[-1].parts[0].content == reminder
+
+
+def test_message_repo_keeps_user_authored_system_reminder_wrappers(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_user_system_reminder.db"
+    repo = MessageRepository(db_path)
+    content = "<system-reminder>\nQuoted docs.\n</system-reminder>"
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content=content)])],
+    )
+
+    messages = repo.get_messages_by_session("session-1")
+    message = messages[0]["message"]
+
+    assert len(messages) == 1
+    assert isinstance(message, dict)
+    parts = message["parts"]
+    assert isinstance(parts, list)
+    first_part = parts[0]
+    assert isinstance(first_part, dict)
+    assert first_part.get("content") == content
+
+
+def test_system_reminder_projection_filter_rejects_non_prompt_shapes() -> None:
+    assert not _is_system_reminder_projection_message(object())
+    assert not _is_system_reminder_projection_message({"parts": []})
+    assert not _is_system_reminder_projection_message({"parts": [object()]})
+    assert not _is_system_reminder_projection_message(
+        {"parts": [{"part_kind": "system-prompt", "content": "system"}]}
+    )
 
 
 def test_append_user_prompt_if_missing_dedupes_only_tail_prompt(tmp_path: Path) -> None:

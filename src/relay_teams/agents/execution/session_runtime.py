@@ -36,6 +36,7 @@ from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
@@ -379,6 +380,59 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     coordination_agent = cast(CoordinationAgent, agent)
                 else:
                     history = persisted_history
+            startup_injections = (
+                self._injection_manager.drain_system_reminders_at_start(
+                    request.run_id, request.instance_id
+                )
+                if isinstance(self._injection_manager, RunInjectionManager)
+                else ()
+            )
+            if startup_injections:
+                startup_injection_appended = False
+                for msg in startup_injections:
+                    await publish_run_event_async(
+                        self._run_event_hub,
+                        RunEvent(
+                            session_id=request.session_id,
+                            run_id=request.run_id,
+                            trace_id=request.trace_id,
+                            task_id=request.task_id,
+                            instance_id=request.instance_id,
+                            role_id=request.role_id,
+                            event_type=RunEventType.INJECTION_APPLIED,
+                            payload_json=msg.model_dump_json(),
+                        ),
+                    )
+                    appended = (
+                        await self._message_repo.append_user_prompt_if_missing_async(
+                            session_id=request.session_id,
+                            workspace_id=resolved_workspace_id,
+                            conversation_id=resolved_conversation_id,
+                            agent_role_id=request.role_id,
+                            instance_id=request.instance_id,
+                            task_id=request.task_id,
+                            trace_id=request.trace_id,
+                            content=msg.content,
+                        )
+                    )
+                    if appended:
+                        startup_injection_appended = True
+                if startup_injection_appended:
+                    (
+                        prepared_prompt,
+                        history,
+                        agent_system_prompt,
+                        agent,
+                    ) = await self._build_agent_iteration_context(
+                        request=request,
+                        conversation_id=resolved_conversation_id,
+                        system_prompt=agent_system_prompt,
+                        reserve_user_prompt_tokens=False,
+                        allowed_tools=allowed_tools,
+                        allowed_mcp_servers=self._allowed_mcp_servers,
+                        allowed_skills=self._allowed_skills,
+                    )
+                    coordination_agent = cast(CoordinationAgent, agent)
             seen_count = 0
             buffered_messages: list[ModelRequest | ModelResponse] = []
             restarted = False

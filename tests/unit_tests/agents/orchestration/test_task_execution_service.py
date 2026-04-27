@@ -10,7 +10,7 @@ from typing import cast
 
 import pytest
 import pytest_asyncio
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, UserPromptPart
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
@@ -494,10 +494,12 @@ async def test_execute_retries_root_completion_when_todos_are_incomplete(
 
     refreshed = task_repo.get("task-1")
     messages = message_repo.get_messages_for_instance("session-1", instance.instance_id)
-    serialized_messages = json.dumps(messages, ensure_ascii=False)
+    history = message_repo.get_history_for_conversation(instance.conversation_id)
+    serialized_messages = ModelMessagesTypeAdapter.dump_json(history).decode()
     assert provider.calls == 2
     assert result.output == "ok-2"
     assert refreshed.status == TaskStatus.COMPLETED
+    assert "<system-reminder>" not in json.dumps(messages, ensure_ascii=False)
     assert "<system-reminder>" in serialized_messages
     assert "finish verification" in serialized_messages
 

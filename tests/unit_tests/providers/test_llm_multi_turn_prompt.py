@@ -61,11 +61,12 @@ from relay_teams.providers.model_config import (
     ModelModalityMatrix,
     SamplingConfig,
 )
+from relay_teams.reminders import render_system_reminder
 from relay_teams.roles import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
-from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import RunEvent
@@ -1135,6 +1136,82 @@ async def test_generate_recomputes_budget_after_injection_restart(
     assert isinstance(first_budget, int)
     assert isinstance(second_budget, int)
     assert second_budget < first_budget
+
+
+@pytest.mark.asyncio
+async def test_generate_persists_startup_system_reminders_before_first_agent_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "startup_system_reminder.db",
+        fake_hub,
+    )
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-startup-reminder")
+    reminder = render_system_reminder("Finish pending todos.")
+    _ = injection_manager.enqueue(
+        "run-startup-reminder",
+        "inst-startup-reminder",
+        InjectionSource.SYSTEM,
+        reminder,
+    )
+    provider._session._injection_manager = injection_manager
+
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="ok")]),
+                    messages=[ModelResponse(parts=[TextPart(content="ok")])],
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-startup-reminder",
+        trace_id="trace-startup-reminder",
+        task_id="task-startup-reminder",
+        session_id="session-startup-reminder",
+        workspace_id="default",
+        instance_id="inst-startup-reminder",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="start",
+    )
+
+    response = await provider.generate(request)
+    history = message_repo.get_history_for_conversation(
+        build_conversation_id("session-startup-reminder", "Coordinator")
+    )
+
+    assert response == "ok"
+    assert len(scripted_agent.histories) == 1
+    agent_history = cast(
+        list[ModelRequest | ModelResponse], scripted_agent.histories[0]
+    )
+    assert isinstance(agent_history[-1], ModelRequest)
+    assert agent_history[-1].parts[0].content == reminder
+    assert isinstance(history[-2], ModelRequest)
+    assert history[-2].parts[0].content == reminder
+    assert (
+        injection_manager.drain_at_boundary(
+            "run-startup-reminder", "inst-startup-reminder"
+        )
+        == ()
+    )
+    event_types = [event.event_type for event in fake_hub.events]
+    assert RunEventType.INJECTION_APPLIED in event_types
+    assert RunEventType.TOKEN_USAGE in event_types
 
 
 @pytest.mark.asyncio
