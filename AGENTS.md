@@ -77,6 +77,9 @@
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
 - New tools should follow the shared runtime middleware path via `execute_tool_call(..., raw_args=locals())`; do not reimplement hook-aware input parsing or approval plumbing inside each tool.
 - Hook-driven tool input rewrites and hook-provided runtime environment must be handled in the shared tool runtime plus shared HTTP and command execution layers, not with per-tool special cases.
+- Hook tool matchers must use Relay Teams tool names. Exact Claude Code aliases may be normalized at config load boundaries, but runtime matching and documentation should stay anchored to Relay Teams built-in tool identities.
+- When adding or changing hook events, update `docs/relay-teams-runtime-hooks-design.md`, API/UI runtime visibility, and focused tests in the same task.
+- The hooks settings UI must surface effective source scope/path and scoped filters for runtime-loaded hooks; do not show only handler names when project, role, or skill hooks are involved.
 - For built-in PPT skills, when a user reports遮挡、重叠、溢出等版式问题, fix the artifact, upstream the reusable rule into the built-in ppt skill docs/tests, and verify end-to-end conversion before opening a PR.
 
 ## Interface Boundaries

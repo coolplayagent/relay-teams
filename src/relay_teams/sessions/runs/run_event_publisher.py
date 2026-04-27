@@ -45,6 +45,8 @@ class RunEventPublisher:
         trace_id: str,
         title: str,
         body: str,
+        session_mode: str = "normal",
+        run_kind: str = "conversation",
     ) -> None:
         notification_service = self._get_notification_service()
         if notification_service is None:
@@ -58,6 +60,51 @@ class RunEventPublisher:
                     session_id=session_id,
                     run_id=run_id,
                     trace_id=trace_id,
+                    session_mode=session_mode,
+                    run_kind=run_kind,
+                ),
+            )
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=trace_id,
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.notification.failed",
+                    message="Run notification failed",
+                    payload={"notification_type": notification_type.value},
+                    exc_info=exc,
+                )
+
+    async def emit_notification_async(
+        self,
+        *,
+        notification_type: NotificationType,
+        session_id: str,
+        run_id: str,
+        trace_id: str,
+        title: str,
+        body: str,
+        session_mode: str = "normal",
+        run_kind: str = "conversation",
+    ) -> None:
+        notification_service = self._get_notification_service()
+        if notification_service is None:
+            return
+        try:
+            _ = await notification_service.emit_async(
+                notification_type=notification_type,
+                title=title,
+                body=body,
+                context=NotificationContext(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=trace_id,
+                    session_mode=session_mode,
+                    run_kind=run_kind,
                 ),
             )
         except Exception as exc:

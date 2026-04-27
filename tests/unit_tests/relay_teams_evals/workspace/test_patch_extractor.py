@@ -11,6 +11,7 @@ from relay_teams_evals.workspace.patch_extractor import PatchExtractor
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+@pytest.mark.timeout(10)
 def test_patch_extractor_ignores_untracked_files(tmp_path: Path) -> None:
     repo_path = tmp_path / "repo"
     repo_path.mkdir()

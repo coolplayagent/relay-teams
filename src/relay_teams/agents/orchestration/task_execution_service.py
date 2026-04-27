@@ -65,6 +65,7 @@ from relay_teams.sessions.runs.recoverable_pause import (
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import (
+    RunKind,
     RuntimePromptConversationContext,
     RunThinkingConfig,
     RunTopologySnapshot,
@@ -288,10 +289,25 @@ class TaskExecutionService(BaseModel):
             role_id=role_id,
             workspace_id=workspace.ref.workspace_id,
         )
+        session_mode = "normal"
+        run_kind = RunKind.CONVERSATION
+        if self.run_intent_repo is not None:
+            try:
+                intent = self.run_intent_repo.get(
+                    task.trace_id,
+                    fallback_session_id=task.session_id,
+                )
+                session_mode = intent.session_mode.value
+                run_kind = intent.run_kind
+            except KeyError:
+                # Some direct task-execution tests and legacy flows have no run intent.
+                pass
         runner = SubAgentRunner(
             role=role_for_run,
             prompt_builder=self.prompt_builder,
             provider=self.provider_factory(role_for_run, task.session_id),
+            session_mode=session_mode,
+            run_kind=run_kind,
         )
         snapshot = await self._shared_state_snapshot_async(
             session_id=task.session_id,
@@ -354,6 +370,12 @@ class TaskExecutionService(BaseModel):
             if isinstance(guarded_result, TaskExecutionResult):
                 return guarded_result
             result = guarded_result
+            await self._execute_task_completed_hooks(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                output_text=result,
+            )
             await self.task_repo.update_status_async(
                 task.task_id, TaskStatus.COMPLETED, result=result
             )
@@ -373,12 +395,6 @@ class TaskExecutionService(BaseModel):
                     instance_id=instance_id,
                     payload_json="{}",
                 )
-            )
-            await self._execute_task_completed_hooks(
-                task=task,
-                instance_id=instance_id,
-                role_id=role_id,
-                output_text=result,
             )
             await self._record_memory_if_needed_async(
                 role_id=role_id,

@@ -31,6 +31,7 @@ class SubAgentRequest(BaseModel):
     system_prompt: str
     user_prompt: str | None
     input: tuple[ContentPart, ...] = ()
+    session_mode: str = "normal"
     run_kind: RunKind = RunKind.CONVERSATION
     thinking: RunThinkingConfig = RunThinkingConfig()
 
@@ -45,6 +46,8 @@ class SubAgentRunner(BaseModel):
     role: RoleDefinition
     prompt_builder: RuntimePromptBuilder
     provider: object
+    session_mode: str = "normal"
+    run_kind: RunKind = RunKind.CONVERSATION
 
     async def run(
         self,
@@ -84,6 +87,8 @@ class SubAgentRunner(BaseModel):
                 role_id=self.role.role_id,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                session_mode=self.session_mode,
+                run_kind=self.run_kind,
                 thinking=thinking or RunThinkingConfig(),
             )
         )

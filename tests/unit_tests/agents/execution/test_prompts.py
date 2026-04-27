@@ -3,27 +3,22 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
-import relay_teams.agents.execution.system_prompts as system_prompts
-from relay_teams.agents.execution.system_prompts import (
-    PromptSkillInstruction,
-    RuntimePromptBuildInput,
-    SystemPromptSectionsInput,
-    WorkspaceSshProfilePromptMetadata,
-    build_workspace_ssh_profile_prompt_metadata,
-    build_runtime_system_prompt,
-    build_runtime_system_prompt_result,
-    compose_system_prompt,
+from relay_teams.agents.execution.prompt_instructions import (
+    PromptInstructionResolver,
+    _instruction_memory_type_for_path,
 )
+import relay_teams.agents.execution.system_prompts as system_prompts
 from relay_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     UserPromptSkillCandidate,
     build_user_prompt,
 )
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.secrets import AppSecretStore
@@ -32,6 +27,7 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
 from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
+from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunTopologySnapshot
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import (
@@ -129,6 +125,18 @@ def _task() -> TaskEnvelope:
 class _FileOnlySecretStore(AppSecretStore):
     def has_usable_keyring_backend(self) -> bool:
         return False
+
+
+class _FakeHookService:
+    def __init__(self) -> None:
+        self.event_inputs: list[object] = []
+
+    async def execute(
+        self, *, event_input: object, run_event_hub: object
+    ) -> HookDecisionBundle:
+        _ = run_event_hub
+        self.event_inputs.append(event_input)
+        return HookDecisionBundle(decision=HookDecisionType.OBSERVE)
 
 
 def _mixed_workspace_handle(tmp_path: Path) -> WorkspaceHandle:
@@ -246,8 +254,8 @@ def _coordinator_registry() -> RoleRegistry:
 
 def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> None:
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
@@ -306,6 +314,72 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "Deliver weekly summary" not in prompt
 
 
+def test_runtime_system_prompt_emits_instructions_loaded_hook(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("Follow local instructions.", encoding="utf-8")
+    hook_service = _FakeHookService()
+
+    sections = asyncio.run(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
+                role=_role("writer"),
+                task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
+                    coordinator_role_id="Coordinator",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability.",
+                    allowed_role_ids=("writer",),
+                ),
+                shared_state_snapshot=(),
+                working_directory=tmp_path,
+                worktree_root=tmp_path,
+            ),
+            instruction_resolver=PromptInstructionResolver(
+                app_config_dir=tmp_path / "config",
+                instructions=(),
+            ),
+            hook_service=hook_service,
+            run_event_hub=cast(RunEventHub, object()),
+        )
+    )
+
+    assert "Follow local instructions." in sections.prompt
+    assert len(hook_service.event_inputs) == 2
+    source_event_input = hook_service.event_inputs[0]
+    assert (
+        getattr(source_event_input, "event_name") == HookEventName.INSTRUCTIONS_LOADED
+    )
+    assert getattr(source_event_input, "role_id") == "writer"
+    assert getattr(source_event_input, "session_mode") == "orchestration"
+    assert getattr(source_event_input, "run_kind") == "conversation"
+    assert getattr(source_event_input, "instruction_source_count") == 1
+    assert getattr(source_event_input, "mode") == "source"
+    assert getattr(source_event_input, "source_type") == "local"
+    assert getattr(source_event_input, "file_path") == str(
+        (tmp_path / "AGENTS.md").resolve()
+    )
+    assert getattr(source_event_input, "load_reason") == "initial"
+    assert getattr(source_event_input, "memory_type") == "project"
+    assert getattr(source_event_input, "local_instruction_paths") == (
+        str((tmp_path / "AGENTS.md").resolve()),
+    )
+    aggregate_event_input = hook_service.event_inputs[1]
+    assert (
+        getattr(aggregate_event_input, "event_name")
+        == HookEventName.INSTRUCTIONS_LOADED
+    )
+    assert getattr(aggregate_event_input, "role_id") == "writer"
+    assert getattr(aggregate_event_input, "session_mode") == "orchestration"
+    assert getattr(aggregate_event_input, "run_kind") == "conversation"
+    assert getattr(aggregate_event_input, "instruction_source_count") == 1
+    assert getattr(aggregate_event_input, "mode") == "aggregate"
+    assert getattr(aggregate_event_input, "local_instruction_paths") == (
+        str((tmp_path / "AGENTS.md").resolve()),
+    )
+
+
 def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() -> None:
     registry = RoleRegistry()
     registry.register(
@@ -336,8 +410,8 @@ def test_runtime_system_prompt_ignores_unknown_mcp_servers_in_available_roles() 
     )
 
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
@@ -380,8 +454,8 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
     )
 
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
@@ -411,8 +485,8 @@ def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(
 def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     working_directory = Path("/tmp/workspace-root")
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 task=_task(),
                 shared_state_snapshot=(),
@@ -440,8 +514,8 @@ def test_runtime_system_prompt_includes_workspace_environments(
     workspace = _mixed_workspace_handle(tmp_path)
 
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 task=_task(),
                 shared_state_snapshot=(),
@@ -449,7 +523,7 @@ def test_runtime_system_prompt_includes_workspace_environments(
                 worktree_root=workspace.scope_root,
                 workspace=workspace,
                 ssh_profile_metadata=(
-                    WorkspaceSshProfilePromptMetadata(
+                    system_prompts.WorkspaceSshProfilePromptMetadata(
                         ssh_profile_id="prod-profile",
                         host="prod.example.com",
                         username="deploy",
@@ -514,7 +588,7 @@ def test_workspace_ssh_profile_prompt_metadata_excludes_secret_fields(
         ),
     )
 
-    metadata = build_workspace_ssh_profile_prompt_metadata(
+    metadata = system_prompts.build_workspace_ssh_profile_prompt_metadata(
         workspace=workspace,
         ssh_profile_service=service,
         consumer="tests.unit_tests.agents.execution.test_prompts",
@@ -554,7 +628,7 @@ def test_workspace_ssh_profile_prompt_metadata_skips_profiles_without_username(
         ),
     )
 
-    metadata = build_workspace_ssh_profile_prompt_metadata(
+    metadata = system_prompts.build_workspace_ssh_profile_prompt_metadata(
         workspace=workspace,
         ssh_profile_service=service,
         consumer="tests.unit_tests.agents.execution.test_prompts",
@@ -577,8 +651,8 @@ def test_runtime_system_prompt_keeps_stable_prefix_across_workspaces(
     second_workspace = _mixed_workspace_handle(tmp_path / "second")
 
     first_prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 task=_task(),
                 shared_state_snapshot=(),
@@ -589,8 +663,8 @@ def test_runtime_system_prompt_keeps_stable_prefix_across_workspaces(
         )
     )
     second_prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 task=_task(),
                 shared_state_snapshot=(),
@@ -768,8 +842,8 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
     None
 ):
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
@@ -807,11 +881,11 @@ def test_runtime_system_prompt_layers_keep_base_instructions_before_workspace_co
 
 
 def test_compose_system_prompt_renders_skill_catalog_when_provided() -> None:
-    prompt = compose_system_prompt(
-        SystemPromptSectionsInput(
+    prompt = system_prompts.compose_system_prompt(
+        system_prompts.SystemPromptSectionsInput(
             base_instructions="## Role\nYou are a planner.",
             skill_instructions=(
-                PromptSkillInstruction(
+                system_prompts.PromptSkillInstruction(
                     name="time",
                     description="Normalize all times to UTC.",
                 ),
@@ -826,15 +900,15 @@ def test_compose_system_prompt_renders_skill_catalog_when_provided() -> None:
 
 
 def test_compose_system_prompt_places_skill_catalog_before_capability_summary() -> None:
-    prompt = compose_system_prompt(
-        SystemPromptSectionsInput(
+    prompt = system_prompts.compose_system_prompt(
+        system_prompts.SystemPromptSectionsInput(
             base_instructions="## Role\nYou are a planner.",
             capability_summary="## Available Roles\n### writer_agent",
             workspace_context=(
                 "## Runtime Environment Information\n- Working Directory: /tmp/project"
             ),
             skill_instructions=(
-                PromptSkillInstruction(
+                system_prompts.PromptSkillInstruction(
                     name="time",
                     description="Normalize all times to UTC.",
                 ),
@@ -876,8 +950,8 @@ def test_user_prompt_builder_appends_skill_candidates() -> None:
 
 def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> None:
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("Coordinator"),
                 task=_task(),
                 topology=RunTopologySnapshot(
@@ -905,8 +979,8 @@ def test_runtime_system_prompt_for_coordinator_mentions_task_orchestration() -> 
 
 def test_runtime_system_prompt_for_main_agent_uses_base_role_prompt_only() -> None:
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("MainAgent"),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.NORMAL,
@@ -957,8 +1031,8 @@ def test_runtime_system_prompt_for_normal_mode_root_includes_available_subagents
     )
 
     prompt = asyncio.run(
-        build_runtime_system_prompt(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
                 role=registry.get("MainAgent"),
                 topology=RunTopologySnapshot(
                     session_mode=SessionMode.NORMAL,
@@ -999,8 +1073,8 @@ def test_runtime_system_prompt_loads_all_project_agents_files(
     )
 
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 shared_state_snapshot=(),
                 working_directory=nested_dir,
@@ -1031,8 +1105,8 @@ def test_runtime_system_prompt_loads_global_agents_with_project_agents(
     (config_dir / "AGENTS.md").write_text("Global instructions.", encoding="utf-8")
 
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 shared_state_snapshot=(),
                 working_directory=nested_dir,
@@ -1060,8 +1134,8 @@ def test_runtime_system_prompt_uses_env_config_dir_for_global_agents(
     monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(config_dir))
 
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 shared_state_snapshot=(),
                 working_directory=tmp_path,
@@ -1091,8 +1165,8 @@ def test_runtime_system_prompt_does_not_load_global_claude_or_gemini(
     monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(config_dir))
 
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 shared_state_snapshot=(),
                 working_directory=tmp_path,
@@ -1130,8 +1204,8 @@ def test_runtime_system_prompt_loads_configured_instruction_sources(
     monkeypatch.setattr(resolver, "_fetch_url", fake_fetch)
 
     result = asyncio.run(
-        build_runtime_system_prompt_result(
-            RuntimePromptBuildInput(
+        system_prompts.build_runtime_system_prompt_result(
+            system_prompts.RuntimePromptBuildInput(
                 role=_role("writer_agent"),
                 shared_state_snapshot=(),
                 working_directory=working_dir,
@@ -1144,3 +1218,10 @@ def test_runtime_system_prompt_loads_configured_instruction_sources(
     assert "Configured local instructions." in result.prompt
     assert "Configured remote instructions." in result.prompt
     assert configured_file.resolve() in result.local_instruction_paths
+
+
+def test_instruction_memory_type_recognizes_gemini_and_configured_files(
+    tmp_path: Path,
+) -> None:
+    assert _instruction_memory_type_for_path(tmp_path / "GEMINI.md") == "gemini"
+    assert _instruction_memory_type_for_path(tmp_path / "prompt.md") == "configured"

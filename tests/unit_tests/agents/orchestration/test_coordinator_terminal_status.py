@@ -48,7 +48,12 @@ from relay_teams.workspace import (
     build_conversation_id,
     build_instance_conversation_id,
 )
-from relay_teams.hooks import HookService
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookService,
+    TaskCreatedInput,
+)
 
 
 class _RecordingTaskExecutionService:
@@ -126,17 +131,24 @@ class _CancellingTaskExecutionService:
 
 
 class _CapturingHookService:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        decision: HookDecisionType = HookDecisionType.ALLOW,
+        *,
+        reason: str = "",
+    ) -> None:
         self.calls: list[tuple[object, object | None]] = []
+        self._decision = decision
+        self._reason = reason
 
     async def execute(
         self,
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
-        return object()
+        return HookDecisionBundle(decision=self._decision, reason=self._reason)
 
 
 def _build_coordinator(
@@ -400,6 +412,41 @@ async def test_root_task_created_hook_is_not_emitted_for_normal_run(
     await coordinator._execute_task_created_hooks(root_task=root_task)
 
     assert hook_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_root_task_created_hook_denial_blocks_delegated_root_task(
+    tmp_path: Path,
+) -> None:
+    hook_service = _CapturingHookService(
+        HookDecisionType.DENY,
+        reason="blocked by policy",
+    )
+    run_event_hub = RunEventHub()
+    coordinator = CoordinatorGraph.model_construct(
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=run_event_hub,
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id="parent-task-1",
+        trace_id="run-1",
+        role_id="Coordinator",
+        title="Delegated root",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+
+    with pytest.raises(ValueError, match="blocked by policy"):
+        await coordinator._execute_task_created_hooks(root_task=root_task)
+
+    assert len(hook_service.calls) == 1
+    event_input, captured_run_event_hub = hook_service.calls[0]
+    assert captured_run_event_hub is run_event_hub
+    assert isinstance(event_input, TaskCreatedInput)
+    assert event_input.created_task_id == "task-root-1"
+    assert event_input.parent_task_id == "parent-task-1"
 
 
 @pytest.mark.asyncio

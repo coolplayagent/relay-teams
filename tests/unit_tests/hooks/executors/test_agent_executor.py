@@ -110,6 +110,31 @@ async def test_agent_executor_requires_role_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_executor_uses_event_role_id_when_handler_role_is_omitted() -> None:
+    executor = AgentHookExecutor(
+        background_task_service=_BackgroundTaskService(),
+        session_repo=_SessionRepo(),
+    )
+
+    result = await executor.execute(
+        handler=HookHandlerConfig.model_construct(
+            type=HookHandlerType.AGENT,
+            prompt="Review: $ARGUMENTS",
+        ),
+        event_input=StopInput(
+            event_name=HookEventName.STOP,
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            role_id="Verifier",
+            output_text="candidate answer",
+        ),
+    )
+
+    assert result.decision == HookDecisionType.RETRY
+
+
+@pytest.mark.asyncio
 async def test_agent_executor_requires_prompt() -> None:
     executor = AgentHookExecutor(
         background_task_service=_BackgroundTaskService(),

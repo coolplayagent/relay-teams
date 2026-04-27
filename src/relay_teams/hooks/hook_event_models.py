@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.hooks.hook_models import HookEventName
@@ -12,9 +14,9 @@ class HookEventInput(BaseModel):
     session_id: str
     run_id: str
     trace_id: str
-    task_id: str | None = None
-    instance_id: str | None = None
-    role_id: str | None = None
+    task_id: Optional[str] = None
+    instance_id: Optional[str] = None
+    role_id: Optional[str] = None
     session_mode: str = ""
     run_kind: str = ""
 
@@ -47,6 +49,38 @@ class PermissionRequestInput(HookEventInput):
     tool_call_id: str
     tool_input: dict[str, JsonValue]
     approval_required: bool = True
+
+
+class PermissionDeniedInput(HookEventInput):
+    tool_name: str
+    tool_call_id: str
+    tool_input: dict[str, JsonValue]
+    denial_source: str = ""
+    denial_reason: str = ""
+    approval_status: str = ""
+
+
+class NotificationInput(HookEventInput):
+    notification_type: str
+    title: str
+    body: str
+    channels: tuple[str, ...] = ()
+    dedupe_key: str = ""
+    tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+
+
+class InstructionsLoadedInput(HookEventInput):
+    instruction_source_count: int = 0
+    local_instruction_paths: tuple[str, ...] = ()
+    mode: str = "aggregate"
+    source: str = ""
+    source_type: str = ""
+    file_path: str = ""
+    load_reason: str = ""
+    memory_type: str = ""
+    trigger_file_path: str = ""
+    parent_file_path: str = ""
 
 
 class PostToolUseInput(HookEventInput):
@@ -99,7 +133,7 @@ class SubagentStopInput(HookEventInput):
 
 class TaskCreatedInput(HookEventInput):
     created_task_id: str
-    parent_task_id: str | None = None
+    parent_task_id: Optional[str] = None
     title: str = ""
     objective: str = ""
 

@@ -1122,7 +1122,7 @@ class PromptHistoryService:
         if not plan.should_compact:
             return history
         if isinstance(self._hook_service, PromptHookService):
-            _ = await self._hook_service.execute(
+            bundle = await self._hook_service.execute(
                 event_input=PreCompactInput(
                     event_name=HookEventName.PRE_COMPACT,
                     session_id=request.session_id,
@@ -1143,6 +1143,26 @@ class PromptHistoryService:
                 ),
                 run_event_hub=self._run_event_hub,
             )
+            if bundle.decision == HookDecisionType.DENY:
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    event="conversation.history.compaction.denied",
+                    message="Conversation compaction skipped by runtime hooks",
+                    payload={
+                        "trace_id": request.trace_id,
+                        "session_id": request.session_id,
+                        "task_id": request.task_id,
+                        "instance_id": request.instance_id,
+                        "role_id": request.role_id,
+                        "conversation_id": conversation_id,
+                        "reason": (
+                            bundle.reason
+                            or "Context compaction was blocked by runtime hooks."
+                        ),
+                    },
+                )
+                return history
         compacted_result = (
             await self._conversation_compaction_service.maybe_compact_with_result(
                 session_id=request.session_id,

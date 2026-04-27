@@ -450,6 +450,7 @@ async def test_background_task_manager_ssh_tty_uses_windows_conpty(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(10)
 async def test_background_task_manager_completes_and_publishes_events(
     tmp_path: Path,
 ) -> None:
@@ -805,6 +806,7 @@ async def test_background_task_manager_emits_monitor_line_events(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(10)
 async def test_background_task_manager_write_finishes_shell_prompt(
     tmp_path: Path,
 ) -> None:

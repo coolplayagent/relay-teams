@@ -141,7 +141,7 @@ def test_role_loader_preserves_valid_frontmatter_hooks_when_one_group_is_empty(
     groups = role.hooks.hooks[HookEventName.PRE_TOOL_USE]
     assert len(groups) == 2
     assert groups[0].hooks == ()
-    assert groups[1].matcher == "Read"
+    assert groups[1].matcher == "read"
     assert groups[1].hooks[0].command == "echo ok"
 
 
@@ -174,7 +174,7 @@ def test_role_loader_normalizes_legacy_frontmatter_hook_fields(
     role = RoleLoader().load_one(role_file)
 
     groups = role.hooks.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert [group.matcher for group in groups] == ["read", "write"]
     assert all(group.hooks[0].if_rule == "Bash(git *)" for group in groups)
 
 

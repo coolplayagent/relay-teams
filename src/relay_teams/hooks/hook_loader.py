@@ -24,6 +24,18 @@ from relay_teams.paths import get_project_root_or_none
 
 LOGGER = get_logger(__name__)
 _CAPABILITY_WILDCARD = "*"
+CLAUDE_TOOL_MATCHER_ALIASES: dict[str, str] = {
+    "Bash": "shell",
+    "Edit": "edit",
+    "Glob": "glob",
+    "Grep": "grep",
+    "NotebookEdit": "notebook_edit",
+    "Read": "read",
+    "TodoWrite": "todo_write",
+    "WebFetch": "webfetch",
+    "WebSearch": "websearch",
+    "Write": "write",
+}
 
 MATCHER_UNSUPPORTED_EVENTS = frozenset(
     {
@@ -37,6 +49,7 @@ TOOL_EVENTS = frozenset(
     {
         HookEventName.PRE_TOOL_USE,
         HookEventName.PERMISSION_REQUEST,
+        HookEventName.PERMISSION_DENIED,
         HookEventName.POST_TOOL_USE,
         HookEventName.POST_TOOL_USE_FAILURE,
     }
@@ -48,6 +61,8 @@ COMMAND_HTTP_ONLY_EVENTS = frozenset(
         HookEventName.SESSION_END,
         HookEventName.STOP_FAILURE,
         HookEventName.SUBAGENT_START,
+        HookEventName.INSTRUCTIONS_LOADED,
+        HookEventName.NOTIFICATION,
         HookEventName.PRE_COMPACT,
         HookEventName.POST_COMPACT,
     }
@@ -62,8 +77,14 @@ class _HookRoleEntry(Protocol):
 
 
 class _HookRoleRegistry(Protocol):
-    def get(self, role_id: str) -> object: ...
-    def list_roles(self) -> tuple[_HookRoleEntry, ...]: ...
+    def get(self, role_id: str) -> object:
+        raise NotImplementedError
+
+    def list_roles(self) -> tuple[_HookRoleEntry, ...]:
+        raise NotImplementedError
+
+    def list_subagent_roles(self) -> tuple[_HookRoleEntry, ...]:
+        raise NotImplementedError
 
 
 class _HookSkillMetadata(Protocol):
@@ -109,7 +130,14 @@ class HookLoader:
 
     def save_user_config(self, config: HooksConfig) -> None:
         _ = self.user_config_path.write_text(
-            dumps(config.model_dump(mode="json"), indent=2),
+            dumps(
+                config.model_dump(
+                    mode="json",
+                    exclude_defaults=True,
+                    exclude_none=True,
+                ),
+                indent=2,
+            ),
             encoding="utf-8",
         )
 
@@ -166,12 +194,13 @@ class HookLoader:
             return HooksConfig()
         try:
             payload = _load_json_object(path)
-            normalized_payload = normalize_hooks_payload(payload)
             if tolerant:
+                normalized_payload = normalize_hooks_payload(payload, tolerant=True)
                 return self._load_tolerant_payload(
                     path=path,
                     payload=normalized_payload,
                 )
+            normalized_payload = normalize_hooks_payload(payload)
             config = HooksConfig.model_validate(normalized_payload)
             validate_hook_event_capabilities(config=config)
             return self._validate_handler_references(config=config, tolerant=False)
@@ -299,6 +328,7 @@ class HookLoader:
         tolerant: bool,
     ) -> HooksConfig:
         known_role_ids = self._known_role_ids()
+        agent_hook_role_ids = self._known_agent_hook_role_ids()
         if not known_role_ids:
             return config
         next_hooks: dict[HookEventName, tuple[HookMatcherGroup, ...]] = {}
@@ -310,6 +340,7 @@ class HookLoader:
                     if self._handler_role_is_valid(
                         handler=handler,
                         known_role_ids=known_role_ids,
+                        agent_hook_role_ids=agent_hook_role_ids,
                         tolerant=tolerant,
                     ):
                         next_handlers.append(handler)
@@ -341,13 +372,29 @@ class HookLoader:
         *,
         handler: HookHandlerConfig,
         known_role_ids: frozenset[str],
+        agent_hook_role_ids: frozenset[str],
         tolerant: bool,
     ) -> bool:
         if handler.type != HookHandlerType.AGENT:
             return True
         role_id = str(handler.role_id or "").strip()
-        if role_id in known_role_ids:
+        if not role_id:
+            if not tolerant:
+                raise ValueError("Agent hook role_id is required.")
+            LOGGER.warning("Ignoring agent hook handler with empty role_id")
+            return False
+        if role_id in agent_hook_role_ids:
             return True
+        if role_id in known_role_ids:
+            if not tolerant:
+                raise ValueError(
+                    f"Agent hook role_id must reference a subagent role: {role_id}"
+                )
+            LOGGER.warning(
+                "Ignoring hook handler with non-subagent agent role",
+                extra={"role_id": role_id},
+            )
+            return False
         if not tolerant:
             raise ValueError(f"Unknown agent hook role_id: {role_id or '<empty>'}")
         LOGGER.warning(
@@ -363,6 +410,16 @@ class HookLoader:
         return frozenset(
             str(role.role_id or "").strip()
             for role in role_registry.list_roles()
+            if str(role.role_id or "").strip()
+        )
+
+    def _known_agent_hook_role_ids(self) -> frozenset[str]:
+        if self._get_role_registry is None:
+            return frozenset()
+        role_registry = cast(_HookRoleRegistry, self._get_role_registry())
+        return frozenset(
+            str(role.role_id or "").strip()
+            for role in role_registry.list_subagent_roles()
             if str(role.role_id or "").strip()
         )
 
@@ -531,7 +588,7 @@ def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     return {}
 
 
-def normalize_hooks_payload(payload: object) -> object:
+def normalize_hooks_payload(payload: object, *, tolerant: bool = False) -> object:
     if not isinstance(payload, dict):
         return payload
     next_payload = dict(payload)
@@ -548,14 +605,21 @@ def normalize_hooks_payload(payload: object) -> object:
             if not isinstance(raw_group, dict):
                 normalized_groups.append(raw_group)
                 continue
-            normalized_groups.extend(_normalize_hook_group(raw_group))
+            try:
+                normalized_groups.extend(
+                    _normalize_hook_group(raw_group, raw_event_name=event_name)
+                )
+            except ValueError:
+                if not tolerant:
+                    raise
+                continue
         normalized_hooks[event_name] = normalized_groups
     next_payload["hooks"] = normalized_hooks
     return next_payload
 
 
 def parse_tolerant_hooks_payload(payload: object) -> HooksConfig:
-    normalized_payload = normalize_hooks_payload(payload)
+    normalized_payload = normalize_hooks_payload(payload, tolerant=True)
     if not isinstance(normalized_payload, dict):
         return HooksConfig()
     raw_hooks = normalized_payload.get("hooks")
@@ -585,8 +649,13 @@ def parse_tolerant_hooks_payload(payload: object) -> HooksConfig:
     return HooksConfig(hooks=next_hooks)
 
 
-def _normalize_hook_group(raw_group: dict[str, object]) -> list[object]:
+def _normalize_hook_group(
+    raw_group: dict[str, object],
+    *,
+    raw_event_name: str = "",
+) -> list[object]:
     group = dict(raw_group)
+    is_tool_event = _is_tool_event_name(raw_event_name)
     raw_handlers = group.get("hooks")
     handlers = raw_handlers
     if isinstance(raw_handlers, list):
@@ -618,14 +687,25 @@ def _normalize_hook_group(raw_group: dict[str, object]) -> list[object]:
     group["hooks"] = handlers
     raw_tool_names = group.get("tool_names", ())
     matcher = str(group.get("matcher") or "").strip()
+    if is_tool_event and matcher:
+        matcher = _normalize_tool_matcher(matcher)
+        if not matcher:
+            raise ValueError("tool hook matcher must contain at least one pattern")
+        group["matcher"] = matcher
     tool_name_values = (
         raw_tool_names if isinstance(raw_tool_names, (list, tuple)) else ()
     )
     tool_names = tuple(
         dict.fromkeys(
-            str(value).strip() for value in tool_name_values if str(value).strip()
+            _normalize_tool_matcher(str(value).strip())
+            if is_tool_event
+            else str(value).strip()
+            for value in tool_name_values
+            if str(value).strip()
         )
     )
+    if is_tool_event and any(not tool_name for tool_name in tool_names):
+        raise ValueError("tool hook matcher must contain at least one pattern")
     if not tool_names:
         group.pop("tool_names", None)
         return [group]
@@ -643,11 +723,38 @@ def _normalize_hook_group(raw_group: dict[str, object]) -> list[object]:
     return [group | {"matcher": tool_name} for tool_name in tool_names]
 
 
+def _is_tool_event_name(raw_event_name: str) -> bool:
+    try:
+        return HookEventName(raw_event_name) in TOOL_EVENTS
+    except ValueError:
+        return False
+
+
+def _normalize_tool_matcher(matcher: str) -> str:
+    return "|".join(
+        _normalize_tool_matcher_part(part.strip())
+        for part in matcher.split("|")
+        if part.strip()
+    )
+
+
+def _normalize_tool_matcher_part(part: str) -> str:
+    if _is_glob_matcher(part):
+        return part
+    return CLAUDE_TOOL_MATCHER_ALIASES.get(part, part)
+
+
+def _is_glob_matcher(value: str) -> bool:
+    return any(char in value for char in "*?[]")
+
+
 def _validate_handler_event_compatibility(
     *,
     event_name: HookEventName,
     handler: HookHandlerConfig,
 ) -> None:
+    if handler.run_async and handler.type != HookHandlerType.COMMAND:
+        raise ValueError("async hooks are only supported for command handlers")
     if handler.if_rule and event_name not in TOOL_EVENTS:
         raise ValueError(
             f"Hook handler 'if' is only supported for tool events, not {event_name.value}"

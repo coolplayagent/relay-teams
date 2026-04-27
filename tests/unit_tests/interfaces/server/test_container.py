@@ -15,6 +15,8 @@ from relay_teams.env.environment_variable_models import (
 from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.roles import RoleLoader
+from relay_teams.skills.discovery import SkillsDirectory
+from relay_teams.skills.skill_models import SkillSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
@@ -71,6 +73,27 @@ def _write_app_role(config_dir: Path, *, role_id: str) -> None:
             "Plan carefully.\n"
         ),
         encoding="utf-8",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _use_empty_skill_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def _from_config_dirs(
+        _cls: type[SkillRegistry],
+        **_kwargs: object,
+    ) -> SkillRegistry:
+        return SkillRegistry(
+            directory=SkillsDirectory(
+                sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "missing-skills"),)
+            )
+        )
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.server.container.SkillRegistry.from_config_dirs",
+        classmethod(_from_config_dirs),
     )
 
 
@@ -165,6 +188,11 @@ def test_roles_reload_updates_long_lived_role_registry_references(
     config_dir = tmp_path / ".agent-teams"
     _write_model_config(config_dir, api_key="initial-secret")
     container = ServerContainer(config_dir=config_dir)
+    container.skill_registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "missing-skills"),)
+        )
+    )
     _write_app_role(config_dir, role_id="planner")
     registry = RoleLoader().load_builtin_and_app(
         builtin_roles_dir=get_builtin_roles_dir(),
@@ -254,6 +282,11 @@ def test_saving_environment_variable_reloads_model_runtime(
     config_dir = tmp_path / ".agent-teams"
     _write_model_config(config_dir, api_key=f"${{{env_key}}}")
     container = ServerContainer(config_dir=config_dir)
+    monkeypatch.setattr(
+        container.skills_config_reload_service,
+        "reload_skills_config",
+        lambda: None,
+    )
 
     assert container.runtime.model_status.loaded is False
 

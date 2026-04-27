@@ -755,7 +755,7 @@ def test_discover_keeps_skill_when_one_frontmatter_hook_group_is_empty(
     groups = skill.metadata.hooks.hooks[HookEventName.PRE_TOOL_USE]
     assert len(groups) == 2
     assert groups[0].hooks == ()
-    assert groups[1].matcher == "Read"
+    assert groups[1].matcher == "read"
     assert groups[1].hooks[0].command == "echo ok"
 
 
@@ -791,7 +791,7 @@ def test_discover_normalizes_legacy_frontmatter_hook_fields(tmp_path: Path) -> N
     skill = directory.get_skill("valid")
     assert skill is not None
     groups = skill.metadata.hooks.hooks[HookEventName.PRE_TOOL_USE]
-    assert [group.matcher for group in groups] == ["Read", "Write"]
+    assert [group.matcher for group in groups] == ["read", "write"]
     assert all(group.hooks[0].if_rule == "Bash(git *)" for group in groups)
 
 

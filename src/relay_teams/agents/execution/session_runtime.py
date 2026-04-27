@@ -287,6 +287,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 trace_id=request.trace_id,
                 task_id=request.task_id,
                 session_id=request.session_id,
+                session_mode=request.session_mode,
+                run_kind=request.run_kind.value,
                 workspace_id=resolved_workspace_id,
                 conversation_id=resolved_conversation_id,
                 instance_id=request.instance_id,

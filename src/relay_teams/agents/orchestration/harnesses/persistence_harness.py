@@ -16,7 +16,13 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, TaskRecord
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.hooks import HookEventName, HookService, TaskCompletedInput
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCompletedInput,
+)
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
@@ -60,7 +66,7 @@ class TaskPersistenceHarness(BaseModel):
     ) -> None:
         if self.hook_service is None or task.parent_task_id is None:
             return
-        _ = await self.hook_service.execute(
+        bundle = await self.hook_service.execute(
             event_input=TaskCompletedInput(
                 event_name=HookEventName.TASK_COMPLETED,
                 session_id=task.session_id,
@@ -77,6 +83,13 @@ class TaskPersistenceHarness(BaseModel):
             ),
             run_event_hub=self.run_event_hub,
         )
+        if (
+            isinstance(bundle, HookDecisionBundle)
+            and bundle.decision == HookDecisionType.DENY
+        ):
+            raise RuntimeError(
+                bundle.reason or "Task completion denied by runtime hooks."
+            )
 
     def complete_with_assistant_error(
         self,

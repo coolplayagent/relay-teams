@@ -41,10 +41,10 @@ class AgentHookExecutor:
         handler: HookHandlerConfig,
         event_input: HookEventInput,
     ) -> HookDecision:
-        role_id = str(handler.role_id or "").strip()
+        role_id = str(handler.role_id or event_input.role_id or "").strip()
         prompt_template = str(handler.prompt or "").strip()
         if not role_id:
-            raise ValueError("Agent hook requires role_id")
+            raise ValueError("Agent hook requires role_id or event role_id")
         if not prompt_template:
             raise ValueError("Agent hook requires a prompt")
         session = self._session_repo.get(event_input.session_id)
