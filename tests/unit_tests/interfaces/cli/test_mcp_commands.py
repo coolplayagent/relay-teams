@@ -174,7 +174,7 @@ def test_mcp_tools_renders_table_by_default(monkeypatch) -> None:
 def test_mcp_tools_surfaces_connection_error(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.mcp.mcp_cli.load_mcp_service",
-        lambda: _FailingMcpService(),
+        _FailingMcpService,
     )
 
     result = runner.invoke(cli_app.app, ["mcp", "tools", "broken-server"])
@@ -215,6 +215,38 @@ def test_mcp_add_supports_stdio_config(monkeypatch) -> None:
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem"],
             "env": {"TOKEN": "secret"},
+        },
+        "overwrite": False,
+    }
+
+
+def test_mcp_add_preserves_quoted_command_path_with_spaces(monkeypatch) -> None:
+    fake_service = _FakeMcpService()
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_cli.load_mcp_service",
+        lambda: fake_service,
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        [
+            "mcp",
+            "add",
+            "filesystem",
+            "--command",
+            '"C:\\Program Files\\nodejs\\npx.cmd" -y',
+            "--arg",
+            "@modelcontextprotocol/server-filesystem",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fake_service.added_config == {
+        "name": "filesystem",
+        "server_config": {
+            "transport": "stdio",
+            "command": "C:\\Program Files\\nodejs\\npx.cmd",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"],
         },
         "overwrite": False,
     }

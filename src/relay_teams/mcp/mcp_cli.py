@@ -408,7 +408,7 @@ def _build_server_config(
         resolved_transport = transport or "stdio"
         if resolved_transport != "stdio":
             raise typer.BadParameter("--transport must be stdio when using --command")
-        command_parts = shlex.split(command, posix=False)
+        command_parts = shlex.split(command)
         if not command_parts:
             raise typer.BadParameter("--command must be non-empty")
         config: dict[str, JsonValue] = {
