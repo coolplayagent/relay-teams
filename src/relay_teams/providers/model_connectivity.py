@@ -351,7 +351,7 @@ class ModelConnectivityProbeService:
         if isinstance(response_or_result, CodeAgentAuthVerifyResult):
             return response_or_result
         response = response_or_result
-        if response.status_code < 400:
+        if 200 <= response.status_code < 300:
             return CodeAgentAuthVerifyResult(
                 status="valid",
                 checked_at=checked_at,
@@ -376,7 +376,7 @@ class ModelConnectivityProbeService:
         if isinstance(retry_response_or_result, CodeAgentAuthVerifyResult):
             return retry_response_or_result
         retry_response = retry_response_or_result
-        if retry_response.status_code < 400:
+        if 200 <= retry_response.status_code < 300:
             return CodeAgentAuthVerifyResult(
                 status="valid",
                 checked_at=checked_at,
@@ -1654,7 +1654,7 @@ class ModelConnectivityProbeService:
     ) -> str | ModelConnectivityProbeResult:
         try:
             auth_config = self._resolve_codeagent_auth_for_request(
-                cast(CodeAgentAuthConfig, config.codeagent_auth)
+                self._require_codeagent_auth_config(config.codeagent_auth)
             )
             return get_codeagent_token_service().get_token_sync(
                 base_url=config.base_url,
@@ -1696,7 +1696,7 @@ class ModelConnectivityProbeService:
     ) -> str | CodeAgentAuthVerifyResult:
         try:
             auth_config = self._resolve_codeagent_auth_for_request(
-                cast(CodeAgentAuthConfig, config.codeagent_auth)
+                self._require_codeagent_auth_config(config.codeagent_auth)
             )
             return get_codeagent_token_service().get_token_sync(
                 base_url=config.base_url,
@@ -1739,7 +1739,7 @@ class ModelConnectivityProbeService:
     ) -> str | ModelDiscoveryResult:
         try:
             auth_config = self._resolve_codeagent_auth_for_request(
-                cast(CodeAgentAuthConfig, config.codeagent_auth)
+                self._require_codeagent_auth_config(config.codeagent_auth)
             )
             return get_codeagent_token_service().get_token_sync(
                 base_url=config.base_url,
@@ -1808,8 +1808,19 @@ class ModelConnectivityProbeService:
             status_code=400,
         )
 
+    @staticmethod
+    def _require_codeagent_auth_config(
+        auth_config: CodeAgentAuthConfig | None,
+    ) -> CodeAgentAuthConfig:
+        if auth_config is None:
+            raise CodeAgentOAuthError(
+                "CodeAgent auth is not configured.",
+                status_code=None,
+            )
+        return auth_config
+
+    @staticmethod
     def _send_codeagent_auth_verify_request(
-        self,
         *,
         config: ModelEndpointConfig,
         checked_at: datetime,
@@ -2621,7 +2632,8 @@ class ModelConnectivityProbeService:
             return "provider_error"
         return "request_invalid"
 
-    def _is_codeagent_auth_invalid_error(self, error: CodeAgentOAuthError) -> bool:
+    @staticmethod
+    def _is_codeagent_auth_invalid_error(error: CodeAgentOAuthError) -> bool:
         return error.auth_invalid
 
     def _latency_ms(self, started: float) -> int:

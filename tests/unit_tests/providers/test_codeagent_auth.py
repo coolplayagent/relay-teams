@@ -1061,6 +1061,16 @@ def test_get_codeagent_oauth_session_by_state_returns_saved_session() -> None:
     )
 
 
+def test_extract_error_code_reads_nested_error_code() -> None:
+    payload = {
+        "error": {
+            "code": " DEV.00000001 ",
+        }
+    }
+
+    assert codeagent_auth_module._extract_error_code(payload) == "DEV.00000001"
+
+
 def test_get_codeagent_oauth_session_by_state_returns_none_for_missing_state() -> None:
     clear_codeagent_oauth_session_store()
 

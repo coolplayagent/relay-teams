@@ -1330,7 +1330,7 @@ def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_s
 def test_probe_codeagent_maps_codeagent_auth_invalid_error_without_http_status(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
         def get_token_sync(
@@ -1549,6 +1549,242 @@ def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
     assert headers["User-Agent"] == "AgentKernel/1.0"
 
 
+def test_verify_codeagent_auth_raises_for_missing_profile() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(
+        ValueError,
+        match="Model profile 'missing' was not found in runtime config.",
+    ):
+        service.verify_codeagent_auth(profile_name="missing")
+
+
+def test_verify_codeagent_auth_raises_for_non_codeagent_profile() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(
+        ValueError,
+        match="Model profile 'default' is not a CodeAgent profile.",
+    ):
+        service.verify_codeagent_auth(profile_name="default")
+
+
+def test_verify_codeagent_auth_raises_without_codeagent_auth() -> None:
+    invalid_config = ModelEndpointConfig.model_construct(
+        provider=ProviderType.CODEAGENT,
+        model="codeagent-chat",
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        api_key=None,
+        maas_auth=None,
+        codeagent_auth=None,
+        ssl_verify=True,
+        sampling=SamplingConfig(
+            temperature=1.0,
+            top_p=0.95,
+            max_tokens=128,
+        ),
+        connect_timeout_seconds=17.5,
+    )
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: RuntimeConfig.model_construct(
+            paths=RuntimePaths(
+                config_dir=Path("D:/tmp/.agent_teams"),
+                env_file=Path("D:/tmp/.agent_teams/.env"),
+                db_path=Path("D:/tmp/.agent_teams/relay_teams.db"),
+                roles_dir=Path("D:/tmp/.agent_teams/roles"),
+            ),
+            llm_profiles={"default": invalid_config},
+            default_model_profile="default",
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Model profile 'default' does not have CodeAgent auth configured.",
+    ):
+        service.verify_codeagent_auth(profile_name="default")
+
+
+def test_verify_codeagent_auth_returns_error_when_token_refresh_times_out(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="refresh-token"),
+        )
+    )
+
+    class _TimeoutTokenService:
+        def get_token_sync(
+            self,
+            *,
+            base_url: str,
+            auth_config: CodeAgentAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            _ = (
+                base_url,
+                auth_config,
+                ssl_verify,
+                connect_timeout_seconds,
+                force_refresh,
+            )
+            raise httpx.ReadTimeout("token request timed out")
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _TimeoutTokenService(),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "error"
+    assert result.detail == "token request timed out"
+
+
+def test_verify_codeagent_auth_returns_error_when_verify_request_times_out(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="refresh-token"),
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            error=httpx.ReadTimeout("verify request timed out")
+        ),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "error"
+    assert result.detail == "verify request timed out"
+
+
+def test_verify_codeagent_auth_returns_error_when_verify_request_fails(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="refresh-token"),
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            error=httpx.ConnectError("failed to reach codeagent")
+        ),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "error"
+    assert result.detail == "failed to reach codeagent"
+
+
+def test_verify_codeagent_auth_returns_error_for_redirect_response(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(
+                access_token="saved-access-token",
+                refresh_token="refresh-token",
+            ),
+        )
+    )
+
+    class _TokenService:
+        def get_token_sync(
+            self,
+            *,
+            base_url: str,
+            auth_config: CodeAgentAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            calls = captured.setdefault("token_calls", [])
+            assert isinstance(calls, list)
+            calls.append(
+                {
+                    "base_url": base_url,
+                    "access_token": auth_config.access_token,
+                    "refresh_token": auth_config.refresh_token,
+                    "ssl_verify": ssl_verify,
+                    "connect_timeout_seconds": connect_timeout_seconds,
+                    "force_refresh": force_refresh,
+                }
+            )
+            return "saved-access-token"
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _TokenService(),
+    )
+    responses = [
+        httpx.Response(
+            302,
+            headers={"location": "https://login.example/sso"},
+        )
+    ]
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _QueuedHttpClient(
+            captured=captured,
+            responses=responses,
+        ),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "error"
+    assert result.detail == "Failed to verify CodeAgent authentication."
+    assert captured["token_calls"] == [
+        {
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "access_token": "saved-access-token",
+            "refresh_token": "refresh-token",
+            "ssl_verify": True,
+            "connect_timeout_seconds": 17.5,
+            "force_refresh": False,
+        }
+    ]
+
+
 def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
     monkeypatch,
 ) -> None:
@@ -1609,6 +1845,84 @@ def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
 
     assert result.status == "valid"
     assert result.detail is None
+    assert captured["token_calls"] == [
+        {
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "refresh_token": "refresh-token",
+            "ssl_verify": True,
+            "connect_timeout_seconds": 17.5,
+            "force_refresh": False,
+        },
+        {
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "refresh_token": "refresh-token",
+            "ssl_verify": True,
+            "connect_timeout_seconds": 17.5,
+            "force_refresh": True,
+        },
+    ]
+
+
+def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="refresh-token"),
+        )
+    )
+
+    class _SuccessfulCodeAgentTokenService:
+        def get_token_sync(
+            self,
+            *,
+            base_url: str,
+            auth_config: CodeAgentAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            calls = captured.setdefault("token_calls", [])
+            assert isinstance(calls, list)
+            calls.append(
+                {
+                    "base_url": base_url,
+                    "refresh_token": auth_config.refresh_token,
+                    "ssl_verify": ssl_verify,
+                    "connect_timeout_seconds": connect_timeout_seconds,
+                    "force_refresh": force_refresh,
+                }
+            )
+            return "fresh-access-token" if force_refresh else "saved-access-token"
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _SuccessfulCodeAgentTokenService(),
+    )
+    responses = [
+        httpx.Response(401, json={"detail": "expired access token"}),
+        httpx.Response(
+            302,
+            headers={"location": "https://login.example/sso"},
+        ),
+    ]
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _QueuedHttpClient(
+            captured=captured,
+            responses=responses,
+        ),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "error"
+    assert result.detail == "Failed to verify CodeAgent authentication."
     assert captured["token_calls"] == [
         {
             "base_url": DEFAULT_CODEAGENT_BASE_URL,

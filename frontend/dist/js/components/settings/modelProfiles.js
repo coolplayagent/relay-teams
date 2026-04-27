@@ -23,6 +23,7 @@ import { errorToPayload, logError } from '../../utils/logger.js';
 let profiles = {};
 let fallbackConfig = { policies: [] };
 let editingProfile = null;
+let nextDraftCodeAgentVerificationScopeId = 1;
 let profileProbeStates = {};
 let draftProbeState = null;
 let draftDiscoveredModels = [];
@@ -989,6 +990,7 @@ function handleEditProfile(name) {
         hasPersistedRefreshToken: Boolean(codeagentAuth.has_refresh_token),
         loginInProgress: false,
         pendingAuthorizationUrl: '',
+        verificationScopeId: nextDraftCodeAgentVerificationScopeId++,
         verificationRequestId: 0,
         statusMessage: Boolean(codeagentAuth.has_refresh_token)
             ? 'Saved sign-in requires verification'
@@ -1522,6 +1524,7 @@ async function verifyPersistedCodeAgentAuth(profileName) {
     if (editingProfile !== normalizedProfileName || !draftCodeAgentAuthState.hasPersistedRefreshToken) {
         return;
     }
+    const verificationScopeId = Number(draftCodeAgentAuthState.verificationScopeId || 0);
     const verificationRequestId = Number(draftCodeAgentAuthState.verificationRequestId || 0) + 1;
     draftCodeAgentAuthState.verificationRequestId = verificationRequestId;
     draftCodeAgentAuthState.verified = false;
@@ -1532,7 +1535,7 @@ async function verifyPersistedCodeAgentAuth(profileName) {
 
     try {
         const result = await verifyCodeAgentAuth(normalizedProfileName);
-        if (!isActiveCodeAgentVerification(normalizedProfileName, verificationRequestId)) {
+        if (!isActiveCodeAgentVerification(normalizedProfileName, verificationScopeId, verificationRequestId)) {
             return;
         }
         draftCodeAgentAuthState.verifying = false;
@@ -1549,7 +1552,7 @@ async function verifyPersistedCodeAgentAuth(profileName) {
         }
         draftCodeAgentAuthState.statusMessage = result.detail || 'Saved sign-in could not be verified';
     } catch (e) {
-        if (!isActiveCodeAgentVerification(normalizedProfileName, verificationRequestId)) {
+        if (!isActiveCodeAgentVerification(normalizedProfileName, verificationScopeId, verificationRequestId)) {
             return;
         }
         draftCodeAgentAuthState.verifying = false;
@@ -1558,10 +1561,10 @@ async function verifyPersistedCodeAgentAuth(profileName) {
     renderDraftCodeAgentAuthState();
 }
 
-function isActiveCodeAgentVerification(profileName, verificationRequestId) {
+function isActiveCodeAgentVerification(profileName, verificationScopeId, verificationRequestId) {
     return (
-        isCodeAgentProvider(getDraftProvider())
-        && editingProfile === profileName
+        editingProfile === profileName
+        && Number(draftCodeAgentAuthState.verificationScopeId || 0) === verificationScopeId
         && Number(draftCodeAgentAuthState.verificationRequestId || 0) === verificationRequestId
     );
 }
@@ -2911,6 +2914,7 @@ function createDraftCodeAgentAuthState() {
         hasPersistedRefreshToken: false,
         loginInProgress: false,
         pendingAuthorizationUrl: '',
+        verificationScopeId: nextDraftCodeAgentVerificationScopeId++,
         verificationRequestId: 0,
         statusMessage: 'Not signed in',
     };
