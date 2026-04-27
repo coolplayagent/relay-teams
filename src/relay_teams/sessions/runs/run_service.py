@@ -252,6 +252,11 @@ class SessionRunService:
                 session_id,
                 run_id,
             ),
+            create_run_async=lambda intent, source: self.create_run_async(
+                intent,
+                source=source,
+            ),
+            ensure_run_started_async=self.ensure_run_started_async,
         )
         self._interaction_service = RunInteractionService(
             run_control_manager=self._run_control_manager,
@@ -1589,16 +1594,18 @@ class SessionRunService:
         record: "BackgroundTaskRecord",
         message: str,
     ) -> None:
-        if self._should_delegate_to_bound_loop():
-            record_copy = record.model_copy(deep=True)
-            self._call_in_bound_loop(
-                lambda: self._handle_background_task_completion_local(
-                    record=record_copy,
-                    message=message,
-                )
-            )
-            return
         self._handle_background_task_completion_local(record=record, message=message)
+
+    async def handle_background_task_completion_async(
+        self,
+        *,
+        record: "BackgroundTaskRecord",
+        message: str,
+    ) -> None:
+        await self._followup_router.handle_background_task_completion_async(
+            record=record,
+            message=message,
+        )
 
     def handle_monitor_trigger(
         self,

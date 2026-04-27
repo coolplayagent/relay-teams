@@ -910,10 +910,8 @@ async def test_background_task_completion_keeps_source_run_active_when_siblings_
         record=_build_background_record(),
         message="background task finished",
     )
-    await asyncio.wait_for(meta_agent.started.wait(), timeout=1)
-
-    assert meta_agent.trace_id is not None
-    assert meta_agent.trace_id != "run-existing"
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(meta_agent.started.wait(), timeout=0.05)
     assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
 
     meta_agent.release.set()
@@ -921,7 +919,7 @@ async def test_background_task_completion_keeps_source_run_active_when_siblings_
 
 
 @pytest.mark.asyncio
-async def test_background_task_completion_starts_new_run_when_live_delivery_is_unavailable(
+async def test_background_task_completion_skips_new_run_when_live_delivery_is_unavailable(
     tmp_path: Path,
 ) -> None:
     class _BlockingMetaAgent:
@@ -979,14 +977,12 @@ async def test_background_task_completion_starts_new_run_when_live_delivery_is_u
         record=_build_background_record(),
         message="background task finished",
     )
-    await asyncio.wait_for(meta_agent.started.wait(), timeout=1)
-
-    assert meta_agent.intent is not None
-    assert meta_agent.trace_id is not None
-    assert meta_agent.trace_id != "run-existing"
-    assert meta_agent.intent.intent == "background task finished"
-    assert meta_agent.intent.target_role_id is None
-    assert meta_agent.trace_id in manager._running_run_ids
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(meta_agent.started.wait(), timeout=0.05)
+    assert meta_agent.intent is None
+    assert meta_agent.trace_id is None
+    assert manager._running_run_ids == set()
+    assert manager._active_run_registry.get_active_run_id("session-1") == "run-existing"
 
     meta_agent.release.set()
     await asyncio.sleep(0)
