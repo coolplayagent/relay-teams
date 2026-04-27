@@ -315,10 +315,12 @@ class OpenAICompatibleProvider(LLMProvider):
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
-        self._session._publish_committed_tool_outcome_events_from_messages(
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        return self._session._publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=messages,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     def _build_model_api_error_message(self, error: ModelAPIError) -> str:

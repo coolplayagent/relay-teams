@@ -642,6 +642,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -664,6 +665,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             ),
             filter_model_messages=self._filter_model_messages,
             has_tool_side_effect_messages=self._has_tool_side_effect_messages,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     async def _commit_ready_messages_async(
@@ -672,6 +674,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -694,6 +697,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             ),
             filter_model_messages=self._filter_model_messages,
             has_tool_side_effect_messages=self._has_tool_side_effect_messages,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     def _commit_all_safe_messages(
@@ -702,6 +706,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -714,6 +719,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             pending_messages=pending_messages,
             commit_ready_messages=self._commit_ready_messages,
             last_committable_index=self._last_committable_index,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     async def _commit_all_safe_messages_async(
@@ -722,6 +728,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -734,6 +741,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             pending_messages=pending_messages,
             commit_ready_messages=self._commit_ready_messages_async,
             last_committable_index=self._last_committable_index,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     def _has_pending_tool_calls(
@@ -890,8 +898,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
-        self._event_publishing_service().publish_committed_tool_outcome_events_from_messages(
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        return self._event_publishing_service().publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=messages,
             to_json_compatible=self._to_json_compatible,
@@ -899,6 +908,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             tool_result_already_emitted_from_runtime=(
                 self._tool_result_already_emitted_from_runtime
             ),
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     async def _publish_committed_tool_outcome_events_from_messages_async(
@@ -906,8 +916,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
-        await self._event_publishing_service().publish_committed_tool_outcome_events_from_messages_async(
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        return await self._event_publishing_service().publish_committed_tool_outcome_events_from_messages_async(
             request=request,
             messages=messages,
             to_json_compatible=self._to_json_compatible,
@@ -915,6 +926,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             tool_result_already_emitted_from_runtime=(
                 self._tool_result_already_emitted_from_runtime_async
             ),
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
 
     def _tool_result_already_emitted_from_runtime(

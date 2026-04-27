@@ -7,18 +7,24 @@ from collections.abc import AsyncIterator, Sequence
 from json import dumps
 from typing import Protocol, cast
 
-from pydantic_ai._agent_graph import ModelRequestNode
+from pydantic_ai._agent_graph import CallToolsNode, ModelRequestNode
 from pydantic import JsonValue
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
+    FunctionToolResultEvent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     ToolCallPart,
     ToolCallPartDelta,
+    ToolReturnPart,
 )
 from pydantic_ai.usage import UsageLimits
 
+from relay_teams.agents.execution.message_commit import (
+    tool_input_validation_failure_to_tool_return,
+)
 from relay_teams.agents.execution.prompt_history import PreparedPromptContext
 from relay_teams.agents.execution.session_mixin_base import AgentLlmSessionMixinBase
 from relay_teams.logger import (
@@ -76,6 +82,25 @@ class AgentNodeStreamContext(Protocol):
 
 class StreamableModelRequestNode(Protocol):
     def stream(self, ctx: object) -> AgentNodeStreamContext: ...
+
+
+class AgentToolEventStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[object]: ...
+
+
+class AgentToolEventStreamContext(Protocol):
+    async def __aenter__(self) -> AgentToolEventStream: ...
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> bool | None: ...
+
+
+class StreamableToolCallNode(Protocol):
+    def stream(self, ctx: object) -> AgentToolEventStreamContext: ...
 
 
 class AgentRun(Protocol):
@@ -173,6 +198,28 @@ def model_step_payload(
 
 
 class SessionRuntimeMixin(AgentLlmSessionMixinBase):
+    async def _publish_tool_outcome_event_from_stream_async(
+        self,
+        *,
+        request: LLMRequest,
+        stream_event: object,
+        published_tool_outcome_ids: set[str],
+    ) -> bool:
+        if not isinstance(stream_event, FunctionToolResultEvent):
+            return False
+        result = stream_event.result
+        if not isinstance(result, (ToolReturnPart, RetryPromptPart)):
+            return False
+        if isinstance(result, RetryPromptPart):
+            if not result.tool_name:
+                return False
+            result = tool_input_validation_failure_to_tool_return(result)
+        return await self._publish_committed_tool_outcome_events_from_messages_async(
+            request=request,
+            messages=[ModelRequest(parts=[result])],
+            published_tool_outcome_ids=published_tool_outcome_ids,
+        )
+
     async def run(self, request: LLMRequest) -> str:
         return await self._generate_async(request)
 
@@ -327,6 +374,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             attempt_tool_outcome_event_emitted = False
             attempt_messages_committed = False
             published_tool_call_ids: set[str] = set()
+            published_tool_outcome_ids: set[str] = set()
             log_event(
                 LOGGER,
                 logging.DEBUG,
@@ -507,6 +555,21 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     emitted_text_chunks[streamed_text_start:]
                                 )
                                 latest_streamed_text = streamed_node_text
+                            elif isinstance(node, CallToolsNode):
+                                tool_node = cast(StreamableToolCallNode, node)
+                                async with tool_node.stream(
+                                    agent_run.ctx
+                                ) as tool_stream:
+                                    async for tool_stream_event in tool_stream:
+                                        control_ctx.raise_if_cancelled()
+                                        tool_outcome_emitted = await self._publish_tool_outcome_event_from_stream_async(
+                                            request=request,
+                                            stream_event=tool_stream_event,
+                                            published_tool_outcome_ids=published_tool_outcome_ids,
+                                        )
+                                        if tool_outcome_emitted:
+                                            attempt_tool_outcome_event_emitted = True
+                                streamed_node_text = ""
                             else:
                                 streamed_node_text = ""
 
@@ -544,6 +607,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     request=request,
                                     history=history,
                                     pending_messages=buffered_messages,
+                                    published_tool_outcome_ids=published_tool_outcome_ids,
                                 )
                                 if committed_tool_events_published:
                                     attempt_tool_outcome_event_emitted = True
@@ -670,6 +734,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             request=request,
                             history=history,
                             pending_messages=buffered_messages,
+                            published_tool_outcome_ids=published_tool_outcome_ids,
                         )
                         if committed_tool_events_published:
                             attempt_tool_outcome_event_emitted = True

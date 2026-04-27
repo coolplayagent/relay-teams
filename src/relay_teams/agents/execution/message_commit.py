@@ -165,7 +165,7 @@ class MessageCommitService:
         normalize_committable_messages: NormalizeCommittableMessages,
         workspace_id: Callable[[LLMRequest], str],
         conversation_id: Callable[[LLMRequest], str],
-        publish_committed_tool_outcome_events_from_messages: Callable[..., None],
+        publish_committed_tool_outcome_events_from_messages: Callable[..., bool],
         filter_model_messages: Callable[
             [Sequence[ModelRequest | ModelResponse]],
             list[ModelRequest | ModelResponse],
@@ -174,6 +174,7 @@ class MessageCommitService:
             [Sequence[ModelRequest | ModelResponse]],
             bool,
         ],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -202,6 +203,7 @@ class MessageCommitService:
         publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=ready,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
         next_history = filter_model_messages(
             self._message_repo.get_history_for_conversation(resolved_conversation_id)
@@ -232,7 +234,7 @@ class MessageCommitService:
         conversation_id: Callable[[LLMRequest], str],
         publish_committed_tool_outcome_events_from_messages: Callable[
             ...,
-            Awaitable[None],
+            Awaitable[bool],
         ],
         filter_model_messages: Callable[
             [Sequence[ModelRequest | ModelResponse]],
@@ -242,6 +244,7 @@ class MessageCommitService:
             [Sequence[ModelRequest | ModelResponse]],
             bool,
         ],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -271,6 +274,7 @@ class MessageCommitService:
         await publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=ready,
+            published_tool_outcome_ids=published_tool_outcome_ids,
         )
         next_history = filter_model_messages(
             await self._get_history_for_conversation_async(resolved_conversation_id)
@@ -301,6 +305,7 @@ class MessageCommitService:
             [Sequence[ModelRequest | ModelResponse]],
             int,
         ],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -324,6 +329,7 @@ class MessageCommitService:
                 request=request,
                 history=next_history,
                 pending_messages=remaining,
+                published_tool_outcome_ids=published_tool_outcome_ids,
             )
             if committed_tool_events_published:
                 tool_events_published = True
@@ -358,6 +364,7 @@ class MessageCommitService:
             [Sequence[ModelRequest | ModelResponse]],
             int,
         ],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -381,6 +388,7 @@ class MessageCommitService:
                 request=request,
                 history=next_history,
                 pending_messages=remaining,
+                published_tool_outcome_ids=published_tool_outcome_ids,
             )
             if committed_tool_events_published:
                 tool_events_published = True
@@ -433,15 +441,7 @@ class MessageCommitService:
             for part in message.parts:
                 if isinstance(part, RetryPromptPart) and part.tool_name:
                     next_parts.append(
-                        ToolReturnPart(
-                            tool_name=part.tool_name,
-                            tool_call_id=part.tool_call_id,
-                            content=build_tool_error_result(
-                                error_code="tool_input_validation_failed",
-                                message=str(part.content or "").strip()
-                                or "Tool input validation failed.",
-                            ),
-                        )
+                        tool_input_validation_failure_to_tool_return(part)
                     )
                     changed = True
                     continue
@@ -476,3 +476,16 @@ class MessageCommitService:
             if not pending:
                 last_safe_index = index
         return last_safe_index
+
+
+def tool_input_validation_failure_to_tool_return(
+    part: RetryPromptPart,
+) -> ToolReturnPart:
+    return ToolReturnPart(
+        tool_name=str(part.tool_name or ""),
+        tool_call_id=part.tool_call_id,
+        content=build_tool_error_result(
+            error_code="tool_input_validation_failed",
+            message=str(part.content or "").strip() or "Tool input validation failed.",
+        ),
+    )
