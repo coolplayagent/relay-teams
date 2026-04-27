@@ -54,7 +54,13 @@ async function probeBackendHealth() {
     const controlUrl = await resolveControlPlaneLiveUrl();
     if (controlUrl) {
         const controlProbe = await probeJson(controlUrl, CONTROL_PLANE_TIMEOUT_MS);
-        if (controlProbe.ok && isControlPlaneLivePayload(controlProbe.payload)) {
+        if (
+            controlProbe.ok
+            && isControlPlaneLivePayload(
+                controlProbe.payload,
+                { allowInternalMainBaseUrl: true },
+            )
+        ) {
             rememberControlPlaneLiveUrl(controlUrl);
             if (await confirmMainBackendOnline()) {
                 return true;
@@ -185,14 +191,17 @@ function isLivePayload(payload) {
     return safeStatus === 'alive' || safeStatus === 'ok';
 }
 
-function isControlPlaneLivePayload(payload) {
+function isControlPlaneLivePayload(
+    payload,
+    { allowInternalMainBaseUrl = false } = {},
+) {
     if (!isLivePayload(payload)) {
         return false;
     }
     const mainBaseUrl = String(payload?.main_base_url || '').trim();
     return Boolean(mainBaseUrl)
         && (baseUrlMatchesCurrentOrigin(mainBaseUrl)
-            || isInternalBaseUrl(mainBaseUrl));
+            || (allowInternalMainBaseUrl && isInternalBaseUrl(mainBaseUrl)));
 }
 
 function normalizeControlPlaneLiveUrl(rawUrl) {
