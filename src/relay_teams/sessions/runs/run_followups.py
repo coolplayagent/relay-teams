@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from pydantic import JsonValue
 from pydantic_ai.messages import ModelRequest, UserPromptPart
@@ -25,7 +26,7 @@ from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskMan
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -76,6 +77,11 @@ class RunFollowupRouter:
         create_run: Callable[[IntentInput, InjectionSource], tuple[str, str]],
         ensure_run_started: Callable[[str], None],
         remember_active_run: Callable[[str, str], None],
+        create_run_async: Callable[
+            [IntentInput, InjectionSource], Awaitable[tuple[str, str]]
+        ]
+        | None = None,
+        ensure_run_started_async: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._injection_manager = injection_manager
         self._run_control_manager = run_control_manager
@@ -94,7 +100,9 @@ class RunFollowupRouter:
         self._runtime_for_run = runtime_for_run
         self._ensure_session = ensure_session
         self._create_run = create_run
+        self._create_run_async = create_run_async
         self._ensure_run_started = ensure_run_started
+        self._ensure_run_started_async = ensure_run_started_async
         self._remember_active_run = remember_active_run
 
     def handle_background_task_completion(
@@ -116,6 +124,29 @@ class RunFollowupRouter:
             allow_coordinator=True,
             event_prefix="background_task.notification",
             payload=payload,
+            spawn_if_unroutable=False,
+        )
+
+    async def handle_background_task_completion_async(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        message: str,
+    ) -> None:
+        payload: dict[str, JsonValue] = {
+            "background_task_id": record.background_task_id,
+        }
+        await self.route_system_message_async(
+            source_run_id=record.run_id,
+            session_id=record.session_id,
+            preferred_instance_id=record.instance_id,
+            role_id=record.role_id,
+            task_id_fallback="background-task-notification",
+            message=message,
+            allow_coordinator=True,
+            event_prefix="background_task.notification",
+            payload=payload,
+            spawn_if_unroutable=False,
         )
 
     def handle_monitor_trigger(
@@ -171,6 +202,7 @@ class RunFollowupRouter:
         allow_coordinator: bool,
         event_prefix: str,
         payload: dict[str, JsonValue],
+        spawn_if_unroutable: bool = True,
     ) -> None:
         task_id = self.find_task_for_instance(
             run_id=source_run_id,
@@ -228,6 +260,44 @@ class RunFollowupRouter:
                         payload=payload,
                     )
                 return
+        active_run_id = self._active_run_registry.get_active_run_id(session_id)
+        if (
+            allow_coordinator
+            and active_run_id
+            and active_run_id != source_run_id
+            and self.can_enqueue_followup_to_coordinator(active_run_id)
+            and self.append_followup_to_coordinator(
+                active_run_id,
+                message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+        ):
+            with bind_trace_context(
+                trace_id=active_run_id,
+                run_id=active_run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event=f"{event_prefix}.enqueued",
+                    message="System follow-up enqueued to active coordinator",
+                    payload={
+                        **payload,
+                        "source_run_id": source_run_id,
+                        "target_run_id": active_run_id,
+                    },
+                )
+            return
+        if not spawn_if_unroutable:
+            self._log_unroutable_system_message(
+                source_run_id=source_run_id,
+                session_id=session_id,
+                event_prefix=event_prefix,
+                payload=payload,
+            )
+            return
         self.spawn_system_followup_run(
             source_run_id=source_run_id,
             session_id=session_id,
@@ -235,6 +305,155 @@ class RunFollowupRouter:
             event_prefix=event_prefix,
             payload=payload,
         )
+
+    async def route_system_message_async(
+        self,
+        *,
+        source_run_id: str,
+        session_id: str,
+        preferred_instance_id: str | None,
+        role_id: str | None,
+        task_id_fallback: str,
+        message: str,
+        allow_coordinator: bool,
+        event_prefix: str,
+        payload: dict[str, JsonValue],
+        spawn_if_unroutable: bool = True,
+    ) -> None:
+        task_id = await asyncio.to_thread(
+            self.find_task_for_instance,
+            run_id=source_run_id,
+            instance_id=preferred_instance_id or "",
+        )
+        can_append_to_instance = preferred_instance_id and await asyncio.to_thread(
+            self.can_enqueue_followup_to_instance,
+            run_id=source_run_id,
+            instance_id=preferred_instance_id,
+        )
+        if can_append_to_instance and preferred_instance_id:
+            appended_to_instance = await asyncio.to_thread(
+                self.append_followup_to_instance,
+                run_id=source_run_id,
+                instance_id=preferred_instance_id,
+                task_id=task_id or task_id_fallback,
+                content=message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+            if appended_to_instance:
+                with bind_trace_context(
+                    trace_id=source_run_id,
+                    run_id=source_run_id,
+                    session_id=session_id,
+                    instance_id=preferred_instance_id,
+                    role_id=role_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        event=f"{event_prefix}.enqueued",
+                        message="System follow-up enqueued to originating instance",
+                        payload=payload,
+                    )
+                return
+        can_append_to_coordinator = allow_coordinator and await asyncio.to_thread(
+            self.can_enqueue_followup_to_coordinator,
+            source_run_id,
+        )
+        if can_append_to_coordinator:
+            appended_to_coordinator = await asyncio.to_thread(
+                self.append_followup_to_coordinator,
+                source_run_id,
+                message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+            if appended_to_coordinator:
+                with bind_trace_context(
+                    trace_id=source_run_id,
+                    run_id=source_run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        event=f"{event_prefix}.enqueued",
+                        message="System follow-up enqueued to coordinator",
+                        payload=payload,
+                    )
+                return
+        active_run_id = self._active_run_registry.get_active_run_id(session_id)
+        can_append_to_active = (
+            allow_coordinator
+            and active_run_id
+            and active_run_id != source_run_id
+            and await asyncio.to_thread(
+                self.can_enqueue_followup_to_coordinator,
+                active_run_id,
+            )
+        )
+        if can_append_to_active and active_run_id:
+            appended_to_active = await asyncio.to_thread(
+                self.append_followup_to_coordinator,
+                active_run_id,
+                message,
+                enqueue=True,
+                source=InjectionSource.SYSTEM,
+            )
+            if appended_to_active:
+                with bind_trace_context(
+                    trace_id=active_run_id,
+                    run_id=active_run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        event=f"{event_prefix}.enqueued",
+                        message="System follow-up enqueued to active coordinator",
+                        payload={
+                            **payload,
+                            "source_run_id": source_run_id,
+                            "target_run_id": active_run_id,
+                        },
+                    )
+                return
+        if not spawn_if_unroutable:
+            self._log_unroutable_system_message(
+                source_run_id=source_run_id,
+                session_id=session_id,
+                event_prefix=event_prefix,
+                payload=payload,
+            )
+            return
+        await self.spawn_system_followup_run_async(
+            source_run_id=source_run_id,
+            session_id=session_id,
+            message=message,
+            event_prefix=event_prefix,
+            payload=payload,
+        )
+
+    @staticmethod
+    def _log_unroutable_system_message(
+        *,
+        source_run_id: str,
+        session_id: str,
+        event_prefix: str,
+        payload: dict[str, JsonValue],
+    ) -> None:
+        with bind_trace_context(
+            trace_id=source_run_id,
+            run_id=source_run_id,
+            session_id=session_id,
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                event=f"{event_prefix}.skipped",
+                message="System follow-up skipped because the source run is no longer accepting injections",
+                payload=payload,
+            )
 
     def spawn_system_followup_run(
         self,
@@ -264,6 +483,92 @@ class RunFollowupRouter:
             source_run_id,
         } and self.has_active_background_tasks(source_run_id):
             self._remember_active_run(normalized_session_id, source_run_id)
+            with bind_trace_context(
+                trace_id=source_run_id,
+                run_id=source_run_id,
+                session_id=normalized_session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    event=f"{event_prefix}.source_run_retained",
+                    message="Source run remains active while sibling background tasks are still running",
+                    payload={
+                        **payload,
+                        "source_run_id": source_run_id,
+                        "target_run_id": new_run_id,
+                    },
+                )
+        with bind_trace_context(
+            trace_id=new_run_id,
+            run_id=new_run_id,
+            session_id=normalized_session_id,
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                event=f"{event_prefix}.spawned",
+                message="System follow-up routed through create_run",
+                payload={
+                    **payload,
+                    "source_run_id": source_run_id,
+                    "target_run_id": new_run_id,
+                },
+            )
+        return new_run_id
+
+    async def spawn_system_followup_run_async(
+        self,
+        *,
+        source_run_id: str,
+        session_id: str,
+        message: str,
+        event_prefix: str,
+        payload: dict[str, JsonValue],
+    ) -> str:
+        normalized_session_id = await asyncio.to_thread(
+            self._ensure_session,
+            session_id,
+        )
+        active_run_before = self._active_run_registry.get_active_run_id(
+            normalized_session_id
+        )
+        await asyncio.to_thread(
+            self._run_control_manager.assert_session_allows_main_input,
+            normalized_session_id,
+        )
+        _ = await asyncio.to_thread(
+            self._session_repo.mark_started,
+            normalized_session_id,
+        )
+        intent = IntentInput(
+            session_id=normalized_session_id,
+            input=(TextContentPart(text=message),),
+        )
+        if self._create_run_async is None:
+            new_run_id, _ = await asyncio.to_thread(
+                self._create_run,
+                intent,
+                InjectionSource.SYSTEM,
+            )
+        else:
+            new_run_id, _ = await self._create_run_async(
+                intent,
+                InjectionSource.SYSTEM,
+            )
+        if self._ensure_run_started_async is None:
+            await asyncio.to_thread(self._ensure_run_started, new_run_id)
+        else:
+            await self._ensure_run_started_async(new_run_id)
+        if active_run_before in {
+            None,
+            source_run_id,
+        } and await asyncio.to_thread(self.has_active_background_tasks, source_run_id):
+            await asyncio.to_thread(
+                self._remember_active_run,
+                normalized_session_id,
+                source_run_id,
+            )
             with bind_trace_context(
                 trace_id=source_run_id,
                 run_id=source_run_id,
@@ -576,15 +881,42 @@ class RunFollowupRouter:
         record: AgentRuntimeRecord,
         payload: str,
     ) -> None:
-        self._run_event_hub.publish(
-            RunEvent(
-                session_id=record.session_id,
-                run_id=run_id,
-                trace_id=run_id,
-                task_id=None,
-                instance_id=record.instance_id,
-                role_id=record.role_id,
-                event_type=RunEventType.INJECTION_ENQUEUED,
-                payload_json=payload,
-            )
+        event = RunEvent(
+            session_id=record.session_id,
+            run_id=run_id,
+            trace_id=run_id,
+            task_id=None,
+            instance_id=record.instance_id,
+            role_id=record.role_id,
+            event_type=RunEventType.INJECTION_ENQUEUED,
+            payload_json=payload,
         )
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self._run_event_hub.publish(event)
+            return
+        _ = asyncio.create_task(self._publish_injection_event_async(event))
+
+    async def _publish_injection_event_async(self, event: RunEvent) -> None:
+        try:
+            await publish_run_event_async(self._run_event_hub, event)
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=event.trace_id,
+                run_id=event.run_id,
+                session_id=event.session_id,
+                instance_id=event.instance_id,
+                role_id=event.role_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.followup.injection_event_publish_failed",
+                    message="Failed to publish follow-up injection event",
+                    payload={
+                        "event_type": event.event_type.value,
+                        "error": str(exc),
+                    },
+                    exc_info=exc,
+                )

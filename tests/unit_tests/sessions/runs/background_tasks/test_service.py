@@ -30,8 +30,13 @@ from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_result_payload,
 )
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
-from relay_teams.sessions.runs.enums import ExecutionMode
-from relay_teams.sessions.runs.run_models import IntentInput, RunThinkingConfig
+from relay_teams.sessions.runs.enums import ExecutionMode, RunEventType
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.run_models import (
+    IntentInput,
+    RunEvent,
+    RunThinkingConfig,
+)
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
@@ -164,6 +169,28 @@ class _CapturingCompletionSink:
         self.calls: list[tuple[BackgroundTaskRecord, str]] = []
 
     def handle_background_task_completion(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        message: str,
+    ) -> None:
+        self.calls.append((record, message))
+
+
+class _AsyncCapturingCompletionSink:
+    def __init__(self) -> None:
+        self.calls: list[tuple[BackgroundTaskRecord, str]] = []
+
+    def handle_background_task_completion(
+        self,
+        *,
+        record: BackgroundTaskRecord,
+        message: str,
+    ) -> None:
+        _ = (record, message)
+        raise AssertionError("sync completion sink must not be used")
+
+    async def handle_background_task_completion_async(
         self,
         *,
         record: BackgroundTaskRecord,
@@ -313,6 +340,67 @@ class _FakeRunControlManager:
         return run_id in self._stopped_run_ids
 
 
+class _LoopGuardRunEventHub:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def publish(self, event: RunEvent) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self.events.append(event)
+            return
+        raise AssertionError("sync publish must not run on the event loop")
+
+    async def publish_async(self, event: RunEvent) -> None:
+        self.events.append(event)
+
+
+class _FailingStartRunEventHub(_LoopGuardRunEventHub):
+    def publish(self, event: RunEvent) -> None:
+        if event.event_type == RunEventType.BACKGROUND_TASK_STARTED:
+            raise RuntimeError("start publish failed")
+        super().publish(event)
+
+
+class _LoopGuardRunRuntimeRepository:
+    def __init__(self, wrapped: RunRuntimeRepository) -> None:
+        self._wrapped = wrapped
+
+    def ensure(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        root_task_id: str | None = None,
+        status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
+        phase: RunRuntimePhase = RunRuntimePhase.IDLE,
+    ) -> object:
+        self._raise_if_running_on_event_loop()
+        return self._wrapped.ensure(
+            run_id=run_id,
+            session_id=session_id,
+            root_task_id=root_task_id,
+            status=status,
+            phase=phase,
+        )
+
+    def get(self, run_id: str) -> object | None:
+        self._raise_if_running_on_event_loop()
+        return self._wrapped.get(run_id)
+
+    def update(self, run_id: str, **changes: object) -> object:
+        self._raise_if_running_on_event_loop()
+        return self._wrapped.update(run_id, **changes)
+
+    def _raise_if_running_on_event_loop(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        raise AssertionError("run runtime repository must not run on the event loop")
+
+
 class _CapturingHookService:
     def __init__(self) -> None:
         self.executed_events: list[str] = []
@@ -415,6 +503,46 @@ async def test_background_task_service_notifies_sink_and_persists_completion_mar
             include_task_id=True,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_uses_async_completion_sink(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-async-sink.db")
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    sink = _AsyncCapturingCompletionSink()
+    service.bind_completion_sink(sink)
+    record = repo.upsert(_build_record(recent_output=("async done",)))
+
+    assert manager._listener is not None
+    await manager._listener(record)
+
+    persisted = repo.get(record.background_task_id)
+    assert persisted is not None
+    assert persisted.completion_notified_at is not None
+    assert len(sink.calls) == 1
+    assert sink.calls[0][0] == record
+    assert "async done" in sink.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_treats_missing_completion_as_delivered(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-service-missing.db")
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+    )
+
+    delivered = await service._attempt_completion_delivery_async("missing-task")
+
+    assert delivered is True
 
 
 @pytest.mark.asyncio
@@ -760,6 +888,111 @@ async def test_background_task_service_start_subagent_completes_and_persists_res
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.COMPLETED
     assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_start_subagent_publishes_start_event_async(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-subagent-events.db")
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    run_event_hub = _LoopGuardRunEventHub()
+    run_runtime_repo = _LoopGuardRunRuntimeRepository(
+        RunRuntimeRepository(tmp_path / "background-task-subagent-events.db")
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        run_event_hub=cast(RunEventHub, run_event_hub),
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=cast(RunRuntimeRepository, run_runtime_repo),
+    )
+
+    started = await service.start_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        tool_call_id="call-1",
+        workspace_id="workspace-1",
+        cwd=Path("C:/workspace"),
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+    _, completed = await service.wait_for_run(
+        run_id="run-1",
+        background_task_id=started.background_task_id,
+    )
+
+    assert completed is True
+    assert [event.event_type for event in run_event_hub.events] == [
+        RunEventType.BACKGROUND_TASK_STARTED,
+        RunEventType.BACKGROUND_TASK_COMPLETED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_start_subagent_cleans_up_when_start_event_fails(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-subagent-start-event-failure.db"
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    run_control_manager = _FakeRunControlManager()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        run_event_hub=cast(RunEventHub, _FailingStartRunEventHub()),
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=run_control_manager,
+    )
+
+    with pytest.raises(RuntimeError, match="start publish failed"):
+        await service.start_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="MainAgent",
+            tool_call_id="call-1",
+            workspace_id="workspace-1",
+            cwd=Path("C:/workspace"),
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+
+    records = repo.list_by_run("run-1")
+    assert len(records) == 1
+    subagent_run_id = records[0].subagent_run_id
+    assert subagent_run_id is not None
+    assert records[0].status == BackgroundTaskStatus.FAILED
+    assert records[0].output_excerpt == "Task cancelled"
+    assert executor.calls == []
+    assert run_control_manager.registered_run_ids == [
+        subagent_run_id,
+    ]
+    assert run_control_manager.unregistered_run_ids == [
+        subagent_run_id,
+    ]
 
 
 @pytest.mark.asyncio
