@@ -67,6 +67,23 @@ def build_coordination_agent(
             consumer="agents.execution.coordination_agent_builder",
         )
         for server_name in resolved_mcp_servers:
+            is_runtime_failed = getattr(
+                mcp_registry,
+                "is_server_runtime_failed",
+                None,
+            )
+            if callable(is_runtime_failed) and is_runtime_failed(server_name):
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.mcp_toolset.skip_failed",
+                    message=(
+                        "Skipping MCP server previously marked as failed while "
+                        "building coordination agent"
+                    ),
+                    payload={"server_name": server_name},
+                )
+                continue
             try:
                 toolsets.extend(mcp_registry.get_toolsets((server_name,)))
             except Exception as exc:

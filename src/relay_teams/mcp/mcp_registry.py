@@ -44,6 +44,7 @@ class McpRegistry:
     def __init__(self, specs: tuple[McpServerSpec, ...] = ()) -> None:
         self._specs = {spec.name: spec for spec in specs}
         self._toolsets: dict[str, MCPServer] = {}
+        self._runtime_failed_names: set[str] = set()
 
     def get_toolsets(self, names: tuple[str, ...]) -> tuple[MCPServer, ...]:
         with trace_span(
@@ -55,6 +56,8 @@ class McpRegistry:
             resolved_names = self.resolve_server_names(names)
             toolsets: list[MCPServer] = []
             for name in resolved_names:
+                if self.is_server_runtime_failed(name):
+                    continue
                 toolsets.append(self._get_or_create_toolset(name))
             return tuple(toolsets)
 
@@ -126,6 +129,17 @@ class McpRegistry:
     def list_enabled_names(self) -> tuple[str, ...]:
         return tuple(name for name in self.list_names() if self._specs[name].enabled)
 
+    def is_server_runtime_failed(self, name: str) -> bool:
+        return name.strip() in self._runtime_failed_names
+
+    def mark_server_runtime_failed(self, name: str) -> None:
+        normalized_name = name.strip()
+        if normalized_name:
+            self._runtime_failed_names.add(normalized_name)
+
+    def mark_server_runtime_available(self, name: str) -> None:
+        self._runtime_failed_names.discard(name.strip())
+
     def list_specs(self) -> tuple[McpServerSpec, ...]:
         return tuple(self._specs[name] for name in self.list_names())
 
@@ -177,9 +191,14 @@ class McpRegistry:
             )
 
     async def _list_tool_objects(self, name: str) -> tuple[_ListedMcpTool, ...]:
-        toolset = self._get_or_create_toolset(name)
-        async with toolset:
-            mcp_tools = await toolset.list_tools()
+        try:
+            toolset = self._get_or_create_toolset(name)
+            async with toolset:
+                mcp_tools = await toolset.list_tools()
+        except Exception:
+            self.mark_server_runtime_failed(name)
+            raise
+        self.mark_server_runtime_available(name)
         return cast("tuple[_ListedMcpTool, ...]", tuple(mcp_tools))
 
     def _get_or_create_toolset(self, name: str) -> MCPServer:

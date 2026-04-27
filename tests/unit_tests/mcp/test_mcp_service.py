@@ -244,6 +244,22 @@ class _FakeListedTool:
         self.inputSchema = input_schema
 
 
+class _FailingAsyncToolset:
+    async def __aenter__(self) -> "_FailingAsyncToolset":
+        raise RuntimeError("MCP startup failed")
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> None:
+        _ = exc_type, exc, tb
+
+    async def list_tools(self) -> tuple[_FakeListedTool, ...]:
+        return ()
+
+
 @pytest.mark.asyncio
 async def test_registry_list_tools_prefixes_server_name(monkeypatch) -> None:
     registry = McpRegistry(
@@ -284,6 +300,33 @@ async def test_registry_list_tools_prefixes_server_name(monkeypatch) -> None:
         "filesystem_read_file",
         "filesystem_write_file",
     ]
+
+
+@pytest.mark.asyncio
+async def test_registry_marks_mcp_server_failed_after_background_load_error(
+    monkeypatch,
+) -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="broken",
+                config={"mcpServers": {"broken": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.build_mcp_server",
+        lambda _spec: _FailingAsyncToolset(),
+    )
+
+    with pytest.raises(RuntimeError, match="MCP startup failed"):
+        await registry.list_tool_schemas("broken")
+
+    assert registry.is_server_runtime_failed("broken") is True
+    assert registry.get_toolsets(("broken",)) == ()
 
 
 def test_build_mcp_server_uses_longer_default_stdio_timeout() -> None:
