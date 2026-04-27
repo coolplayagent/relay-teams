@@ -143,6 +143,8 @@ export {
     updateTrigger,
     updateWeChatGatewayAccount,
     updateXiaolubanGatewayAccount,
+    updateXiaolubanGatewayImConfig,
+    fetchXiaolubanGatewayImForwardingCommand,
     validateRoleConfig,
     waitWeChatGatewayLogin,
     fetchRunTokenUsage,

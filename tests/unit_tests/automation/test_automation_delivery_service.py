@@ -25,6 +25,7 @@ from relay_teams.automation.automation_models import (
     AutomationXiaolubanBinding,
 )
 from relay_teams.gateway.feishu.models import FeishuEnvironment
+from relay_teams.gateway.xiaoluban import format_xiaoluban_notification_text
 from relay_teams.media import content_parts_from_text
 from relay_teams.notifications import NotificationContext, NotificationType
 from relay_teams.sessions.runs.enums import RunEventType
@@ -150,15 +151,24 @@ class _FakeXiaolubanGatewayService:
         self.sent_messages: list[dict[str, object]] = []
         self.fail_send_key_error = False
 
-    def send_text_message(
+    def send_notification_message(
         self,
         *,
         account_id: str,
-        text: str,
+        workspace_id: str,
+        session_id: str,
+        status: str,
+        body: str,
         receiver_uid: str | None = None,
     ) -> str:
         if self.fail_send_key_error:
             raise KeyError(f"Unknown Xiaoluban account_id: {account_id}")
+        text = format_xiaoluban_notification_text(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            status=status,
+            body=body,
+        )
         self.sent_messages.append(
             {
                 "account_id": account_id,

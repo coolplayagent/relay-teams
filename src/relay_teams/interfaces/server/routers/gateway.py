@@ -17,12 +17,17 @@ from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.gateway.xiaoluban import (
     XiaolubanAccountCreateInput,
     XiaolubanAccountRecord,
+    XiaolubanAccountStatus,
     XiaolubanAccountUpdateInput,
     XiaolubanGatewayService,
+    XiaolubanImConfigUpdateInput,
+    XiaolubanImForwardingCommandResponse,
+    XiaolubanImListenerService,
 )
 from relay_teams.interfaces.server.deps import (
     get_wechat_gateway_service,
     get_xiaoluban_gateway_service,
+    get_xiaoluban_im_listener_service,
 )
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest
@@ -70,6 +75,60 @@ async def update_xiaoluban_account(
         raise http_exception_for(
             exc,
             mappings=((ValueError, 422),),
+        ) from exc
+
+
+@router.patch(
+    "/xiaoluban/accounts/{account_id}/im",
+    response_model=XiaolubanAccountRecord,
+)
+async def update_xiaoluban_im_config(
+    account_id: RequiredIdentifierStr,
+    req: XiaolubanImConfigUpdateInput,
+    service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
+) -> XiaolubanAccountRecord:
+    try:
+        return await call_maybe_async(service.update_im_config, account_id, req)
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
+
+
+@router.get(
+    "/xiaoluban/accounts/{account_id}/im:forwarding-command",
+    response_model=XiaolubanImForwardingCommandResponse,
+)
+async def get_xiaoluban_im_forwarding_command(
+    account_id: RequiredIdentifierStr,
+    service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
+    listener_service: Annotated[
+        XiaolubanImListenerService,
+        Depends(get_xiaoluban_im_listener_service),
+    ],
+) -> XiaolubanImForwardingCommandResponse:
+    try:
+        account = await call_maybe_async(service.get_account, account_id)
+        if account.status != XiaolubanAccountStatus.ENABLED:
+            raise ValueError("xiaoluban_account_disabled")
+        if not account.im_config.workspace_id:
+            raise ValueError("xiaoluban_im_workspace_missing")
+        await call_maybe_async(
+            service.validate_im_workspace, account.im_config.workspace_id
+        )
+        _ = await call_maybe_async(service.get_im_callback_auth_token, account_id)
+        forwarding_url = listener_service.callback_url(account_id=account_id)
+        return XiaolubanImForwardingCommandResponse(
+            account_id=account_id,
+            forwarding_url=forwarding_url,
+            forwarding_command=f"{forwarding_url} g",
+            listener_running=listener_service.is_running(),
+        )
+    except (KeyError, RuntimeError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422), (RuntimeError, 409)),
         ) from exc
 
 

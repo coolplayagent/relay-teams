@@ -51,6 +51,7 @@ relay-teams = "relay_teams.interfaces.cli.app:main"
 relay-teams-evals = "relay_teams_evals.run:app"
 
 [tool.pytest.ini_options]
+addopts = "--basetemp=.pytest-tmp"
 testpaths = ["tests/unit_tests", "tests/integration_tests"]
 pythonpath = ["src", "tests", "."]
 markers = [

@@ -9,6 +9,7 @@ import httpx
 
 from relay_teams.gateway.xiaoluban.models import (
     DEFAULT_XIAOLUBAN_BASE_URL,
+    XiaolubanKeepAliveRequest,
     XiaolubanSendTextRequest,
     XiaolubanSendTextResponse,
 )
@@ -47,12 +48,65 @@ class XiaolubanClient:
             raise RuntimeError(f"Xiaoluban API request failed: {exc}") from exc
         return _parse_send_response(response)
 
+    def keep_alive(
+        self,
+        *,
+        uid: str,
+        session_id: str,
+        auth_token: str,
+        base_url: str = DEFAULT_XIAOLUBAN_BASE_URL,
+        save_info: str = "",
+        timeout_minutes: int = 1440,
+    ) -> None:
+        request = XiaolubanKeepAliveRequest(
+            uid=uid,
+            session_id=session_id,
+            save_info=save_info,
+            minute=timeout_minutes,
+            auth=auth_token,
+        )
+        _ = self._post_util_route(
+            base_url=base_url,
+            route="keep_alive",
+            payload_json=request.model_dump_json(),
+        )
+
+    def _post_util_route(
+        self,
+        *,
+        base_url: str,
+        route: str,
+        payload_json: str,
+    ) -> httpx.Response:
+        try:
+            with create_sync_http_client(
+                timeout_seconds=self._timeout_seconds
+            ) as client:
+                response = client.post(
+                    _build_util_url(base_url, route),
+                    content=payload_json.encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                )
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"Xiaoluban API request failed: {exc}") from exc
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip() or str(exc)
+            raise RuntimeError(f"Xiaoluban util API request failed: {detail}") from exc
+        return response
+
 
 def _normalize_base_url(base_url: str) -> str:
     normalized = base_url.strip()
     if not normalized:
         return DEFAULT_XIAOLUBAN_BASE_URL
     return normalized
+
+
+def _build_util_url(base_url: str, route: str) -> str:
+    normalized = _normalize_base_url(base_url).rstrip("/")
+    return f"{normalized}/y/msg/util/{route.strip('/')}"
 
 
 def _parse_send_response(response: httpx.Response) -> XiaolubanSendTextResponse:

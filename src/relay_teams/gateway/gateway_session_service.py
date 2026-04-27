@@ -22,7 +22,7 @@ from relay_teams.gateway.gateway_session_model_profile_store import (
 )
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from relay_teams.sessions.session_service import SessionService
-from relay_teams.sessions.session_models import SessionMode
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.workspace import WorkspaceService
 
 
@@ -117,7 +117,7 @@ class GatewaySessionService:
         normalized_capabilities = capabilities or {}
         normalized_channel_state = channel_state or {}
         if existing is None:
-            internal_session = self._session_service.create_session(
+            internal_session = self._create_internal_session(
                 workspace_id=workspace_id,
                 metadata=metadata,
                 session_mode=session_mode,
@@ -139,8 +139,34 @@ class GatewaySessionService:
             )
             return self._repository.create(record)
 
+        internal_session_id = existing.internal_session_id
+        active_run_id = existing.active_run_id
+        try:
+            _ = self._session_service.get_session(existing.internal_session_id)
+        except KeyError:
+            previous_profile = self._session_model_profile_store.get(
+                existing.internal_session_id
+            )
+            internal_session = self._create_internal_session(
+                workspace_id=workspace_id,
+                metadata=metadata,
+                session_mode=session_mode,
+                normal_root_role_id=normal_root_role_id,
+                orchestration_preset_id=orchestration_preset_id,
+            )
+            self._session_model_profile_store.delete(existing.internal_session_id)
+            internal_session_id = internal_session.session_id
+            if previous_profile is not None:
+                self._session_model_profile_store.set(
+                    internal_session_id,
+                    previous_profile,
+                )
+            active_run_id = None
+
         updated = existing.model_copy(
             update={
+                "internal_session_id": internal_session_id,
+                "active_run_id": active_run_id,
                 "peer_user_id": peer_user_id or existing.peer_user_id,
                 "peer_chat_id": peer_chat_id or existing.peer_chat_id,
                 "cwd": cwd if cwd is not None else existing.cwd,
@@ -153,6 +179,23 @@ class GatewaySessionService:
             }
         )
         return self._repository.update(updated)
+
+    def _create_internal_session(
+        self,
+        *,
+        workspace_id: str,
+        metadata: dict[str, str] | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
+    ) -> SessionRecord:
+        return self._session_service.create_session(
+            workspace_id=workspace_id,
+            metadata=metadata,
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
 
     def rebind_session_cwd(
         self,

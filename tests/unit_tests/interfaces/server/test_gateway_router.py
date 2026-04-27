@@ -11,11 +11,14 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanAccountRecord,
     XiaolubanAccountStatus,
     XiaolubanAccountUpdateInput,
+    XiaolubanImConfigUpdateInput,
+    XiaolubanInboundMessage,
     XiaolubanSecretStatus,
 )
 from relay_teams.interfaces.server.deps import (
     get_wechat_gateway_service,
     get_xiaoluban_gateway_service,
+    get_xiaoluban_im_listener_service,
 )
 from relay_teams.interfaces.server.routers import gateway
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
@@ -124,6 +127,8 @@ class _FakeXiaolubanGatewayService:
     def __init__(self) -> None:
         self.created_payloads: list[XiaolubanAccountCreateInput] = []
         self.updated_payloads: list[tuple[str, XiaolubanAccountUpdateInput]] = []
+        self.updated_im_payloads: list[tuple[str, XiaolubanImConfigUpdateInput]] = []
+        self.inbound_messages: list[tuple[str, XiaolubanInboundMessage]] = []
         self.deleted_account_ids: list[tuple[str, bool]] = []
 
     def list_accounts(self) -> tuple[XiaolubanAccountRecord, ...]:
@@ -148,6 +153,32 @@ class _FakeXiaolubanGatewayService:
                 "display_name": req.display_name or self._record().display_name,
             }
         )
+
+    def update_im_config(
+        self,
+        account_id: str,
+        req: XiaolubanImConfigUpdateInput,
+    ) -> XiaolubanAccountRecord:
+        self.updated_im_payloads.append((account_id, req))
+        return self._record().model_copy(update={"account_id": account_id})
+
+    def handle_im_inbound(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+    ) -> None:
+        self.inbound_messages.append((account_id, message))
+
+    def get_account(self, account_id: str) -> XiaolubanAccountRecord:
+        return self._record().model_copy(update={"account_id": account_id})
+
+    def get_im_callback_auth_token(self, account_id: str) -> str:
+        del account_id
+        return "secret-token"
+
+    def validate_im_workspace(self, workspace_id: str) -> None:
+        del workspace_id
 
     def set_account_enabled(
         self,
@@ -174,20 +205,48 @@ class _FakeXiaolubanGatewayService:
 
     @staticmethod
     def _record() -> XiaolubanAccountRecord:
+        from relay_teams.gateway.xiaoluban.models import XiaolubanImConfig
+
         return XiaolubanAccountRecord(
             account_id="xlb_123",
             display_name="小鲁班主账号",
             status=XiaolubanAccountStatus.ENABLED,
             derived_uid="uid_self",
             secret_status=XiaolubanSecretStatus(token_configured=True),
+            im_config=XiaolubanImConfig(workspace_id="workspace-1"),
             created_at=datetime(2026, 4, 22, 1, 0, tzinfo=UTC),
             updated_at=datetime(2026, 4, 22, 1, 0, tzinfo=UTC),
+        )
+
+
+class _FakeXiaolubanImListenerService:
+    def __init__(
+        self,
+        *,
+        running: bool = True,
+        callback_host: str = "10.88.1.23",
+        callback_port: int = 9009,
+    ) -> None:
+        self._running = running
+        self._callback_host = callback_host
+        self._callback_port = callback_port
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def callback_url(self, *, account_id: str) -> str:
+        return (
+            f"http://{self._callback_host}:{self._callback_port}/{account_id}"
+            "?auth=secret-token"
         )
 
 
 def _client(
     fake_service: _FakeWeChatGatewayService,
     fake_xiaoluban_service: _FakeXiaolubanGatewayService | None = None,
+    *,
+    base_url: str = "http://testserver",
+    xiaoluban_im_listener: _FakeXiaolubanImListenerService | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(gateway.router, prefix="/api")
@@ -195,7 +254,10 @@ def _client(
     app.dependency_overrides[get_xiaoluban_gateway_service] = lambda: (
         fake_xiaoluban_service or _FakeXiaolubanGatewayService()
     )
-    return TestClient(app)
+    app.dependency_overrides[get_xiaoluban_im_listener_service] = lambda: (
+        xiaoluban_im_listener or _FakeXiaolubanImListenerService()
+    )
+    return TestClient(app, base_url=base_url)
 
 
 def test_list_wechat_accounts_route_returns_accounts() -> None:
@@ -373,6 +435,120 @@ def test_delete_xiaoluban_account_route_forwards_force_flag() -> None:
     assert fake_xiaoluban_service.deleted_account_ids == [("enabled", True)]
 
 
+def test_xiaoluban_im_config_route_updates_settings() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.patch(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im",
+        json={
+            "workspace_id": "workspace-1",
+        },
+    )
+
+    assert response.status_code == 200
+    account_id, payload = fake_xiaoluban_service.updated_im_payloads[0]
+    assert account_id == "xlb_123"
+    assert payload.workspace_id == "workspace-1"
+
+
+def test_xiaoluban_im_forwarding_command_route_uses_listener_url() -> None:
+    client = _client(
+        _FakeWeChatGatewayService(),
+        _FakeXiaolubanGatewayService(),
+        base_url="http://relay.test",
+    )
+
+    response = client.get(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im:forwarding-command"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "xlb_123",
+        "forwarding_url": "http://10.88.1.23:9009/xlb_123?auth=secret-token",
+        "forwarding_command": "http://10.88.1.23:9009/xlb_123?auth=secret-token g",
+        "listener_running": True,
+    }
+
+
+def test_xiaoluban_im_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
+    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    requests = [
+        client.patch(
+            "/api/gateway/xiaoluban/accounts/xlb_123/im",
+            json={"workspace_id": "workspace-1"},
+        ),
+        client.get("/api/gateway/xiaoluban/accounts/xlb_123/im:forwarding-command"),
+    ]
+
+    assert [response.status_code for response in requests] == [200, 200]
+    assert [call[0] for call in calls] == [
+        "update_im_config",
+        "get_account",
+        "validate_im_workspace",
+        "get_im_callback_auth_token",
+    ]
+    assert fake_xiaoluban_service.updated_im_payloads[0][0] == "xlb_123"
+    assert (
+        fake_xiaoluban_service.updated_im_payloads[0][1].workspace_id == "workspace-1"
+    )
+
+
+def test_xiaoluban_im_forwarding_command_reports_stopped_listener() -> None:
+    client = _client(
+        _FakeWeChatGatewayService(),
+        _FakeXiaolubanGatewayService(),
+        xiaoluban_im_listener=_FakeXiaolubanImListenerService(running=False),
+    )
+
+    response = client.get(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im:forwarding-command"
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["forwarding_command"]
+        == "http://10.88.1.23:9009/xlb_123?auth=secret-token g"
+    )
+    assert response.json()["listener_running"] is False
+
+
+def test_xiaoluban_im_forwarding_command_route_uses_configured_listener_port() -> None:
+    client = _client(
+        _FakeWeChatGatewayService(),
+        _FakeXiaolubanGatewayService(),
+        xiaoluban_im_listener=_FakeXiaolubanImListenerService(
+            callback_host="10.88.1.23",
+            callback_port=8091,
+        ),
+    )
+
+    response = client.get(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im:forwarding-command"
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["forwarding_url"]
+        == "http://10.88.1.23:8091/xlb_123?auth=secret-token"
+    )
+
+
 def test_xiaoluban_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
@@ -471,3 +647,69 @@ def test_update_wechat_account_route_rejects_none_like_path_identifier() -> None
 
     assert response.status_code == 422
     assert fake_service.updated_payloads == []
+
+
+def test_update_xiaoluban_im_config_route_maps_valueerror_to_422() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    original_update = fake_xiaoluban_service.update_im_config
+    fake_xiaoluban_service.update_im_config = lambda account_id, req: (
+        _ for _ in ()
+    ).throw(ValueError("workspace_id is required for Xiaoluban IM"))
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.patch(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im",
+        json={"workspace_id": ""},
+    )
+
+    assert response.status_code == 422
+    fake_xiaoluban_service.update_im_config = original_update
+
+
+def test_xiaoluban_im_forwarding_command_route_maps_keyerror_to_404() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    original_get = fake_xiaoluban_service.get_account
+    fake_xiaoluban_service.get_account = lambda account_id: (_ for _ in ()).throw(
+        KeyError("Unknown")
+    )
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.get(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im:forwarding-command"
+    )
+
+    assert response.status_code == 404
+    fake_xiaoluban_service.get_account = original_get
+
+
+def test_xiaoluban_im_forwarding_command_route_maps_runtimeerror_to_409() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    original_get = fake_xiaoluban_service.get_account
+    fake_xiaoluban_service.get_account = lambda account_id: (_ for _ in ()).throw(
+        RuntimeError("listener_host_unavailable")
+    )
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.get(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im:forwarding-command"
+    )
+
+    assert response.status_code == 409
+    fake_xiaoluban_service.get_account = original_get
+
+
+def test_update_xiaoluban_im_config_route_maps_keyerror_to_404() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    original_update = fake_xiaoluban_service.update_im_config
+    fake_xiaoluban_service.update_im_config = lambda account_id, req: (
+        _ for _ in ()
+    ).throw(KeyError("Unknown"))
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.patch(
+        "/api/gateway/xiaoluban/accounts/xlb_123/im",
+        json={"workspace_id": "workspace-1"},
+    )
+
+    assert response.status_code == 404
+    fake_xiaoluban_service.update_im_config = original_update

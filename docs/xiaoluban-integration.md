@@ -2,7 +2,8 @@
 
 ## Scope
 
-Agent Teams now supports Xiaoluban as an outbound automation delivery provider.
+Agent Teams supports Xiaoluban as an outbound automation delivery provider and as a
+minimal inbound IM task entry point.
 
 Current scope:
 
@@ -12,13 +13,16 @@ Current scope:
 - automation `started`, `completed`, and `failed` notifications
 - delivery to the account owner's derived UID or a configured Xiaoluban receiver/group ID
 - workspace-scoped run completion notifications from selected workspaces
+- Xiaoluban IM forwarding for the current token owner
+- inbound WeLink messages forwarded through Xiaoluban's manual forwarding mode
+- Xiaoluban-triggered Relay task execution with a final-result reply
 
 Current non-goals for this phase:
 
-- inbound Xiaoluban conversations
-- Xiaoluban session creation or bound-session reuse
-- Xiaoluban-triggered task execution
 - Xiaoluban tool execution or plugin orchestration
+- group, department, or collaborator whitelist editing
+- intermediate progress pushes
+- Xiaoluban plugin script publishing
 
 ## Account Model
 
@@ -31,6 +35,7 @@ Each Xiaoluban account stores:
 - `derived_uid`
 - `notification_workspace_ids`
 - `notification_receiver`
+- `im_config.workspace_id`
 - `created_at`
 - `updated_at`
 - `secret_status.token_configured`
@@ -65,6 +70,7 @@ The Xiaoluban section supports:
 - edit account display name / token
 - choose workspaces that should send run completion notifications
 - set an optional notification recipient/group ID
+- set the required Xiaoluban IM workspace from the account create/edit dialog
 - enable or disable account
 - delete account
 
@@ -74,10 +80,36 @@ The UI only asks for:
 - personal token, which can be obtained by sending `获取发送token` to Xiaoluban in WeLink
 - notification workspaces, defaulting to none selected
 - optional notification recipient/group ID
+- IM workspace, required for inbound IM-triggered tasks
 
 The delivery endpoint is fixed to `http://xiaoluban.rnd.huawei.com:80/` and is not exposed for editing in the UI.
 
 Editing an existing account allows leaving the token field empty to keep the current stored token.
+Saving the account form persists the Xiaoluban account and IM settings in one request. The UI shows the Xiaoluban forwarding command the user must send manually in WeLink.
+
+### Xiaoluban IM Forwarding
+
+The IM settings are separate from notification delivery settings.
+
+The first version exposes:
+
+- IM workspace, required for inbound IM-triggered tasks
+- read-only forwarding command, for example `http://10.88.1.23:9009/{account_id}?auth=... g`
+
+Forwarding uses the dedicated Xiaoluban IM listener, not the main Relay Teams
+web port. The listener binds to `0.0.0.0:9009` by default and generates a
+forwarding URL with the machine's detected local IPv4 address and a per-account
+auth token, for example `http://10.88.1.23:9009/{account_id}?auth=...`. The user sends
+`http://10.88.1.23:9009/{account_id}?auth=... g` to Xiaoluban in WeLink to enter
+message forwarding mode, and sends `q` to exit that mode. The default
+`relay-teams server start` command remains loopback-only for the main web UI and
+still shows `http://127.0.0.1:8000`.
+
+The listener can be adjusted with:
+
+- `RELAY_TEAMS_XIAOLUBAN_IM_LISTENER_HOST`
+- `RELAY_TEAMS_XIAOLUBAN_IM_LISTENER_PORT`
+- `RELAY_TEAMS_XIAOLUBAN_IM_PUBLIC_HOST`
 
 ### Automation Binding
 
@@ -93,18 +125,21 @@ For Xiaoluban candidates:
 
 ## Delivery Semantics
 
-Xiaoluban automation delivery is handled by the shared automation delivery dispatcher.
+Xiaoluban outbound messages are sent through the gateway service
+`send_notification_message` path. That method is the single formatting and
+send entry point for workspace notifications, automation delivery, and inbound
+IM replies.
 
 Provider behavior in this phase:
 
 - `supports_bound_session_reuse = false`
 - notifications are sent to the account's `notification_receiver` when configured, otherwise to `derived_uid`
-- no inbound session is created or reused
+- automation delivery bindings do not require or reuse an IM session
 - Xiaoluban notification bodies are prefixed through the shared Xiaoluban formatter:
 
 ```text
 【relay-teams】
-session: <session_id>
+<session_id>
 ────────────────────
 <message body>
 ```
@@ -121,6 +156,35 @@ Workspace completion behavior:
 - when a normal run completes, the Xiaoluban notification dispatcher checks the session's `workspace_id`
 - matching enabled accounts with usable credentials receive the run completion body
 - automation-owned terminal notifications are suppressed from the workspace dispatcher to avoid duplicate Xiaoluban messages
+- IM-triggered run terminal notifications are also suppressed from the workspace dispatcher because the IM path sends the final reply itself
+
+## Inbound IM Semantics
+
+Xiaoluban calls the dedicated IM listener callback at:
+
+```text
+POST http://{detected-local-ip}:9009/{account_id}?auth=...
+```
+
+The route returns immediately with:
+
+```json
+{"message":"Forwarding received"}
+```
+
+Processing continues in the background:
+
+- the account must exist and be enabled
+- the request must include the account-specific auth token in the callback URL
+- the IM workspace must exist
+- the stored personal token is reused for Xiaoluban replies
+- `keep_alive` is attempted when a Xiaoluban `session_id` is present
+- empty content sends a short usage hint through the shared Xiaoluban notification formatter
+- gateway sessions use the Xiaoluban channel and an external key of `xiaoluban:{account_id}:{session_id}` when a session id is present
+- if no `session_id` is present, the key falls back to `xiaoluban:{account_id}:{sender}:{receiver}`
+- busy sessions are rejected with a short "try again later" message through the shared Xiaoluban notification formatter
+- the task runs through the shared gateway session ingress path
+- only the terminal result is sent back to Xiaoluban through the shared Xiaoluban notification formatter
 
 ## APIs
 
@@ -129,6 +193,8 @@ Gateway APIs:
 - `GET /api/gateway/xiaoluban/accounts`
 - `POST /api/gateway/xiaoluban/accounts`
 - `PATCH /api/gateway/xiaoluban/accounts/{account_id}`
+- `PATCH /api/gateway/xiaoluban/accounts/{account_id}/im`
+- `GET /api/gateway/xiaoluban/accounts/{account_id}/im:forwarding-command`
 - `POST /api/gateway/xiaoluban/accounts/{account_id}:enable`
 - `POST /api/gateway/xiaoluban/accounts/{account_id}:disable`
 - `DELETE /api/gateway/xiaoluban/accounts/{account_id}`

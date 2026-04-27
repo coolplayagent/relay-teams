@@ -12,6 +12,7 @@ from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 class GatewayChannelType(str, Enum):
     ACP_STDIO = "acp_stdio"
     WECHAT = "wechat"
+    XIAOLUBAN = "xiaoluban"
 
 
 class GatewayMcpConnectionStatus(str, Enum):

@@ -22,7 +22,10 @@ from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
 from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
 from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
 from relay_teams.gateway.wechat.service import WeChatGatewayService
-from relay_teams.gateway.xiaoluban import XiaolubanGatewayService
+from relay_teams.gateway.xiaoluban import (
+    XiaolubanGatewayService,
+    XiaolubanImListenerService,
+)
 from relay_teams.hooks import HookService
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
 from relay_teams.interfaces.server.container import ServerContainer
@@ -233,6 +236,12 @@ def get_wechat_gateway_service(request: Request) -> WeChatGatewayService:
 
 def get_xiaoluban_gateway_service(request: Request) -> XiaolubanGatewayService:
     return get_container(request).xiaoluban_gateway_service
+
+
+def get_xiaoluban_im_listener_service(
+    request: Request,
+) -> XiaolubanImListenerService:
+    return get_container(request).xiaoluban_im_listener_service
 
 
 def get_github_trigger_service(request: Request) -> GitHubTriggerService:

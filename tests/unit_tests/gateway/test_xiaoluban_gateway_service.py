@@ -347,6 +347,31 @@ def test_send_text_message_uses_explicit_receiver_uid(tmp_path: Path) -> None:
     assert client.calls[0]["receiver_uid"] == "override_uid"
 
 
+def test_send_notification_message_formats_text_once(tmp_path: Path) -> None:
+    service, _secret_store, client = _build_service(tmp_path)
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+        )
+    )
+
+    message_id = service.send_notification_message(
+        account_id=created.account_id,
+        workspace_id="workspace-1",
+        session_id="session-1",
+        status="completed",
+        body="done",
+        receiver_uid="uid",
+    )
+
+    assert message_id == "xlbmsg_1"
+    assert client.calls[0]["text"] == (
+        "【relay-teams】\nsession-1\n────────────────────\ndone"
+    )
+    assert client.calls[0]["receiver_uid"] == "uid"
+
+
 def test_send_text_message_uses_configured_notification_receiver(
     tmp_path: Path,
 ) -> None:
@@ -446,6 +471,13 @@ def test_derive_uid_from_token_rejects_plugin_style_token() -> None:
         _ = derive_uid_from_token("p_badtoken")
 
 
+def test_im_config_from_json_rejects_non_dict() -> None:
+    import relay_teams.gateway.xiaoluban.account_repository as account_repo_module
+
+    with pytest.raises(ValueError, match="Invalid persisted im_config_json"):
+        account_repo_module._im_config_from_json("[]")
+
+
 def test_account_repository_skips_invalid_rows_and_raises_for_invalid_get(
     tmp_path: Path,
 ) -> None:
@@ -543,6 +575,7 @@ def test_account_repository_adds_missing_notification_columns(
     }
     assert "notification_workspace_ids_json" in columns
     assert "notification_receiver" in columns
+    assert "im_config_json" in columns
 
 
 def test_secret_store_normalizes_tokens_and_deletes_values(tmp_path: Path) -> None:
@@ -600,6 +633,44 @@ def test_client_sends_json_request_through_configured_base_url(
     }
 
 
+def test_client_keep_alive_posts_session_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "http://xlb.test/y/msg/util/keep_alive")
+    response = httpx.Response(200, text="ok", request=request)
+    fake_http_client = _FakeHttpClient(response)
+
+    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
+        assert timeout_seconds == 30.0
+        return fake_http_client
+
+    monkeypatch.setattr(
+        xiaoluban_client_module,
+        "create_sync_http_client",
+        fake_create_sync_http_client,
+    )
+
+    XiaolubanClient().keep_alive(
+        uid="uid",
+        session_id="session-1",
+        save_info="saved",
+        timeout_minutes=60,
+        auth_token="token",
+        base_url="http://xlb.test/",
+    )
+
+    assert fake_http_client.calls[0]["url"] == "http://xlb.test/y/msg/util/keep_alive"
+    content = fake_http_client.calls[0]["content"]
+    assert isinstance(content, bytes)
+    assert json.loads(content.decode("utf-8")) == {
+        "uid": "uid",
+        "session_id": "session-1",
+        "save_info": "saved",
+        "minute": 60,
+        "auth": "token",
+    }
+
+
 def test_client_wraps_transport_failures_as_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -617,6 +688,52 @@ def test_client_wraps_transport_failures_as_runtime_error(
         _ = XiaolubanClient().send_text_message(
             text="hello",
             receiver_uid="uid",
+            auth_token="token",
+        )
+
+
+def test_client_post_util_route_handles_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FailingHttpClient:
+        assert timeout_seconds == 30.0
+        return _FailingHttpClient()
+
+    monkeypatch.setattr(
+        xiaoluban_client_module,
+        "create_sync_http_client",
+        fake_create_sync_http_client,
+    )
+
+    with pytest.raises(RuntimeError, match="Xiaoluban API request failed"):
+        XiaolubanClient().keep_alive(
+            uid="uid",
+            session_id="session-1",
+            auth_token="token",
+        )
+
+
+def test_client_post_util_route_handles_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "http://xlb.test/y/msg/util/keep_alive")
+    response = httpx.Response(500, text="internal error", request=request)
+    fake_http_client = _FakeHttpClient(response)
+
+    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
+        assert timeout_seconds == 30.0
+        return fake_http_client
+
+    monkeypatch.setattr(
+        xiaoluban_client_module,
+        "create_sync_http_client",
+        fake_create_sync_http_client,
+    )
+
+    with pytest.raises(RuntimeError, match="Xiaoluban util API request failed"):
+        XiaolubanClient().keep_alive(
+            uid="uid",
+            session_id="session-1",
             auth_token="token",
         )
 

@@ -72,6 +72,26 @@ export async function updateXiaolubanGatewayAccount(accountId, payload) {
     );
 }
 
+export async function updateXiaolubanGatewayImConfig(accountId, payload) {
+    return requestJson(
+        `/api/gateway/xiaoluban/accounts/${encodeURIComponent(accountId)}/im`,
+        {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to update Xiaoluban IM settings',
+    );
+}
+
+export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
+    return requestJson(
+        `/api/gateway/xiaoluban/accounts/${encodeURIComponent(accountId)}/im:forwarding-command`,
+        undefined,
+        'Failed to fetch Xiaoluban IM forwarding command',
+    );
+}
+
 export async function enableWeChatGatewayAccount(accountId) {
     return requestJson(
         `/api/gateway/wechat/accounts/${encodeURIComponent(accountId)}:enable`,

@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from relay_teams.gateway.xiaoluban import (
+    CompositeXiaolubanTerminalNotificationSuppressor,
+    format_xiaoluban_notification_text,
     XiaolubanAccountRecord,
     XiaolubanAccountStatus,
     XiaolubanNotificationDispatcher,
@@ -41,15 +43,24 @@ class _FakeXiaolubanAccountLookup:
             for account in self._accounts
         )
 
-    def send_text_message(
+    def send_notification_message(
         self,
         *,
         account_id: str,
-        text: str,
+        workspace_id: str,
+        session_id: str,
+        status: str,
+        body: str,
         receiver_uid: str | None = None,
     ) -> str:
         if account_id in self.fail_send_account_ids:
             raise RuntimeError("send_failed")
+        text = format_xiaoluban_notification_text(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            status=status,
+            body=body,
+        )
         self.sent_messages.append(
             {
                 "account_id": account_id,
@@ -61,11 +72,35 @@ class _FakeXiaolubanAccountLookup:
 
 
 class _Suppressor:
+    def __init__(self, *, should_suppress: bool = True) -> None:
+        self._should_suppress = should_suppress
+
     def should_suppress_xiaoluban_terminal_notification(
         self, run_id: str | None
     ) -> bool:
         _ = run_id
-        return True
+        return self._should_suppress
+
+
+def test_composite_suppressor_delegates_to_all_members() -> None:
+    suppressing = _Suppressor()
+    non_suppressing = _Suppressor(should_suppress=False)
+    composite = CompositeXiaolubanTerminalNotificationSuppressor(
+        non_suppressing,
+        suppressing,
+    )
+
+    assert composite.should_suppress_xiaoluban_terminal_notification("run-1") is True
+
+
+def test_composite_suppressor_handles_none_members() -> None:
+    composite = CompositeXiaolubanTerminalNotificationSuppressor(
+        None,
+        _Suppressor(should_suppress=False),
+        None,
+    )
+
+    assert composite.should_suppress_xiaoluban_terminal_notification("run-1") is False
 
 
 def test_dispatcher_sends_completed_run_to_configured_workspace_accounts() -> None:
