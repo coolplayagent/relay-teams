@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+from .css_helpers import load_components_css
+
 DEFAULT_MOCK_API_SOURCE = """
 export async function fetchModelProfiles() {
     return {
@@ -182,6 +184,23 @@ export async function deleteModelProfile(name) {
     globalThis.__deletedProfileName = name;
 }
 """.strip()
+
+
+def test_codeagent_sso_button_uses_shared_form_control_height() -> None:
+    components_css = load_components_css()
+    rule_start = components_css.index(".codeagent-sso-login-btn {")
+    rule_end = components_css.index(".codeagent-sso-login-btn:disabled {", rule_start)
+    button_rule = components_css[rule_start:rule_end]
+    override_rule_start = components_css.index(
+        ".settings-list-action.codeagent-sso-login-btn {"
+    )
+    override_rule_end = components_css.index(
+        ".settings-list-action:hover {", override_rule_start
+    )
+    override_rule = components_css[override_rule_start:override_rule_end]
+
+    assert "min-height: 42px;" in button_rule
+    assert "min-height: 42px;" in override_rule
 
 
 def test_saving_model_profile_restores_profile_list_visibility(

@@ -2342,6 +2342,7 @@
 .codeagent-sso-login-btn {
     width: auto;
     min-width: 0;
+    min-height: 42px;
     max-width: 100%;
     white-space: nowrap;
 }
@@ -3379,6 +3380,10 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
     font-size: 0.76rem;
     font-weight: 500;
     line-height: 1.2;
+}
+
+.settings-list-action.codeagent-sso-login-btn {
+    min-height: 42px;
 }
 
 .settings-list-action:hover {
