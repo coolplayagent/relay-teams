@@ -405,6 +405,61 @@ async def test_execute_applies_timeout_when_worker_cancel_wait_expires(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(5)
+async def test_timeout_finalizer_applies_timeout_when_worker_cancel_wait_expires(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        task_execution_module,
+        "TIMEOUT_WORKER_CANCEL_GRACE_SECONDS",
+        0.01,
+    )
+    provider = _CancellationResistantProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_cancel_wait_timeout_finalizer.db",
+        provider,
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    async def _resistant_worker() -> TaskExecutionResult:
+        return TaskExecutionResult(output=await provider.generate(object()))
+
+    worker = asyncio.create_task(_resistant_worker())
+    timeout_cancellation = asyncio.Event()
+    await provider.started.wait()
+
+    try:
+        result = await service._complete_timeout_after_worker_cancel_async(
+            task=task,
+            instance_id=instance_id,
+            role_id="time",
+            timeout_seconds=0.05,
+            worker=worker,
+            timeout_cancellation=timeout_cancellation,
+        )
+    finally:
+        provider.release.set()
+
+    record = task_repo.get(task.task_id)
+    assert result.error_code == "task_timeout"
+    assert timeout_cancellation.is_set()
+    assert provider.cancelled.is_set()
+    assert record.status == TaskStatus.TIMEOUT
+    assert record.error_message is not None
+    assert "Task timed out after" in record.error_message
+    await asyncio.wait_for(provider.finished.wait(), timeout=1.0)
+    late_result = await asyncio.wait_for(worker, timeout=1.0)
+    assert late_result.output == "late"
+    await asyncio.sleep(0.01)
+    assert task_repo.get(task.task_id).status == TaskStatus.TIMEOUT
+
+
+@pytest.mark.asyncio
 async def test_timeout_finalizer_preserves_worker_result_if_cancel_returns_one(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

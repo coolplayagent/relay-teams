@@ -42,6 +42,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     role_id          TEXT,
                     tool_call_id     TEXT,
                     title            TEXT NOT NULL DEFAULT '',
+                    input_text       TEXT NOT NULL DEFAULT '',
                     command          TEXT NOT NULL,
                     cwd              TEXT NOT NULL,
                     execution_mode   TEXT NOT NULL,
@@ -57,6 +58,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     subagent_run_id TEXT,
                     subagent_task_id TEXT,
                     subagent_instance_id TEXT,
+                    subagent_suppress_hooks INTEGER NOT NULL DEFAULT 0,
                     created_at       TEXT NOT NULL,
                     updated_at       TEXT NOT NULL,
                     completed_at     TEXT,
@@ -86,6 +88,10 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 self._conn.execute(
                     "ALTER TABLE background_tasks ADD COLUMN title TEXT NOT NULL DEFAULT ''"
                 )
+            if "input_text" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN input_text TEXT NOT NULL DEFAULT ''"
+                )
             if "subagent_role_id" not in columns:
                 self._conn.execute(
                     "ALTER TABLE background_tasks ADD COLUMN subagent_role_id TEXT"
@@ -101,6 +107,10 @@ class BackgroundTaskRepository(SharedSqliteRepository):
             if "subagent_instance_id" not in columns:
                 self._conn.execute(
                     "ALTER TABLE background_tasks ADD COLUMN subagent_instance_id TEXT"
+                )
+            if "subagent_suppress_hooks" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE background_tasks ADD COLUMN subagent_suppress_hooks INTEGER NOT NULL DEFAULT 0"
                 )
             self._conn.execute(
                 """
@@ -137,6 +147,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     role_id,
                     tool_call_id,
                     title,
+                    input_text,
                     command,
                     cwd,
                     execution_mode,
@@ -152,12 +163,13 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     subagent_run_id,
                     subagent_task_id,
                     subagent_instance_id,
+                    subagent_suppress_hooks,
                     created_at,
                     updated_at,
                     completed_at,
                     completion_notified_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(background_task_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -167,6 +179,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     role_id=excluded.role_id,
                     tool_call_id=excluded.tool_call_id,
                     title=excluded.title,
+                    input_text=excluded.input_text,
                     command=excluded.command,
                     cwd=excluded.cwd,
                     execution_mode=excluded.execution_mode,
@@ -182,6 +195,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     subagent_run_id=excluded.subagent_run_id,
                     subagent_task_id=excluded.subagent_task_id,
                     subagent_instance_id=excluded.subagent_instance_id,
+                    subagent_suppress_hooks=excluded.subagent_suppress_hooks,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
                     completed_at=excluded.completed_at,
@@ -218,6 +232,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     role_id,
                     tool_call_id,
                     title,
+                    input_text,
                     command,
                     cwd,
                     execution_mode,
@@ -233,12 +248,13 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     subagent_run_id,
                     subagent_task_id,
                     subagent_instance_id,
+                    subagent_suppress_hooks,
                     created_at,
                     updated_at,
                     completed_at,
                     completion_notified_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(background_task_id)
                 DO UPDATE SET
                     run_id=excluded.run_id,
@@ -248,6 +264,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     role_id=excluded.role_id,
                     tool_call_id=excluded.tool_call_id,
                     title=excluded.title,
+                    input_text=excluded.input_text,
                     command=excluded.command,
                     cwd=excluded.cwd,
                     execution_mode=excluded.execution_mode,
@@ -263,6 +280,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     subagent_run_id=excluded.subagent_run_id,
                     subagent_task_id=excluded.subagent_task_id,
                     subagent_instance_id=excluded.subagent_instance_id,
+                    subagent_suppress_hooks=excluded.subagent_suppress_hooks,
                     created_at=excluded.created_at,
                     updated_at=excluded.updated_at,
                     completed_at=excluded.completed_at,
@@ -320,7 +338,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 SELECT *
                 FROM background_tasks
                 WHERE run_id=?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (run_id,),
             ).fetchall()
@@ -334,7 +352,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 SELECT *
                 FROM background_tasks
                 WHERE run_id=?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (run_id,),
             )
@@ -348,7 +366,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 SELECT *
                 FROM background_tasks
                 WHERE session_id=?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (session_id,),
             ).fetchall()
@@ -364,7 +382,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 SELECT *
                 FROM background_tasks
                 WHERE session_id=?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (session_id,),
             )
@@ -377,7 +395,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 """
                 SELECT *
                 FROM background_tasks
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
@@ -389,7 +407,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 """
                 SELECT *
                 FROM background_tasks
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
             )
         )
@@ -402,11 +420,14 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 SELECT *
                 FROM background_tasks
                 WHERE status IN (?, ?)
-                ORDER BY updated_at DESC, created_at DESC
+                  AND NOT (kind=? AND execution_mode=?)
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (
                     BackgroundTaskStatus.RUNNING.value,
                     BackgroundTaskStatus.BLOCKED.value,
+                    BackgroundTaskKind.SUBAGENT.value,
+                    "foreground",
                 ),
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
@@ -419,11 +440,14 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 SELECT *
                 FROM background_tasks
                 WHERE status IN (?, ?)
-                ORDER BY updated_at DESC, created_at DESC
+                  AND NOT (kind=? AND execution_mode=?)
+                ORDER BY updated_at DESC, created_at DESC, rowid DESC
                 """,
                 (
                     BackgroundTaskStatus.RUNNING.value,
                     BackgroundTaskStatus.BLOCKED.value,
+                    BackgroundTaskKind.SUBAGENT.value,
+                    "foreground",
                 ),
             )
         )
@@ -500,6 +524,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     UPDATE background_tasks
                     SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
                     WHERE status IN (?, ?)
+                      AND NOT (kind=? AND execution_mode=?)
                     """,
                     (
                         BackgroundTaskStatus.STOPPED.value,
@@ -507,6 +532,8 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                         now,
                         BackgroundTaskStatus.RUNNING.value,
                         BackgroundTaskStatus.BLOCKED.value,
+                        BackgroundTaskKind.SUBAGENT.value,
+                        "foreground",
                     ),
                 )
             else:
@@ -516,6 +543,7 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                     UPDATE background_tasks
                     SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
                     WHERE background_task_id IN ({placeholders}) AND status IN (?, ?)
+                      AND NOT (kind=? AND execution_mode=?)
                     """,
                     (
                         BackgroundTaskStatus.STOPPED.value,
@@ -524,6 +552,8 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                         *background_task_ids,
                         BackgroundTaskStatus.RUNNING.value,
                         BackgroundTaskStatus.BLOCKED.value,
+                        BackgroundTaskKind.SUBAGENT.value,
+                        "foreground",
                     ),
                 )
             affected = int(cursor.rowcount or 0)
@@ -598,6 +628,7 @@ def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
         record.role_id,
         record.tool_call_id,
         record.title,
+        record.input_text,
         record.command,
         record.cwd,
         record.execution_mode,
@@ -613,6 +644,7 @@ def _record_params(record: BackgroundTaskRecord) -> tuple[object, ...]:
         record.subagent_run_id,
         record.subagent_task_id,
         record.subagent_instance_id,
+        1 if record.subagent_suppress_hooks else 0,
         record.created_at.isoformat(),
         record.updated_at.isoformat(),
         record.completed_at.isoformat() if record.completed_at is not None else None,
@@ -642,6 +674,7 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
         role_id=normalize_persisted_text(row["role_id"]),
         tool_call_id=normalize_persisted_text(row["tool_call_id"]),
         title=str(row["title"] or ""),
+        input_text=str(row["input_text"] or ""),
         command=str(row["command"]),
         cwd=str(row["cwd"]),
         execution_mode=_decode_execution_mode(row["execution_mode"]),
@@ -657,6 +690,7 @@ def _row_to_record(row: sqlite3.Row) -> BackgroundTaskRecord:
         subagent_run_id=normalize_persisted_text(row["subagent_run_id"]),
         subagent_task_id=normalize_persisted_text(row["subagent_task_id"]),
         subagent_instance_id=normalize_persisted_text(row["subagent_instance_id"]),
+        subagent_suppress_hooks=bool(int(row["subagent_suppress_hooks"] or 0)),
         created_at=created_at,
         updated_at=updated_at,
         completed_at=parse_persisted_datetime_or_none(row["completed_at"]),

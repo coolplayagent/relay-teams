@@ -11,7 +11,10 @@ from openai.types.chat.chat_completion_message_function_tool_call_param import (
 from pydantic_ai._utils import guard_tool_call_id
 from pydantic_ai.messages import (
     ModelMessage,
+    ModelResponse,
     ModelRequestPart,
+    TextPart,
+    ThinkingPart,
     ToolCallPart,
 )
 from pydantic_ai.models import ModelRequestParameters
@@ -32,10 +35,18 @@ class RecoverableOpenAIChatModel(OpenAIChatModel):
         messages: Sequence[ModelMessage],
         model_request_parameters: ModelRequestParameters,
     ) -> list[chat.ChatCompletionMessageParam]:
-        return await super()._map_messages(
+        mapped = await super()._map_messages(
             self._sanitize_replayed_messages(messages),
             model_request_parameters,
         )
+        for message in mapped:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") != "assistant":
+                continue
+            if message.get("content") is None:
+                message["content"] = ""
+        return mapped
 
     @staticmethod
     def _map_tool_call(t: ToolCallPart) -> ChatCompletionMessageFunctionToolCallParam:
@@ -66,7 +77,8 @@ class RecoverableOpenAIChatModel(OpenAIChatModel):
         messages: Sequence[ModelMessage],
     ) -> list[ModelMessage]:
         return normalize_replayed_messages(
-            messages, on_drop=cls._log_dropped_tool_result
+            _drop_provider_empty_responses(messages),
+            on_drop=cls._log_dropped_tool_result,
         )
 
     @staticmethod
@@ -89,3 +101,32 @@ class RecoverableOpenAIChatModel(OpenAIChatModel):
                 "tool_name": str(getattr(part, "tool_name", "") or ""),
             },
         )
+
+
+def _drop_provider_empty_responses(
+    messages: Sequence[ModelMessage],
+) -> list[ModelMessage]:
+    sanitized: list[ModelMessage] = []
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            sanitized.append(message)
+            continue
+        if _is_thinking_only_response(message):
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.history.dropped_thinking_only_response",
+                message="Dropped thinking-only assistant response before provider replay",
+                payload={},
+            )
+            continue
+        sanitized.append(message)
+    return sanitized
+
+
+def _is_thinking_only_response(message: ModelResponse) -> bool:
+    if not message.parts:
+        return False
+    if any(isinstance(part, (TextPart, ToolCallPart)) for part in message.parts):
+        return False
+    return all(isinstance(part, ThinkingPart) for part in message.parts)

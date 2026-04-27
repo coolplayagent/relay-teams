@@ -181,6 +181,7 @@ from relay_teams.sessions.runs.background_tasks.command_runtime import (
     kill_process_tree_by_pid,
 )
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskKind
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
@@ -1418,6 +1419,11 @@ class ServerContainer:
         interrupted = self.background_task_repository.list_interruptible()
         interrupted_ids: List[str] = []
         for record in interrupted:
+            if (
+                record.kind == BackgroundTaskKind.SUBAGENT
+                and record.execution_mode == "foreground"
+            ):
+                continue
             if record.pid is None:
                 LOGGER.warning(
                     "Persisted background task lost pid before interruption cleanup",

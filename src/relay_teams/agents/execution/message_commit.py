@@ -456,7 +456,7 @@ class MessageCommitService:
         self,
         messages: Sequence[ModelRequest | ModelResponse],
     ) -> int:
-        pending: set[str] = set()
+        pending: dict[str, str] = {}
         last_safe_index = 0
         for index, msg in enumerate(messages, start=1):
             if isinstance(msg, ModelResponse):
@@ -465,14 +465,20 @@ class MessageCommitService:
                         continue
                     tool_call_id = str(part.tool_call_id or "").strip()
                     if tool_call_id:
-                        pending.add(tool_call_id)
+                        pending[tool_call_id] = str(part.tool_name or "")
             else:
                 for part in msg.parts:
                     tool_call_id = str(getattr(part, "tool_call_id", "") or "").strip()
                     if not tool_call_id:
                         continue
                     if isinstance(part, (ToolReturnPart, RetryPromptPart)):
-                        pending.discard(tool_call_id)
+                        pending_tool_name = pending.get(tool_call_id)
+                        result_tool_name = str(getattr(part, "tool_name", "") or "")
+                        if pending_tool_name is not None and (
+                            not result_tool_name
+                            or pending_tool_name == result_tool_name
+                        ):
+                            pending.pop(tool_call_id, None)
             if not pending:
                 last_safe_index = index
         return last_safe_index

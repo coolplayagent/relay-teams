@@ -104,7 +104,7 @@ async def test_run_event_hub_publish_async_serializes_state_updates() -> None:
     )
     queue = hub.subscribe("run-1")
 
-    await asyncio.gather(
+    published_event_ids = await asyncio.gather(
         hub.publish_async(_event(RunEventType.RUN_STARTED)),
         hub.publish_async(_event(RunEventType.MODEL_STEP_STARTED)),
     )
@@ -114,6 +114,7 @@ async def test_run_event_hub_publish_async_serializes_state_updates() -> None:
 
     assert run_state_repo.max_active_updates == 1
     assert run_state_repo.applied_event_ids == [1, 2]
+    assert published_event_ids == [1, 2]
     assert first.event_id == 1
     assert second.event_id == 2
 
@@ -139,6 +140,22 @@ async def test_run_event_hub_publish_async_finishes_projection_when_cancelled() 
 
     assert run_state_repo.max_active_updates == 1
     assert run_state_repo.applied_event_ids == [1]
+    assert delivered.event_id == 1
+
+
+def test_run_event_hub_publish_returns_event_id() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    queue = hub.subscribe("run-1")
+
+    event_id = hub.publish(_event(RunEventType.RUN_STARTED))
+    delivered = queue.get_nowait()
+
+    assert event_id == 1
     assert delivered.event_id == 1
 
 

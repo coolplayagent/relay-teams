@@ -237,8 +237,9 @@ Purpose: cross-agent key-value state.
 
 `expires_at` controls TTL.
 
-Task-scoped tool runtime state is also stored here under `state_key` values such as `tool_call_state:<tool_call_id>`.
-Current tool-call state payloads include run/session linkage, `run_yolo`, and `approval_mode` metadata so SQLite analysis can distinguish YOLO approval bypass from policy-exempt tools.
+Task-scoped tool runtime state is also stored here under `state_key` values such as `tool_call_state:<tool_call_id>` and `tool_call_batch:<batch_id>`.
+Current tool-call state payloads include run/session linkage, batch linkage, result event ids, `run_yolo`, and `approval_mode` metadata so SQLite analysis can distinguish YOLO approval bypass from policy-exempt tools.
+Tool-call batch payloads group all tool calls emitted by one assistant response, including parallel tool calls, so crash recovery can replay only complete sealed batches.
 Sanitized internal tool data may include provider or upstream host identifiers, but must not persist API-key-bearing URLs.
 
 ---
@@ -262,6 +263,7 @@ CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 ```
 
 Purpose: append-only business/run event log.
+Tool call and tool result events are the durable source used to rebuild missing `tool_call_state:*` and `tool_call_batch:*` shared-state entries after a forced backend stop.
 
 ---
 
@@ -718,6 +720,7 @@ CREATE TABLE IF NOT EXISTS background_tasks (
     role_id             TEXT,
     tool_call_id        TEXT,
     title               TEXT NOT NULL DEFAULT '',
+    input_text          TEXT NOT NULL DEFAULT '',
     command             TEXT NOT NULL,
     cwd                 TEXT NOT NULL,
     execution_mode      TEXT NOT NULL,
@@ -733,6 +736,7 @@ CREATE TABLE IF NOT EXISTS background_tasks (
     subagent_run_id     TEXT,
     subagent_task_id    TEXT,
     subagent_instance_id TEXT,
+    subagent_suppress_hooks INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     completed_at        TEXT,
@@ -745,7 +749,9 @@ CREATE INDEX IF NOT EXISTS idx_background_tasks_status
     ON background_tasks(status, updated_at DESC);
 ```
 
-Purpose: durable metadata for managed background tasks bound to one run.
+Purpose: durable metadata for managed background tasks bound to one run. Foreground
+subagent rows retain enough launch metadata to reattach or resume a synchronous
+`spawn_subagent` call after a forced backend stop.
 
 Notes:
 - `execution_mode` is currently fixed to `background`.

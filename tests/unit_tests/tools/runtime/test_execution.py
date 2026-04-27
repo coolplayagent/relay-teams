@@ -153,6 +153,157 @@ class _FakePolicy:
         return self.needs_approval
 
 
+def test_execute_tool_persists_terminal_state_before_publishing_result_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[tuple[str, bool, int]] = []
+
+    async def fake_persist_tool_record_async(**kwargs: object) -> None:
+        runtime_meta = cast(dict[str, JsonValue], kwargs["runtime_meta"])
+        result_event_id = cast(int, kwargs.get("result_event_id", 0))
+        order.append(
+            (
+                "persist",
+                runtime_meta.get("tool_result_event_published") is True,
+                result_event_id,
+            )
+        )
+
+    async def fake_publish_tool_result_event_async(**kwargs: object) -> int:
+        visible_envelope = cast(dict[str, JsonValue], kwargs["visible_envelope"])
+        meta = cast(dict[str, JsonValue], visible_envelope["meta"])
+        order.append(
+            (
+                "publish",
+                meta.get("tool_result_event_published") is True,
+                42,
+            )
+        )
+        return 42
+
+    monkeypatch.setattr(
+        execution_module,
+        "_persist_tool_record_async",
+        fake_persist_tool_record_async,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_publish_tool_result_event_async",
+        fake_publish_tool_result_event_async,
+    )
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-order-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="search",
+            args_summary={"query": "relay"},
+            action=lambda: {"matches": 1},
+        )
+    )
+
+    assert cast(dict[str, JsonValue], result)["ok"] is True
+    assert order == [
+        ("persist", False, 0),
+        ("publish", True, 42),
+        ("persist", True, 42),
+    ]
+
+
+def test_execute_tool_ignores_post_publish_result_linkage_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[tuple[str, int]] = []
+
+    async def fake_persist_tool_record_async(**kwargs: object) -> None:
+        result_event_id = cast(int, kwargs.get("result_event_id", 0))
+        order.append(("persist", result_event_id))
+        if result_event_id == 42:
+            raise sqlite3.OperationalError("database is locked")
+
+    async def fake_publish_tool_result_event_async(**kwargs: object) -> int:
+        _ = kwargs
+        order.append(("publish", 42))
+        return 42
+
+    monkeypatch.setattr(
+        execution_module,
+        "_persist_tool_record_async",
+        fake_persist_tool_record_async,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_publish_tool_result_event_async",
+        fake_publish_tool_result_event_async,
+    )
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-linkage-failure"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="search",
+            args_summary={"query": "relay"},
+            action=lambda: {"matches": 1},
+        )
+    )
+
+    assert cast(dict[str, JsonValue], result)["ok"] is True
+    assert order == [
+        ("persist", 0),
+        ("publish", 42),
+        ("persist", 42),
+    ]
+
+
+def test_execute_tool_runs_when_pre_run_state_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action_calls: list[str] = []
+
+    async def fake_mark_tool_running_async(**kwargs: object) -> None:
+        _ = kwargs
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(
+        execution_module,
+        "_mark_tool_running_async",
+        fake_mark_tool_running_async,
+    )
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-running-state-failure"
+
+    def action() -> dict[str, int]:
+        action_calls.append("ran")
+        return {"matches": 1}
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="search",
+            args_summary={"query": "relay"},
+            action=action,
+        )
+    )
+
+    assert action_calls == ["ran"]
+    assert cast(dict[str, JsonValue], result)["ok"] is True
+    assert len(_tool_result_payloads(deps)) == 1
+
+
 class _FakeDeps:
     def __init__(
         self,
