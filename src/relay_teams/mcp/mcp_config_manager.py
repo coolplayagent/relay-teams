@@ -291,7 +291,7 @@ def _normalize_mcp_server_config(
     normalized = _normalize_to_json_object(config)
 
     raw_type = normalized.get("type")
-    if raw_type == "local":
+    if raw_type == "local" and "transport" not in normalized:
         normalized["transport"] = "stdio"
     if raw_type == "remote" and "transport" not in normalized:
         normalized["transport"] = _detect_url_transport(normalized.get("url"))
