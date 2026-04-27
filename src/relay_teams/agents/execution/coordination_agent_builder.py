@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.profiles.openai import OpenAIModelProfile
 
+from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.agents.execution.recoverable_openai_chat_model import (
     RecoverableOpenAIChatModel as OpenAIChatModel,
@@ -24,6 +26,8 @@ from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.context import ToolDeps
+
+LOGGER = get_logger(__name__)
 
 
 def build_coordination_agent(
@@ -62,7 +66,21 @@ def build_coordination_agent(
             strict=False,
             consumer="agents.execution.coordination_agent_builder",
         )
-        toolsets.extend(mcp_registry.get_toolsets(resolved_mcp_servers))
+        for server_name in resolved_mcp_servers:
+            try:
+                toolsets.extend(mcp_registry.get_toolsets((server_name,)))
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.mcp_toolset.load_failed",
+                    message=(
+                        "Failed to initialize MCP toolset for coordination agent; "
+                        "continuing without this MCP server"
+                    ),
+                    payload={"server_name": server_name},
+                    exc_info=exc,
+                )
 
     skill_tools = []
     if skill_registry and allowed_skills:
