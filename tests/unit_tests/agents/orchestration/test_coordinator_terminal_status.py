@@ -340,7 +340,8 @@ async def test_verification_tool_policy_falls_back_when_intent_lookup_fails(
     assert policy.yolo is False
 
 
-def test_terminal_status_from_verification_completes_with_assistant_error(
+@pytest.mark.asyncio
+async def test_terminal_status_from_verification_completes_with_assistant_error(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "coordinator_terminal_status.db"
@@ -365,7 +366,7 @@ def test_terminal_status_from_verification_completes_with_assistant_error(
         event_bus=event_log,
     )
 
-    result = coordinator._terminal_status_from_verification(
+    result = await coordinator._terminal_status_from_verification_async(
         trace_id="run-1",
         root_task=root_task,
         verification=VerificationResult(
@@ -802,7 +803,8 @@ async def test_pending_delegated_task_cancellation_raises_without_stop_request(
         (RunRuntimePhase.AWAITING_RECOVERY, RunRuntimeStatus.PAUSED),
     ],
 )
-def test_prepare_recovery_preserves_paused_subagent_state(
+@pytest.mark.asyncio
+async def test_prepare_recovery_preserves_paused_subagent_state(
     tmp_path: Path,
     phase: RunRuntimePhase,
     runtime_status: RunRuntimeStatus,
@@ -885,7 +887,7 @@ def test_prepare_recovery_preserves_paused_subagent_state(
         )
     )
 
-    coordinator._prepare_recovery(
+    await coordinator._prepare_recovery_async(
         trace_id="run-1",
         coordinator_instance_id=coordinator_instance.instance_id,
     )
@@ -898,7 +900,7 @@ def test_prepare_recovery_preserves_paused_subagent_state(
         == InstanceStatus.STOPPED
     )
     assert (
-        coordinator._has_resumable_delegated_work(
+        await coordinator._has_resumable_delegated_work_async(
             trace_id="run-1",
             root_task_id=root_task.task_id,
         )

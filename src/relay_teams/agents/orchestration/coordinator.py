@@ -134,9 +134,9 @@ class CoordinatorGraph(BaseModel):
             skills=intent.skills,
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
-        _ = self.task_repo.create(root_task)
+        _ = await self.task_repo.create_async(root_task)
         await self._execute_task_created_hooks(root_task=root_task)
-        self.event_bus.emit(
+        await self.event_bus.emit_async(
             EventEnvelope(
                 event_type=EventType.TASK_CREATED,
                 trace_id=trace_id,
@@ -150,13 +150,13 @@ class CoordinatorGraph(BaseModel):
         root_instance_id: str | None = None
         if mode == ExecutionMode.MANUAL:
             result = TaskExecutionResult(
-                output=self._initialize_manual_mode(
+                output=await self._initialize_manual_mode(
                     trace_id=trace_id, root_task=root_task
                 ),
                 completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
             )
         elif mode == ExecutionMode.AI:
-            root_instance_id = self._ensure_root_instance(
+            root_instance_id = await self._ensure_root_instance_async(
                 session_id=session_id,
                 trace_id=trace_id,
                 root_task=root_task,
@@ -200,7 +200,7 @@ class CoordinatorGraph(BaseModel):
                 tool_approval_policy=verification_tool_policy,
                 workspace_root=workspace_root,
             )
-            verification_result = self._terminal_status_from_verification(
+            verification_result = await self._terminal_status_from_verification_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 verification=verification,
@@ -236,15 +236,15 @@ class CoordinatorGraph(BaseModel):
         *,
         trace_id: str,
     ) -> CoordinatorRunResult:
-        root_task_record = self._get_root_task_by_trace(trace_id)
+        root_task_record = await self._get_root_task_by_trace_async(trace_id)
         root_task = root_task_record.envelope
-        root_instance_id = self._ensure_root_instance(
+        root_instance_id = await self._ensure_root_instance_async(
             session_id=root_task.session_id,
             trace_id=trace_id,
             root_task=root_task,
             assigned_instance_id=root_task_record.assigned_instance_id,
         )
-        self._prepare_recovery(
+        await self._prepare_recovery_async(
             trace_id=trace_id,
             coordinator_instance_id=root_instance_id,
         )
@@ -278,7 +278,7 @@ class CoordinatorGraph(BaseModel):
                 tool_approval_policy=verification_tool_policy,
                 workspace_root=workspace_root,
             )
-            verification_result = self._terminal_status_from_verification(
+            verification_result = await self._terminal_status_from_verification_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 verification=verification,
@@ -294,8 +294,8 @@ class CoordinatorGraph(BaseModel):
                 error_code=verification_result.error_code,
                 error_message=verification_result.error_message,
             )
-        runtime = self.run_runtime_repo.get(trace_id)
-        coordinator_first = not self._has_resumable_delegated_work(
+        runtime = await self.run_runtime_repo.get_async(trace_id)
+        coordinator_first = not await self._has_resumable_delegated_work_async(
             trace_id=trace_id,
             root_task_id=root_task.task_id,
         )
@@ -331,7 +331,7 @@ class CoordinatorGraph(BaseModel):
             tool_approval_policy=verification_tool_policy,
             workspace_root=workspace_root,
         )
-        verification_result = self._terminal_status_from_verification(
+        verification_result = await self._terminal_status_from_verification_async(
             trace_id=trace_id,
             root_task=root_task,
             verification=verification,
@@ -348,16 +348,18 @@ class CoordinatorGraph(BaseModel):
             error_message=verification_result.error_message,
         )
 
-    def _initialize_manual_mode(self, *, trace_id: str, root_task: TaskEnvelope) -> str:
+    async def _initialize_manual_mode(
+        self, *, trace_id: str, root_task: TaskEnvelope
+    ) -> str:
         result = (
             "Manual orchestration initialized. Use task APIs or task tools to create, update, "
             "list, and dispatch delegated tasks."
         )
         session_id = root_task.session_id
-        self.task_repo.update_status(
+        await self.task_repo.update_status_async(
             root_task.task_id, TaskStatus.COMPLETED, result=result
         )
-        self.event_bus.emit(
+        await self.event_bus.emit_async(
             EventEnvelope(
                 event_type=EventType.TASK_COMPLETED,
                 trace_id=trace_id,
@@ -366,7 +368,7 @@ class CoordinatorGraph(BaseModel):
                 payload_json="{}",
             )
         )
-        self._publish_run_event(
+        await self._publish_run_event_async(
             session_id=session_id,
             run_id=trace_id,
             trace_id=trace_id,
@@ -470,7 +472,7 @@ class CoordinatorGraph(BaseModel):
         trace_id: str,
         root_task_id: str,
     ) -> bool:
-        records = self.task_repo.list_by_trace(trace_id)
+        records = await self.task_repo.list_by_trace_async(trace_id)
         lanes: dict[str, list[TaskRecord]] = {}
         instances: dict[str, AgentRuntimeRecord] = {}
         for record in records:
@@ -487,10 +489,12 @@ class CoordinatorGraph(BaseModel):
             ):
                 continue
             try:
-                instance = self.agent_repo.get_instance(record.assigned_instance_id)
+                instance = await self.agent_repo.get_instance_async(
+                    record.assigned_instance_id
+                )
             except KeyError:
                 msg = f"Assigned instance not found: {record.assigned_instance_id}"
-                self.task_repo.update_status(
+                await self.task_repo.update_status_async(
                     task.task_id, TaskStatus.FAILED, error_message=msg
                 )
                 log_event(
@@ -503,7 +507,7 @@ class CoordinatorGraph(BaseModel):
                         "assigned_instance_id": record.assigned_instance_id,
                     },
                 )
-                self.event_bus.emit(
+                await self.event_bus.emit_async(
                     EventEnvelope(
                         event_type=EventType.TASK_FAILED,
                         trace_id=task.trace_id,
@@ -550,15 +554,17 @@ class CoordinatorGraph(BaseModel):
         )
         return any(lane_results)
 
-    def _get_root_task_by_trace(self, trace_id: str) -> TaskRecord:
-        for record in self.task_repo.list_by_trace(trace_id):
+    async def _get_root_task_by_trace_async(self, trace_id: str) -> TaskRecord:
+        for record in await self.task_repo.list_by_trace_async(trace_id):
             if record.envelope.parent_task_id is None:
                 return record
         raise KeyError(f"No root task found for run_id={trace_id}")
 
-    def _prepare_recovery(self, *, trace_id: str, coordinator_instance_id: str) -> None:
-        runtime = self.run_runtime_repo.get(trace_id)
-        records = self.task_repo.list_by_trace(trace_id)
+    async def _prepare_recovery_async(
+        self, *, trace_id: str, coordinator_instance_id: str
+    ) -> None:
+        runtime = await self.run_runtime_repo.get_async(trace_id)
+        records = await self.task_repo.list_by_trace_async(trace_id)
         incomplete_task_ids = {
             record.envelope.task_id
             for record in records
@@ -579,13 +585,13 @@ class CoordinatorGraph(BaseModel):
                     if record.assigned_instance_id
                     else TaskStatus.CREATED
                 )
-                self.task_repo.update_status(
+                await self.task_repo.update_status_async(
                     record.envelope.task_id,
                     next_status,
                     assigned_instance_id=record.assigned_instance_id,
                 )
 
-        for instance in self.agent_repo.list_by_run(trace_id):
+        for instance in await self.agent_repo.list_by_run_async(trace_id):
             should_reset = (
                 instance.instance_id == coordinator_instance_id
                 or instance.status == InstanceStatus.RUNNING
@@ -603,13 +609,15 @@ class CoordinatorGraph(BaseModel):
                 should_reset = False
             if not should_reset:
                 continue
-            self.agent_repo.mark_status(instance.instance_id, InstanceStatus.IDLE)
+            await self.agent_repo.mark_status_async(
+                instance.instance_id, InstanceStatus.IDLE
+            )
 
-    def _has_resumable_delegated_work(
+    async def _has_resumable_delegated_work_async(
         self, *, trace_id: str, root_task_id: str
     ) -> bool:
-        runtime = self.run_runtime_repo.get(trace_id)
-        for record in self.task_repo.list_by_trace(trace_id):
+        runtime = await self.run_runtime_repo.get_async(trace_id)
+        for record in await self.task_repo.list_by_trace_async(trace_id):
             task = record.envelope
             if task.task_id == root_task_id:
                 continue
@@ -655,7 +663,7 @@ class CoordinatorGraph(BaseModel):
         if not isinstance(workspace_manager, WorkspaceManager):
             return allowed_tools, None
         try:
-            instance = self.agent_repo.get_instance(instance_id)
+            instance = await self.agent_repo.get_instance_async(instance_id)
             workspace = workspace_manager.resolve(
                 session_id=task.session_id,
                 role_id=role_id,
@@ -739,7 +747,7 @@ class CoordinatorGraph(BaseModel):
             return True
         return False
 
-    def _ensure_root_instance(
+    async def _ensure_root_instance_async(
         self,
         *,
         session_id: str,
@@ -753,19 +761,21 @@ class CoordinatorGraph(BaseModel):
         existing = None
         if assigned_instance_id is not None:
             try:
-                existing = self.agent_repo.get_instance(assigned_instance_id)
+                existing = await self.agent_repo.get_instance_async(
+                    assigned_instance_id
+                )
             except KeyError:
                 existing = None
         if existing is None and reuse_existing_instance:
-            existing = self.agent_repo.get_session_role_instance(
+            existing = await self.agent_repo.get_session_role_instance_async(
                 session_id, root_role_id
             )
         if existing is not None:
             coordinator_instance_id = existing.instance_id
-            _ = self.agent_repo.mark_status(
+            await self.agent_repo.mark_status_async(
                 coordinator_instance_id, InstanceStatus.IDLE
             )
-            self.agent_repo.upsert_instance(
+            await self.agent_repo.upsert_instance_async(
                 run_id=trace_id,
                 trace_id=trace_id,
                 session_id=session_id,
@@ -775,12 +785,12 @@ class CoordinatorGraph(BaseModel):
                 conversation_id=existing.conversation_id,
                 status=InstanceStatus.IDLE,
             )
-            self.task_repo.update_status(
+            await self.task_repo.update_status_async(
                 task_id=root_task.task_id,
                 status=TaskStatus.ASSIGNED,
                 assigned_instance_id=coordinator_instance_id,
             )
-            self.event_bus.emit(
+            await self.event_bus.emit_async(
                 EventEnvelope(
                     event_type=EventType.TASK_ASSIGNED,
                     trace_id=trace_id,
@@ -792,7 +802,9 @@ class CoordinatorGraph(BaseModel):
             )
             return coordinator_instance_id
 
-        session = self.session_repo.get(session_id) if self.session_repo else None
+        session = (
+            await self.session_repo.get_async(session_id) if self.session_repo else None
+        )
         if session is None:
             raise RuntimeError(
                 "CoordinatorGraph requires session_repo to resolve workspace"
@@ -808,12 +820,12 @@ class CoordinatorGraph(BaseModel):
                 else None
             ),
         )
-        _ = self.task_repo.update_status(
+        await self.task_repo.update_status_async(
             task_id=root_task.task_id,
             status=TaskStatus.ASSIGNED,
             assigned_instance_id=instance.instance_id,
         )
-        self.agent_repo.upsert_instance(
+        await self.agent_repo.upsert_instance_async(
             run_id=trace_id,
             trace_id=trace_id,
             session_id=session_id,
@@ -823,7 +835,7 @@ class CoordinatorGraph(BaseModel):
             conversation_id=instance.conversation_id,
             status=InstanceStatus.IDLE,
         )
-        self.event_bus.emit(
+        await self.event_bus.emit_async(
             EventEnvelope(
                 event_type=EventType.INSTANCE_CREATED,
                 trace_id=trace_id,
@@ -833,7 +845,7 @@ class CoordinatorGraph(BaseModel):
                 payload_json="{}",
             )
         )
-        self.event_bus.emit(
+        await self.event_bus.emit_async(
             EventEnvelope(
                 event_type=EventType.TASK_ASSIGNED,
                 trace_id=trace_id,
@@ -855,7 +867,7 @@ class CoordinatorGraph(BaseModel):
             return topology.normal_root_role_id
         return topology.coordinator_role_id
 
-    def _publish_run_event(
+    async def _publish_run_event_async(
         self,
         session_id: str,
         run_id: str,
@@ -868,7 +880,7 @@ class CoordinatorGraph(BaseModel):
     ) -> None:
         if self.run_event_hub is None:
             return
-        self.run_event_hub.publish(
+        await self.run_event_hub.publish_async(
             RunEvent(
                 session_id=session_id,
                 run_id=run_id,
@@ -929,7 +941,7 @@ class CoordinatorGraph(BaseModel):
             return ToolApprovalPolicy()
         return ToolApprovalPolicy(yolo=intent.yolo)
 
-    def _terminal_status_from_verification(
+    async def _terminal_status_from_verification_async(
         self,
         *,
         trace_id: str,
@@ -951,12 +963,12 @@ class CoordinatorGraph(BaseModel):
             if details
             else (output.strip() if output.strip() else "Verification failed")
         )
-        current = self.task_repo.get(root_task.task_id)
+        current = await self.task_repo.get_async(root_task.task_id)
         assistant_message = build_assistant_error_message(
             error_code="verification_failed",
             error_message=failure_message,
         )
-        self.task_repo.update_status(
+        await self.task_repo.update_status_async(
             root_task.task_id,
             TaskStatus.COMPLETED,
             assigned_instance_id=current.assigned_instance_id,
@@ -964,11 +976,11 @@ class CoordinatorGraph(BaseModel):
             error_message=failure_message,
         )
         if root_instance_id is not None:
-            instance = self.agent_repo.get_instance(root_instance_id)
-            self.task_execution_service.message_repo.prune_conversation_history_to_safe_boundary(
+            instance = await self.agent_repo.get_instance_async(root_instance_id)
+            await self.task_execution_service.message_repo.prune_conversation_history_to_safe_boundary_async(
                 instance.conversation_id
             )
-            self.task_execution_service.message_repo.append(
+            await self.task_execution_service.message_repo.append_async(
                 session_id=root_task.session_id,
                 workspace_id=instance.workspace_id,
                 conversation_id=instance.conversation_id,
@@ -979,7 +991,7 @@ class CoordinatorGraph(BaseModel):
                 messages=[ModelResponse(parts=[TextPart(content=assistant_message)])],
             )
             if self.run_event_hub is not None:
-                self._publish_run_event(
+                await self._publish_run_event_async(
                     session_id=root_task.session_id,
                     run_id=trace_id,
                     trace_id=trace_id,
