@@ -158,6 +158,7 @@ def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> 
     assert run_usage.total_requests == 0
     assert run_usage.total_tool_calls == 0
     assert run_usage.by_agent[0].input_tokens == 0
+    assert run_usage.by_agent[0].latest_input_tokens == 0
     assert run_usage.by_agent[0].cached_input_tokens == 0
     assert run_usage.by_agent[0].output_tokens == 7
     assert run_usage.by_agent[0].reasoning_output_tokens == 0
@@ -172,6 +173,7 @@ def test_token_usage_repo_treats_null_numeric_values_as_zero(tmp_path: Path) -> 
     assert session_usage.total_requests == 0
     assert session_usage.total_tool_calls == 0
     assert session_usage.by_role["role-1"].input_tokens == 0
+    assert session_usage.by_role["role-1"].latest_input_tokens == 0
     assert session_usage.by_role["role-1"].cached_input_tokens == 0
     assert session_usage.by_role["role-1"].output_tokens == 7
     assert session_usage.by_role["role-1"].reasoning_output_tokens == 0
@@ -381,7 +383,7 @@ def test_token_usage_repo_filters_pre_clear_usage_from_session_totals(
 
     assert active_usage.total_input_tokens == 7
     assert active_usage.total_output_tokens == 3
-    assert active_usage.total_tokens == 10
     assert historical_usage.total_input_tokens == 27
     assert historical_usage.total_output_tokens == 8
-    assert old_run_usage.total_tokens == 25
+    assert old_run_usage.total_input_tokens == 20
+    assert old_run_usage.total_output_tokens == 5

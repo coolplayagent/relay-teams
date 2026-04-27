@@ -39,7 +39,10 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.media_run_executor import MediaRunExecutor
 from relay_teams.sessions.runs.run_auxiliary import RunAuxiliaryService
 from relay_teams.sessions.runs.run_event_publisher import RunEventPublisher
-from relay_teams.sessions.runs.run_followups import RunFollowupRouter
+from relay_teams.sessions.runs.run_followups import (
+    RunFollowupRouter,
+    assert_runtime_auto_attach_phase_allowed,
+)
 from relay_teams.sessions.runs.run_hook_pipeline import RunHookPipeline
 from relay_teams.sessions.runs.ids import new_trace_id
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -63,7 +66,10 @@ from relay_teams.tools.runtime.approval_ticket_repo import (
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from relay_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
+from relay_teams.sessions.runs.recoverable_pause import (
+    RecoverableRunPauseError,
+    RecoverableRunPausePayload,
+)
 from relay_teams.sessions.runs.run_recovery import (
     RunRecoveryService,
 )
@@ -610,7 +616,7 @@ class SessionRunService:
                             run_id,
                             root_task_id=payload.task_id,
                             status=RunRuntimeStatus.PAUSED,
-                            phase=RunRuntimePhase.AWAITING_RECOVERY,
+                            phase=_recoverable_pause_phase(payload),
                             active_instance_id=payload.instance_id,
                             active_task_id=payload.task_id,
                             active_role_id=payload.role_id,
@@ -1274,7 +1280,7 @@ class SessionRunService:
                 run_id,
                 root_task_id=payload.task_id,
                 status=RunRuntimeStatus.PAUSED,
-                phase=RunRuntimePhase.AWAITING_RECOVERY,
+                phase=_recoverable_pause_phase(payload),
                 active_instance_id=payload.instance_id,
                 active_task_id=payload.task_id,
                 active_role_id=payload.role_id,
@@ -2169,6 +2175,7 @@ class SessionRunService:
             raise RuntimeError(
                 f"Run {run_id} is stopping. Wait for it to stop before continuing."
             )
+        assert_runtime_auto_attach_phase_allowed(run_id, runtime)
         if (
             runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
             and runtime.active_subagent_instance_id
@@ -2383,3 +2390,7 @@ class SessionRunService:
             event,
             failure_event=failure_event,
         )
+
+
+def _recoverable_pause_phase(payload: RecoverableRunPausePayload) -> RunRuntimePhase:
+    return payload.runtime_phase or RunRuntimePhase.AWAITING_RECOVERY

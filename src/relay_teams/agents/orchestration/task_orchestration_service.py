@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import cast
 
 from pydantic import JsonValue
 
@@ -19,8 +20,11 @@ from relay_teams.agents.orchestration.task_contracts import (
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import (
+    TaskLifecyclePolicy,
     TaskEnvelope,
     TaskRecord,
+    TaskSpec,
+    VerificationCommand,
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -84,7 +88,9 @@ class TaskOrchestrationService:
                     role_id=None,
                     title=_resolved_title(draft.title, draft.objective),
                     objective=draft.objective,
-                    verification=VerificationPlan(checklist=("non_empty_response",)),
+                    verification=_verification_for_task_draft(draft),
+                    spec=draft.spec,
+                    lifecycle=draft.lifecycle,
                 )
             )
             created_records.append(record)
@@ -126,7 +132,7 @@ class TaskOrchestrationService:
         record = self.get_task(task_id=task_id, run_id=run_id)
         if record.envelope.parent_task_id is None:
             raise ValueError("root coordinator task cannot be updated via task APIs")
-        if record.status != TaskStatus.CREATED:
+        if record.status != TaskStatus.CREATED and not _is_handoff_only_update(update):
             raise ValueError("only created tasks can be updated")
 
         current = record.envelope
@@ -138,18 +144,20 @@ class TaskOrchestrationService:
         if not next_objective:
             raise ValueError("objective must not be empty")
 
+        handoff_only_update = _is_handoff_only_update(update)
         next_title = (
-            _resolved_title(update.title, next_objective)
-            if update.title is not None
-            else current.title or _resolved_title(None, next_objective)
+            current.title
+            if handoff_only_update
+            else (
+                _resolved_title(update.title, next_objective)
+                if update.title is not None
+                else current.title or _resolved_title(None, next_objective)
+            )
         )
         updated = self._task_repo.update_envelope(
             task_id,
             current.model_copy(
-                update={
-                    "objective": next_objective,
-                    "title": next_title,
-                }
+                update=_task_update_fields(update, next_objective, next_title),
             ),
         )
         return {"task": _task_projection(updated)}
@@ -187,7 +195,7 @@ class TaskOrchestrationService:
         record = await self.get_task_async(task_id=task_id, run_id=run_id)
         if record.envelope.parent_task_id is None:
             raise ValueError("root coordinator task cannot be updated via task APIs")
-        if record.status != TaskStatus.CREATED:
+        if record.status != TaskStatus.CREATED and not _is_handoff_only_update(update):
             raise ValueError("only created tasks can be updated")
 
         current = record.envelope
@@ -199,18 +207,20 @@ class TaskOrchestrationService:
         if not next_objective:
             raise ValueError("objective must not be empty")
 
+        handoff_only_update = _is_handoff_only_update(update)
         next_title = (
-            _resolved_title(update.title, next_objective)
-            if update.title is not None
-            else current.title or _resolved_title(None, next_objective)
+            current.title
+            if handoff_only_update
+            else (
+                _resolved_title(update.title, next_objective)
+                if update.title is not None
+                else current.title or _resolved_title(None, next_objective)
+            )
         )
         updated = await self._task_repo.update_envelope_async(
             task_id,
             current.model_copy(
-                update={
-                    "objective": next_objective,
-                    "title": next_title,
-                }
+                update=_task_update_fields(update, next_objective, next_title),
             ),
         )
         return {"task": _task_projection(updated)}
@@ -755,4 +765,75 @@ def _task_projection(record: TaskRecord) -> dict[str, JsonValue]:
         row["result"] = record.result
     if record.error_message:
         row["error"] = record.error_message
+    row["verification"] = cast(
+        JsonValue,
+        record.envelope.verification.model_dump(mode="json"),
+    )
+    if record.envelope.spec is not None:
+        row["spec"] = cast(JsonValue, record.envelope.spec.model_dump(mode="json"))
+    if record.envelope.handoff is not None:
+        row["handoff"] = cast(
+            JsonValue,
+            record.envelope.handoff.model_dump(mode="json"),
+        )
+    lifecycle = record.envelope.lifecycle
+    if _has_non_default_lifecycle(lifecycle):
+        row["lifecycle"] = cast(JsonValue, lifecycle.model_dump(mode="json"))
     return row
+
+
+def _verification_for_task_draft(draft: TaskDraft) -> VerificationPlan:
+    if draft.verification is not None:
+        return draft.verification
+    return _verification_for_task_spec(draft.spec)
+
+
+def _verification_for_task_spec(spec: TaskSpec | None) -> VerificationPlan:
+    if spec is None:
+        return VerificationPlan(checklist=("non_empty_response",))
+    return VerificationPlan(
+        checklist=("non_empty_response",),
+        acceptance_criteria=spec.acceptance_criteria,
+        command_checks=tuple(
+            VerificationCommand.model_validate({"command": command})
+            for command in spec.verification_commands
+        ),
+        evidence_expectations=spec.evidence_expectations,
+    )
+
+
+def _is_handoff_only_update(update: TaskUpdate) -> bool:
+    return (
+        update.handoff is not None
+        and update.objective is None
+        and update.title is None
+        and update.spec is None
+        and update.verification is None
+        and update.lifecycle is None
+    )
+
+
+def _task_update_fields(
+    update: TaskUpdate,
+    next_objective: str,
+    next_title: str | None,
+) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "objective": next_objective,
+        "title": next_title,
+    }
+    if update.spec is not None:
+        fields["spec"] = update.spec
+        if update.verification is None:
+            fields["verification"] = _verification_for_task_spec(update.spec)
+    if update.verification is not None:
+        fields["verification"] = update.verification
+    if update.lifecycle is not None:
+        fields["lifecycle"] = update.lifecycle
+    if update.handoff is not None:
+        fields["handoff"] = update.handoff
+    return fields
+
+
+def _has_non_default_lifecycle(lifecycle: TaskLifecyclePolicy) -> bool:
+    return lifecycle != TaskLifecyclePolicy()

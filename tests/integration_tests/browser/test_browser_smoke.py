@@ -19,7 +19,7 @@ from relay_teams.env.web_config_models import (
 from relay_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
 from relay_teams.interfaces.cli.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
-from playwright.sync_api import Locator, Page
+from playwright.sync_api import Locator, Page, Request, Response
 from playwright.sync_api import expect
 from playwright.sync_api import sync_playwright
 import pytest
@@ -1318,12 +1318,12 @@ def test_browser_web_settings_complex_fallback_roundtrip(
 
     page.locator("#web-searxng-instance-url").fill(custom_searxng_instance_url)
     with page.expect_request(
-        lambda request: (
-            request.method == "PUT"
-            and request.url == f"{integration_env.api_base_url}/api/system/configs/web"
-        )
+        lambda request: _is_web_config_put_request(request, integration_env)
     ) as save_with_fallback_request_info:
-        page.locator("#save-web-btn").click()
+        with page.expect_response(
+            lambda response: _is_web_config_put_response(response, integration_env)
+        ):
+            page.locator("#save-web-btn").click()
     save_with_fallback_payload = json.loads(
         save_with_fallback_request_info.value.post_data or "{}"
     )
@@ -1369,12 +1369,12 @@ def test_browser_web_settings_complex_fallback_roundtrip(
         timeout=_WAIT_TIMEOUT_MS
     )
     with page.expect_request(
-        lambda request: (
-            request.method == "PUT"
-            and request.url == f"{integration_env.api_base_url}/api/system/configs/web"
-        )
+        lambda request: _is_web_config_put_request(request, integration_env)
     ) as save_without_fallback_request_info:
-        page.locator("#save-web-btn").click()
+        with page.expect_response(
+            lambda response: _is_web_config_put_response(response, integration_env)
+        ):
+            page.locator("#save-web-btn").click()
     save_without_fallback_payload = json.loads(
         save_without_fallback_request_info.value.post_data or "{}"
     )
@@ -2027,6 +2027,25 @@ def _open_web_settings_panel(
     ):
         page.locator('.settings-tab[data-tab="web"]').click()
     expect(page.locator("#web-panel")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+
+def _is_web_config_put_request(
+    request: Request, integration_env: IntegrationEnvironment
+) -> bool:
+    return (
+        request.method == "PUT"
+        and request.url == f"{integration_env.api_base_url}/api/system/configs/web"
+    )
+
+
+def _is_web_config_put_response(
+    response: Response, integration_env: IntegrationEnvironment
+) -> bool:
+    return (
+        response.request.method == "PUT"
+        and response.url == f"{integration_env.api_base_url}/api/system/configs/web"
+        and response.ok
+    )
 
 
 def _open_workspace_settings_panel(

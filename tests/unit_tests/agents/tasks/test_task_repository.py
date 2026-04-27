@@ -102,6 +102,60 @@ async def test_async_task_repository_methods_share_persisted_state(
 
 
 @pytest.mark.asyncio
+async def test_heartbeat_running_async_preserves_terminal_state(
+    tmp_path: Path,
+) -> None:
+    repo = TaskRepository(tmp_path / "task_repo_heartbeat.db")
+    envelope = TaskEnvelope(
+        task_id="task-heartbeat",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        objective="demo",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+
+    try:
+        await repo.create_async(envelope)
+        await repo.update_status_async(
+            "task-heartbeat",
+            TaskStatus.RUNNING,
+            assigned_instance_id="inst-1",
+        )
+        stale_updated = await repo.heartbeat_running_async(
+            "task-heartbeat",
+            assigned_instance_id="inst-2",
+        )
+        running_updated = await repo.heartbeat_running_async(
+            "task-heartbeat",
+            assigned_instance_id="inst-1",
+        )
+        running = await repo.get_async("task-heartbeat")
+        await repo.update_status_async(
+            "task-heartbeat",
+            TaskStatus.COMPLETED,
+            assigned_instance_id="inst-1",
+            result="done",
+        )
+        updated = await repo.heartbeat_running_async(
+            "task-heartbeat",
+            assigned_instance_id="inst-1",
+        )
+        fetched = await repo.get_async("task-heartbeat")
+    finally:
+        await repo.close_async()
+
+    assert stale_updated is False
+    assert running_updated is True
+    assert running.status == TaskStatus.RUNNING
+    assert running.assigned_instance_id == "inst-1"
+    assert updated is False
+    assert fetched.status == TaskStatus.COMPLETED
+    assert fetched.assigned_instance_id == "inst-1"
+    assert fetched.result == "done"
+
+
+@pytest.mark.asyncio
 async def test_task_repository_async_hot_paths_do_not_reinitialize_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

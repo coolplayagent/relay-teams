@@ -420,10 +420,18 @@ class AsyncAgentTeamsClient:
         *,
         objective: str | None = None,
         title: str | None = None,
+        spec: dict[str, JsonValue] | None = None,
+        verification: dict[str, JsonValue] | None = None,
+        lifecycle: dict[str, JsonValue] | None = None,
+        handoff: dict[str, JsonValue] | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
             "objective": objective,
             "title": title,
+            "spec": spec,
+            "verification": verification,
+            "lifecycle": lifecycle,
+            "handoff": handoff,
         }
         return await self._request_json(
             "PATCH",

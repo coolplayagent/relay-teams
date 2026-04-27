@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from json import dumps
+from pathlib import Path
 from typing import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +21,7 @@ from relay_teams.agents.orchestration.verification import verify_task
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.providers.provider_contracts import LLMProvider
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.logger import get_logger, log_event
@@ -28,6 +30,7 @@ from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.enums import ExecutionMode, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.ids import new_trace_id
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import IntentInput, RunEvent
 from relay_teams.sessions.runs.assistant_errors import (
     RunCompletionReason,
@@ -42,7 +45,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.workspace import build_conversation_id
+from relay_teams.workspace import WorkspaceManager, build_conversation_id
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.ids import new_task_id
@@ -54,6 +57,7 @@ from relay_teams.agents.tasks.models import (
 )
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 MAX_ORCHESTRATION_CYCLES = 8
 MAX_PARALLEL_DELEGATED_TASKS = 4
@@ -113,6 +117,7 @@ class CoordinatorGraph(BaseModel):
             },
         )
         root_role_id = self._root_role_id(intent)
+        verification_tool_policy = ToolApprovalPolicy(yolo=intent.yolo)
 
         root_task = TaskEnvelope(
             task_id=new_task_id().value,
@@ -180,8 +185,15 @@ class CoordinatorGraph(BaseModel):
                 error_message=result.error_message,
             )
         else:
-            verification = verify_task(
-                self.task_repo, self.event_bus, root_task.task_id
+            allowed_tools, workspace_root = await self._verification_context(
+                task=root_task,
+                instance_id=root_instance_id,
+            )
+            verification = await self._verify_task_async(
+                root_task_id=root_task.task_id,
+                allowed_tools=allowed_tools,
+                tool_approval_policy=verification_tool_policy,
+                workspace_root=workspace_root,
             )
             verification_result = self._terminal_status_from_verification(
                 trace_id=trace_id,
@@ -232,6 +244,10 @@ class CoordinatorGraph(BaseModel):
             coordinator_instance_id=root_instance_id,
         )
         root_role_id = _require_task_role_id(root_task)
+        verification_tool_policy = await self._verification_tool_policy_async(
+            trace_id=trace_id,
+            fallback_session_id=root_task.session_id,
+        )
         if not self.role_registry.is_coordinator_role(root_role_id):
             result = await self._task_executor(
                 instance_id=root_instance_id,
@@ -247,8 +263,15 @@ class CoordinatorGraph(BaseModel):
                     error_code=result.error_code,
                     error_message=result.error_message,
                 )
-            verification = verify_task(
-                self.task_repo, self.event_bus, root_task.task_id
+            allowed_tools, workspace_root = await self._verification_context(
+                task=root_task,
+                instance_id=root_instance_id,
+            )
+            verification = await self._verify_task_async(
+                root_task_id=root_task.task_id,
+                allowed_tools=allowed_tools,
+                tool_approval_policy=verification_tool_policy,
+                workspace_root=workspace_root,
             )
             verification_result = self._terminal_status_from_verification(
                 trace_id=trace_id,
@@ -293,7 +316,16 @@ class CoordinatorGraph(BaseModel):
                 error_code=result.error_code,
                 error_message=result.error_message,
             )
-        verification = verify_task(self.task_repo, self.event_bus, root_task.task_id)
+        allowed_tools, workspace_root = await self._verification_context(
+            task=root_task,
+            instance_id=root_instance_id,
+        )
+        verification = await self._verify_task_async(
+            root_task_id=root_task.task_id,
+            allowed_tools=allowed_tools,
+            tool_approval_policy=verification_tool_policy,
+            workspace_root=workspace_root,
+        )
         verification_result = self._terminal_status_from_verification(
             trace_id=trace_id,
             root_task=root_task,
@@ -558,7 +590,7 @@ class CoordinatorGraph(BaseModel):
             )
             if (
                 runtime is not None
-                and runtime.phase == RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
+                and _is_paused_subagent_phase(runtime.phase)
                 and runtime.active_subagent_instance_id == instance.instance_id
             ):
                 should_reset = False
@@ -597,6 +629,91 @@ class CoordinatorGraph(BaseModel):
             return True
         return False
 
+    async def _verification_context(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str | None,
+    ) -> tuple[tuple[str, ...], Path | None]:
+        role_id = _require_task_role_id(task)
+        allowed_tools = await self._verification_allowed_tools(
+            task=task,
+            role_id=role_id,
+        )
+        if instance_id is None:
+            return allowed_tools, None
+        workspace_manager = getattr(
+            self.task_execution_service, "workspace_manager", None
+        )
+        if not isinstance(workspace_manager, WorkspaceManager):
+            return allowed_tools, None
+        try:
+            instance = self.agent_repo.get_instance(instance_id)
+            workspace = workspace_manager.resolve(
+                session_id=task.session_id,
+                role_id=role_id,
+                instance_id=instance_id,
+                workspace_id=instance.workspace_id,
+                conversation_id=instance.conversation_id,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.verification.workspace_lookup_failed",
+                message=(
+                    "Verification workspace lookup failed; file checks will use raw paths"
+                ),
+                payload={
+                    "trace_id": task.trace_id,
+                    "task_id": task.task_id,
+                    "role_id": role_id,
+                    "instance_id": instance_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return allowed_tools, None
+        return allowed_tools, workspace.resolve_workdir()
+
+    async def _verification_allowed_tools(
+        self,
+        *,
+        task: TaskEnvelope,
+        role_id: str,
+    ) -> tuple[str, ...]:
+        runtime_role_resolver = getattr(
+            self.task_execution_service,
+            "runtime_role_resolver",
+            None,
+        )
+        try:
+            if isinstance(runtime_role_resolver, RuntimeRoleResolver):
+                role = await runtime_role_resolver.get_effective_role_async(
+                    run_id=task.trace_id,
+                    role_id=role_id,
+                )
+            else:
+                role = self.role_registry.get(role_id)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.verification.role_lookup_failed",
+                message=(
+                    "Verification role lookup failed; command checks will be denied"
+                ),
+                payload={
+                    "trace_id": task.trace_id,
+                    "task_id": task.task_id,
+                    "role_id": role_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return ()
+        return tuple(role.tools)
+
     def _is_paused_subagent_task(
         self,
         *,
@@ -604,10 +721,7 @@ class CoordinatorGraph(BaseModel):
         task_id: str,
         assigned_instance_id: str | None,
     ) -> bool:
-        if (
-            runtime is None
-            or runtime.phase != RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP
-        ):
+        if runtime is None or not _is_paused_subagent_phase(runtime.phase):
             return False
         if runtime.active_task_id and runtime.active_task_id == task_id:
             return True
@@ -760,6 +874,54 @@ class CoordinatorGraph(BaseModel):
             )
         )
 
+    async def _verify_task_async(
+        self,
+        *,
+        root_task_id: str,
+        allowed_tools: tuple[str, ...],
+        tool_approval_policy: ToolApprovalPolicy,
+        workspace_root: Path | None,
+    ) -> VerificationResult:
+        return await asyncio.to_thread(
+            verify_task,
+            self.task_repo,
+            self.event_bus,
+            root_task_id,
+            allowed_tools=allowed_tools,
+            tool_approval_policy=tool_approval_policy,
+            workspace_root=workspace_root,
+        )
+
+    async def _verification_tool_policy_async(
+        self,
+        *,
+        trace_id: str,
+        fallback_session_id: str,
+    ) -> ToolApprovalPolicy:
+        run_intent_repo = getattr(self.task_execution_service, "run_intent_repo", None)
+        if not isinstance(run_intent_repo, RunIntentRepository):
+            return ToolApprovalPolicy()
+        try:
+            intent = await run_intent_repo.get_async(
+                trace_id,
+                fallback_session_id=fallback_session_id,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.verification.intent_lookup_failed",
+                message="Verification policy lookup failed; using default approval policy",
+                payload={
+                    "trace_id": trace_id,
+                    "session_id": fallback_session_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return ToolApprovalPolicy()
+        return ToolApprovalPolicy(yolo=intent.yolo)
+
     def _terminal_status_from_verification(
         self,
         *,
@@ -852,3 +1014,11 @@ def _require_task_role_id(task: TaskEnvelope) -> str:
     if role_id is None:
         raise ValueError(f"Task {task.task_id} is not bound to a role")
     return role_id
+
+
+def _is_paused_subagent_phase(phase: RunRuntimePhase) -> bool:
+    return phase in {
+        RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+        RunRuntimePhase.AWAITING_MANUAL_ACTION,
+        RunRuntimePhase.AWAITING_RECOVERY,
+    }

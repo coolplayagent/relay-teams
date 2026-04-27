@@ -141,9 +141,11 @@ async def test_update_task_tool_uses_async_task_service(
     ) -> dict[str, JsonValue]:
         _ = (ctx, tool_name, args_summary)
         return await action(
-            task_id=cast(str, raw_args["task_id"]),
-            objective=cast(str | None, raw_args["objective"]),
-            title=cast(str | None, raw_args["title"]),
+            {
+                "task_id": cast(str, raw_args["task_id"]),
+                "objective": cast(str | None, raw_args["objective"]),
+                "title": cast(str | None, raw_args["title"]),
+            }
         )
 
     monkeypatch.setattr(update_task, "execute_tool_call", _execute_tool_call)

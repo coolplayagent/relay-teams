@@ -174,7 +174,7 @@ class _FakeDeps:
                 name="Spec Coder",
                 description="Implements requested changes.",
                 version="1",
-                tools=(),
+                tools=("webfetch",),
                 system_prompt="Implement tasks.",
             )
         )

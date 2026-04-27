@@ -27,6 +27,11 @@ from typing import (
 from uuid import uuid4
 
 from relay_teams.logger import get_logger, log_event, log_tool_error
+from relay_teams.agents.instances.models import (
+    AgentRuntimeRecord,
+    RuntimeToolSnapshotEntry,
+    RuntimeToolsSnapshot,
+)
 from relay_teams.media import ContentPart, TextContentPart, UserPromptContent
 from relay_teams.metrics.adapters import record_tool_execution_async
 from relay_teams.notifications import NotificationContext, NotificationType
@@ -54,6 +59,7 @@ from relay_teams.tools.runtime.models import (
     ToolError,
     ToolExecutionError,
     ToolInternalRecord,
+    ToolRuntimeDecision,
     ToolResultEnvelope,
     ToolResultProjection,
 )
@@ -105,6 +111,12 @@ class _AsyncRunRuntimeRepository(Protocol):
 
     async def update_async(self, run_id: str, **changes: object) -> object:
         pass
+
+
+@runtime_checkable
+class _RuntimeToolsAgentRepository(Protocol):
+    async def get_instance_async(self, instance_id: str) -> AgentRuntimeRecord:
+        raise NotImplementedError
 
 
 # noinspection PyUnusedLocal,PyTypeHints
@@ -1555,11 +1567,24 @@ async def _handle_tool_approval(
     approval_request: ToolApprovalRequest | None = None,
     force_approval: bool = False,
 ) -> tuple[str | None, ToolError | None]:
-    decision = _evaluate_tool_approval_policy(
+    decision = await _evaluate_tool_approval_policy(
+        ctx=ctx,
         policy=ctx.deps.tool_approval_policy,
         tool_name=tool_name,
         approval_request=approval_request,
     )
+    meta["runtime_policy_decision"] = decision.runtime_decision.value
+    if decision.reason:
+        meta["runtime_policy_reason"] = decision.reason
+    if decision.runtime_decision == ToolRuntimeDecision.DENY:
+        meta["approval_required"] = False
+        meta["approval_mode"] = ToolApprovalMode.POLICY_EXEMPT.value
+        meta["approval_status"] = "denied_by_policy"
+        return None, ToolError(
+            type="tool_policy_denied",
+            message=decision.reason or "Tool call denied by runtime policy.",
+            retryable=False,
+        )
     approval_required = force_approval or decision.required
     run_yolo = _policy_uses_yolo(ctx.deps.tool_approval_policy)
     args_preview = _safe_json(args_summary)
@@ -2007,17 +2032,30 @@ def _visible_envelope(
     return cast(dict[str, JsonValue], envelope.model_dump(mode="json"))
 
 
-def _evaluate_tool_approval_policy(
+async def _evaluate_tool_approval_policy(
     *,
+    ctx: ToolContext,
     policy: ToolApprovalPolicy | _RequiresApprovalPolicy,
     tool_name: str,
     approval_request: ToolApprovalRequest | None,
 ) -> ToolApprovalDecision:
     if isinstance(policy, ToolApprovalPolicy):
-        return policy.evaluate(tool_name, approval_request)
+        allowed_tools = await _allowed_tools_for_runtime_policy(ctx=ctx)
+        return policy.evaluate(
+            tool_name,
+            approval_request,
+            role_id=ctx.deps.role_id,
+            task_id=ctx.deps.task_id,
+            allowed_tools=allowed_tools,
+        )
     required = cast(bool, policy.requires_approval(tool_name))
     return ToolApprovalDecision(
         required=required,
+        runtime_decision=(
+            ToolRuntimeDecision.REQUIRE_APPROVAL
+            if required
+            else ToolRuntimeDecision.ALLOW
+        ),
         permission_scope=(
             approval_request.permission_scope if approval_request is not None else None
         ),
@@ -2032,6 +2070,94 @@ def _evaluate_tool_approval_policy(
             approval_request.execution_surface if approval_request is not None else None
         ),
     )
+
+
+async def _allowed_tools_for_runtime_policy(
+    *,
+    ctx: ToolContext,
+) -> tuple[str, ...] | None:
+    try:
+        runtime_role_resolver = getattr(ctx.deps, "runtime_role_resolver", None)
+        if runtime_role_resolver is not None:
+            role = await runtime_role_resolver.get_effective_role_async(
+                run_id=ctx.deps.run_id,
+                role_id=ctx.deps.role_id,
+            )
+        else:
+            role = ctx.deps.role_registry.get(ctx.deps.role_id)
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="tool.policy.role_resolution_failed",
+            message="Tool runtime policy could not resolve role capabilities",
+            payload={
+                "role_id": ctx.deps.role_id,
+                "task_id": ctx.deps.task_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return ()
+    tools = set(role.tools)
+    tools.update(await _runtime_snapshot_tool_names_for_policy(ctx=ctx))
+    return tuple(sorted(tools))
+
+
+async def _runtime_snapshot_tool_names_for_policy(
+    *,
+    ctx: ToolContext,
+) -> tuple[str, ...]:
+    agent_repo = getattr(ctx.deps, "agent_repo", None)
+    if not isinstance(agent_repo, _RuntimeToolsAgentRepository):
+        return ()
+    try:
+        instance = await agent_repo.get_instance_async(ctx.deps.instance_id)
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="tool.policy.runtime_tools_snapshot_unavailable",
+            message="Tool runtime policy could not load runtime tool snapshot",
+            payload={
+                "role_id": ctx.deps.role_id,
+                "task_id": ctx.deps.task_id,
+                "instance_id": ctx.deps.instance_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return ()
+    if not instance.runtime_tools_json.strip():
+        return ()
+    try:
+        snapshot = RuntimeToolsSnapshot.model_validate_json(instance.runtime_tools_json)
+    except ValidationError as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="tool.policy.runtime_tools_snapshot_invalid",
+            message="Tool runtime policy ignored invalid runtime tool snapshot",
+            payload={
+                "role_id": ctx.deps.role_id,
+                "task_id": ctx.deps.task_id,
+                "instance_id": ctx.deps.instance_id,
+                "error_type": type(exc).__name__,
+            },
+        )
+        return ()
+    return _runtime_snapshot_tool_names(snapshot)
+
+
+def _runtime_snapshot_tool_names(snapshot: RuntimeToolsSnapshot) -> tuple[str, ...]:
+    tools = set[str]()
+    for entry in _runtime_snapshot_entries(snapshot):
+        tools.add(entry.name)
+    return tuple(sorted(tools))
+
+
+def _runtime_snapshot_entries(
+    snapshot: RuntimeToolsSnapshot,
+) -> tuple[RuntimeToolSnapshotEntry, ...]:
+    return snapshot.local_tools + snapshot.skill_tools + snapshot.mcp_tools
 
 
 class _RequiresApprovalPolicy(Protocol):

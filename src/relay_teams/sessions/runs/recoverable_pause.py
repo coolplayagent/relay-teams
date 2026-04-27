@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.providers.llm_retry import LlmRetryErrorInfo
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimePhase
 
 
 class RecoverableRunPausePayload(BaseModel):
@@ -20,6 +21,8 @@ class RecoverableRunPausePayload(BaseModel):
     error_message: str = Field(min_length=1)
     retries_used: int = Field(default=0, ge=0)
     total_attempts: int = Field(default=1, ge=1)
+    runtime_phase: RunRuntimePhase | None = None
+    assistant_message: str = ""
 
     @classmethod
     def from_request(
