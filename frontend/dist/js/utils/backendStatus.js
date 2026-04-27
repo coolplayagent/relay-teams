@@ -264,7 +264,7 @@ function baseUrlMatchesCurrentOrigin(rawUrl) {
             && expectedHost === normalizeComparableHost(current.hostname)
             && effectivePort(expected) === effectivePort(current);
     } catch (_) {
-        return true;
+        return false;
     }
 }
 

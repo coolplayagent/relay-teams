@@ -382,6 +382,15 @@ globalThis.fetch = async url => {
             json: async () => ({ status: 'alive' }),
         };
     }
+    if (safeUrl === 'http://127.0.0.1:8002/live') {
+        return {
+            ok: true,
+            json: async () => ({
+                status: 'alive',
+                main_base_url: 'not-a-url',
+            }),
+        };
+    }
     if (safeUrl === '/api/system/live') {
         return { ok: false, json: async () => ({}) };
     }
@@ -421,3 +430,4 @@ console.log(JSON.stringify({
         "/api/system/live",
     ]
     assert "http://127.0.0.1:8001/live" in payload["calls"]
+    assert "http://127.0.0.1:8002/live" in payload["calls"]
