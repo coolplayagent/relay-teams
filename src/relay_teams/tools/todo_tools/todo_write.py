@@ -23,11 +23,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Replace the entire run-scoped todo list for the current run."""
 
-        def _action(items: list[TodoItem]) -> dict[str, JsonValue]:
+        async def _action(items: list[TodoItem]) -> dict[str, JsonValue]:
             service = ctx.deps.todo_service
             if service is None:
                 raise RuntimeError("Todo service is not configured")
-            snapshot = service.replace_for_run(
+            snapshot = await service.replace_for_run_async(
                 run_id=ctx.deps.run_id,
                 session_id=ctx.deps.session_id,
                 items=items,
