@@ -252,6 +252,38 @@ def test_mcp_add_preserves_quoted_command_path_with_spaces(monkeypatch) -> None:
     }
 
 
+def test_mcp_add_preserves_unquoted_windows_command_path(monkeypatch) -> None:
+    fake_service = _FakeMcpService()
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_cli.load_mcp_service",
+        lambda: fake_service,
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        [
+            "mcp",
+            "add",
+            "filesystem",
+            "--command",
+            "C:\\tools\\npx.cmd",
+            "--arg",
+            "@modelcontextprotocol/server-filesystem",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fake_service.added_config == {
+        "name": "filesystem",
+        "server_config": {
+            "transport": "stdio",
+            "command": "C:\\tools\\npx.cmd",
+            "args": ["@modelcontextprotocol/server-filesystem"],
+        },
+        "overwrite": False,
+    }
+
+
 def test_mcp_add_supports_remote_config_json(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.mcp.mcp_cli.load_mcp_service",

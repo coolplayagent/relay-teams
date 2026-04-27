@@ -408,7 +408,7 @@ def _build_server_config(
         resolved_transport = transport or "stdio"
         if resolved_transport != "stdio":
             raise typer.BadParameter("--transport must be stdio when using --command")
-        command_parts = shlex.split(command)
+        command_parts = _split_command_option(command)
         if not command_parts:
             raise typer.BadParameter("--command must be non-empty")
         config: dict[str, JsonValue] = {
@@ -449,3 +449,15 @@ def _parse_key_value_options(
             raise typer.BadParameter(f"{option_name} values must use KEY=VALUE")
         parsed[key.strip()] = item
     return parsed
+
+
+def _split_command_option(command: str) -> list[str]:
+    return [
+        _strip_surrounding_quotes(part) for part in shlex.split(command, posix=False)
+    ]
+
+
+def _strip_surrounding_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
