@@ -313,6 +313,20 @@ When the provider exposes per-model context-limit metadata in the catalog payloa
 The settings UI uses `model_entries[].context_window` to auto-fill the profile context window field after model discovery. Providers that return only model ids will still populate `models[]`, but `context_window` remains user-specified.
 For a small set of known provider/model pairs, the backend also applies a built-in context-window fallback when the provider returns only model ids.
 
+### `POST /system/configs/model/codeagent/auth:verify`
+
+Verifies whether a saved CodeAgent profile still has a usable SSO session.
+The request body is `{ "profile_name": "<saved profile name>" }`.
+The backend only accepts saved `codeagent` profiles for this endpoint. It validates the saved session by making a lightweight authenticated CodeAgent request with the currently available token, and only forces a refresh when the first authenticated request comes back `401/403`.
+
+The response shape is:
+
+- `status`: `valid`, `reauth_required`, or `error`
+- `checked_at`
+- optional `detail`
+
+`reauth_required` means the saved session can no longer complete an authenticated CodeAgent request, including one retry through the refresh path, and the user must sign in again. The persisted `codeagent_auth.has_refresh_token` flag still means saved credentials exist; it does not mean the current session has already been verified.
+
 ### `POST /system/configs/model:reload`
 
 Reloads model config into runtime.

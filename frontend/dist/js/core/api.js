@@ -61,6 +61,7 @@ export {
     fetchModelConfig,
     fetchModelCatalog,
     fetchCodeAgentOAuthSession,
+    verifyCodeAgentAuth,
     fetchModelFallbackConfig,
     fetchModelProfiles,
     fetchNotificationConfig,

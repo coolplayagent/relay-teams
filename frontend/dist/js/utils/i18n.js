@@ -3801,8 +3801,11 @@ Object.assign(TRANSLATIONS['zh-CN'], {
 Object.assign(TRANSLATIONS['en-US'], {
     'settings.model.codeagent_sign_in_sso': 'Sign in with SSO',
     'settings.model.codeagent_sso_starting': 'Starting SSO login...',
+    'settings.model.codeagent_sso_saved': 'Saved sign-in requires verification',
+    'settings.model.codeagent_sso_verifying': 'Verifying saved sign-in',
     'settings.model.codeagent_sso_waiting': 'Waiting for SSO callback',
     'settings.model.codeagent_sso_signed_in': 'Signed in',
+    'settings.model.codeagent_sso_reauth_required': 'Saved sign-in expired. Sign in with SSO again.',
     'settings.model.codeagent_sso_popup_blocked': 'SSO popup was blocked. Click Sign in with SSO again to continue.',
     'settings.model.codeagent_sso_timed_out': 'SSO login timed out',
     'settings.model.codeagent_sso_failed': 'SSO failed: {error}',
@@ -3811,8 +3814,11 @@ Object.assign(TRANSLATIONS['en-US'], {
 Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.model.codeagent_sign_in_sso': '使用 SSO 登录',
     'settings.model.codeagent_sso_starting': '正在启动 SSO 登录...',
+    'settings.model.codeagent_sso_saved': '已保存登录，需校验状态',
+    'settings.model.codeagent_sso_verifying': '正在校验已保存的登录状态',
     'settings.model.codeagent_sso_waiting': '等待 SSO 回调',
     'settings.model.codeagent_sso_signed_in': '已登录',
+    'settings.model.codeagent_sso_reauth_required': '已保存登录已失效，请重新使用 SSO 登录。',
     'settings.model.codeagent_sso_popup_blocked': 'SSO 弹窗被拦截，请再次点击“使用 SSO 登录”继续。',
     'settings.model.codeagent_sso_timed_out': 'SSO 登录超时',
     'settings.model.codeagent_sso_failed': 'SSO 登录失败：{error}',

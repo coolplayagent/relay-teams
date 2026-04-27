@@ -8,6 +8,8 @@ from pathlib import Path
 import subprocess
 from typing import cast
 
+from .css_helpers import load_components_css
+
 DEFAULT_MOCK_API_SOURCE = """
 export async function fetchModelProfiles() {
     return {
@@ -164,6 +166,16 @@ export async function fetchCodeAgentOAuthSession(authSessionId) {
     };
 }
 
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return {
+        status: "valid",
+        checked_at: "2026-04-27T02:00:00Z",
+        detail: null,
+    };
+}
+
 export async function reloadModelConfig() {
     globalThis.__reloadCalled = true;
 }
@@ -172,6 +184,23 @@ export async function deleteModelProfile(name) {
     globalThis.__deletedProfileName = name;
 }
 """.strip()
+
+
+def test_codeagent_sso_button_uses_shared_form_control_height() -> None:
+    components_css = load_components_css()
+    rule_start = components_css.index(".codeagent-sso-login-btn {")
+    rule_end = components_css.index(".codeagent-sso-login-btn:disabled {", rule_start)
+    button_rule = components_css[rule_start:rule_end]
+    override_rule_start = components_css.index(
+        ".settings-list-action.codeagent-sso-login-btn {"
+    )
+    override_rule_end = components_css.index(
+        ".settings-list-action:hover {", override_rule_start
+    )
+    override_rule = components_css[override_rule_start:override_rule_end]
+
+    assert "min-height: 42px;" in button_rule
+    assert "min-height: 42px;" in override_rule
 
 
 def test_saving_model_profile_restores_profile_list_visibility(
@@ -3596,6 +3625,299 @@ export async function deleteModelProfile(name) {
     assert payload["authStatus"] == "SSO failed: poll failed for failed-auth-session"
 
 
+def test_editing_saved_codeagent_profile_verifies_persisted_sign_in(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    verifyCalls: globalThis.__codeAgentAuthVerifyCalls,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                has_access_token: true,
+                has_refresh_token: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return { status: "valid", checked_at: "2026-04-27T02:00:00Z", detail: null };
+}
+""".strip(),
+    )
+
+    assert payload["verifyCalls"] == ["codeagent-profile"]
+    assert payload["authStatus"] == "Signed in"
+
+
+def test_saved_codeagent_profile_clears_verifying_after_provider_switch_during_verify(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+
+const verifyingWhilePending = document.getElementById("profile-codeagent-login-status").disabled;
+document.getElementById("profile-provider").value = "openai_compatible";
+document.getElementById("profile-provider").onchange();
+
+globalThis.__resolveCodeAgentAuthVerify({
+    status: "valid",
+    checked_at: "2026-04-27T02:00:00Z",
+    detail: null,
+});
+await Promise.resolve();
+
+document.getElementById("profile-provider").value = "codeagent";
+document.getElementById("profile-provider").onchange();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    verifyCalls: globalThis.__codeAgentAuthVerifyCalls,
+    verifyingWhilePending,
+    loginDisabledAfterResolve: document.getElementById("profile-codeagent-login-status").disabled,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+    providerValue: document.getElementById("profile-provider").value,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                has_access_token: true,
+                has_refresh_token: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return new Promise(resolve => {
+        globalThis.__resolveCodeAgentAuthVerify = resolve;
+    });
+}
+""".strip(),
+    )
+
+    assert payload["verifyCalls"] == ["codeagent-profile"]
+    assert payload["verifyingWhilePending"] is True
+    assert payload["loginDisabledAfterResolve"] is False
+    assert payload["authStatus"] == "Signed in"
+    assert payload["providerValue"] == "codeagent"
+
+
+def test_saved_codeagent_profile_ignores_stale_verify_response_after_reopen(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+const editButtons = document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn");
+editButtons.find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+
+document.getElementById("cancel-profile-btn").onclick();
+editButtons.find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+
+globalThis.__verifyResolvers[1]({
+    status: "valid",
+    checked_at: "2026-04-27T02:00:01Z",
+    detail: null,
+});
+await Promise.resolve();
+
+globalThis.__verifyResolvers[0]({
+    status: "reauth_required",
+    checked_at: "2026-04-27T02:00:00Z",
+    detail: "expired session",
+});
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    verifyCalls: globalThis.__codeAgentAuthVerifyCalls,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+    loginDisabled: document.getElementById("profile-codeagent-login-status").disabled,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                has_access_token: true,
+                has_refresh_token: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    globalThis.__verifyResolvers = globalThis.__verifyResolvers || [];
+    return new Promise(resolve => {
+        globalThis.__verifyResolvers.push(resolve);
+    });
+}
+""".strip(),
+    )
+
+    assert payload["verifyCalls"] == ["codeagent-profile", "codeagent-profile"]
+    assert payload["authStatus"] == "Signed in"
+    assert payload["loginDisabled"] is False
+
+
+def test_saved_codeagent_profile_with_expired_sign_in_requires_reauth_before_discovery(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+await Promise.resolve();
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    verifyCalls: globalThis.__codeAgentAuthVerifyCalls,
+    discoverPayload: globalThis.__discoverPayload || null,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+    discoveryStatus: document.getElementById("profile-model-discovery-status").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                has_access_token: true,
+                has_refresh_token: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return {
+        status: "reauth_required",
+        checked_at: "2026-04-27T02:00:00Z",
+        detail: "未识别到用户认证信息",
+    };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+""".strip(),
+    )
+
+    assert payload["verifyCalls"] == ["codeagent-profile"]
+    assert payload["discoverPayload"] is None
+    assert payload["authStatus"] == "Saved sign-in expired. Sign in with SSO again."
+    assert payload["discoveryStatus"] == (
+        "SSO login expired. Sign in with SSO again before fetching CodeAgent models."
+    )
+
+
 def test_codeagent_sso_polling_stops_when_auth_session_changes(
     tmp_path: Path,
 ) -> None:
@@ -3903,6 +4225,13 @@ def _run_model_profiles_script(
             "    return { policies: [] };\n"
             "}\n"
         )
+    if "fetchModelProfiles" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function fetchModelProfiles() {\n"
+            "    return {};\n"
+            "}\n"
+        )
     if "fetchModelCatalog" not in resolved_mock_api_source:
         resolved_mock_api_source = (
             f"{resolved_mock_api_source}\n\n"
@@ -3912,6 +4241,22 @@ def _run_model_profiles_script(
             "export async function refreshModelCatalog() {\n"
             "    globalThis.__refreshModelCatalogCount = (globalThis.__refreshModelCatalogCount || 0) + 1;\n"
             "    return fetchModelCatalog();\n"
+            "}\n"
+        )
+    if "probeModelConnection" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function probeModelConnection(payload) {\n"
+            "    globalThis.__probePayload = payload;\n"
+            "    return { ok: true, latency_ms: 42 };\n"
+            "}\n"
+        )
+    if "discoverModelCatalog" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function discoverModelCatalog(payload) {\n"
+            "    globalThis.__discoverPayload = payload;\n"
+            "    return { ok: true, latency_ms: 37, models: [] };\n"
             "}\n"
         )
     if "startCodeAgentOAuth" not in resolved_mock_api_source:
@@ -3932,6 +4277,36 @@ def _run_model_profiles_script(
             "    globalThis.__codeAgentOAuthSessionChecks = globalThis.__codeAgentOAuthSessionChecks || [];\n"
             "    globalThis.__codeAgentOAuthSessionChecks.push(authSessionId);\n"
             "    return { completed: true };\n"
+            "}\n"
+        )
+    if "verifyCodeAgentAuth" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function verifyCodeAgentAuth(profileName) {\n"
+            "    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];\n"
+            "    globalThis.__codeAgentAuthVerifyCalls.push(profileName);\n"
+            "    return { status: 'valid', checked_at: '2026-04-27T02:00:00Z', detail: null };\n"
+            "}\n"
+        )
+    if "saveModelProfile" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function saveModelProfile(name, profile) {\n"
+            "    globalThis.__savedProfile = { name, profile };\n"
+            "}\n"
+        )
+    if "reloadModelConfig" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function reloadModelConfig() {\n"
+            "    globalThis.__reloadCalled = true;\n"
+            "}\n"
+        )
+    if "deleteModelProfile" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function deleteModelProfile(name) {\n"
+            "    globalThis.__deletedProfileName = name;\n"
             "}\n"
         )
     mock_api_path.write_text(resolved_mock_api_source, encoding="utf-8")
@@ -4018,8 +4393,11 @@ const translations = {
     "settings.model.image_capability_unsupported": "Text only",
     "settings.model.codeagent_sign_in_sso": "Sign in with SSO",
     "settings.model.codeagent_sso_starting": "Starting SSO login",
+    "settings.model.codeagent_sso_saved": "Saved sign-in requires verification",
+    "settings.model.codeagent_sso_verifying": "Verifying saved sign-in",
     "settings.model.codeagent_sso_waiting": "Waiting for SSO callback",
     "settings.model.codeagent_sso_signed_in": "Signed in",
+    "settings.model.codeagent_sso_reauth_required": "Saved sign-in expired. Sign in with SSO again.",
     "settings.model.codeagent_sso_popup_blocked": "SSO popup was blocked. Click Sign in with SSO again to continue.",
     "settings.model.codeagent_sso_timed_out": "SSO login timed out",
     "settings.model.codeagent_sso_failed": "SSO failed: {error}",

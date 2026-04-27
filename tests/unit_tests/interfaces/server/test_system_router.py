@@ -89,6 +89,7 @@ from relay_teams.interfaces.server.ui_language_models import (
 )
 from relay_teams.interfaces.server.routers import system
 from relay_teams.providers.model_connectivity import (
+    CodeAgentAuthVerifyResult,
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
     ModelDiscoveryRequest,
@@ -139,6 +140,12 @@ class _FakeSystemService:
         self.saved_model_fallback_config: dict[str, object] | None = None
         self.saved_model_profile: tuple[str, dict[str, object], str | None] | None = (
             None
+        )
+        self.last_verified_codeagent_profile_name: str | None = None
+        self.codeagent_auth_verify_result = CodeAgentAuthVerifyResult(
+            status="valid",
+            checked_at=datetime.now(UTC),
+            detail=None,
         )
         self.model_profile_error: Exception | None = None
         self.model_profile_delete_error: Exception | None = None
@@ -747,6 +754,14 @@ class _FakeSystemService:
                 "retryable": False,
             }
         )
+
+    def verify_codeagent_auth(
+        self,
+        *,
+        profile_name: str,
+    ) -> CodeAgentAuthVerifyResult:
+        self.last_verified_codeagent_profile_name = profile_name
+        return self.codeagent_auth_verify_result
 
     def probe_webhook_connectivity(
         self,
@@ -3199,6 +3214,49 @@ def test_codeagent_oauth_status_preserves_explicit_oauth_error_status(
     assert response.status_code == 409
     assert response.json()["detail"] == "session denied"
     clear_codeagent_oauth_session_store()
+
+
+def test_verify_codeagent_auth_returns_service_result() -> None:
+    service = _FakeSystemService()
+    service.codeagent_auth_verify_result = CodeAgentAuthVerifyResult(
+        status="reauth_required",
+        checked_at=datetime(2026, 4, 27, 2, 0, tzinfo=UTC),
+        detail="未识别到用户认证信息",
+    )
+    client = _create_test_client(service)
+
+    response = client.post(
+        "/api/system/configs/model/codeagent/auth:verify",
+        json={"profile_name": "codeagent-profile"},
+    )
+
+    assert response.status_code == 200
+    assert service.last_verified_codeagent_profile_name == "codeagent-profile"
+    assert response.json() == {
+        "status": "reauth_required",
+        "checked_at": "2026-04-27T02:00:00Z",
+        "detail": "未识别到用户认证信息",
+    }
+
+
+def test_verify_codeagent_auth_returns_bad_request_for_validation_errors() -> None:
+    class _InvalidCodeAgentService(_FakeSystemService):
+        def verify_codeagent_auth(
+            self,
+            *,
+            profile_name: str,
+        ) -> CodeAgentAuthVerifyResult:
+            raise ValueError(f"Unknown CodeAgent profile: {profile_name}")
+
+    client = _create_test_client(_InvalidCodeAgentService())
+
+    response = client.post(
+        "/api/system/configs/model/codeagent/auth:verify",
+        json={"profile_name": "missing"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown CodeAgent profile: missing"
 
 
 def test_save_model_profile_accepts_source_name_for_rename() -> None:

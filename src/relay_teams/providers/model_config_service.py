@@ -14,6 +14,7 @@ from relay_teams.providers.model_config import (
 )
 from relay_teams.providers.model_catalog import ModelCatalogResult, ModelCatalogService
 from relay_teams.providers.model_connectivity import (
+    CodeAgentAuthVerifyResult,
     ModelConnectivityProbeRequest,
     ModelConnectivityProbeResult,
     ModelConnectivityProbeService,
@@ -118,6 +119,15 @@ class ModelConfigService:
         request: ModelDiscoveryRequest,
     ) -> ModelDiscoveryResult:
         return self._model_connectivity_probe_service.discover_models(request)
+
+    def verify_codeagent_auth(
+        self,
+        *,
+        profile_name: str,
+    ) -> CodeAgentAuthVerifyResult:
+        return self._model_connectivity_probe_service.verify_codeagent_auth(
+            profile_name=profile_name
+        )
 
     def reload_model_config(self) -> None:
         runtime = load_runtime_config(

@@ -91,9 +91,25 @@ class _CodeAgentTokenRecord:
 
 
 class CodeAgentOAuthError(RuntimeError):
-    def __init__(self, message: str, *, status_code: int | None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None,
+        error_code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.error_code = error_code
+
+    @property
+    def auth_invalid(self) -> bool:
+        if self.status_code in {401, 403}:
+            return True
+        if self.error_code == "DEV.00000001":
+            return True
+        normalized_message = str(self).strip()
+        return normalized_message == "未识别到用户认证信息"
 
 
 class CodeAgentTokenService:
@@ -829,11 +845,13 @@ def _build_token_result(
 ) -> CodeAgentOAuthTokenResult:
     payload = _response_json(response)
     if response.status_code >= 400:
+        error_code = _extract_error_code(payload)
         raise CodeAgentOAuthError(
             _extract_error_message(payload)
             or response.text
             or "CodeAgent OAuth request failed.",
             status_code=response.status_code,
+            error_code=error_code,
         )
     access_token = _extract_str(payload, ("access_token", "accessToken", "token"))
     refresh_token = _extract_str(payload, ("refresh_token", "refreshToken"))
@@ -860,11 +878,13 @@ def _build_polled_token_result(
 ) -> CodeAgentOAuthTokenResult | None:
     payload = _response_json(response)
     if response.status_code >= 400:
+        error_code = _extract_error_code(payload)
         raise CodeAgentOAuthError(
             _extract_error_message(payload)
             or response.text
             or "CodeAgent OAuth token polling failed.",
             status_code=response.status_code,
+            error_code=error_code,
         )
     if response.status_code != 200:
         return None
@@ -877,6 +897,7 @@ def _build_polled_token_result(
             raise CodeAgentOAuthError(
                 error_message,
                 status_code=response.status_code,
+                error_code=_extract_error_code(payload),
             )
         return None
     refresh_token = _extract_str(payload, ("refresh_token", "refreshToken"))
@@ -964,7 +985,7 @@ def _extract_int(payload: object, keys: tuple[str, ...]) -> int | None:
 
 def _extract_error_message(payload: object) -> str | None:
     if isinstance(payload, dict):
-        for key in ("message", "detail", "error_description"):
+        for key in ("message", "detail", "error_description", "error_msg"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -975,6 +996,21 @@ def _extract_error_message(payload: object) -> str | None:
                 return message.strip()
         if isinstance(error, str) and error.strip():
             return error.strip()
+    return None
+
+
+def _extract_error_code(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("error_code", "errorCode", "code"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    error = payload.get("error")
+    if isinstance(error, dict):
+        code = error.get("code")
+        if isinstance(code, str) and code.strip():
+            return code.strip()
     return None
 
 

@@ -79,6 +79,7 @@ export {
     fetchSystemHealth,
     discoverModelCatalog,
     fetchCodeAgentOAuthSession,
+    verifyCodeAgentAuth,
     probeClawHubConnectivity,
     deleteClawHubSkill,
     probeGitHubConnectivity,
