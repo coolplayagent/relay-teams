@@ -19,11 +19,11 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     async def todo_read(ctx: ToolContext) -> dict[str, JsonValue]:
         """Return the current run-scoped todo snapshot."""
 
-        def _action() -> dict[str, JsonValue]:
+        async def _action() -> dict[str, JsonValue]:
             service = ctx.deps.todo_service
             if service is None:
                 raise RuntimeError("Todo service is not configured")
-            snapshot = service.get_for_run(
+            snapshot = await service.get_for_run_async(
                 run_id=ctx.deps.run_id,
                 session_id=ctx.deps.session_id,
             )

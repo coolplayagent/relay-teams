@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Sequence
 from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import cast
@@ -36,6 +37,10 @@ class _FakeTodoService:
         self.get_calls: list[dict[str, object]] = []
 
     def get_for_run(self, *, run_id: str, session_id: str) -> TodoSnapshot:
+        _ = (run_id, session_id)
+        raise AssertionError("todo_read should use the async todo service path")
+
+    async def get_for_run_async(self, *, run_id: str, session_id: str) -> TodoSnapshot:
         self.get_calls.append({"run_id": run_id, "session_id": session_id})
         return TodoSnapshot(
             run_id=run_id,
@@ -49,7 +54,25 @@ class _FakeTodoService:
         *,
         run_id: str,
         session_id: str,
-        items,
+        items: Sequence[TodoItem],
+        updated_by_role_id: str | None = None,
+        updated_by_instance_id: str | None = None,
+    ) -> TodoSnapshot:
+        _ = (
+            run_id,
+            session_id,
+            items,
+            updated_by_role_id,
+            updated_by_instance_id,
+        )
+        raise AssertionError("todo_write should use the async todo service path")
+
+    async def replace_for_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        items: Sequence[TodoItem],
         updated_by_role_id: str | None = None,
         updated_by_instance_id: str | None = None,
     ) -> TodoSnapshot:
@@ -116,7 +139,7 @@ async def test_todo_write_calls_service_with_full_snapshot(
         *,
         tool_name: str,
         args_summary: dict[str, object],
-        action: Callable[..., Awaitable[dict[str, object]]],
+        action: Callable[..., object],
         raw_args: dict[str, object] | None = None,
         **_: object,
     ) -> dict[str, object]:
@@ -183,7 +206,10 @@ async def test_todo_read_returns_current_snapshot(
         **_: object,
     ) -> dict[str, object]:
         del ctx, tool_name, args_summary, raw_args
-        return cast(dict[str, object], action())
+        result = action()
+        if inspect.isawaitable(result):
+            return await result
+        return cast(dict[str, object], result)
 
     monkeypatch.setattr(todo_read_module, "execute_tool_call", _fake_execute_tool_call)
 
