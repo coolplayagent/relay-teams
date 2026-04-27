@@ -5,7 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -46,7 +45,7 @@ class UpdateTaskRequest(BaseModel):
 async def list_tasks(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> list[TaskRecord]:
-    return list(await call_maybe_async(service.list_tasks))
+    return list(await service.list_tasks_async())
 
 
 @router.post("/runs/{run_id}")
@@ -74,8 +73,7 @@ async def list_tasks_for_run(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
     try:
-        return await call_maybe_async(
-            service.list_delegated_tasks,
+        return await service.list_delegated_tasks_async(
             run_id=run_id,
             include_root=include_root,
         )
@@ -89,7 +87,7 @@ async def get_task(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> TaskRecord:
     try:
-        return await call_maybe_async(service.get_task, task_id=task_id)
+        return await service.get_task_async(task_id=task_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Task not found") from exc
 
@@ -101,8 +99,7 @@ async def update_task_by_id(
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
     try:
-        return await call_maybe_async(
-            service.update_task,
+        return await service.update_task_async(
             run_id=None,
             task_id=task_id,
             update=TaskUpdate(

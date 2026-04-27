@@ -390,7 +390,8 @@ async def test_create_tasks_denied_by_hook_does_not_persist_task(
     assert [record.envelope.task_id for record in task_repo.list_all()] == ["task-root"]
 
 
-def test_update_task_allows_created_only(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_update_task_allows_created_only(tmp_path: Path) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
         tmp_path / "task_orchestration_update.db"
     )
@@ -407,7 +408,7 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
         )
     )
 
-    updated = service.update_task(
+    updated = await service.update_task_async(
         run_id="run-1",
         task_id=created.envelope.task_id,
         update=TaskUpdate(
@@ -426,14 +427,15 @@ def test_update_task_allows_created_only(tmp_path: Path) -> None:
 
     task_repo.update_status(created.envelope.task_id, TaskStatus.ASSIGNED)
     with pytest.raises(ValueError, match="only created tasks can be updated"):
-        service.update_task(
+        await service.update_task_async(
             run_id="run-1",
             task_id=created.envelope.task_id,
             update=TaskUpdate(title="Should fail"),
         )
 
 
-def test_update_task_recomputes_verification_when_spec_changes(
+@pytest.mark.asyncio
+async def test_update_task_recomputes_verification_when_spec_changes(
     tmp_path: Path,
 ) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
@@ -456,7 +458,7 @@ def test_update_task_recomputes_verification_when_spec_changes(
         )
     )
 
-    updated = service.update_task(
+    updated = await service.update_task_async(
         run_id="run-1",
         task_id=created.envelope.task_id,
         update=TaskUpdate(
@@ -485,7 +487,8 @@ def test_update_task_recomputes_verification_when_spec_changes(
     assert verification_payload["evidence_expectations"] == ["pytest output"]
 
 
-def test_update_task_handoff_only_preserves_missing_title(
+@pytest.mark.asyncio
+async def test_update_task_handoff_only_preserves_missing_title(
     tmp_path: Path,
 ) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
@@ -505,7 +508,7 @@ def test_update_task_handoff_only_preserves_missing_title(
     )
     task_repo.update_status(created.envelope.task_id, TaskStatus.ASSIGNED)
 
-    updated = service.update_task(
+    updated = await service.update_task_async(
         run_id="run-1",
         task_id=created.envelope.task_id,
         update=TaskUpdate(
@@ -1053,7 +1056,8 @@ async def test_dispatch_task_rejects_invalid_statuses(
         )
 
 
-def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
     service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
         tmp_path / "task_orchestration_list.db"
     )
@@ -1070,7 +1074,7 @@ def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
         )
     )
 
-    payload = service.list_delegated_tasks(run_id="run-1")
+    payload = await service.list_delegated_tasks_async(run_id="run-1")
 
     assert "ok" not in payload
     tasks = cast(list[JsonValue], payload["tasks"])
