@@ -55,9 +55,7 @@ async function probeBackendHealth() {
         const controlProbe = await probeJson(controlUrl, CONTROL_PLANE_TIMEOUT_MS);
         if (controlProbe.ok && isControlPlaneLivePayload(controlProbe.payload)) {
             rememberControlPlaneLiveUrl(controlUrl);
-            const mainProbe = await probeJson('/api/system/live', MAIN_LIVE_TIMEOUT_MS);
-            if (mainProbe.ok && isLivePayload(mainProbe.payload)) {
-                markBackendOnline(t('backend.status.connected'));
+            if (await confirmMainBackendOnline()) {
                 return true;
             }
             markBackendBusy(t('backend.status.busy'));
@@ -71,6 +69,9 @@ async function probeBackendHealth() {
         const fallbackProbe = await probeJson(fallbackUrl, CONTROL_PLANE_TIMEOUT_MS);
         if (fallbackProbe.ok && isControlPlaneLivePayload(fallbackProbe.payload)) {
             rememberControlPlaneLiveUrl(fallbackUrl);
+            if (await confirmMainBackendOnline()) {
+                return true;
+            }
             markBackendBusy(t('backend.status.busy'));
             return true;
         }
@@ -82,6 +83,15 @@ async function probeBackendHealth() {
         return true;
     }
     markBackendOffline(t('backend.status.offline'));
+    return false;
+}
+
+async function confirmMainBackendOnline() {
+    const mainProbe = await probeJson('/api/system/live', MAIN_LIVE_TIMEOUT_MS);
+    if (mainProbe.ok && isLivePayload(mainProbe.payload)) {
+        markBackendOnline(t('backend.status.connected'));
+        return true;
+    }
     return false;
 }
 

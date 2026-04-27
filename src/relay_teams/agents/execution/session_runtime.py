@@ -85,22 +85,26 @@ class StreamableModelRequestNode(Protocol):
 
 
 class AgentToolEventStream(Protocol):
-    def __aiter__(self) -> AsyncIterator[object]: ...
+    def __aiter__(self) -> AsyncIterator[object]:
+        raise NotImplementedError  # pragma: no cover
 
 
 class AgentToolEventStreamContext(Protocol):
-    async def __aenter__(self) -> AgentToolEventStream: ...
+    async def __aenter__(self) -> AgentToolEventStream:
+        raise NotImplementedError  # pragma: no cover
 
     async def __aexit__(
         self,
         exc_type: object,
         exc: object,
         tb: object,
-    ) -> bool | None: ...
+    ) -> bool | None:
+        raise NotImplementedError  # pragma: no cover
 
 
 class StreamableToolCallNode(Protocol):
-    def stream(self, ctx: object) -> AgentToolEventStreamContext: ...
+    def stream(self, ctx: object) -> AgentToolEventStreamContext:
+        raise NotImplementedError  # pragma: no cover
 
 
 class AgentRun(Protocol):

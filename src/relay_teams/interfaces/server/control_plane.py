@@ -109,10 +109,15 @@ def allocate_control_plane_config(
 ) -> ControlPlaneServerConfig:
     control_host = _control_host_for_bind(host)
     configured_port = _env_int(os.environ, CONTROL_PLANE_PORT_ENV)
+    excluded_ports = frozenset({port})
     control_port = (
         configured_port
-        if configured_port is not None
-        else _find_available_port(control_host, preferred_port=port + 1)
+        if configured_port is not None and configured_port not in excluded_ports
+        else _find_available_port(
+            control_host,
+            preferred_port=port + 1,
+            excluded_ports=excluded_ports,
+        )
     )
     return ControlPlaneServerConfig(
         host=control_host,
@@ -174,10 +179,10 @@ def _build_handler(
     class ControlPlaneRequestHandler(BaseHTTPRequestHandler):
         server_version = "AgentTeamsControlPlane/1.0"
 
-        def do_OPTIONS(self) -> None:
+        def handle_options(self) -> None:
             self._send_empty(204)
 
-        def do_GET(self) -> None:
+        def handle_get(self) -> None:
             path = urlsplit(self.path).path
             if path not in {"/live", "/api/system/live"}:
                 self._send_json({"detail": "Not found"}, status_code=404)
@@ -188,10 +193,6 @@ def _build_handler(
                 main_base_url=config.main_base_url,
             )
             self._send_json(payload.model_dump(mode="json"))
-
-        def log_message(self, format: str, *args: object) -> None:
-            _ = (format, args)
-            return
 
         def _send_empty(self, status_code: int) -> None:
             self.send_response(status_code)
@@ -218,12 +219,42 @@ def _build_handler(
             self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Accept, Content-Type")
 
+    def suppress_log_message(
+        request_handler: BaseHTTPRequestHandler,
+        message_format: str,
+        *args: object,
+    ) -> None:
+        _ = (request_handler, message_format, args)
+
+    setattr(
+        ControlPlaneRequestHandler,
+        "do_OPTIONS",
+        ControlPlaneRequestHandler.handle_options,
+    )
+    setattr(
+        ControlPlaneRequestHandler,
+        "do_GET",
+        ControlPlaneRequestHandler.handle_get,
+    )
+    setattr(ControlPlaneRequestHandler, "log_message", suppress_log_message)
     return ControlPlaneRequestHandler
 
 
-def _find_available_port(host: str, *, preferred_port: int) -> int:
+def _find_available_port(
+    host: str,
+    *,
+    preferred_port: int,
+    excluded_ports: frozenset[int] = frozenset(),
+) -> int:
     start_port = max(1, min(65535, preferred_port))
     for port in range(start_port, min(65535, start_port + 50) + 1):
+        if port in excluded_ports:
+            continue
+        if _can_bind(host, port):
+            return port
+    for port in range(start_port - 1, max(1, start_port - 50) - 1, -1):
+        if port in excluded_ports:
+            continue
         if _can_bind(host, port):
             return port
     raise RuntimeError("No control-plane port is available near the API port")
