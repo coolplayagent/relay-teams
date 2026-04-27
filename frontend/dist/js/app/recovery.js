@@ -14,6 +14,7 @@ import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import {
     answerUserQuestion,
     fetchSessionRecovery,
+    invalidateSessionRecovery,
     resolveToolApproval,
     resumeRun,
     stopBackgroundTask,
@@ -87,7 +88,7 @@ function handleBackgroundTaskPanelToggle(runId) {
 
 export async function hydrateSessionView(
     sessionId = state.currentSessionId,
-    { includeRounds = true, quiet = true, roundsScrollPolicy = '' } = {},
+    { includeRounds = true, quiet = true, roundsScrollPolicy = '', signal = null } = {},
 ) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) {
@@ -95,6 +96,7 @@ export async function hydrateSessionView(
         clearSessionRecovery();
         return null;
     }
+    throwIfAborted(signal);
 
     startSessionContinuity(safeSessionId);
     const preserveActiveSubagentView = shouldPreserveActiveSubagentView(safeSessionId);
@@ -108,15 +110,18 @@ export async function hydrateSessionView(
         await loadSessionRounds(safeSessionId, {
             render: !preserveActiveSubagentView,
             scrollPolicy: roundsScrollPolicy || undefined,
+            signal,
         });
+        throwIfAborted(signal);
         if (state.currentSessionId !== safeSessionId) return null;
     }
-    const snapshot = await refreshSessionRecovery(safeSessionId, { quiet });
+    const snapshot = await refreshSessionRecovery(safeSessionId, { quiet, signal });
+    throwIfAborted(signal);
     await ensureAutomaticRecoveryStream(snapshot, {
         sessionId: safeSessionId,
         reason: 'hydrate-session',
     });
-    await refreshSubagentRail(safeSessionId, { preserveSelection: true });
+    await refreshSubagentRail(safeSessionId, { preserveSelection: true, signal });
     syncSessionContinuity();
     return snapshot;
 }
@@ -151,6 +156,7 @@ export function stopSessionContinuity(sessionId = null) {
 export function scheduleRecoveryContinuityRefresh({
     sessionId = state.currentSessionId,
     delayMs = 0,
+    forceRefresh = false,
     includeRounds = false,
     quiet = true,
     reason = '',
@@ -161,6 +167,7 @@ export function scheduleRecoveryContinuityRefresh({
     startSessionContinuity(safeSessionId);
     continuity.pendingRefresh = mergePendingRefresh(continuity.pendingRefresh, {
         sessionId: safeSessionId,
+        forceRefresh: forceRefresh === true,
         includeRounds,
         quiet,
         reason,
@@ -254,7 +261,10 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
         const previousActiveRunId = String(
             state.currentRecoverySnapshot?.activeRun?.run_id || state.activeRunId || '',
         ).trim();
-        const snapshot = await fetchSessionRecovery(safeSessionId);
+        const snapshot = await fetchSessionRecovery(safeSessionId, {
+            signal: options.signal,
+        });
+        throwIfAborted(options.signal);
         if (state.currentSessionId !== safeSessionId) return null;
         const normalized = applyRecoverySnapshot(snapshot);
         await reconcileMissingActiveRun(normalized, {
@@ -265,6 +275,9 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
         refreshVisibleContextIndicators({ immediate: true });
         return normalized;
     } catch (e) {
+        if (e?.name === 'AbortError') {
+            throw e;
+        }
         if (e?.status === 404 && state.currentSessionId === safeSessionId) {
             clearSessionRecovery();
             stopSessionContinuity(safeSessionId);
@@ -276,6 +289,12 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
         }
         syncSessionContinuity();
         return null;
+    }
+}
+
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
     }
 }
 
@@ -815,6 +834,7 @@ function mergePendingRefresh(current, next) {
     if (!current) return { ...next };
     return {
         sessionId: next.sessionId || current.sessionId,
+        forceRefresh: current.forceRefresh || next.forceRefresh,
         includeRounds: current.includeRounds || next.includeRounds,
         quiet: current.quiet && next.quiet,
         reason: next.reason || current.reason,
@@ -853,6 +873,9 @@ async function runScheduledContinuityRefresh(request) {
             render: !shouldPreserveActiveSubagentView(safeSessionId),
         });
         if (state.currentSessionId !== safeSessionId) return null;
+    }
+    if (request.forceRefresh === true) {
+        invalidateSessionRecovery(safeSessionId);
     }
     const snapshot = await refreshSessionRecovery(safeSessionId, { quiet: request.quiet !== false });
     await ensureAutomaticRecoveryStream(snapshot, {

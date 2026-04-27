@@ -34,8 +34,8 @@ import {
 import { coordinatorContainerFor } from './utils.js';
 
 export function handleToolCall(payload, eventMeta, instanceId, roleId) {
-    markLlmRetrySucceeded();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    markLlmRetrySucceeded(runId);
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
@@ -76,9 +76,9 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
 }
 
 export function handleToolInputValidationFailed(payload, instanceId, eventMeta = null, roleId = '') {
-    markLlmRetrySucceeded();
-    const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    markLlmRetrySucceeded(runId);
+    const { container } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);
     if (!container) {
@@ -104,9 +104,9 @@ export function handleToolInputValidationFailed(payload, instanceId, eventMeta =
 }
 
 export function handleToolResult(payload, instanceId, eventMeta = null, roleId = '') {
-    markLlmRetrySucceeded();
-    const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || '';
+    markLlmRetrySucceeded(runId);
+    const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const streamKey = isPrimary ? 'primary' : (instanceId || roleId);

@@ -34,6 +34,8 @@ let draftWorkspaceError = '';
 let draftWorkspaceBusy = false;
 let draftWorkspaceMenuOpen = false;
 let mentionHintInput = null;
+let draftEntryAnimationToken = 0;
+const DRAFT_ENTRY_ANIMATION_MS = 160;
 
 export function isNewSessionDraftActive() {
     return state.pendingNewSessionActive === true;
@@ -84,6 +86,7 @@ export function openNewSessionDraft(workspaceId) {
     }
     if (els.chatMessages) {
         els.chatMessages.innerHTML = renderNewSessionDraftMarkup(resolveRecentSession());
+        playDraftEntryAnimation();
     }
     moveComposerIntoDraft();
     if (els.promptInput) {
@@ -101,6 +104,22 @@ export function openNewSessionDraft(workspaceId) {
     document.dispatchEvent(new CustomEvent('agent-teams-new-session-draft-opened', {
         detail: { workspaceId: safeWorkspaceId },
     }));
+}
+
+function playDraftEntryAnimation() {
+    const draftPage = els.chatMessages?.querySelector?.('.new-session-draft-page') || null;
+    if (!draftPage?.classList) {
+        return;
+    }
+    const animationToken = ++draftEntryAnimationToken;
+    draftPage.classList.remove('is-entering');
+    draftPage.classList.add('is-entering');
+    globalThis.setTimeout(() => {
+        if (draftEntryAnimationToken !== animationToken) {
+            return;
+        }
+        draftPage.classList.remove('is-entering');
+    }, DRAFT_ENTRY_ANIMATION_MS);
 }
 
 export function clearNewSessionDraft() {
@@ -128,10 +147,13 @@ export function applyDraftSessionTopology(sessionMode, {
         : null;
 }
 
-export async function ensureSessionForNewSessionDraft() {
+export async function ensureSessionForNewSessionDraft(options = {}) {
     if (!isNewSessionDraftActive()) {
         return state.currentSessionId || '';
     }
+    const shouldCommit = typeof options.shouldCommit === 'function'
+        ? options.shouldCommit
+        : () => true;
 
     const workspaceId = String(state.pendingNewSessionWorkspaceId || '').trim();
     if (!workspaceId) {
@@ -151,10 +173,10 @@ export async function ensureSessionForNewSessionDraft() {
     if (!sessionId) {
         throw new Error('Session creation did not return a session id.');
     }
-
-    state.currentWorkspaceId = workspaceId;
-    state.currentSessionId = sessionId;
-    applyCurrentSessionRecord(created);
+    if (shouldCommit() === false) {
+        emitDetachedDraftSessionCreated(sessionId, workspaceId, created);
+        return '';
+    }
 
     let record = created;
     try {
@@ -166,13 +188,30 @@ export async function ensureSessionForNewSessionDraft() {
                     ? orchestrationPresetId
                     : null,
             });
-            applyCurrentSessionRecord(record);
+            if (shouldCommit() === false) {
+                emitDetachedDraftSessionCreated(sessionId, workspaceId, record);
+                return '';
+            }
         }
     } catch (error) {
+        if (shouldCommit() === false) {
+            emitDetachedDraftSessionCreated(sessionId, workspaceId, created);
+            return '';
+        }
+        state.currentWorkspaceId = workspaceId;
+        state.currentSessionId = sessionId;
+        applyCurrentSessionRecord(created);
         finalizeCreatedDraftSession(sessionId, workspaceId, created);
         throw error;
     }
 
+    if (shouldCommit() === false) {
+        emitDetachedDraftSessionCreated(sessionId, workspaceId, record);
+        return '';
+    }
+    state.currentWorkspaceId = workspaceId;
+    state.currentSessionId = sessionId;
+    applyCurrentSessionRecord(record);
     finalizeCreatedDraftSession(sessionId, workspaceId, record);
     return sessionId;
 }
@@ -184,6 +223,17 @@ function finalizeCreatedDraftSession(sessionId, workspaceId, record) {
     }
     document.dispatchEvent(new CustomEvent('agent-teams-new-session-draft-created', {
         detail: { sessionId, workspaceId, session: record },
+    }));
+}
+
+function emitDetachedDraftSessionCreated(sessionId, workspaceId, record) {
+    document.dispatchEvent(new CustomEvent('agent-teams-new-session-draft-created', {
+        detail: {
+            sessionId,
+            workspaceId,
+            session: record,
+            detached: true,
+        },
     }));
 }
 

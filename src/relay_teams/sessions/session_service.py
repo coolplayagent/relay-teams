@@ -1,14 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import contextlib
 import shutil
 import uuid
-from collections.abc import Callable
-import contextlib
+from collections.abc import AsyncIterator, Callable, Mapping
+from time import monotonic
 from typing import TYPE_CHECKING, cast
 
 from relay_teams.agents.instances.models import AgentRuntimeRecord
 from relay_teams.media import ContentPart
+from relay_teams.media import content_parts_to_text
+from relay_teams.media import user_prompt_content_to_text
 from relay_teams.metrics import SqliteMetricAggregateStore
 from relay_teams.monitors.repository import MonitorRepository
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
@@ -18,6 +21,7 @@ from relay_teams.validation import (
 )
 from relay_teams.sessions.session_metadata import (
     SESSION_METADATA_TITLE_SOURCE_KEY,
+    SESSION_TITLE_SOURCE_AUTO,
     SESSION_TITLE_SOURCE_MANUAL,
 )
 from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
@@ -36,7 +40,10 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
+from relay_teams.sessions.runs.run_state_models import RunStateRecord
 from relay_teams.sessions.runs.todo_service import TodoService
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_models import IntentInput, RunEvent
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskKind
 from relay_teams.sessions.runs.background_tasks.repository import (
@@ -102,12 +109,21 @@ AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
 ACTIVE_RUN_REBIND_ERROR = (
     "Cannot rebind workspace while session has active or recoverable run"
 )
+TERMINAL_RUN_STATUSES = frozenset(
+    {
+        RunRuntimeStatus.COMPLETED,
+        RunRuntimeStatus.FAILED,
+        RunRuntimeStatus.STOPPED,
+    }
+)
 _LEGACY_COORDINATOR_IDENTIFIERS = (
     "coordinator",
     "coordinator agent",
     "coordinator_agent",
 )
 _MAIN_AGENT_IDENTIFIERS = ("mainagent", "main agent", "main_agent")
+_AUTO_SESSION_TITLE_MAX_CHARS = 120
+_LIST_SESSIONS_CACHE_TTL_SECONDS = 0.1
 
 
 def _legacy_coordinator_identifiers() -> tuple[str, ...]:
@@ -116,6 +132,17 @@ def _legacy_coordinator_identifiers() -> tuple[str, ...]:
 
 def _main_agent_identifiers() -> tuple[str, ...]:
     return _MAIN_AGENT_IDENTIFIERS
+
+
+def _normalize_auto_session_title(value: str) -> str | None:
+    for raw_line in str(value or "").splitlines():
+        normalized = " ".join(raw_line.strip().split())
+        if not normalized:
+            continue
+        if len(normalized) <= _AUTO_SESSION_TITLE_MAX_CHARS:
+            return normalized
+        return f"{normalized[: _AUTO_SESSION_TITLE_MAX_CHARS - 3].rstrip()}..."
+    return None
 
 
 def _system_roles_unavailable_error_type() -> type[Exception]:
@@ -189,6 +216,10 @@ class SessionService:
         self._media_asset_service = media_asset_service
         self._run_intent_repo = run_intent_repo
         self._get_runtime = get_runtime
+        self._list_sessions_cache: tuple[float, tuple[SessionRecord, ...]] | None = None
+
+    def _invalidate_list_sessions_cache(self) -> None:
+        self._list_sessions_cache = None
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
         self._role_registry = role_registry
@@ -252,6 +283,7 @@ class SessionService:
                 orchestration_preset_id=resolved_orchestration_preset_id,
             )
             _ = self._orchestration_settings_service.resolve_run_topology(probe)
+        self._invalidate_list_sessions_cache()
         return self._session_repo.create(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -310,6 +342,7 @@ class SessionService:
                 next_metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = title_source
 
         self._session_repo.update_metadata(session_id, next_metadata)
+        self._invalidate_list_sessions_cache()
 
     def sync_session_metadata(
         self,
@@ -318,6 +351,7 @@ class SessionService:
     ) -> None:
         _ = self._session_repo.get(session_id)
         self._session_repo.update_metadata(session_id, dict(metadata))
+        self._invalidate_list_sessions_cache()
 
     def _replace_custom_metadata(
         self,
@@ -358,6 +392,114 @@ class SessionService:
             "source_provider",
         } or key.startswith("feishu_")
 
+    def _with_auto_session_title(self, record: SessionRecord) -> SessionRecord:
+        metadata = dict(record.metadata)
+        title = str(metadata.get("title") or "").strip()
+        title_source = str(
+            metadata.get(SESSION_METADATA_TITLE_SOURCE_KEY) or ""
+        ).strip()
+        if title and title_source != SESSION_TITLE_SOURCE_AUTO:
+            return record
+        auto_title = self._resolve_auto_session_title(record.session_id)
+        if auto_title is None:
+            return record
+        metadata["title"] = auto_title
+        metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = SESSION_TITLE_SOURCE_AUTO
+        return record.model_copy(update={"metadata": metadata})
+
+    def _with_auto_session_title_from_preloaded(
+        self,
+        record: SessionRecord,
+        *,
+        first_intent_titles: Mapping[str, str],
+        first_user_messages: Mapping[str, Mapping[str, object]],
+    ) -> SessionRecord:
+        metadata = dict(record.metadata)
+        title = str(metadata.get("title") or "").strip()
+        title_source = str(
+            metadata.get(SESSION_METADATA_TITLE_SOURCE_KEY) or ""
+        ).strip()
+        if title and title_source != SESSION_TITLE_SOURCE_AUTO:
+            return record
+        auto_title = self._resolve_auto_session_title_from_preloaded(
+            record.session_id,
+            first_intent_titles=first_intent_titles,
+            first_user_messages=first_user_messages,
+        )
+        if auto_title is None:
+            return record
+        metadata["title"] = auto_title
+        metadata[SESSION_METADATA_TITLE_SOURCE_KEY] = SESSION_TITLE_SOURCE_AUTO
+        return record.model_copy(update={"metadata": metadata})
+
+    def _resolve_auto_session_title(self, session_id: str) -> str | None:
+        run_intent_title = self._first_run_intent_title(session_id)
+        if run_intent_title is not None:
+            return run_intent_title
+        return self._first_user_message_title(session_id)
+
+    def _resolve_auto_session_title_from_preloaded(
+        self,
+        session_id: str,
+        *,
+        first_intent_titles: Mapping[str, str],
+        first_user_messages: Mapping[str, Mapping[str, object]],
+    ) -> str | None:
+        title = first_intent_titles.get(session_id)
+        if title is not None:
+            return title
+        message = first_user_messages.get(session_id)
+        if message is None:
+            return None
+        return self._user_message_title(message.get("message"))
+
+    @staticmethod
+    def _run_intent_title(intent: IntentInput) -> str | None:
+        return _normalize_auto_session_title(
+            content_parts_to_text(intent.display_input or intent.input)
+        )
+
+    def _first_run_intent_title(self, session_id: str) -> str | None:
+        if self._run_intent_repo is None:
+            return None
+        for intent in self._run_intent_repo.list_by_session(session_id).values():
+            title = self._run_intent_title(intent)
+            if title is not None:
+                return title
+        return None
+
+    def _first_user_message_title(self, session_id: str) -> str | None:
+        messages = self._message_repo.get_user_messages_by_session(
+            session_id,
+            include_cleared=True,
+            include_hidden_from_context=True,
+        )
+        for message in messages:
+            title = self._user_message_title(message.get("message"))
+            if title is not None:
+                return title
+        return None
+
+    @staticmethod
+    def _user_message_title(message: object) -> str | None:
+        if not isinstance(message, dict):
+            return None
+        raw_parts = message.get("parts")
+        if not isinstance(raw_parts, list):
+            return None
+        for raw_part in raw_parts:
+            if not isinstance(raw_part, dict):
+                continue
+            part_kind = str(raw_part.get("part_kind") or "").strip()
+            if part_kind != "user-prompt":
+                continue
+            title = _normalize_auto_session_title(
+                user_prompt_content_to_text(raw_part.get("content"))
+            )
+            if title is not None:
+                return title
+        return None
+
     def update_session_topology(
         self,
         session_id: str,
@@ -392,6 +534,7 @@ class SessionService:
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
+        self._invalidate_list_sessions_cache()
         return self.get_session(session_id)
 
     def rebind_session_workspace(
@@ -415,6 +558,7 @@ class SessionService:
             workspace_id=workspace_id,
             project_id=project_id or workspace_id,
         )
+        self._invalidate_list_sessions_cache()
         self._agent_repo.update_session_workspace(
             session_id,
             workspace_id=workspace_id,
@@ -551,6 +695,7 @@ class SessionService:
             )
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
+        self._invalidate_list_sessions_cache()
 
     def _has_dependent_session_data(
         self,
@@ -656,6 +801,7 @@ class SessionService:
                 agent.conversation_id,
             )
         self._token_usage_repo.delete_by_run(agent.run_id)
+        self._invalidate_list_sessions_cache()
 
     def _delete_background_task_logs(
         self,
@@ -685,7 +831,9 @@ class SessionService:
                 resolved_log_path.unlink()
 
     def get_session(self, session_id: str) -> SessionRecord:
-        return self._session_repo.get(session_id)
+        return self._with_terminal_run_projection(
+            self._with_auto_session_title(self._session_repo.get(session_id))
+        )
 
     def _list_subagent_background_tasks(
         self,
@@ -707,7 +855,41 @@ class SessionService:
         )
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
+        cached = self._list_sessions_cache
+        now = monotonic()
+        if cached is not None and now - cached[0] <= _LIST_SESSIONS_CACHE_TTL_SECONDS:
+            return cached[1]
         sessions = self._session_repo.list_all()
+        session_ids = tuple(record.session_id for record in sessions)
+        runtimes_by_session: dict[str, tuple[RunRuntimeRecord, ...]] = (
+            self._run_runtime_repo.list_by_session_ids(session_ids)
+        )
+        background_tasks_by_session: dict[str, tuple[BackgroundTaskRecord, ...]] = (
+            self._background_task_repository.list_by_session_ids(session_ids)
+            if self._background_task_repository is not None
+            else {}
+        )
+        excluded_run_ids_by_session = self._subagent_run_ids_by_session_ids(
+            session_ids=session_ids,
+            runtimes_by_session=runtimes_by_session,
+            background_tasks_by_session=background_tasks_by_session,
+        )
+        active_background_run_ids = self._active_background_run_ids(
+            background_tasks_by_session,
+        )
+        first_intent_titles: dict[str, str] = (
+            self._run_intent_repo.first_titles_by_session_ids(session_ids)
+            if self._run_intent_repo is not None
+            else {}
+        )
+        session_ids_needing_message_titles = tuple(
+            record.session_id
+            for record in sessions
+            if record.session_id not in first_intent_titles
+        )
+        first_user_messages = self._message_repo.first_user_messages_by_session_ids(
+            session_ids_needing_message_titles
+        )
         normal_session_ids = tuple(
             record.session_id
             for record in sessions
@@ -716,39 +898,103 @@ class SessionService:
         subagent_counts = self._agent_repo.count_normal_mode_subagents_by_session_ids(
             normal_session_ids
         )
+        selected_by_session: dict[str, tuple[str, RunRuntimeRecord]] = {}
+        for session_id in session_ids:
+            selected = self._select_active_run_from_preloaded(
+                session_id=session_id,
+                runtimes=runtimes_by_session.get(session_id, ()),
+                excluded_run_ids=excluded_run_ids_by_session.get(session_id, set()),
+                active_background_run_ids=active_background_run_ids,
+            )
+            if selected is not None:
+                selected_by_session[session_id] = selected
+        selected_run_ids = tuple(
+            dict.fromkeys(run_id for run_id, _runtime in selected_by_session.values())
+        )
+        approval_counts = self._approval_ticket_repo.count_open_by_run_ids(
+            selected_run_ids
+        )
+        question_counts = (
+            self._user_question_repo.count_open_by_run_ids(selected_run_ids)
+            if self._user_question_repo is not None
+            else {}
+        )
         enriched: list[SessionRecord] = []
         for record in sessions:
-            selected = self._select_active_run(record.session_id)
+            record = self._with_auto_session_title_from_preloaded(
+                record,
+                first_intent_titles=first_intent_titles,
+                first_user_messages=first_user_messages,
+            )
+            selected = selected_by_session.get(record.session_id)
             subagent_session_count = subagent_counts.get(record.session_id, 0)
+            runtimes = runtimes_by_session.get(record.session_id, ())
+            excluded_run_ids = excluded_run_ids_by_session.get(
+                record.session_id,
+                set(),
+            )
             if selected is None:
                 enriched.append(
-                    record.model_copy(
-                        update={
-                            "subagent_session_count": subagent_session_count,
-                        }
+                    self._with_terminal_run_projection_from_preloaded(
+                        record.model_copy(
+                            update={
+                                "subagent_session_count": subagent_session_count,
+                            }
+                        ),
+                        runtimes=runtimes,
+                        excluded_run_ids=excluded_run_ids,
                     )
                 )
                 continue
             run_id, runtime = selected
-            approval_count = len(self._approval_ticket_repo.list_open_by_run(run_id))
-            question_count = self._pending_user_question_count(run_id)
+            approval_count = approval_counts.get(run_id, 0)
+            question_count = question_counts.get(run_id, 0)
             enriched.append(
-                record.model_copy(
-                    update={
-                        "has_active_run": True,
-                        "active_run_id": run_id,
-                        "active_run_status": runtime.status.value,
-                        "active_run_phase": self._public_phase(
-                            runtime,
-                            approval_count,
-                            question_count,
-                        ),
-                        "pending_tool_approval_count": approval_count,
-                        "subagent_session_count": subagent_session_count,
-                    }
+                self._with_terminal_run_projection_from_preloaded(
+                    record.model_copy(
+                        update={
+                            "has_active_run": True,
+                            "active_run_id": run_id,
+                            "active_run_status": runtime.status.value,
+                            "active_run_phase": self._public_phase(
+                                runtime,
+                                approval_count,
+                                question_count,
+                            ),
+                            "pending_tool_approval_count": approval_count,
+                            "subagent_session_count": subagent_session_count,
+                        }
+                    ),
+                    runtimes=runtimes,
+                    excluded_run_ids=excluded_run_ids,
                 )
             )
-        return tuple(enriched)
+        result = tuple(enriched)
+        self._list_sessions_cache = (monotonic(), result)
+        return result
+
+    def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
+        _ = self._session_repo.get(session_id)
+        runtimes = self._run_runtime_repo.list_by_session(session_id)
+        background_tasks = (
+            self._background_task_repository.list_by_session(session_id)
+            if self._background_task_repository is not None
+            else ()
+        )
+        latest_terminal = self._latest_terminal_run_from_preloaded(
+            runtimes,
+            self._subagent_run_ids_from_records(
+                runtimes=runtimes,
+                background_tasks=background_tasks,
+            ),
+        )
+        if latest_terminal is None:
+            return
+        self._session_repo.mark_terminal_run_viewed(
+            session_id,
+            latest_terminal.run_id,
+        )
+        self._invalidate_list_sessions_cache()
 
     def list_sessions_by_project(
         self,
@@ -778,9 +1024,40 @@ class SessionService:
             if self._is_normal_mode_subagent_record(record, session=session)
         ]
         records.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
+        run_ids = tuple(dict.fromkeys(record.run_id for record in records))
+        runtime_by_run = {
+            runtime.run_id: runtime
+            for runtime in self._run_runtime_repo.list_by_session(session_id)
+            if runtime.run_id in run_ids
+        }
+        run_state_by_run = (
+            {
+                run_state.run_id: run_state
+                for run_state in self._run_state_repo.list_by_session(session_id)
+                if run_state.run_id in run_ids
+            }
+            if self._run_state_repo is not None
+            else {}
+        )
+        approval_counts = (
+            self._approval_ticket_repo.count_open_by_run_ids(run_ids)
+            if self._approval_ticket_repo is not None
+            else {}
+        )
+        question_counts = (
+            self._user_question_repo.count_open_by_run_ids(run_ids)
+            if self._user_question_repo is not None
+            else {}
+        )
         return tuple(
             {
-                **self._normal_mode_subagent_projection(record),
+                **self._normal_mode_subagent_projection(
+                    record,
+                    runtime_by_run=runtime_by_run,
+                    run_state_by_run=run_state_by_run,
+                    approval_counts=approval_counts,
+                    question_counts=question_counts,
+                ),
                 "title": self._subagent_title_for_run(
                     run_id=record.run_id,
                     root_tasks_by_run=root_tasks_by_run,
@@ -788,6 +1065,61 @@ class SessionService:
             }
             for record in records
         )
+
+    async def stream_normal_mode_subagent_events(
+        self,
+        session_id: str,
+        *,
+        after_event_id: int = 0,
+    ) -> AsyncIterator[RunEvent]:
+        session = self._session_repo.get(session_id)
+        if session.session_mode != SessionMode.NORMAL:
+            return
+
+        queue = (
+            self._run_event_hub.subscribe_session(session_id)
+            if self._run_event_hub is not None
+            else None
+        )
+        replay_high_watermark = max(0, int(after_event_id))
+        try:
+            if self._event_log is not None:
+                rows = await self._event_log.list_subagent_run_events_by_session_after_id_async(
+                    session_id,
+                    replay_high_watermark,
+                )
+                for row in rows:
+                    event = self._run_event_from_log_row(row)
+                    if event is None:
+                        continue
+                    if event.event_id is not None:
+                        replay_high_watermark = max(
+                            replay_high_watermark,
+                            event.event_id,
+                        )
+                    yield event
+
+            if queue is None:
+                return
+
+            while True:
+                event = await queue.get()
+                if event.session_id != session_id:
+                    continue
+                if not self._is_subagent_run_id(event.run_id):
+                    continue
+                event_id = event.event_id
+                if event_id is not None and event_id <= replay_high_watermark:
+                    continue
+                if event_id is not None:
+                    replay_high_watermark = max(
+                        replay_high_watermark,
+                        event_id,
+                    )
+                yield event
+        finally:
+            if queue is not None and self._run_event_hub is not None:
+                self._run_event_hub.unsubscribe_session(session_id, queue)
 
     def list_agents_in_session(self, session_id: str) -> tuple[dict[str, object], ...]:
         session = self._session_repo.get(session_id)
@@ -1313,6 +1645,64 @@ class SessionService:
             clear_index += 1
         return entries
 
+    def _with_terminal_run_projection(self, record: SessionRecord) -> SessionRecord:
+        latest_terminal = self._latest_terminal_run(record.session_id)
+        if latest_terminal is None:
+            return record
+        last_viewed_run_id = str(record.last_viewed_terminal_run_id or "").strip()
+        return record.model_copy(
+            update={
+                "latest_terminal_run_id": latest_terminal.run_id,
+                "latest_terminal_run_status": latest_terminal.status.value,
+                "latest_terminal_run_updated_at": latest_terminal.updated_at,
+                "has_unread_terminal_run": last_viewed_run_id != latest_terminal.run_id,
+            }
+        )
+
+    def _with_terminal_run_projection_from_preloaded(
+        self,
+        record: SessionRecord,
+        *,
+        runtimes: tuple[RunRuntimeRecord, ...],
+        excluded_run_ids: set[str],
+    ) -> SessionRecord:
+        latest_terminal = self._latest_terminal_run_from_preloaded(
+            runtimes,
+            excluded_run_ids,
+        )
+        if latest_terminal is None:
+            return record
+        last_viewed_run_id = str(record.last_viewed_terminal_run_id or "").strip()
+        return record.model_copy(
+            update={
+                "latest_terminal_run_id": latest_terminal.run_id,
+                "latest_terminal_run_status": latest_terminal.status.value,
+                "latest_terminal_run_updated_at": latest_terminal.updated_at,
+                "has_unread_terminal_run": last_viewed_run_id != latest_terminal.run_id,
+            }
+        )
+
+    def _latest_terminal_run(self, session_id: str) -> RunRuntimeRecord | None:
+        excluded_run_ids = self._subagent_run_ids(session_id)
+        for runtime in self._run_runtime_repo.list_by_session(session_id):
+            if runtime.run_id in excluded_run_ids:
+                continue
+            if runtime.status in TERMINAL_RUN_STATUSES:
+                return runtime
+        return None
+
+    @staticmethod
+    def _latest_terminal_run_from_preloaded(
+        runtimes: tuple[RunRuntimeRecord, ...],
+        excluded_run_ids: set[str],
+    ) -> RunRuntimeRecord | None:
+        for runtime in sorted(runtimes, key=lambda item: item.updated_at, reverse=True):
+            if runtime.run_id in excluded_run_ids:
+                continue
+            if runtime.status in TERMINAL_RUN_STATUSES:
+                return runtime
+        return None
+
     def _select_active_run(
         self, session_id: str
     ) -> tuple[str, RunRuntimeRecord] | None:
@@ -1354,6 +1744,57 @@ class SessionService:
                 return runtime.run_id, runtime
         return None
 
+    def _select_active_run_from_preloaded(
+        self,
+        *,
+        session_id: str,
+        runtimes: tuple[RunRuntimeRecord, ...],
+        excluded_run_ids: set[str],
+        active_background_run_ids: set[str],
+    ) -> tuple[str, RunRuntimeRecord] | None:
+        hinted_run_id = (
+            self._active_run_registry.get_active_run_id(session_id)
+            if self._active_run_registry is not None
+            else None
+        )
+        sorted_runtimes = sorted(
+            runtimes, key=lambda item: item.updated_at, reverse=True
+        )
+        if hinted_run_id and hinted_run_id not in excluded_run_ids:
+            hinted_runtime = next(
+                (
+                    runtime
+                    for runtime in sorted_runtimes
+                    if runtime.run_id == hinted_run_id
+                ),
+                None,
+            )
+            if hinted_runtime is not None:
+                return hinted_run_id, hinted_runtime
+
+        for runtime in sorted_runtimes:
+            if runtime.run_id in excluded_run_ids:
+                continue
+            if runtime.status in {
+                RunRuntimeStatus.RUNNING,
+                RunRuntimeStatus.STOPPING,
+                RunRuntimeStatus.PAUSED,
+                RunRuntimeStatus.STOPPED,
+                RunRuntimeStatus.QUEUED,
+            }:
+                return runtime.run_id, runtime
+        for runtime in sorted_runtimes:
+            if runtime.run_id in excluded_run_ids:
+                continue
+            if runtime.status not in {
+                RunRuntimeStatus.COMPLETED,
+                RunRuntimeStatus.FAILED,
+            }:
+                continue
+            if runtime.run_id in active_background_run_ids:
+                return runtime.run_id, runtime
+        return None
+
     def _subagent_run_ids(self, session_id: str) -> set[str]:
         run_ids = {
             runtime.run_id
@@ -1369,6 +1810,53 @@ class SessionService:
                 record.kind == BackgroundTaskKind.SUBAGENT
                 and record.subagent_run_id is not None
             )
+        }
+
+    @staticmethod
+    def _subagent_run_ids_from_records(
+        *,
+        runtimes: tuple[RunRuntimeRecord, ...],
+        background_tasks: tuple[BackgroundTaskRecord, ...],
+    ) -> set[str]:
+        run_ids = {
+            runtime.run_id
+            for runtime in runtimes
+            if str(runtime.run_id).strip().startswith("subagent_run_")
+        }
+        run_ids.update(
+            record.subagent_run_id
+            for record in background_tasks
+            if (
+                record.kind == BackgroundTaskKind.SUBAGENT
+                and record.subagent_run_id is not None
+            )
+        )
+        return run_ids
+
+    def _subagent_run_ids_by_session_ids(
+        self,
+        *,
+        session_ids: tuple[str, ...],
+        runtimes_by_session: Mapping[str, tuple[RunRuntimeRecord, ...]],
+        background_tasks_by_session: Mapping[str, tuple[BackgroundTaskRecord, ...]],
+    ) -> dict[str, set[str]]:
+        return {
+            session_id: self._subagent_run_ids_from_records(
+                runtimes=runtimes_by_session.get(session_id, ()),
+                background_tasks=background_tasks_by_session.get(session_id, ()),
+            )
+            for session_id in session_ids
+        }
+
+    @staticmethod
+    def _active_background_run_ids(
+        background_tasks_by_session: Mapping[str, tuple[BackgroundTaskRecord, ...]],
+    ) -> set[str]:
+        return {
+            record.run_id
+            for records in background_tasks_by_session.values()
+            for record in records
+            if record.execution_mode == "background" and record.is_active
         }
 
     def _has_background_tasks(self, run_id: str) -> bool:
@@ -1446,28 +1934,51 @@ class SessionService:
     def _normal_mode_subagent_projection(
         self,
         record: AgentRuntimeRecord,
+        *,
+        runtime_by_run: Mapping[str, RunRuntimeRecord] | None = None,
+        run_state_by_run: Mapping[str, RunStateRecord] | None = None,
+        approval_counts: Mapping[str, int] | None = None,
+        question_counts: Mapping[str, int] | None = None,
     ) -> dict[str, object]:
         projected = self._agent_projection(record)
-        runtime = self._run_runtime_repo.get(record.run_id)
+        runtime = (
+            runtime_by_run.get(record.run_id)
+            if runtime_by_run is not None
+            else self._run_runtime_repo.get(record.run_id)
+        )
         run_state = (
-            self._run_state_repo.get_run_state(record.run_id)
-            if self._run_state_repo is not None
+            run_state_by_run.get(record.run_id)
+            if run_state_by_run is not None
+            else (
+                self._run_state_repo.get_run_state(record.run_id)
+                if self._run_state_repo is not None
+                else None
+            )
+        )
+        approval_count = (
+            approval_counts.get(record.run_id, 0)
+            if approval_counts is not None
             else None
         )
-        stream_connected = (
-            self._run_event_hub.has_subscribers(record.run_id)
-            if self._run_event_hub is not None
-            else False
+        if approval_count is None:
+            approval_count = 0
+            if runtime is not None and self._approval_ticket_repo is not None:
+                approval_count = len(
+                    self._approval_ticket_repo.list_open_by_run(runtime.run_id)
+                )
+        question_count = (
+            question_counts.get(record.run_id, 0)
+            if question_counts is not None
+            else self._pending_user_question_count(record.run_id)
         )
+        stream_connected = False
+        if self._run_event_hub is not None:
+            stream_connected = self._run_event_hub.has_subscribers(
+                record.run_id
+            ) or self._run_event_hub.has_session_subscribers(record.session_id)
         projected["run_status"] = (
             runtime.status.value if runtime is not None else projected["status"]
         )
-        approval_count = 0
-        if runtime is not None and self._approval_ticket_repo is not None:
-            approval_count = len(
-                self._approval_ticket_repo.list_open_by_run(runtime.run_id)
-            )
-        question_count = self._pending_user_question_count(record.run_id)
         projected["run_phase"] = (
             self._public_phase(runtime, approval_count, question_count)
             if runtime is not None
@@ -1609,6 +2120,36 @@ class SessionService:
         if not objective:
             return ""
         return objective[:80]
+
+    @staticmethod
+    def _run_event_from_log_row(row: Mapping[str, object]) -> RunEvent | None:
+        row_id = row.get("id")
+        if not isinstance(row_id, int):
+            return None
+        try:
+            event_type = RunEventType(str(row["event_type"]))
+        except (KeyError, ValueError):
+            return None
+        trace_id = str(row.get("trace_id") or "").strip()
+        session_id = str(row.get("session_id") or "").strip()
+        if not trace_id or not session_id:
+            return None
+        return RunEvent(
+            session_id=session_id,
+            run_id=trace_id,
+            trace_id=trace_id,
+            task_id=(str(row["task_id"]) if row.get("task_id") is not None else None),
+            instance_id=(
+                str(row["instance_id"]) if row.get("instance_id") is not None else None
+            ),
+            event_type=event_type,
+            payload_json=str(row.get("payload_json") or "{}"),
+            event_id=row_id,
+        )
+
+    @staticmethod
+    def _is_subagent_run_id(run_id: str) -> bool:
+        return str(run_id or "").strip().startswith("subagent_run_")
 
     @staticmethod
     def _is_normal_mode_subagent_record(

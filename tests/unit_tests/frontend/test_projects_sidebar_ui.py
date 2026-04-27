@@ -107,9 +107,504 @@ console.log(JSON.stringify({
     assert payload["finalProjectCount"] == 3
     assert payload["initialFirstProjectTitle"] == "Alpha Project"
     assert payload["initialSecondProjectTitle"] == "Beta Project"
-    assert payload["initialFirstSessionLabel"] == "session-11"
+    assert payload["initialFirstSessionLabel"] == "New conversation"
     assert payload["finalFirstProjectTitle"] == "Gamma Project"
     assert payload["sortedFirstProjectTitle"] == "Alpha Project"
+
+
+def test_projects_sidebar_renders_session_run_status_indicators(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: { file_scope: { backend: "project" } },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-running",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:04:00Z",
+        metadata: { title: "Running task" },
+        has_active_run: true,
+        active_run_status: "running",
+    },
+    {
+        session_id: "session-queued",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:03:30Z",
+        metadata: { title: "Queued task" },
+        has_active_run: true,
+        active_run_status: "queued",
+    },
+    {
+        session_id: "session-stopped",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:03:20Z",
+        metadata: { title: "Stopped task" },
+        has_active_run: true,
+        active_run_status: "stopped",
+        has_unread_terminal_run: true,
+        latest_terminal_run_status: "stopped",
+    },
+    {
+        session_id: "session-failed",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:03:10Z",
+        metadata: { title: "Failed task" },
+        has_active_run: true,
+        active_run_status: "failed",
+        has_unread_terminal_run: true,
+        latest_terminal_run_status: "failed",
+    },
+    {
+        session_id: "session-unread",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:03:00Z",
+        metadata: { title: "Finished task" },
+        has_unread_terminal_run: true,
+        latest_terminal_run_status: "completed",
+    },
+    {
+        session_id: "session-7",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:02:00Z",
+        metadata: { title: "Current task" },
+        has_unread_terminal_run: true,
+        latest_terminal_run_status: "failed",
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function deleteSession() {
+    return { status: "ok" };
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function forkWorkspace() {
+    return {};
+}
+
+export async function pickWorkspace() {
+    return { workspace_id: "alpha-project" };
+}
+
+export async function createAutomationProject() {
+    return {};
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+        runner_source="""
+import { loadProjects } from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+await loadProjects();
+
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const items = firstProject.querySelectorAll(".session-item").map(item => ({
+    sessionId: item.getAttribute("data-session-id"),
+    className: item.className,
+}));
+
+console.log(JSON.stringify({ items }));
+""".strip(),
+    )
+
+    classes = {
+        str(item["sessionId"]): str(item["className"])
+        for item in cast(list[dict[str, object]], payload["items"])
+    }
+    assert "has-run-indicator-running" in classes["session-running"]
+    assert "has-run-indicator-running" in classes["session-queued"]
+    assert "has-run-indicator-stopped" in classes["session-stopped"]
+    assert "has-run-indicator-running" not in classes["session-stopped"]
+    assert "has-run-indicator-failed" in classes["session-failed"]
+    assert "has-run-indicator-running" not in classes["session-failed"]
+    assert "has-run-indicator-unread" in classes["session-unread"]
+    assert "active" in classes["session-7"]
+    assert "has-run-indicator-unread" not in classes["session-7"]
+
+
+def test_projects_sidebar_renders_2000_sessions_without_full_dom_expansion(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: { file_scope: { backend: "project" } },
+    },
+];
+
+const sessions = Array.from({ length: 2000 }, (_, index) => ({
+    session_id: `session-${String(index).padStart(4, "0")}`,
+    workspace_id: "alpha-project",
+    updated_at: new Date(Date.UTC(2026, 2, 14, 10, 0, index % 60)).toISOString(),
+    metadata: { title: `Session title ${index}` },
+    pending_tool_approval_count: 0,
+}));
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function deleteSession() {
+    return { status: "ok" };
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function forkWorkspace() {
+    return {};
+}
+
+export async function pickWorkspace() {
+    return { workspace_id: "alpha-project" };
+}
+
+export async function createAutomationProject() {
+    return {};
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+        runner_source="""
+import { loadProjects } from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+const started = performance.now();
+await loadProjects();
+const elapsedMs = performance.now() - started;
+
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const visibleSessionCount = firstProject.querySelectorAll(".session-item").length;
+const visibilityLabel = firstProject.querySelector(".project-session-visibility-btn").textContent;
+
+console.log(JSON.stringify({
+    elapsedMs,
+    visibleSessionCount,
+    visibilityLabel,
+}));
+""".strip(),
+    )
+
+    assert payload["visibleSessionCount"] == 10
+    assert payload["visibilityLabel"] == "Show all (2000)"
+    elapsed_ms = payload["elapsedMs"]
+    assert isinstance(elapsed_ms, int | float)
+    assert elapsed_ms < 300
+
+
+def test_projects_sidebar_clears_unread_indicator_immediately_on_session_click(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: { file_scope: { backend: "project" } },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-unread",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:03:00Z",
+        metadata: { title: "Finished task" },
+        has_unread_terminal_run: true,
+        latest_terminal_run_status: "completed",
+    },
+    {
+        session_id: "session-7",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:02:00Z",
+        metadata: { title: "Current task" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function deleteSession() {
+    return { status: "ok" };
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function forkWorkspace() {
+    return {};
+}
+
+export async function pickWorkspace() {
+    return { workspace_id: "alpha-project" };
+}
+
+export async function createAutomationProject() {
+    return {};
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+    await new Promise(resolve => setTimeout(resolve, 20));
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const unreadItem = firstProject.querySelectorAll(".session-item")
+    .find(item => item.getAttribute("data-session-id") === "session-unread");
+
+unreadItem.onclick();
+const immediateClassName = unreadItem.className;
+
+console.log(JSON.stringify({
+    immediateClassName,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+}));
+""".strip(),
+    )
+
+    class_name = str(payload["immediateClassName"])
+    assert "active" in class_name
+    assert "has-run-indicator-unread" not in class_name
+    assert "session-run-indicator-viewed" in class_name
+    assert payload["selectedSessionIds"] == ["session-unread"]
+
+
+def test_projects_sidebar_keeps_latest_rapid_session_click_active(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+    await new Promise(resolve => setTimeout(resolve, sessionId === "session-11" ? 20 : 0));
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const items = firstProject.querySelectorAll(".session-item");
+const firstItem = items.find(item => item.getAttribute("data-session-id") === "session-11");
+const secondItem = items.find(item => item.getAttribute("data-session-id") === "session-10");
+
+firstItem.onclick();
+secondItem.onclick();
+const immediateFirstClassName = firstItem.className;
+const immediateSecondClassName = secondItem.className;
+await flushTasks();
+await new Promise(resolve => setTimeout(resolve, 30));
+await flushTasks();
+
+console.log(JSON.stringify({
+    immediateFirstClassName,
+    immediateSecondClassName,
+    finalFirstClassName: firstItem.className,
+    finalSecondClassName: secondItem.className,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    currentSessionId: state.currentSessionId,
+}));
+""".strip(),
+    )
+
+    assert "active" not in str(payload["immediateFirstClassName"]).split()
+    assert "active" in str(payload["immediateSecondClassName"]).split()
+    assert "active" not in str(payload["finalFirstClassName"]).split()
+    assert "active" in str(payload["finalSecondClassName"]).split()
+    assert payload["selectedSessionIds"] == ["session-11", "session-10"]
+    assert payload["currentSessionId"] == "session-10"
+
+
+def test_projects_sidebar_session_activation_animation_ignores_old_timeout(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async () => {});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const item = firstProject.querySelectorAll(".session-item")
+    .find(candidate => candidate.getAttribute("data-session-id") === "session-11");
+
+const originalSetTimeout = globalThis.setTimeout;
+const scheduledTimeouts = [];
+globalThis.setTimeout = (callback, delay) => {
+    scheduledTimeouts.push({ callback, delay });
+    return scheduledTimeouts.length;
+};
+
+item.onclick();
+const afterFirstClick = item.className;
+item.onclick();
+const afterSecondClick = item.className;
+scheduledTimeouts[0].callback();
+const afterOldTimeout = item.className;
+scheduledTimeouts[1].callback();
+const afterNewTimeout = item.className;
+globalThis.setTimeout = originalSetTimeout;
+
+console.log(JSON.stringify({
+    afterFirstClick,
+    afterSecondClick,
+    afterOldTimeout,
+    afterNewTimeout,
+    timeoutDelays: scheduledTimeouts.map(item => item.delay),
+}));
+""".strip(),
+    )
+
+    assert "session-item-activating" in str(payload["afterFirstClick"]).split()
+    assert "session-item-activating" in str(payload["afterSecondClick"]).split()
+    assert "session-item-activating" in str(payload["afterOldTimeout"]).split()
+    assert "session-item-activating" not in str(payload["afterNewTimeout"]).split()
+    timeout_delays = cast(list[int], payload["timeoutDelays"])
+    assert timeout_delays[-2:] == [140, 140]
 
 
 def test_projects_sidebar_new_session_keeps_session_visibility_collapsed_and_declares_animations(
@@ -180,13 +675,275 @@ console.log(JSON.stringify({
     assert "function animateSessionItem(item, animation) {" in sidebar_script
     assert "openNewSessionDraftFromSidebar(projectId);" in sidebar_script
     assert "animateSessionItem(sessionItem, 'removing');" in sidebar_script
-    assert "animateSessionItem(button, 'activating');" in sidebar_script
+    assert (
+        "optimisticActivateSession(sessionId, { animate: true, item: button, updateState: false });"
+        in sidebar_script
+    )
+    assert "await selectSessionById(sessionId, selectionToken);" in sidebar_script
+    assert (
+        "void selectSessionById(sessionId, selectionToken).catch(error => {"
+        in sidebar_script
+    )
+    assert (
+        "document.addEventListener('agent-teams-session-selected', () => void loadProjects());"
+        not in sidebar_script
+    )
+    assert "agent-teams-session-activated" in sidebar_script
+    assert "void markSelectedSessionTerminalViewed(sessionId, selectionSignal);" in (
+        repo_root / "frontend" / "dist" / "js" / "app" / "session.js"
+    ).read_text(encoding="utf-8")
     assert ".session-item-entering {" in components_base_css
     assert ".session-item-removing {" in components_base_css
     assert ".session-item-activating {" in components_base_css
     assert "@keyframes sessionItemEnter {" in components_base_css
     assert "@keyframes sessionItemRemove {" in components_base_css
     assert "@keyframes sessionItemActivate {" in components_base_css
+    assert "pendingSessionVisibilityAnimation" in sidebar_script
+    assert "SESSION_VISIBILITY_ANIMATED_ITEM_LIMIT = 24" in sidebar_script
+    assert "session-entry-visible-entering" in sidebar_script
+    assert "session-entry-collapsing" in sidebar_script
+    assert "button.scrollIntoView?.({ block: 'nearest' });" in (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sessionSearch.js"
+    ).read_text(encoding="utf-8")
+    assert (
+        "function renderProjectsWorkspaceShell(toolbar, contentNodes)" in sidebar_script
+    )
+    assert "els.projectsList.style.display = 'flex';" in sidebar_script
+    assert "syncSidebarStickyOffsets" not in sidebar_script
+    assert "--sidebar-feature-sticky-height" not in components_base_css
+    assert ".projects-workspace-shell {" in components_base_css
+    assert "flex: 1 1 0;" in components_base_css
+    assert ".projects-workspace-scroll {" in components_base_css
+    assert "scrollbar-width: thin;" in components_base_css
+    assert "overscroll-behavior: contain;" in components_base_css
+    assert (
+        ".projects-workspace-scroll::-webkit-scrollbar-thumb {" in components_base_css
+    )
+    assert ".projects-list::-webkit-scrollbar-thumb {" not in components_base_css
+    assert ".home-feature-section {\n    position: sticky;" not in components_base_css
+    assert ".projects-toolbar {\n    position: sticky;" not in components_base_css
+    assert ".project-session-list.is-visibility-expanding" in components_base_css
+    assert ".project-session-list.is-visibility-collapsing" in components_base_css
+    assert (
+        ".project-session-list.is-visibility-height-collapsing" in components_base_css
+    )
+    assert "projectSessionVisibilitySettle" not in components_base_css
+    assert "@keyframes projectSessionVisibilityEnter {" in components_base_css
+    assert "@keyframes projectSessionVisibilityExit {" in components_base_css
+    assert ".session-search-root {" in components_base_css
+    assert ".session-search-result {" in components_base_css
+    assert ".session-search-mark {" in components_base_css
+    assert (
+        "background: color-mix(in srgb, var(--bg-surface) 96%, transparent);"
+        in components_base_css
+    )
+    assert "font-size: 0.84rem;" in components_base_css
+    assert (
+        ".session-search-results.is-animated .session-search-result {"
+        in components_base_css
+    )
+    assert "@keyframes sessionSearchResultEnter {" in components_base_css
+    assert "has_unread_terminal_run" in sidebar_script
+    assert "has-run-indicator-${indicatorType}" in sidebar_script
+    assert ".session-run-indicator-running" in components_base_css
+    assert ".session-run-indicator-unread" in components_base_css
+    assert ".session-run-indicator-stopped" in components_base_css
+    assert ".session-run-indicator-failed" in components_base_css
+    assert ".session-item.active.has-run-indicator-unread" in components_base_css
+    assert "@keyframes sessionRunIndicatorSpin {" in components_base_css
+    assert "@media (prefers-reduced-motion: reduce)" in components_base_css
+    assert 'class="session-label-text" title=' in sidebar_script
+
+
+def test_projects_sidebar_render_signature_does_not_recurse_serialized_markup() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    sidebar_script = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    ).read_text(encoding="utf-8")
+
+    assert "const serializedContent = innerHtml || textContent;" in sidebar_script
+    assert (
+        "const childSignature = serializedContent\n"
+        "        ? ''\n"
+        "        : Array.from(node.children || []).map(renderNodeSignature).join('::');"
+    ) in sidebar_script
+    assert (
+        "`${className}::${innerHtml}::${textContent}::${childSignature}`"
+        not in sidebar_script
+    )
+
+
+def test_session_search_filters_and_highlights_results(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sessionSearch.js"
+    )
+    module_path = tmp_path / "sessionSearch.mjs"
+    mock_i18n_path = tmp_path / "mockI18n.mjs"
+    runner_path = tmp_path / "runner.mjs"
+    module_path.write_text(
+        source_path.read_text(encoding="utf-8").replace(
+            "../utils/i18n.js",
+            "./mockI18n.mjs",
+        ),
+        encoding="utf-8",
+    )
+    mock_i18n_path.write_text(
+        """
+const translations = {
+    "sidebar.untitled_session": "New conversation",
+    "sidebar.project": "Project",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    runner_path.write_text(
+        """
+import {
+    buildSessionSearchResults,
+    highlightSessionSearchText,
+} from "./sessionSearch.mjs";
+
+const entries = [
+    {
+        sessionId: "hidden-42",
+        title: "Review <agent> permissions",
+        projectLabel: "agent-teams",
+        updatedAtMs: 3,
+        groupKey: "workspace:agent-teams",
+    },
+    {
+        sessionId: "session-2",
+        title: "Build workspace client",
+        projectLabel: "workspace",
+        updatedAtMs: 2,
+        groupKey: "workspace:workspace",
+    },
+    {
+        sessionId: "session-3",
+        title: "Other task",
+        projectLabel: "agent-teams",
+        updatedAtMs: 1,
+        groupKey: "workspace:agent-teams",
+    },
+];
+
+const manyEntries = Array.from({ length: 24 }, (_, index) => ({
+    sessionId: `bulk-${index}`,
+    title: `Bulk session ${index}`,
+    projectLabel: "agent-teams",
+    updatedAtMs: index,
+    groupKey: "workspace:agent-teams",
+}));
+const largeEntries = Array.from({ length: 2000 }, (_, index) => ({
+    sessionId: `large-${index}`,
+    title: index === 1999 ? "Needle session 1999" : `Large session ${index}`,
+    projectLabel: index % 2 === 0 ? "agent-teams" : "workspace",
+    updatedAtMs: index,
+    groupKey: "workspace:agent-teams",
+}));
+
+const agentResults = buildSessionSearchResults(entries, "agent");
+const projectResults = buildSessionSearchResults(entries, "workspace");
+const idResults = buildSessionSearchResults(entries, "hidden-42");
+const recentResults = buildSessionSearchResults(entries, "");
+const noMatches = buildSessionSearchResults(entries, "missing");
+const manyResults = buildSessionSearchResults(manyEntries, "bulk");
+const largeStarted = performance.now();
+const largeResults = buildSessionSearchResults(largeEntries, "needle");
+const largeElapsedMs = performance.now() - largeStarted;
+const highlighted = highlightSessionSearchText("Review <agent> permissions", "agent");
+
+console.log(JSON.stringify({
+    agentResultIds: agentResults.map(item => item.sessionId),
+    firstTitleHtml: agentResults[0].titleHtml,
+    projectResultIds: projectResults.map(item => item.sessionId),
+    idResultIds: idResults.map(item => item.sessionId),
+    recentResultIds: recentResults.map(item => item.sessionId),
+    noMatchCount: noMatches.length,
+    manyResultCount: manyResults.length,
+    manyShortcutCount: manyResults.filter(item => item.shortcut).length,
+    ninthShortcut: manyResults[8]?.shortcut || "",
+    tenthShortcut: manyResults[9]?.shortcut || "",
+    largeFirstResultId: largeResults[0]?.sessionId || "",
+    largeElapsedMs,
+    highlighted,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=3,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["agentResultIds"] == ["hidden-42", "session-3"]
+    assert (
+        payload["firstTitleHtml"]
+        == 'Review &lt;<mark class="session-search-mark">agent</mark>&gt; permissions'
+    )
+    assert payload["projectResultIds"] == ["session-2"]
+    assert payload["idResultIds"] == ["hidden-42"]
+    assert payload["recentResultIds"] == ["hidden-42", "session-2", "session-3"]
+    assert payload["noMatchCount"] == 0
+    assert payload["manyResultCount"] == 20
+    assert payload["manyShortcutCount"] == 9
+    assert payload["ninthShortcut"]
+    assert payload["tenthShortcut"] == ""
+    assert payload["largeFirstResultId"] == "large-1999"
+    large_elapsed_ms = payload["largeElapsedMs"]
+    assert isinstance(large_elapsed_ms, int | float)
+    assert large_elapsed_ms < 80
+    assert (
+        payload["highlighted"]
+        == 'Review &lt;<mark class="session-search-mark">agent</mark>&gt; permissions'
+    )
+    source_text = source_path.read_text(encoding="utf-8")
+    css_text = (
+        repo_root / "frontend" / "dist" / "css" / "components" / "session-search.css"
+    ).read_text(encoding="utf-8")
+    assert "updateActiveResultVisuals();" in source_text
+    assert "let selecting = false;" in source_text
+    assert "setSearchSelecting(true, activeIndex);" in source_text
+    assert "await selectHandler(result);\n        closeSessionSearch();" in source_text
+    assert 'class="session-search-result-marker" aria-hidden="true">-' in source_text
+    assert "session-search-result-icon" not in source_text
+    assert '<svg viewBox="0 0 24 24"' not in source_text
+    assert "const shortcutClass = result.shortcut" in source_text
+    assert "const shortcutHtml = result.shortcut" in source_text
+    assert "session-search-shortcut is-empty" in source_text
+    assert 'title="${escapeHtml(result.title)}"' in source_text
+    assert 'title="${escapeHtml(result.projectLabel)}"' in source_text
+    assert (
+        "grid-template-columns: 0.7rem minmax(0, 1fr) minmax(5.25rem, 6.75rem) 2.55rem;"
+        in css_text
+    )
+    assert ".session-search-result.has-shortcut {" not in css_text
+    assert ".session-search-results::-webkit-scrollbar {" in css_text
+    assert "scrollbar-width: none;" in css_text
+    assert ".session-search-result.is-selecting {" in css_text
+    assert ".session-search-shortcut.is-empty {" in css_text
+    assert "minmax(5.8rem, 9rem)" not in css_text
+    assert ".session-search-results.is-animated .session-search-result {" in css_text
+    assert ".session-search-results.is-searching" not in css_text
 
 
 def test_projects_sidebar_renders_normal_mode_subagents_as_child_sessions(
@@ -982,7 +1739,7 @@ console.log(JSON.stringify({
     assert payload["renameCalls"] == [
         {
             "sessionId": "session-7",
-            "metadata": {"title": "Renamed Session"},
+            "metadata": {"title": "Renamed Session", "title_source": "manual"},
         }
     ]
     assert payload["renamedLabel"] == "Renamed Session"
@@ -2330,6 +3087,7 @@ const refreshedCounts = { ...globalThis.__fetchCounts };
 console.log(JSON.stringify({
     initialCounts,
     refreshedCounts,
+    sessionForceRefreshes: globalThis.__sessionForceRefreshes,
 }));
 """.strip(),
         mock_api_source="""
@@ -2362,14 +3120,16 @@ globalThis.__fetchCounts = {
     sessions: 0,
     automationProjects: 0,
 };
+globalThis.__sessionForceRefreshes = [];
 
 export async function fetchWorkspaces() {
     globalThis.__fetchCounts.workspaces += 1;
     return workspaces;
 }
 
-export async function fetchSessions() {
+export async function fetchSessions(options = {}) {
     globalThis.__fetchCounts.sessions += 1;
+    globalThis.__sessionForceRefreshes.push(options.forceRefresh === true);
     return sessions;
 }
 
@@ -2438,9 +3198,137 @@ export async function runAutomationProject() {
         "sessions": 2,
         "automationProjects": 2,
     }
+    assert payload["sessionForceRefreshes"] == [False, True]
 
 
-def test_projects_sidebar_defaults_subagent_events_to_force_refresh_when_detail_missing(
+def test_projects_sidebar_preserves_forced_refresh_across_debounce(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    scheduleSessionsRefresh,
+} from "./sidebar.mjs";
+
+await loadProjects();
+scheduleSessionsRefresh(40, { forceRefresh: true });
+scheduleSessionsRefresh(0);
+await new Promise(resolve => setTimeout(resolve, 90));
+
+console.log(JSON.stringify({
+    fetchCounts: globalThis.__fetchCounts,
+    sessionForceRefreshes: globalThis.__sessionForceRefreshes,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+globalThis.__fetchCounts = {
+    workspaces: 0,
+    sessions: 0,
+    automationProjects: 0,
+};
+globalThis.__sessionForceRefreshes = [];
+
+export async function fetchWorkspaces() {
+    globalThis.__fetchCounts.workspaces += 1;
+    return workspaces;
+}
+
+export async function fetchSessions(options = {}) {
+    globalThis.__fetchCounts.sessions += 1;
+    globalThis.__sessionForceRefreshes.push(options.forceRefresh === true);
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchCounts.automationProjects += 1;
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["fetchCounts"] == {
+        "workspaces": 2,
+        "sessions": 2,
+        "automationProjects": 2,
+    }
+    assert payload["sessionForceRefreshes"] == [False, True]
+
+
+def test_projects_sidebar_defers_subagent_events_without_force_refresh_while_hovering(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -2457,12 +3345,13 @@ document.dispatchEvent({
 });
 await new Promise(resolve => setTimeout(resolve, 180));
 
-const refreshedCounts = { ...globalThis.__fetchCounts };
+const deferredCounts = { ...globalThis.__fetchCounts };
 
 console.log(JSON.stringify({
     initialCounts,
-    refreshedCounts,
-}));""".strip(),
+    deferredCounts,
+}));
+process.exit(0);""".strip(),
         mock_api_source="""
 const workspaces = [
     {
@@ -2563,10 +3452,10 @@ export async function runAutomationProject() {
         "sessions": 1,
         "automationProjects": 1,
     }
-    assert payload["refreshedCounts"] == {
-        "workspaces": 2,
-        "sessions": 2,
-        "automationProjects": 2,
+    assert payload["deferredCounts"] == {
+        "workspaces": 1,
+        "sessions": 1,
+        "automationProjects": 1,
     }
 
 
@@ -2582,21 +3471,36 @@ def test_projects_sidebar_hover_hint_preserves_project_action_space() -> None:
 
     hint_start = components_css.index(".projects-list .project-path-hint {")
     hint_end = components_css.index(
-        ".projects-list .project-row:hover + .project-path-hint,",
+        ".projects-list .project-path-hint.is-measuring",
         hint_start,
     )
     hint_rule = components_css[hint_start:hint_end]
 
     assert "position: relative;" in actions_rule
     assert "z-index: 8;" in actions_rule
-    assert "right: 3.15rem;" in hint_rule
+    assert "position: fixed;" in hint_rule
     assert "width: auto;" in hint_rule
     assert "min-width: 0;" in hint_rule
     assert "max-width: none;" in hint_rule
     assert "overflow: hidden;" in hint_rule
     assert "white-space: nowrap;" in hint_rule
-    assert "text-overflow: ellipsis;" in hint_rule
-    assert "z-index: 6;" in hint_rule
+    assert "text-overflow: clip;" in hint_rule
+    assert "transform: translateY(-2px);" in hint_rule
+    assert "z-index: 1200;" in hint_rule
+    assert ".project-path-hint.is-visible" in components_css
+
+    sidebar_script = (
+        Path(__file__).resolve().parents[3]
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "sidebar.js"
+    ).read_text(encoding="utf-8")
+    assert "function bindProjectPathHint(card)" in sidebar_script
+    assert "function showProjectPathHint(row, hint)" in sidebar_script
+    assert "viewportWidth - left - 12" in sidebar_script
+    assert "Number(rowRect.width || 0) - 28" not in sidebar_script
 
 
 def test_projects_sidebar_uses_root_path_basename_for_long_git_worktree_title(
@@ -2713,8 +3617,12 @@ def _run_sidebar_script(
 ) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "components" / "sidebar.js"
+    session_search_source_path = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sessionSearch.js"
+    )
 
     module_under_test_path = tmp_path / "sidebar.mjs"
+    session_search_module_path = tmp_path / "sessionSearch.mjs"
     mock_dom_path = tmp_path / "mockDom.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
@@ -2722,6 +3630,7 @@ def _run_sidebar_script(
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_state_path = tmp_path / "mockState.mjs"
     mock_stream_path = tmp_path / "mockStream.mjs"
+    mock_submission_path = tmp_path / "mockSubmission.mjs"
     mock_recovery_path = tmp_path / "mockRecovery.mjs"
     mock_message_renderer_path = tmp_path / "mockMessageRenderer.mjs"
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
@@ -2730,6 +3639,7 @@ def _run_sidebar_script(
     mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
     mock_new_session_draft_path = tmp_path / "mockNewSessionDraft.mjs"
     mock_rounds_timeline_path = tmp_path / "mockRoundsTimeline.mjs"
+    mock_session_debug_badge_path = tmp_path / "mockSessionDebugBadge.mjs"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -2750,6 +3660,7 @@ function parseElements(source, selector) {
         const patterns = {
             ".home-feature-item": /class="([^"]*home-feature-item[^"]*)"[^>]*data-feature-id="([^"]+)"[^>]*>/g,
             ".home-new-session-btn": /class="([^"]*home-new-session-btn[^"]*)"[^>]*>/g,
+            ".home-session-search-btn": /class="([^"]*home-session-search-btn[^"]*)"[^>]*>/g,
             ".project-toggle": /class="project-toggle"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
         ".project-title-btn": /class="([^"]*project-title-btn[^"]*)"[^>]*aria-current="([^"]+)"[^>]*>/g,
         ".project-options-btn": /class="([^"]*project-options-btn[^"]*)"[^>]*>/g,
@@ -2759,7 +3670,7 @@ function parseElements(source, selector) {
         ".project-session-visibility-btn": /class="project-session-visibility-btn"[^>]*>([\s\S]*?)<\/button>/g,
             ".session-subagents-toggle": /class="session-subagents-toggle"[^>]*data-session-id="([^"]+)"[^>]*aria-expanded="([^"]+)"[^>]*>/g,
             ".session-subagent-list": /class="([^"]*session-subagent-list[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*aria-hidden="([^"]+)"[^>]*>/g,
-            ".session-subagent-item": /class="([^"]*session-subagent-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-role-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-title="([^"]*)"[^>]*>[\s\S]*?<span class="session-label-text">([\s\S]*?)<\/span>/g,
+            ".session-subagent-item": /class="([^"]*session-subagent-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-role-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-title="([^"]*)"[^>]*>[\s\S]*?<span class="session-label-text"[^>]*>([\s\S]*?)<\/span>/g,
         ".session-subagent-delete-btn": /class="([^"]*session-subagent-delete-btn[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-subagent-instance-id="([^"]+)"[^>]*data-subagent-run-id="([^"]+)"[^>]*data-subagent-label="([^"]*)"[^>]*>/g,
         ".session-subagent-empty": /class="session-subagent-empty"[^>]*>([\s\S]*?)<\/div>/g,
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
@@ -2783,6 +3694,8 @@ function parseElements(source, selector) {
                 },
             }));
         } else if (selector === ".home-new-session-btn") {
+            results.push(createNode({ className: match[1] }));
+        } else if (selector === ".home-session-search-btn") {
             results.push(createNode({ className: match[1] }));
         } else if (selector === ".project-toggle") {
             results.push(createNode({ attributes: { "aria-expanded": match[1] } }));
@@ -2931,16 +3844,47 @@ function createCardElement() {
             html = String(value);
             cache.clear();
         },
+        appendChild(child) {
+            this.children.push(child);
+            cache.clear();
+            return child;
+        },
         querySelector(selector) {
             return this.querySelectorAll(selector)[0] || null;
         },
         querySelectorAll(selector) {
+            if (!selector.startsWith(".")) {
+                return [];
+            }
             if (!cache.has(selector)) {
-                cache.set(selector, parseElements(html, selector));
+                const className = selector.slice(1);
+                const directMatches = this.children.filter(child => {
+                    const childClassName = String(child.className || "");
+                    return childClassName.split(/\s+/).includes(className);
+                });
+                const childMatches = this.children.flatMap(child => (
+                    typeof child.querySelectorAll === "function"
+                        ? child.querySelectorAll(selector)
+                        : []
+                ));
+                cache.set(selector, [
+                    ...parseElements(html, selector),
+                    ...directMatches,
+                    ...childMatches,
+                ]);
             }
             return cache.get(selector);
         },
     };
+}
+
+function collectFlattenedProjectChildren(child) {
+    const childClassName = String(child?.className || "");
+    const own = childClassName.split(/\s+/).includes("project-card") ? [child] : [];
+    const nested = Array.isArray(child?.children)
+        ? child.children.flatMap(collectFlattenedProjectChildren)
+        : [];
+    return [...own, ...nested];
 }
 
 function createContainerElement() {
@@ -2963,6 +3907,9 @@ function createContainerElement() {
         },
         appendChild(child) {
             this.children.push(child);
+            if (String(child?.className || "").split(/\s+/).includes("projects-workspace-shell")) {
+                this.children.push(...collectFlattenedProjectChildren(child));
+            }
             return child;
         },
         contains(target) {
@@ -2979,10 +3926,16 @@ function createContainerElement() {
                 return [];
             }
             const className = selector.slice(1);
-            return this.children.filter(child => {
+            const directMatches = this.children.filter(child => {
                 const childClassName = String(child.className || "");
                 return childClassName.split(/\s+/).includes(className);
             });
+            const childMatches = this.children.flatMap(child => (
+                typeof child.querySelectorAll === "function"
+                    ? child.querySelectorAll(selector)
+                    : []
+            ));
+            return [...directMatches, ...childMatches];
         },
     };
 }
@@ -3130,17 +4083,25 @@ const translations = {
     "sidebar.rename_session_title": "Rename Session",
     "sidebar.rename_session_message": "Enter a new name for this session.",
     "sidebar.session_name_placeholder": "Session name",
+    "sidebar.untitled_session": "New conversation",
+    "sidebar.search_conversations": "Search",
+    "sidebar.search_conversations_title": "Search conversations",
+    "sidebar.search_placeholder": "Search conversations",
+    "sidebar.search_recent": "Recent conversations",
+    "sidebar.search_results": "Matching conversations",
+    "sidebar.search_no_matches": "No matches",
     "sidebar.log.queued_bound_session": "Queued automation run in bound IM session: {session_id}",
     "sidebar.no_projects_title": "No projects yet",
     "sidebar.no_projects_copy": "Add a project below to attach a workspace and start sessions.",
     "sidebar.workspace": "Workspace",
         "sidebar.project_options": "Project options",
         "sidebar.new_session": "New session",
-        "sidebar.no_sessions": "No sessions yet",
-        "sidebar.subagent_sessions_toggle": "Toggle subagent sessions",
-        "sidebar.subagent_sessions_loading": "Loading subagent sessions...",
-        "sidebar.subagent_sessions_empty": "No subagent sessions",
-        "settings.action.cancel": "Cancel",
+    "sidebar.no_sessions": "No sessions yet",
+    "sidebar.subagent_sessions_toggle": "Toggle subagent sessions",
+    "sidebar.subagent_sessions_loading": "Loading subagent sessions...",
+    "sidebar.subagent_sessions_empty": "No subagent sessions",
+    "sidebar.error.selecting_session": "Failed to select session: {error}",
+    "settings.action.cancel": "Cancel",
     };
 
 export function t(key) {
@@ -3369,6 +4330,14 @@ export function closeNormalModeSubagentStream(runId) {
 """.strip(),
         encoding="utf-8",
     )
+    mock_submission_path.write_text(
+        """
+export function detachForegroundSubmission() {
+    globalThis.__detachForegroundSubmissionCalls += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_recovery_path.write_text(
         """
 export function clearSessionRecovery() {
@@ -3564,6 +4533,14 @@ export function clearSessionTimeline() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_session_debug_badge_path.write_text(
+        """
+export function syncSessionDebugBadge() {
+    globalThis.__syncSessionDebugBadgeCalls = (globalThis.__syncSessionDebugBadgeCalls || 0) + 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
@@ -3574,6 +4551,7 @@ export function clearSessionTimeline() {
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("../core/state.js", "./mockState.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../core/submission.js", "./mockSubmission.mjs")
         .replace("../app/recovery.js", "./mockRecovery.mjs")
         .replace("./messageRenderer.js", "./mockMessageRenderer.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
@@ -3582,8 +4560,17 @@ export function clearSessionTimeline() {
         .replace("./subagentSessions.js", "./mockSubagentSessions.mjs")
         .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
         .replace("./rounds/timeline.js", "./mockRoundsTimeline.mjs")
+        .replace("./sessionSearch.js", "./sessionSearch.mjs")
+        .replace("./sessionDebugBadge.js", "./mockSessionDebugBadge.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    session_search_module_path.write_text(
+        session_search_source_path.read_text(encoding="utf-8").replace(
+            "../utils/i18n.js",
+            "./mockI18n.mjs",
+        ),
+        encoding="utf-8",
+    )
 
     runner_path.write_text(
         f"""
@@ -3604,6 +4591,7 @@ globalThis.__openedAutomationProjectIds = [];
 globalThis.__hideProjectViewCalls = 0;
 globalThis.__clearNewSessionDraftCalls = 0;
 globalThis.__clearSessionTimelineCalls = 0;
+globalThis.__detachForegroundSubmissionCalls = 0;
 globalThis.__showFormDialogResult = null;
 globalThis.__showFormDialogCalls = [];
 globalThis.__requestAutomationProjectInputResult = null;

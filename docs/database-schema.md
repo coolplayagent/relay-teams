@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     normal_root_role_id TEXT,
     orchestration_preset_id TEXT,
     started_at   TEXT,
+    last_viewed_terminal_run_id TEXT,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
@@ -41,6 +42,7 @@ Notes:
 - `normal_root_role_id` stores the session-selected root role for normal mode. When `NULL`, runtime falls back to the current `MainAgent`.
 - `orchestration_preset_id` stores the session-selected preset for orchestration mode.
 - `started_at` is written when the first run is created and locks further mode switching for that session.
+- `last_viewed_terminal_run_id` stores the latest terminal top-level run the user has opened, so the sidebar can distinguish newly finished runs from already-viewed sessions.
 
 ---
 
@@ -283,6 +285,8 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_messages_session_role_id
+    ON messages(session_id, role, id);
 CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_task ON messages(task_id);
@@ -675,6 +679,8 @@ CREATE TABLE IF NOT EXISTS run_intents (
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id);
+CREATE INDEX IF NOT EXISTS idx_run_intents_session_created
+    ON run_intents(session_id, created_at ASC);
 ```
 
 Purpose: stores the run input and per-run execution settings needed for queued runs and recoverable resume paths.
@@ -741,6 +747,8 @@ CREATE TABLE IF NOT EXISTS background_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_background_tasks_run
     ON background_tasks(run_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_background_tasks_session
+    ON background_tasks(session_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_background_tasks_status
     ON background_tasks(status, updated_at DESC);
 ```

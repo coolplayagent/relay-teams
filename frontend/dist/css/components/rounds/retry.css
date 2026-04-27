@@ -10,6 +10,8 @@
     border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border-color) 72%);
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--warning) 8%, var(--bg-surface) 92%);
+    opacity: 1;
+    animation: round-retry-enter 160ms ease-out;
 }
 
 .round-retry-item-active {
@@ -23,6 +25,11 @@
     background: color-mix(in srgb, var(--danger) 10%, var(--bg-surface) 90%);
 }
 
+.round-retry-item-succeeded {
+    border-color: color-mix(in srgb, var(--success) 34%, var(--border-color) 66%);
+    background: color-mix(in srgb, var(--success) 8%, var(--bg-surface) 92%);
+}
+
 .round-retry-main,
 .round-retry-meta {
     display: flex;
@@ -33,9 +40,22 @@
 }
 
 .round-retry-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
     color: var(--text-primary);
     font-size: 0.76rem;
     font-weight: 600;
+}
+
+.round-retry-spinner {
+    width: 0.7rem;
+    height: 0.7rem;
+    flex: 0 0 auto;
+    border: 1.5px solid color-mix(in srgb, var(--warning) 24%, transparent);
+    border-top-color: var(--warning);
+    border-radius: 50%;
+    animation: round-retry-spin 900ms linear infinite;
 }
 
 .round-retry-copy,
@@ -64,3 +84,25 @@
     line-height: 1.45;
 }
 
+@keyframes round-retry-enter {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes round-retry-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .round-retry-item,
+    .round-retry-spinner {
+        animation: none;
+    }
+}

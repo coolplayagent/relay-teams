@@ -243,6 +243,7 @@ function scheduleContinuityRefreshForEvent(evType) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
             delayMs: 0,
+            forceRefresh: true,
             includeRounds: false,
             quiet: true,
             reason: evType,
@@ -254,6 +255,7 @@ function scheduleContinuityRefreshForEvent(evType) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
             delayMs: 500,
+            forceRefresh: true,
             includeRounds: false,
             quiet: true,
             reason: evType,
@@ -265,6 +267,7 @@ function scheduleContinuityRefreshForEvent(evType) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
             delayMs: BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS,
+            forceRefresh: true,
             includeRounds: false,
             quiet: true,
             reason: evType,
@@ -295,6 +298,7 @@ function scheduleContinuityRefreshForEvent(evType) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
             delayMs: 0,
+            forceRefresh: true,
             includeRounds: false,
             quiet: true,
             reason: evType,
@@ -306,6 +310,7 @@ function scheduleContinuityRefreshForEvent(evType) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
             delayMs: 0,
+            forceRefresh: true,
             includeRounds: false,
             quiet: true,
             reason: evType,

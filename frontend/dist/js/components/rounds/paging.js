@@ -6,12 +6,18 @@ import { fetchSessionRounds } from '../../core/api.js';
 import { setRunPrimaryRole, state } from '../../core/state.js';
 import { roundsState } from './state.js';
 
-export async function fetchInitialRoundsPage(sessionId) {
-    return fetchSessionRounds(sessionId, { limit: roundsState.pageSize });
+export async function fetchInitialRoundsPage(sessionId, options = {}) {
+    return fetchSessionRounds(sessionId, {
+        limit: roundsState.pageSize,
+        signal: options.signal,
+    });
 }
 
-export async function fetchTimelineRoundsPage(sessionId) {
-    return fetchSessionRounds(sessionId, { timeline: true });
+export async function fetchTimelineRoundsPage(sessionId, options = {}) {
+    return fetchSessionRounds(sessionId, {
+        timeline: true,
+        signal: options.signal,
+    });
 }
 
 export async function fetchOlderRoundsPage() {

@@ -2,7 +2,7 @@
  * core/api/automation.js
  * Automation project related API wrappers.
  */
-import { requestJson } from './request.js';
+import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
 export async function fetchAutomationDeliveryBindings() {
     return requestJson(
@@ -16,12 +16,18 @@ export async function fetchAutomationFeishuBindings() {
     return fetchAutomationDeliveryBindings();
 }
 
-export async function fetchAutomationProjects() {
-    return requestJson('/api/automation/projects', undefined, 'Failed to fetch automation projects');
+export async function fetchAutomationProjects(options = {}) {
+    return requestJsonManaged(
+        'automation:projects',
+        '/api/automation/projects',
+        { signal: options.signal },
+        'Failed to fetch automation projects',
+        { ttlMs: 800 },
+    );
 }
 
 export async function createAutomationProject(payload) {
-    return requestJson(
+    const result = await requestJson(
         '/api/automation/projects',
         {
             method: 'POST',
@@ -30,6 +36,8 @@ export async function createAutomationProject(payload) {
         },
         'Failed to create automation project',
     );
+    invalidateManagedRequests('automation:');
+    return result;
 }
 
 export async function fetchAutomationProject(automationProjectId) {
@@ -41,7 +49,7 @@ export async function fetchAutomationProject(automationProjectId) {
 }
 
 export async function updateAutomationProject(automationProjectId, payload) {
-    return requestJson(
+    const result = await requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}`,
         {
             method: 'PATCH',
@@ -50,10 +58,12 @@ export async function updateAutomationProject(automationProjectId, payload) {
         },
         'Failed to update automation project',
     );
+    invalidateManagedRequests('automation:');
+    return result;
 }
 
 export async function deleteAutomationProject(automationProjectId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}`,
         {
             method: 'DELETE',
@@ -62,10 +72,12 @@ export async function deleteAutomationProject(automationProjectId) {
         },
         'Failed to delete automation project',
     );
+    invalidateManagedRequests('automation:');
+    return result;
 }
 
 export async function runAutomationProject(automationProjectId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}:run`,
         {
             method: 'POST',
@@ -74,10 +86,13 @@ export async function runAutomationProject(automationProjectId) {
         },
         'Failed to run automation project',
     );
+    invalidateManagedRequests('automation:');
+    invalidateManagedRequests('sessions:');
+    return result;
 }
 
 export async function enableAutomationProject(automationProjectId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}:enable`,
         {
             method: 'POST',
@@ -86,10 +101,12 @@ export async function enableAutomationProject(automationProjectId) {
         },
         'Failed to enable automation project',
     );
+    invalidateManagedRequests('automation:');
+    return result;
 }
 
 export async function disableAutomationProject(automationProjectId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}:disable`,
         {
             method: 'POST',
@@ -98,6 +115,8 @@ export async function disableAutomationProject(automationProjectId) {
         },
         'Failed to disable automation project',
     );
+    invalidateManagedRequests('automation:');
+    return result;
 }
 
 export async function fetchAutomationProjectSessions(automationProjectId) {

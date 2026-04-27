@@ -74,6 +74,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     request_script = (
         repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
     ).read_text(encoding="utf-8")
+    stream_script = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "stream.js"
+    ).read_text(encoding="utf-8")
     context_indicator_script = (
         repo_root / "frontend" / "dist" / "js" / "components" / "contextIndicators.js"
     ).read_text(encoding="utf-8")
@@ -167,6 +170,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "latest_input_tokens" in context_indicator_script
     assert "formatTokenCount(inputTokens)" in context_indicator_script
     assert "formatTokenCount(usage.input_tokens)" not in context_indicator_script
+    assert "clearContextIndicators({ preserveDisplay = false } = {})" in (
+        context_indicator_script
+    )
     assert "isMainComposerRecoveryActionVisible" not in context_indicator_script
     assert "Latest request input / context window" in i18n_script
     assert "Latest request input tokens: {input_tokens}" in i18n_script
@@ -191,8 +197,14 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "session-token-usage-pair" in session_token_usage_script
     assert "session-token-usage-arrow-up" in session_token_usage_script
     assert "session-token-usage-arrow-down" in session_token_usage_script
-    assert "markBackendOnline" in request_script
-    assert "markBackendOffline" in request_script
+    assert "clearSessionTokenUsage({ preserveDisplay = false } = {})" in (
+        session_token_usage_script
+    )
+    assert "markBackendOnline" not in request_script
+    assert "markBackendOffline" not in request_script
+    assert "../utils/backendStatus.js" not in stream_script
+    assert "markBackendOnline" not in stream_script
+    assert "refreshBackendStatus" not in stream_script
     assert ".status-indicator > span:last-child" in components_css
     assert "flex: 1 1 auto;" in components_css
     assert "white-space: nowrap;" in components_css

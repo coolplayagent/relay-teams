@@ -66,11 +66,32 @@ class ControlPlaneServerHandle:
         self._server = server
         self._thread = thread
         self.config = config
+        self._stopped = False
 
     def stop(self) -> None:
-        self._server.shutdown()
+        if self._stopped:
+            return
+        self._stopped = True
+        shutdown_thread = threading.Thread(
+            target=self._server.shutdown,
+            name="agent-teams-control-plane-stop",
+            daemon=True,
+        )
+        shutdown_thread.start()
+        self._wake_server()
+        shutdown_thread.join(timeout=2.0)
         self._server.server_close()
         self._thread.join(timeout=2.0)
+
+    def _wake_server(self) -> None:
+        try:
+            with socket.create_connection(
+                (_bind_host(self.config.host), self.config.port),
+                timeout=0.2,
+            ):
+                pass
+        except OSError:
+            return
 
 
 class _ControlPlaneHttpServer(ThreadingHTTPServer):

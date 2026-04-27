@@ -32,6 +32,8 @@ from relay_teams.sessions.session_models import SessionMode
 from relay_teams.validation import normalize_persisted_text
 
 LOGGER = get_logger(__name__)
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
+_RUN_INTENT_TITLE_MAX_CHARS = 120
 
 type _ThinkingEffort = Literal["minimal", "low", "medium", "high"] | None
 _MediaGenerationConfigAdapter = TypeAdapter(MediaGenerationConfig)
@@ -191,6 +193,9 @@ class RunIntentRepository(SharedSqliteRepository):
                 )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_run_intents_session ON run_intents(session_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_run_intents_session_created ON run_intents(session_id, created_at ASC)"
             )
 
         self._run_write(operation_name="init_tables", operation=operation)
@@ -363,6 +368,102 @@ class RunIntentRepository(SharedSqliteRepository):
                 _log_invalid_run_intent_row(row=row, error=exc)
         return records
 
+    def first_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, IntentInput]:
+        if not session_ids:
+            return {}
+        records: dict[str, IntentInput] = {}
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT
+                        run_id,
+                        {_RUN_INTENT_SELECT_COLUMNS}
+                    FROM run_intents
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, created_at ASC
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    session_id = str(row["session_id"] or "").strip()
+                    if not session_id or session_id in records:
+                        continue
+                    try:
+                        intent = _intent_input_from_row(
+                            row,
+                            fallback_session_id=session_id,
+                        )
+                        if not content_parts_to_text(
+                            intent.display_input or intent.input
+                        ).strip():
+                            continue
+                        records[session_id] = intent
+                    except (KeyError, ValueError, ValidationError) as exc:
+                        _log_invalid_run_intent_row(row=row, error=exc)
+        return records
+
+    def first_titles_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, str]:
+        if not session_ids:
+            return {}
+        records: dict[str, str] = {}
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT
+                        run_id,
+                        session_id,
+                        intent,
+                        input_json,
+                        display_input_json
+                    FROM run_intents
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, created_at ASC
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    session_id = str(row["session_id"] or "").strip()
+                    if not session_id or session_id in records:
+                        continue
+                    try:
+                        title = _run_intent_title_from_row(row)
+                    except (KeyError, ValueError) as exc:
+                        _log_invalid_run_intent_title_row(row=row, error=exc)
+                        continue
+                    if title is not None:
+                        records[session_id] = title
+        return records
+
+    async def first_by_session_ids_async(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, IntentInput]:
+        return await self._call_sync_async(self.first_by_session_ids, session_ids)
+
+    async def first_titles_by_session_ids_async(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, str]:
+        return await self._call_sync_async(
+            self.first_titles_by_session_ids, session_ids
+        )
+
     async def list_by_session_async(self, session_id: str) -> dict[str, IntentInput]:
         rows = await self._run_async_read(
             lambda conn: async_fetchall(
@@ -531,6 +632,52 @@ def _coerce_input_parts(
     return ()
 
 
+def _run_intent_title_from_row(row: Row) -> str | None:
+    display_input_title, has_display_input_parts = _title_from_content_parts_json(
+        row["display_input_json"]
+    )
+    if has_display_input_parts:
+        return display_input_title
+    input_title, has_input_parts = _title_from_content_parts_json(row["input_json"])
+    if has_input_parts:
+        return input_title
+    return _normalize_run_intent_title(str(row["intent"] or ""))
+
+
+def _title_from_content_parts_json(value: object) -> tuple[str | None, bool]:
+    if not isinstance(value, str) or not value.strip():
+        return None, False
+    loaded: object = json.loads(value)
+    if not isinstance(loaded, list):
+        raise ValueError("content parts payload must be a list")
+    fragments: list[str] = []
+    for item in loaded:
+        if not isinstance(item, dict):
+            raise ValueError("content part payload must be an object")
+        kind = str(item.get("kind") or "").strip()
+        if kind == "text":
+            fragments.append(str(item.get("text") or ""))
+            continue
+        modality = str(item.get("modality") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not modality:
+            continue
+        label = name if name else modality
+        fragments.append(f"[{modality}: {label}]")
+    return _normalize_run_intent_title("\n\n".join(fragments)), bool(loaded)
+
+
+def _normalize_run_intent_title(value: str) -> str | None:
+    for raw_line in str(value or "").splitlines():
+        normalized = " ".join(raw_line.strip().split())
+        if not normalized:
+            continue
+        if len(normalized) <= _RUN_INTENT_TITLE_MAX_CHARS:
+            return normalized
+        return f"{normalized[: _RUN_INTENT_TITLE_MAX_CHARS - 3].rstrip()}..."
+    return None
+
+
 def _coerce_generation_config(value: object) -> MediaGenerationConfig | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -566,5 +713,21 @@ def _log_invalid_run_intent_row(*, row: Row, error: Exception) -> None:
         logging.WARNING,
         event="sessions.run_intent_repo.row_invalid",
         message="Skipping invalid persisted run intent row",
+        payload=payload,
+    )
+
+
+def _log_invalid_run_intent_title_row(*, row: Row, error: Exception) -> None:
+    payload: dict[str, JsonValue] = {
+        "run_id": _persisted_value_preview(row["run_id"]),
+        "session_id": _persisted_value_preview(row["session_id"]),
+        "error_type": type(error).__name__,
+        "error": str(error),
+    }
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="sessions.run_intent_repo.title_row_invalid",
+        message="Skipping invalid persisted run intent title row",
         payload=payload,
     )

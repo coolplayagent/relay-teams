@@ -40,6 +40,7 @@ class SessionRepository(SharedSqliteRepository):
                     normal_root_role_id TEXT,
                     orchestration_preset_id TEXT,
                     started_at TEXT,
+                    last_viewed_terminal_run_id TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )
@@ -78,6 +79,10 @@ class SessionRepository(SharedSqliteRepository):
                 )
             if "started_at" not in columns:
                 self._conn.execute("ALTER TABLE sessions ADD COLUMN started_at TEXT")
+            if "last_viewed_terminal_run_id" not in columns:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN last_viewed_terminal_run_id TEXT"
+                )
             self._conn.execute(
                 """
                 UPDATE sessions
@@ -130,10 +135,11 @@ class SessionRepository(SharedSqliteRepository):
                     normal_root_role_id,
                     orchestration_preset_id,
                     started_at,
+                    last_viewed_terminal_run_id,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.session_id,
@@ -145,6 +151,7 @@ class SessionRepository(SharedSqliteRepository):
                     record.normal_root_role_id,
                     record.orchestration_preset_id,
                     None,
+                    record.last_viewed_terminal_run_id,
                     now,
                     now,
                 ),
@@ -338,6 +345,32 @@ class SessionRepository(SharedSqliteRepository):
         )
         if updated_count == 0:
             raise KeyError(f"Unknown session_id: {session_id}")
+
+    def mark_terminal_run_viewed(self, session_id: str, run_id: str) -> None:
+        rowcount = self._run_write(
+            operation_name="mark_terminal_run_viewed",
+            operation=lambda: (
+                self._conn.execute(
+                    """
+                UPDATE sessions
+                SET last_viewed_terminal_run_id=?
+                WHERE session_id=?
+                """,
+                    (run_id, session_id),
+                ).rowcount
+            ),
+        )
+        if rowcount == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
+
+    async def mark_terminal_run_viewed_async(
+        self, session_id: str, run_id: str
+    ) -> None:
+        return await self._call_sync_async(
+            self.mark_terminal_run_viewed,
+            session_id,
+            run_id,
+        )
 
     def update_workspace(
         self,
@@ -666,6 +699,9 @@ class SessionRepository(SharedSqliteRepository):
                 row["orchestration_preset_id"]
             ),
             started_at=started_at,
+            last_viewed_terminal_run_id=normalize_persisted_text(
+                row["last_viewed_terminal_run_id"]
+            ),
             can_switch_mode=started_at is None,
             created_at=created_at,
             updated_at=updated_at,

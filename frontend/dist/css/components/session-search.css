@@ -1,0 +1,283 @@
+.home-session-search-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.52rem;
+    width: 100%;
+    padding: 0.44rem 0.58rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.home-session-search-btn:hover {
+    background: color-mix(in srgb, var(--bg-surface-muted) 78%, transparent);
+    border-color: color-mix(in srgb, var(--border-color) 80%, transparent);
+}
+
+.home-session-search-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.52rem;
+    min-width: 0;
+}
+
+.home-session-search-shortcut,
+.session-search-shortcut {
+    flex: 0 0 auto;
+    min-width: 2.35rem;
+    padding: 0.06rem 0.28rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 72%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--bg-surface-muted) 72%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.68rem;
+    line-height: 1.25;
+    text-align: center;
+}
+
+.session-search-root {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: max(3rem, 9vh) 1rem 1rem;
+    pointer-events: none;
+}
+
+.session-search-root.is-active {
+    pointer-events: auto;
+}
+
+.session-search-backdrop {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--text-primary) 22%, transparent);
+    opacity: 0;
+    transition: opacity 0.14s ease;
+}
+
+.session-search-root.is-active .session-search-backdrop {
+    opacity: 1;
+}
+
+.session-search-panel {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    width: min(680px, calc(100vw - 2rem));
+    max-height: min(64vh, 620px);
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.session-search-root.is-active .session-search-panel {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.session-search-input-wrap {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.session-search-input {
+    width: 100%;
+    height: 3.05rem;
+    padding: 0 0.9rem;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 0.95rem;
+}
+
+.session-search-input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.session-search-results {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    scrollbar-width: none;
+    padding: 0.24rem;
+    overscroll-behavior: contain;
+}
+
+.session-search-results::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.session-search-section-label {
+    padding: 0.28rem 0.48rem 0.16rem;
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+}
+
+.session-search-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.04rem;
+}
+
+.session-search-result {
+    display: grid;
+    grid-template-columns: 0.7rem minmax(0, 1fr) minmax(5.25rem, 6.75rem) 2.55rem;
+    align-items: center;
+    gap: 0.42rem;
+    min-height: 2rem;
+    width: 100%;
+    padding: 0.2rem 0.42rem;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    opacity: 1;
+    transition: background-color 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease, opacity 0.14s ease;
+}
+
+.session-search-result:hover {
+    background: color-mix(in srgb, var(--bg-surface-muted) 82%, transparent);
+    border-color: color-mix(in srgb, var(--border-color) 78%, transparent);
+}
+
+.session-search-result.is-active {
+    background: color-mix(in srgb, var(--primary) 10%, var(--bg-surface-muted));
+    border-color: color-mix(in srgb, var(--primary) 34%, var(--border-color));
+    box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.session-search-result:disabled {
+    cursor: default;
+}
+
+.session-search-result.is-selecting {
+    cursor: progress;
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-surface-muted));
+    border-color: color-mix(in srgb, var(--primary) 36%, var(--border-color));
+    box-shadow: inset 2px 0 0 var(--primary);
+}
+
+.session-search-results.is-selecting .session-search-result:not(.is-selecting) {
+    opacity: 0.54;
+}
+
+.session-search-result-marker {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    line-height: 1;
+}
+
+.session-search-result-main,
+.session-search-result-title,
+.session-search-result-project {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-search-result-title {
+    display: block;
+    font-size: 0.84rem;
+    font-weight: 500;
+}
+
+.session-search-result-project {
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    text-align: right;
+}
+
+.session-search-result.is-active .session-search-result-title {
+    font-weight: 600;
+}
+
+.session-search-result.is-active .session-search-result-marker,
+.session-search-result.is-selecting .session-search-result-marker {
+    color: color-mix(in srgb, var(--primary) 82%, var(--text-primary));
+}
+
+.session-search-shortcut.is-empty {
+    visibility: hidden;
+}
+
+.session-search-input:disabled {
+    opacity: 1;
+    cursor: progress;
+}
+
+.session-search-mark {
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+    color: inherit;
+}
+
+.session-search-empty {
+    padding: 0.64rem 0.9rem 0.82rem;
+    color: var(--text-secondary);
+    font-size: 0.84rem;
+}
+
+.session-search-results.is-animated .session-search-result {
+    opacity: 0;
+    animation: sessionSearchResultEnter 0.14s ease forwards;
+    animation-delay: calc(min(var(--session-search-result-index), 6) * 14ms);
+}
+
+@keyframes sessionSearchResultEnter {
+    0% {
+        opacity: 0;
+        transform: translateY(3px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (max-width: 720px) {
+    .session-search-result {
+        grid-template-columns: 0.7rem minmax(0, 1fr) 2.55rem;
+    }
+
+    .session-search-result-project {
+        display: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .session-search-backdrop,
+    .session-search-panel,
+    .session-search-result {
+        animation: none;
+        transform: none;
+        transition: none;
+    }
+
+    .session-search-result {
+        opacity: 1;
+    }
+}

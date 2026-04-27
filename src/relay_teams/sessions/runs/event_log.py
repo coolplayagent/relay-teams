@@ -45,6 +45,9 @@ class EventLog(SharedSqliteRepository):
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)"
             )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_id_trace ON events(session_id, id, trace_id)"
+            )
 
         self._run_write(
             operation_name="init_tables",
@@ -75,6 +78,10 @@ class EventLog(SharedSqliteRepository):
             await cursor.close()
             cursor = await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_id_trace ON events(session_id, id, trace_id)"
             )
             await cursor.close()
 
@@ -282,6 +289,54 @@ class EventLog(SharedSqliteRepository):
                 "FROM events WHERE session_id=? ORDER BY id ASC",
                 (session_id,),
             ).fetchall()
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    def list_by_session_after_id(
+        self, session_id: str, after_event_id: int
+    ) -> tuple[dict[str, JsonValue], ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                "FROM events WHERE session_id=? AND id>? ORDER BY id ASC",
+                (session_id, after_event_id),
+            ).fetchall()
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    async def list_by_session_after_id_async(
+        self, session_id: str, after_event_id: int
+    ) -> tuple[dict[str, JsonValue], ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                "FROM events WHERE session_id=? AND id>? ORDER BY id ASC",
+                (session_id, after_event_id),
+            )
+        )
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    def list_subagent_run_events_by_session_after_id(
+        self, session_id: str, after_event_id: int
+    ) -> tuple[dict[str, JsonValue], ...]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                "FROM events WHERE session_id=? AND id>? AND trace_id GLOB 'subagent_run_*' ORDER BY id ASC",
+                (session_id, after_event_id),
+            ).fetchall()
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    async def list_subagent_run_events_by_session_after_id_async(
+        self, session_id: str, after_event_id: int
+    ) -> tuple[dict[str, JsonValue], ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                "FROM events WHERE session_id=? AND id>? AND trace_id GLOB 'subagent_run_*' ORDER BY id ASC",
+                (session_id, after_event_id),
+            )
+        )
         return tuple(self._row_to_dict(row) for row in rows)
 
     async def list_by_session_with_ids_async(

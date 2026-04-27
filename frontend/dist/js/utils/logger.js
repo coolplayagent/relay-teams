@@ -9,6 +9,7 @@ const FRONTEND_LOG_ENDPOINT = '/api/logs/frontend';
 const FLUSH_INTERVAL_MS = 1000;
 const MAX_BATCH_SIZE = 20;
 const MAX_PENDING_EVENTS = 200;
+const MAX_PENDING_WHEN_BACKED_UP = 80;
 const MAX_MESSAGE_LENGTH = 2000;
 
 const browserSessionId = `browser_${Math.random().toString(36).slice(2, 10)}`;
@@ -66,6 +67,12 @@ function scheduleFlush() {
 }
 
 function enqueueEvent(event) {
+    if (
+        pendingEvents.length >= MAX_PENDING_WHEN_BACKED_UP
+        && (event.level === 'debug' || event.level === 'info')
+    ) {
+        return;
+    }
     pendingEvents.push(event);
     if (pendingEvents.length > MAX_PENDING_EVENTS) {
         pendingEvents = pendingEvents.slice(-MAX_PENDING_EVENTS);

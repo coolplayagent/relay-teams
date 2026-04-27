@@ -168,10 +168,9 @@ def test_verify_task_required_file_rejects_workspace_escape(
 
     assert result.passed is False
     assert result.report is not None
+    expected_check_name = f"required_file:{Path('../outside.txt')}"
     structure_check = next(
-        check
-        for check in result.report.checks
-        if check.name == "required_file:../outside.txt"
+        check for check in result.report.checks if check.name == expected_check_name
     )
     assert structure_check.passed is False
     assert "escapes the workspace" in structure_check.details

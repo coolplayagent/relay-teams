@@ -118,10 +118,13 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
         });
     });
 
-    // Store the last message timestamp from raw data (including tool-return
-    // messages not rendered as .message elements) so the collapse group can
-    // compute duration from round start to the final message.
+    // Store raw timestamps, including tool-return messages not rendered as
+    // .message elements, so collapsed groups keep the full processed duration.
     if (historyMessages.length > 0) {
+        const firstRawTimestamp = firstHistoryTimestamp(historyMessages);
+        if (firstRawTimestamp) {
+            container.dataset.roundFirstMessageAt = firstRawTimestamp;
+        }
         for (let i = historyMessages.length - 1; i >= 0; i -= 1) {
             const ts = String(historyMessages[i]?.created_at || '').trim();
             if (ts) {
@@ -947,8 +950,19 @@ function collapseIntermediateMessages(container) {
     // coordinator message. Round start comes from the section's dataset
     // (set by renderRoundSection); last message time from raw data stored
     // by renderHistoricalMessageList (covers non-rendered tool-return messages).
-    const firstTime = Date.parse(container.dataset.roundCreatedAt || messages[0].dataset.createdAt || '');
-    const lastTime = Date.parse(container.dataset.roundLastMessageAt || last.dataset.createdAt || '');
+    const firstTime = Date.parse(
+        container.dataset.roundStartedAt
+        || container.dataset.roundCreatedAt
+        || container.dataset.roundFirstMessageAt
+        || messages[0].dataset.createdAt
+        || '',
+    );
+    const lastTime = Date.parse(
+        container.dataset.roundUpdatedAt
+        || container.dataset.roundLastMessageAt
+        || last.dataset.createdAt
+        || '',
+    );
     const durationText = Number.isFinite(firstTime) && Number.isFinite(lastTime) && lastTime > firstTime
         ? formatElapsed(lastTime - firstTime)
         : '';
@@ -1053,6 +1067,16 @@ function shouldCollapseIntermediateMessages(streamOverlayEntry, options = {}) {
     return !hasActiveOverlayPart;
 }
 
+function firstHistoryTimestamp(historyMessages) {
+    for (let i = 0; i < historyMessages.length; i += 1) {
+        const ts = String(historyMessages[i]?.created_at || '').trim();
+        if (ts) {
+            return ts;
+        }
+    }
+    return '';
+}
+
 function isTerminalRunStatus(runStatus) {
     return [
         'completed',
@@ -1072,7 +1096,7 @@ function isApprovedApprovalStatus(value) {
         || approvalStatus === 'approve_prefix'
     );
 }
-function formatElapsed(ms) {
+export function formatElapsed(ms) {
     const totalSeconds = Math.round(ms / 1000);
     if (totalSeconds < 60) return `${totalSeconds}s`;
     const minutes = Math.floor(totalSeconds / 60);

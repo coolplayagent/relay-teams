@@ -890,6 +890,8 @@ Notes:
 
 Lists sessions.
 
+Each item uses the same `SessionRecord` response shape as `GET /sessions/{session_id}`.
+
 ### `GET /sessions/{session_id}`
 
 Gets one session.
@@ -900,6 +902,13 @@ Response fields also include:
 - `orchestration_preset_id`
 - `started_at`
 - `can_switch_mode`
+- `last_viewed_terminal_run_id`
+- `latest_terminal_run_id`
+- `latest_terminal_run_status`
+- `latest_terminal_run_updated_at`
+- `has_unread_terminal_run`
+
+`latest_terminal_run_*` projects the most recent top-level run whose status is `completed`, `failed`, or `stopped`. `has_unread_terminal_run` is `true` when that run is newer than the last terminal run the user has viewed.
 
 ### `PATCH /sessions/{session_id}`
 
@@ -927,6 +936,18 @@ Rules:
 - `custom_metadata` replaces only the caller-managed custom metadata subset. System-managed metadata keys remain intact.
 - `custom_metadata` keys must be non-empty and cannot overwrite reserved keys such as `title`, `title_source`, `source_label`, `source_icon`, `source_kind`, `source_provider`, or any key with the `feishu_` prefix.
 - `custom_metadata` values must be non-empty strings.
+
+### `POST /sessions/{session_id}/terminal-view`
+
+Marks the latest terminal top-level run for a session as viewed.
+
+Response:
+
+```json
+{"status": "ok"}
+```
+
+If the session has no terminal top-level run yet, the endpoint is a no-op. Missing sessions return `404`.
 
 ### `PATCH /sessions/{session_id}/topology`
 
@@ -1184,6 +1205,16 @@ Response fields include:
 - `reflection_updated_at`
 - `runtime_system_prompt`
 - `runtime_tools_json`
+
+### `GET /sessions/{session_id}/subagents/events`
+
+Streams persisted and live normal-mode subagent run events for a session through SSE.
+
+Notes:
+- The stream is session-scoped and includes only synthetic `subagent_run_*` run events.
+- Clients may pass `after_event_id` to replay events after a known persisted event id before receiving live events.
+- One session-level connection replaces one EventSource per subagent run, so sidebar and subagent views should use this endpoint to avoid request fan-out when a session has many child runs.
+- Event payloads use the same run-event JSON shape as `/api/runs/{run_id}/events`.
 
 ### `DELETE /sessions/{session_id}/subagents/{instance_id}`
 
@@ -2890,3 +2921,6 @@ Returns sessions generated for one automation project.
 `GET /sessions` and `GET /sessions/{session_id}` now also include:
 - `project_kind`: `workspace` or `automation`
 - `project_id`: workspace id or automation project id used by the sidebar grouping logic
+- `latest_terminal_run_id`, `latest_terminal_run_status`, and `latest_terminal_run_updated_at`: latest terminal top-level run projection
+- `last_viewed_terminal_run_id`: last terminal top-level run opened by the user
+- `has_unread_terminal_run`: whether the latest terminal top-level run has not been viewed

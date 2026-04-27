@@ -235,7 +235,9 @@ export async function renderInstanceHistoryInto(container, options = {}) {
         return null;
     }
     try {
-        const messages = await fetchAgentMessages(sessionId, instanceId);
+        const messages = await fetchAgentMessages(sessionId, instanceId, {
+            signal: options.signal || null,
+        });
         const overlayEntry = getInstanceStreamOverlay(runId, instanceId);
         const streamOverlayEntry = shouldRenderLiveOverlay(options, overlayEntry)
             ? overlayEntry
@@ -288,6 +290,9 @@ export async function renderInstanceHistoryInto(container, options = {}) {
             streamOverlayEntry,
         };
     } catch (e) {
+        if (e?.name === 'AbortError') {
+            throw e;
+        }
         container.innerHTML =
             `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(loadFailedLabel)}</div>`;
         throw e;

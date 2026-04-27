@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
+from collections.abc import Awaitable, Callable
+from typing import ParamSpec, TypeVar
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from relay_teams.interfaces.server.async_call import call_maybe_async
+from relay_teams.interfaces.server.async_call import (
+    call_maybe_async,
+    call_maybe_async_in_session_read_thread,
+)
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
@@ -26,6 +34,24 @@ router = APIRouter(prefix="/sessions", tags=["Sessions"])
 logger = get_logger(__name__)
 
 SESSION_RECOVERY_TIMEOUT_SECONDS = 8.0
+SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS = 2.0
+ParamT = ParamSpec("ParamT")
+ResultT = TypeVar("ResultT")
+
+
+async def _call_session_read(
+    operation: str,
+    function: Callable[ParamT, ResultT | Awaitable[ResultT]],
+    /,
+    *args: ParamT.args,
+    **kwargs: ParamT.kwargs,
+) -> ResultT:
+    return await call_maybe_async_in_session_read_thread(
+        operation,
+        function,
+        *args,
+        **kwargs,
+    )
 
 
 class CreateSessionRequest(BaseModel):
@@ -86,7 +112,7 @@ async def list_sessions(
     def _list_sessions() -> tuple[SessionRecord, ...]:
         return service.list_sessions()
 
-    records = await call_maybe_async(_list_sessions)
+    records = await _call_session_read("sessions.list", _list_sessions)
     return list(records)
 
 
@@ -96,7 +122,7 @@ async def get_session(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-        return await call_maybe_async(service.get_session, session_id)
+        return await _call_session_read("sessions.get", service.get_session, session_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -114,6 +140,37 @@ async def update_session(
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
+
+
+@router.post("/{session_id}/terminal-view")
+async def mark_session_terminal_viewed(
+    session_id: RequiredIdentifierStr,
+    service: SessionService = Depends(get_session_service),
+) -> dict[str, str]:
+    try:
+        await asyncio.wait_for(
+            _call_session_read(
+                "sessions.terminal_view",
+                service.mark_latest_terminal_run_viewed,
+                session_id,
+            ),
+            timeout=SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS,
+        )
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
+    except TimeoutError:
+        log_event(
+            logger,
+            logging.WARNING,
+            event="session.terminal_view.mark_timeout",
+            message="Session terminal view marker timed out",
+            payload={
+                "session_id": session_id,
+                "timeout_seconds": SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS,
+            },
+        )
+        return {"status": "deferred"}
 
 
 @router.patch("/{session_id}/topology", response_model=SessionRecord)
@@ -185,7 +242,7 @@ async def get_session_rounds(
             timeline=timeline,
         )
 
-    return await call_maybe_async(_get_session_rounds)
+    return await _call_session_read("sessions.rounds", _get_session_rounds)
 
 
 @router.get("/{session_id}/recovery")
@@ -195,7 +252,11 @@ async def get_session_recovery(
 ) -> dict[str, object]:
     try:
         return await asyncio.wait_for(
-            call_maybe_async(service.get_recovery_snapshot, session_id),
+            _call_session_read(
+                "sessions.recovery",
+                service.get_recovery_snapshot,
+                session_id,
+            ),
             timeout=SESSION_RECOVERY_TIMEOUT_SECONDS,
         )
     except KeyError as exc:
@@ -224,7 +285,12 @@ async def get_round(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await call_maybe_async(service.get_round, session_id, run_id)
+        return await _call_session_read(
+            "sessions.round",
+            service.get_round,
+            session_id,
+            run_id,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -235,7 +301,11 @@ async def list_session_agents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        agents = await call_maybe_async(service.list_agents_in_session, session_id)
+        agents = await _call_session_read(
+            "sessions.agents",
+            service.list_agents_in_session,
+            session_id,
+        )
         return list(agents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
@@ -247,13 +317,70 @@ async def list_session_subagents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        subagents = await call_maybe_async(
+        subagents = await _call_session_read(
+            "sessions.subagents",
             service.list_normal_mode_subagents,
             session_id,
         )
         return list(subagents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+@router.get("/{session_id}/subagents/events")
+async def stream_session_subagent_events(
+    session_id: RequiredIdentifierStr,
+    service: SessionService = Depends(get_session_service),
+    after_event_id: int = 0,
+) -> StreamingResponse:
+    async def event_generator():
+        event_count = 0
+        started = time.perf_counter()
+        log_event(
+            logger,
+            logging.INFO,
+            event="session.subagent_stream.opened",
+            message="Session subagent event stream opened",
+            payload={"session_id": session_id, "after_event_id": after_event_id},
+        )
+        try:
+            async for event in service.stream_normal_mode_subagent_events(
+                session_id,
+                after_event_id=after_event_id,
+            ):
+                event_count += 1
+                yield f"data: {event.model_dump_json()}\n\n"
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            log_event(
+                logger,
+                logging.INFO,
+                event="session.subagent_stream.closed",
+                message="Session subagent event stream closed",
+                duration_ms=elapsed_ms,
+                payload={"session_id": session_id, "event_count": event_count},
+            )
+        except KeyError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                event="session.subagent_stream.not_found",
+                message="Session not found during subagent stream start",
+                payload={"session_id": session_id},
+                exc_info=exc,
+            )
+            yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
+        except Exception as exc:  # pragma: no cover - defensive path
+            log_event(
+                logger,
+                logging.ERROR,
+                event="session.subagent_stream.failed",
+                message="Unexpected session subagent stream failure",
+                payload={"session_id": session_id, "event_count": event_count},
+                exc_info=exc,
+            )
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.delete("/{session_id}/subagents/{instance_id}")
@@ -282,7 +409,8 @@ async def get_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await call_maybe_async(
+        return await _call_session_read(
+            "sessions.agent_reflection",
             service.get_agent_reflection,
             session_id,
             instance_id,
@@ -351,7 +479,11 @@ async def get_session_events(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await call_maybe_async(service.get_global_events, session_id)
+    return await _call_session_read(
+        "sessions.events",
+        service.get_global_events,
+        session_id,
+    )
 
 
 @router.get("/{session_id}/messages")
@@ -359,7 +491,11 @@ async def get_session_messages(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await call_maybe_async(service.get_session_messages, session_id)
+    return await _call_session_read(
+        "sessions.messages",
+        service.get_session_messages,
+        session_id,
+    )
 
 
 @router.get("/{session_id}/agents/{instance_id}/messages")
@@ -368,7 +504,8 @@ async def get_agent_messages(
     instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await call_maybe_async(
+    return await _call_session_read(
+        "sessions.agent_messages",
         service.get_agent_messages,
         session_id,
         instance_id,
@@ -380,7 +517,11 @@ async def get_session_tasks(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await call_maybe_async(service.get_session_tasks, session_id)
+    return await _call_session_read(
+        "sessions.tasks",
+        service.get_session_tasks,
+        session_id,
+    )
 
 
 @router.get("/{session_id}/token-usage")
@@ -388,7 +529,11 @@ async def get_session_token_usage(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    summary = await call_maybe_async(service.get_token_usage_by_session, session_id)
+    summary = await _call_session_read(
+        "sessions.token_usage",
+        service.get_token_usage_by_session,
+        session_id,
+    )
     return {
         "session_id": summary.session_id,
         "total_input_tokens": summary.total_input_tokens,
@@ -425,7 +570,11 @@ async def get_run_token_usage(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     _ = session_id
-    usage = await call_maybe_async(service.get_token_usage_by_run, run_id)
+    usage = await _call_session_read(
+        "sessions.run_token_usage",
+        service.get_token_usage_by_run,
+        run_id,
+    )
     return {
         "run_id": usage.run_id,
         "total_input_tokens": usage.total_input_tokens,

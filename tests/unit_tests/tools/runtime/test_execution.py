@@ -6,6 +6,8 @@ from pydantic import BaseModel, JsonValue
 
 import asyncio
 import sqlite3
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
@@ -293,6 +295,132 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert tool_result_payloads[0]["tool_call_id"] == "call-read-1"
     assert tool_result_payloads[0]["error"] is False
     assert tool_result_payloads[0]["result"] == result
+
+
+def test_tool_action_limits_live_unpersisted_batch_per_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setattr(execution_module, "PER_RUN_TOOL_ACTION_CONCURRENCY", 2)
+        monkeypatch.setattr(
+            execution_module,
+            "_GLOBAL_TOOL_ACTION_SEMAPHORE",
+            asyncio.Semaphore(8),
+        )
+        execution_module._RUN_TOOL_ACTION_GATES.clear()
+
+        ctx = SimpleNamespace(
+            deps=SimpleNamespace(run_id="run-burst", session_id="session-burst"),
+            tool_call_id="tool-burst",
+        )
+        active = 0
+        max_active = 0
+        lock = threading.Lock()
+
+        def action() -> str:
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.04)
+            with lock:
+                active -= 1
+            return "ok"
+
+        tasks = [
+            asyncio.create_task(
+                execution_module._invoke_tool_action_with_limits(
+                    ctx=cast(ToolContext, cast(object, ctx)),
+                    action=action,
+                    tool_input={},
+                )
+            )
+            for _ in range(10)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        assert results == ["ok"] * 10
+        assert max_active <= 2
+        assert "run-burst" not in execution_module._RUN_TOOL_ACTION_GATES
+
+    asyncio.run(_run())
+
+
+def test_tool_action_run_gate_waiters_do_not_hold_global_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setattr(execution_module, "PER_RUN_TOOL_ACTION_CONCURRENCY", 1)
+        monkeypatch.setattr(
+            execution_module,
+            "_GLOBAL_TOOL_ACTION_SEMAPHORE",
+            asyncio.Semaphore(2),
+        )
+        execution_module._RUN_TOOL_ACTION_GATES.clear()
+
+        ctx_a = SimpleNamespace(
+            deps=SimpleNamespace(run_id="run-a", session_id="session-a"),
+            tool_call_id="tool-a",
+        )
+        ctx_b = SimpleNamespace(
+            deps=SimpleNamespace(run_id="run-b", session_id="session-b"),
+            tool_call_id="tool-b",
+        )
+        first_a_started = asyncio.Event()
+        release_first_a = asyncio.Event()
+        run_b_started = asyncio.Event()
+
+        async def slow_run_a_action() -> str:
+            first_a_started.set()
+            await release_first_a.wait()
+            return "a1"
+
+        async def queued_run_a_action() -> str:
+            return "a2"
+
+        async def run_b_action() -> str:
+            run_b_started.set()
+            return "b1"
+
+        first_a_task = asyncio.create_task(
+            execution_module._invoke_tool_action_with_limits(
+                ctx=cast(ToolContext, cast(object, ctx_a)),
+                action=slow_run_a_action,
+                tool_input={},
+            )
+        )
+        await first_a_started.wait()
+        second_a_task = asyncio.create_task(
+            execution_module._invoke_tool_action_with_limits(
+                ctx=cast(ToolContext, cast(object, ctx_a)),
+                action=queued_run_a_action,
+                tool_input={},
+            )
+        )
+        await asyncio.sleep(0.02)
+        run_b_task = asyncio.create_task(
+            execution_module._invoke_tool_action_with_limits(
+                ctx=cast(ToolContext, cast(object, ctx_b)),
+                action=run_b_action,
+                tool_input={},
+            )
+        )
+
+        try:
+            await asyncio.wait_for(run_b_started.wait(), timeout=0.1)
+            run_b_started_before_first_a_released = True
+        except TimeoutError:
+            run_b_started_before_first_a_released = False
+        finally:
+            release_first_a.set()
+
+        results = await asyncio.gather(first_a_task, second_a_task, run_b_task)
+
+        assert run_b_started_before_first_a_released is True
+        assert results == ["a1", "a2", "b1"]
+        assert execution_module._RUN_TOOL_ACTION_GATES == {}
+
+    asyncio.run(_run())
 
 
 def test_execute_tool_call_reuses_persisted_result_for_duplicate_tool_call_id() -> None:

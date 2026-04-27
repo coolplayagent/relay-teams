@@ -3,6 +3,7 @@
  * Normal-mode subagent child-session cache, navigation, and read-only view.
  */
 import { fetchSessionSubagents } from '../core/api.js';
+import { hydrateSessionView } from '../app/recovery.js';
 import { syncNormalModeSubagentStreams } from '../core/stream.js';
 import { clearAllPanels } from './agentPanel.js';
 import { renderInstanceHistoryInto } from './agentPanel/history.js';
@@ -14,9 +15,11 @@ import { sysLog } from '../utils/logger.js';
 
 const subagentSessionsBySessionId = new Map();
 const loadingSessionIds = new Set();
+const loadingPromisesBySessionId = new Map();
 const expandedParentSessionIds = new Set();
 const terminalRefreshTimers = new Map();
 let activeSubagentRenderSequence = 0;
+let activeSubagentRenderController = null;
 const TERMINAL_REFRESH_DELAYS_MS = [120, 250, 500, 900, 1400];
 
 export function getSessionSubagentSessions(sessionId) {
@@ -51,6 +54,11 @@ export function isActiveSubagentSession(sessionId, instanceId) {
 }
 
 export function clearActiveSubagentSession() {
+    activeSubagentRenderSequence += 1;
+    if (activeSubagentRenderController) {
+        activeSubagentRenderController.abort();
+        activeSubagentRenderController = null;
+    }
     cancelTerminalRefreshForInstance(getActiveSubagentSession()?.instanceId || '');
     state.activeSubagentSession = null;
     state.activeView = 'main';
@@ -70,7 +78,7 @@ export function clearActiveSubagentSession() {
 
 export async function ensureSessionSubagents(
     sessionId,
-    { force = false, emitLoadingEvents = true } = {},
+    { force = false, emitLoadingEvents = true, signal = null } = {},
 ) {
     const safeSessionId = String(sessionId || '').trim();
     if (!safeSessionId) {
@@ -80,24 +88,43 @@ export async function ensureSessionSubagents(
         return getSessionSubagentSessions(safeSessionId);
     }
     if (loadingSessionIds.has(safeSessionId)) {
+        const pending = loadingPromisesBySessionId.get(safeSessionId);
+        if (pending) {
+            return pending;
+        }
         return getSessionSubagentSessions(safeSessionId);
     }
+    throwIfAborted(signal);
     loadingSessionIds.add(safeSessionId);
     if (emitLoadingEvents) {
-        emitSubagentSessionsChanged();
+        emitSubagentSessionsChanged({ forceRefresh: false });
     }
-    try {
-        const payload = await fetchSessionSubagents(safeSessionId);
+    const loadPromise = (async () => {
+        const payload = await fetchSessionSubagents(safeSessionId, { signal });
+        throwIfAborted(signal);
         replaceSessionSubagents(safeSessionId, payload, { emitChange: false });
         return getSessionSubagentSessions(safeSessionId);
+    })();
+    loadingPromisesBySessionId.set(safeSessionId, loadPromise);
+    try {
+        return await loadPromise;
     } catch (error) {
-        sysLog(`Failed to load subagent sessions: ${error.message || error}`, 'log-error');
+        if (error?.name !== 'AbortError') {
+            sysLog(`Failed to load subagent sessions: ${error.message || error}`, 'log-error');
+        }
         return getSessionSubagentSessions(safeSessionId);
     } finally {
+        loadingPromisesBySessionId.delete(safeSessionId);
         const wasLoading = loadingSessionIds.delete(safeSessionId);
         if (emitLoadingEvents && wasLoading) {
-            emitSubagentSessionsChanged();
+            emitSubagentSessionsChanged({ forceRefresh: false });
         }
+    }
+}
+
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
     }
 }
 
@@ -108,12 +135,12 @@ export function toggleSubagentSessionList(sessionId) {
     }
     if (expandedParentSessionIds.has(safeSessionId)) {
         expandedParentSessionIds.delete(safeSessionId);
-        emitSubagentSessionsChanged();
+        emitSubagentSessionsChanged({ forceRefresh: false });
         return;
     }
     expandedParentSessionIds.add(safeSessionId);
     void ensureSessionSubagents(safeSessionId, { force: false });
-    emitSubagentSessionsChanged();
+    emitSubagentSessionsChanged({ forceRefresh: false });
 }
 
 export function replaceSessionSubagents(
@@ -148,20 +175,20 @@ export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, sta
         return;
     }
     const current = getSessionSubagentSessions(safeSessionId);
-    const nowIso = new Date().toISOString();
     let changed = false;
+    let nextStatus = '';
     const next = current.map(item => (
         item.instanceId === safeInstanceId
             ? (() => {
-                const nextStatus = String(status || item.status || 'idle');
-                if (item.status === nextStatus) {
+                nextStatus = String(status || item.status || 'idle');
+                if (item.status === nextStatus && item.runStatus === nextStatus) {
                     return item;
                 }
                 changed = true;
                 return {
                     ...item,
                     status: nextStatus,
-                    updatedAt: nowIso,
+                    runStatus: nextStatus,
                 };
             })()
             : item
@@ -169,7 +196,9 @@ export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, sta
     if (!changed) {
         return;
     }
-    applySessionSubagentRecords(safeSessionId, next);
+    applySessionSubagentRecords(safeSessionId, next, { emitChange: false });
+    emitSubagentSessionStatusChanged(safeSessionId, safeInstanceId, nextStatus);
+    emitSubagentSessionsChanged({ forceRefresh: false });
 }
 
 export function removeSessionSubagent(sessionId, instanceId) {
@@ -222,6 +251,28 @@ export async function openSubagentSession(sessionId, record) {
     await renderActiveSubagentSession();
 }
 
+export async function returnToMainSessionView() {
+    const sessionId = String(state.currentSessionId || '').trim();
+    if (!sessionId) {
+        clearActiveSubagentSession();
+        return;
+    }
+    clearActiveSubagentSession();
+    if (els.chatMessages) {
+        els.chatMessages.innerHTML = '';
+    }
+    document.dispatchEvent(new CustomEvent('agent-teams-subagent-session-cleared', {
+        detail: { sessionId },
+    }));
+    await hydrateSessionView(sessionId, {
+        includeRounds: true,
+        quiet: true,
+    });
+    document.dispatchEvent(new CustomEvent('agent-teams-session-selected', {
+        detail: { sessionId },
+    }));
+}
+
 export async function renderActiveSubagentSession(options = {}) {
     const active = getActiveSubagentSession();
     if (!active || !els.chatMessages) {
@@ -232,9 +283,17 @@ export async function renderActiveSubagentSession(options = {}) {
         return { rendered: false, deferred: false };
     }
     const requestId = ++activeSubagentRenderSequence;
+    if (activeSubagentRenderController) {
+        activeSubagentRenderController.abort();
+    }
+    const renderController = new AbortController();
+    activeSubagentRenderController = renderController;
     hideRoundNavigator();
     const body = ensureSubagentSessionView(active);
     if (!body || typeof body !== 'object' || !('innerHTML' in body)) {
+        if (activeSubagentRenderController === renderController) {
+            activeSubagentRenderController = null;
+        }
         return { rendered: false, deferred: false };
     }
     try {
@@ -254,6 +313,7 @@ export async function renderActiveSubagentSession(options = {}) {
             loadFailedLabel: t('subagent_session.load_failed'),
             overlayMode: 'separate',
             requireToolBoundary: options.requireToolBoundary === true,
+            signal: renderController.signal,
         });
         if (!isStillActiveSubagentRender(active, requestId)) {
             return { rendered: false, deferred: false };
@@ -263,8 +323,15 @@ export async function renderActiveSubagentSession(options = {}) {
             deferred: result?.deferred === true,
         };
     } catch (error) {
+        if (error?.name === 'AbortError') {
+            return { rendered: false, deferred: false };
+        }
         sysLog(`Failed to load subagent session: ${error.message || error}`, 'log-error');
         return { rendered: false, deferred: false };
+    } finally {
+        if (activeSubagentRenderController === renderController) {
+            activeSubagentRenderController = null;
+        }
     }
 }
 
@@ -314,12 +381,12 @@ function applySessionSubagentRecords(
 ) {
     const nextRows = Array.isArray(rows) ? rows : [];
     const previousRows = getSessionSubagentSessions(sessionId);
-    const changed = !areSubagentSessionRowsEqual(previousRows, nextRows);
+    const listChanged = !areSubagentSessionListsEqual(previousRows, nextRows);
     subagentSessionsBySessionId.set(sessionId, nextRows);
     syncNormalModeSubagentStreams(sessionId, getSessionSubagentSessions(sessionId));
     syncActiveSubagentSessionFromCache(sessionId);
-    if (emitChange && changed) {
-        emitSubagentSessionsChanged();
+    if (emitChange && listChanged) {
+        emitSubagentSessionsChanged({ forceRefresh: false });
     }
 }
 
@@ -453,6 +520,7 @@ function ensureSubagentSessionView(active) {
         wrapper.innerHTML = `
             <header class="subagent-session-header">
                 <div class="subagent-session-title-row">
+                    <button class="subagent-session-back-btn" type="button">${escapeHtml(t('subagent_session.back'))}</button>
                     <div class="subagent-session-title"></div>
                     <div class="subagent-session-badge"></div>
                 </div>
@@ -461,6 +529,9 @@ function ensureSubagentSessionView(active) {
             <div class="subagent-session-body"></div>
         `;
         chatEl.appendChild(wrapper);
+        wrapper.querySelector?.('.subagent-session-back-btn')?.addEventListener('click', () => {
+            void returnToMainSessionView();
+        });
     }
     syncSubagentSessionViewChrome(active, wrapper);
     const body = wrapper.querySelector('.subagent-session-body');
@@ -495,11 +566,22 @@ function syncSubagentSessionViewChrome(active, wrapper = null) {
     }
 }
 
-function emitSubagentSessionsChanged() {
+function emitSubagentSessionsChanged(detail = {}) {
     if (typeof document?.dispatchEvent !== 'function') {
         return;
     }
-    document.dispatchEvent(new CustomEvent('agent-teams-subagent-sessions-changed'));
+    document.dispatchEvent(new CustomEvent('agent-teams-subagent-sessions-changed', {
+        detail,
+    }));
+}
+
+function emitSubagentSessionStatusChanged(sessionId, instanceId, status) {
+    if (typeof document?.dispatchEvent !== 'function') {
+        return;
+    }
+    document.dispatchEvent(new CustomEvent('agent-teams-subagent-session-status-changed', {
+        detail: { sessionId, instanceId, status },
+    }));
 }
 
 function escapeHtml(value) {
@@ -520,6 +602,33 @@ function areSubagentSessionRowsEqual(leftRows, rightRows) {
         return false;
     }
     return leftRows.every((left, index) => areSubagentSessionRecordsEqual(left, rightRows[index]));
+}
+
+function areSubagentSessionListsEqual(leftRows, rightRows) {
+    if (leftRows.length !== rightRows.length) {
+        return false;
+    }
+    return leftRows.every((left, index) => areSubagentSessionListRecordsEqual(left, rightRows[index]));
+}
+
+function areSubagentSessionListRecordsEqual(left, right) {
+    return !!(
+        right
+        && left.sessionId === right.sessionId
+        && left.instanceId === right.instanceId
+        && left.roleId === right.roleId
+        && left.runId === right.runId
+        && left.title === right.title
+        && left.status === right.status
+        && left.runStatus === right.runStatus
+        && left.runPhase === right.runPhase
+        && left.lastEventId === right.lastEventId
+        && left.checkpointEventId === right.checkpointEventId
+        && left.streamConnected === right.streamConnected
+        && left.createdAt === right.createdAt
+        && left.updatedAt === right.updatedAt
+        && left.conversationId === right.conversationId
+    );
 }
 
 function areSubagentSessionRecordsEqual(left, right) {

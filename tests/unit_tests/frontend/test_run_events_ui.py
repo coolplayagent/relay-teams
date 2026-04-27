@@ -96,6 +96,169 @@ console.log(JSON.stringify({
     assert payload["activeAgentInstanceId"] == "writer-1"
 
 
+def test_terminal_run_event_marks_current_main_session_viewed(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunCompleted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+
+handleRunCompleted({ run_id: 'run-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["viewedCalls"] == ["session-1"]
+
+
+def test_terminal_run_event_marks_parent_session_when_subagent_view_is_open(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunCompleted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeSubagentSession = { sessionId: 'session-1', instanceId: 'agent-1' };
+state.activeRunId = 'run-1';
+
+handleRunCompleted({ run_id: 'run-1', session_id: 'session-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["viewedCalls"] == ["session-1"]
+
+
+def test_terminal_run_event_does_not_mark_current_session_for_other_session_event(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunCompleted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-2';
+
+handleRunCompleted({ run_id: 'run-2', session_id: 'session-2' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["viewedCalls"] == []
+
+
+def test_terminal_run_event_does_not_mark_background_session_without_current_session(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunCompleted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = null;
+state.activeRunId = null;
+
+handleRunCompleted({ run_id: 'run-2', session_id: 'session-2' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["viewedCalls"] == []
+
+
+def test_terminal_run_event_retries_deferred_view_mark(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunCompleted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+globalThis.__markSessionTerminalRunViewedResponses = [
+    { status: 'deferred' },
+    { status: 'ok' },
+];
+
+handleRunCompleted({ run_id: 'run-1' });
+
+await new Promise(resolve => setTimeout(resolve, 300));
+
+console.log(JSON.stringify({
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["viewedCalls"] == ["session-1", "session-1"]
+
+
+def test_terminal_run_event_retries_overloaded_view_mark(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunCompleted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+globalThis.__markSessionTerminalRunViewedResponses = [
+    { errorStatus: 503 },
+    { status: 'ok' },
+];
+
+handleRunCompleted({ run_id: 'run-1' });
+
+await new Promise(resolve => setTimeout(resolve, 300));
+
+console.log(JSON.stringify({
+    logs: globalThis.__sysLogCalls,
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+}));
+""".strip(),
+    )
+
+    logs = payload["logs"]
+    assert isinstance(logs, list)
+    assert not any("Failed to mark session run viewed" in str(log) for log in logs)
+    assert payload["viewedCalls"] == ["session-1", "session-1"]
+
+
 def test_route_event_routes_subagent_stream_events_without_overwriting_parent_run(
     tmp_path: Path,
 ) -> None:
@@ -222,6 +385,7 @@ console.log(JSON.stringify({
         {
             "sessionId": "session-1",
             "delayMs": 0,
+            "forceRefresh": True,
             "includeRounds": False,
             "quiet": True,
             "reason": "user_question_requested",
@@ -253,6 +417,7 @@ console.log(JSON.stringify({
         {
             "sessionId": "session-1",
             "delayMs": 0,
+            "forceRefresh": True,
             "includeRounds": False,
             "quiet": True,
             "reason": "llm_fallback_activated",
@@ -260,6 +425,7 @@ console.log(JSON.stringify({
         {
             "sessionId": "session-1",
             "delayMs": 0,
+            "forceRefresh": True,
             "includeRounds": False,
             "quiet": True,
             "reason": "llm_fallback_exhausted",
@@ -399,7 +565,7 @@ console.log(JSON.stringify({
     ]
 
 
-def test_handle_model_step_finished_passes_run_id_for_normal_mode_subagent(
+def test_handle_model_step_finished_keeps_normal_mode_subagent_status_open(
     tmp_path: Path,
 ) -> None:
     payload = _run_run_events_script(
@@ -433,16 +599,10 @@ console.log(JSON.stringify({
             "options": {"runId": "subagent_run_deadbeef"},
         }
     ]
-    assert payload["statusCalls"] == [
-        {
-            "sessionId": "session-1",
-            "instanceId": "writer-1",
-            "status": "completed",
-        }
-    ]
+    assert payload["statusCalls"] == []
 
 
-def test_handle_model_step_finished_uses_event_role_when_role_map_missing(
+def test_handle_model_step_finished_keeps_event_role_subagent_status_open(
     tmp_path: Path,
 ) -> None:
     payload = _run_run_events_script(
@@ -476,13 +636,7 @@ console.log(JSON.stringify({
             "options": {"runId": "subagent_run_deadbeef"},
         }
     ]
-    assert payload["statusCalls"] == [
-        {
-            "sessionId": "session-1",
-            "instanceId": "writer-1",
-            "status": "completed",
-        }
-    ]
+    assert payload["statusCalls"] == []
 
 
 def _run_run_events_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
@@ -505,6 +659,7 @@ def _run_run_events_script(tmp_path: Path, runner_source: str) -> dict[str, obje
         "../../components/messageRenderer.js": "./mockMessageRenderer.mjs",
         "../../components/agentPanel.js": "./mockAgentPanel.mjs",
         "./utils.js": "./mockUtils.mjs",
+        "../api.js": "./mockApi.mjs",
     }
     source_text = source_path.read_text(encoding="utf-8")
     for original, replacement in replacements.items():
@@ -724,6 +879,24 @@ export function coordinatorContainerFor() {
 """.strip(),
         encoding="utf-8",
     )
+    (tmp_path / "mockApi.mjs").write_text(
+        """
+export async function markSessionTerminalRunViewed(sessionId) {
+    globalThis.__markSessionTerminalRunViewedCalls.push(sessionId);
+    if (Array.isArray(globalThis.__markSessionTerminalRunViewedResponses)) {
+        const response = globalThis.__markSessionTerminalRunViewedResponses.shift();
+        if (response?.errorStatus) {
+            const error = new Error('busy');
+            error.status = response.errorStatus;
+            throw error;
+        }
+        return response || { status: 'ok' };
+    }
+    return { status: 'ok' };
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     runner_path.write_text(
         f"""
@@ -738,6 +911,8 @@ globalThis.__settleActiveSubagentSessionAfterTerminalCalls = [];
 globalThis.__sysLogCalls = [];
 globalThis.__activeSubagentSession = null;
 globalThis.__activeSubagentSessionStreamContainer = null;
+globalThis.__markSessionTerminalRunViewedCalls = [];
+globalThis.__markSessionTerminalRunViewedResponses = [];
 
 {runner_source}
 """.strip(),

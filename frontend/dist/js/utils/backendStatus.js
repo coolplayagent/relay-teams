@@ -11,14 +11,17 @@ const CONTROL_PLANE_TIMEOUT_MS = 1500;
 const MAIN_LIVE_TIMEOUT_MS = 1500;
 const CONTROL_PLANE_FALLBACK_PORT_RANGE = 50;
 const CONTROL_PLANE_CACHE_KEY = 'relayTeams.controlPlaneLiveUrl';
+const BACKEND_STATUS_HINT_EVENT = 'agent-teams-backend-status-hint';
 
 let healthPollTimer = null;
 let inFlightHealthCheck = null;
 let backendStatus = 'checking';
 let controlPlaneLiveUrl = readCachedControlPlaneLiveUrl();
 let controlPlaneDiscoveryAttempted = false;
+let backendStatusHintBound = false;
 
 export function initBackendStatusMonitor() {
+    bindBackendStatusHintListener();
     applyBackendStatus('checking', t('backend.status.checking'));
     void refreshBackendStatus({ force: true });
     if (healthPollTimer) return;
@@ -26,6 +29,8 @@ export function initBackendStatusMonitor() {
         void refreshBackendStatus();
     }, HEALTH_POLL_MS);
 }
+
+bindBackendStatusHintListener();
 
 export function markBackendOnline(label = t('backend.status.connected')) {
     applyBackendStatus('online', label);
@@ -173,6 +178,29 @@ function applyBackendStatus(nextStatus, label) {
         els.backendStatus.textContent = safeLabel;
     }
     els.backendStatus.title = safeLabel;
+}
+
+function bindBackendStatusHintListener() {
+    if (
+        backendStatusHintBound
+        || typeof window === 'undefined'
+        || typeof window.addEventListener !== 'function'
+    ) {
+        return;
+    }
+    window.addEventListener(BACKEND_STATUS_HINT_EVENT, handleBackendStatusHint);
+    backendStatusHintBound = true;
+}
+
+function handleBackendStatusHint(event) {
+    const status = String(event?.detail?.status || '').trim();
+    if (status === 'online') {
+        markBackendOnline(t('backend.status.connected'));
+        return;
+    }
+    if (status === 'offline') {
+        markBackendOffline(t('backend.status.offline'));
+    }
 }
 
 function defaultLabelForStatus(status) {

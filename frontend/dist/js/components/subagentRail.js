@@ -49,7 +49,7 @@ export function initializeSubagentRail() {
 
 export async function refreshSubagentRail(
     sessionId = state.currentSessionId,
-    { preserveSelection = true } = {},
+    { preserveSelection = true, signal = null } = {},
 ) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) {
@@ -62,15 +62,17 @@ export async function refreshSubagentRail(
 
     try {
         const [agentsPayload, tasksPayload] = await Promise.all([
-            fetchSessionAgents(safeSessionId),
-            fetchSessionTasks(safeSessionId),
+            fetchSessionAgents(safeSessionId, { signal }),
+            fetchSessionTasks(safeSessionId, { signal }),
         ]);
+        if (signal?.aborted) return;
         if (state.currentSessionId !== safeSessionId) return;
 
         state.sessionAgents = normalizeSessionAgents(agentsPayload);
         state.sessionTasks = normalizeSessionTasks(tasksPayload);
         renderSubagentRail({ preserveSelection });
     } catch (e) {
+        if (e?.name === 'AbortError') return;
         sysLog(`Failed to load subagent rail: ${e.message || e}`, 'log-error');
     }
 }

@@ -38,6 +38,11 @@ import {
   state,
 } from "../core/state.js";
 import { startIntentStream } from "../core/stream.js";
+import {
+  beginForegroundSubmission,
+  finishForegroundSubmission,
+  isForegroundSubmissionActive,
+} from "../core/submission.js";
 import { els } from "../utils/dom.js";
 import { showToast } from "../utils/feedback.js";
 import { formatMessage, t } from "../utils/i18n.js";
@@ -312,13 +317,21 @@ export async function handleSend() {
     return;
   }
   state.isGenerating = true;
+  const submission = beginForegroundSubmission();
   if (els.sendBtn) els.sendBtn.disabled = true;
   if (els.promptInput) els.promptInput.disabled = true;
   refreshSessionTopologyControls();
   if (isNewSessionDraftActive()) {
     try {
-      const sessionId = await ensureSessionForNewSessionDraft();
+      const sessionId = await ensureSessionForNewSessionDraft({
+        shouldCommit: () => isForegroundSubmissionActive(submission),
+      });
+      if (!isForegroundSubmissionActive(submission)) {
+        finishForegroundSubmission(submission);
+        return;
+      }
       if (!sessionId) {
+        finishForegroundSubmission(submission);
         state.isGenerating = false;
         if (els.sendBtn) els.sendBtn.disabled = false;
         if (els.promptInput) els.promptInput.disabled = false;
@@ -327,7 +340,12 @@ export async function handleSend() {
         return;
       }
     } catch (error) {
+      if (!isForegroundSubmissionActive(submission)) {
+        finishForegroundSubmission(submission);
+        return;
+      }
       const message = error?.message || String(error);
+      finishForegroundSubmission(submission);
       state.isGenerating = false;
       if (els.sendBtn) els.sendBtn.disabled = false;
       if (els.promptInput) els.promptInput.disabled = false;
@@ -341,6 +359,7 @@ export async function handleSend() {
     }
   }
   if (!state.currentSessionId) {
+    finishForegroundSubmission(submission);
     state.isGenerating = false;
     if (els.sendBtn) els.sendBtn.disabled = false;
     if (els.promptInput) els.promptInput.disabled = false;
@@ -350,7 +369,12 @@ export async function handleSend() {
   }
   clearPromptComposerStatus();
   const resolvedPrompt = await resolvePromptSlashText(text);
+  if (!isForegroundSubmissionActive(submission)) {
+    finishForegroundSubmission(submission);
+    return;
+  }
   if (resolvedPrompt === null) {
+    finishForegroundSubmission(submission);
     restorePromptComposerAfterSendAbort();
     return;
   }
@@ -377,29 +401,36 @@ export async function handleSend() {
 
   sysLog(t("composer.log.sending_prompt"));
   startSessionContinuity(state.currentSessionId);
-  await startIntentStream(
-    promptPreviewText,
-    state.currentSessionId,
-    async (sid) =>
-      hydrateSessionView(sid, {
-        includeRounds: true,
-        quiet: true,
-        roundsScrollPolicy: "completion-auto",
-      }),
-    {
-      inputParts,
-      displayInputParts,
-      skills: resolvedPrompt.skills,
-      yolo: state.yolo,
-      thinking: state.thinking,
-      targetRoleId,
-      onRunCreated: (run) => {
-        state.currentSessionCanSwitchMode = false;
-        refreshSessionTopologyControls();
-        createLiveRound(run.run_id, promptPreviewText, displayInputParts);
+  try {
+    await startIntentStream(
+      promptPreviewText,
+      state.currentSessionId,
+      async (sid) =>
+        hydrateSessionView(sid, {
+          includeRounds: true,
+          quiet: true,
+          roundsScrollPolicy: "completion-auto",
+        }),
+      {
+        inputParts,
+        displayInputParts,
+        skills: resolvedPrompt.skills,
+        yolo: state.yolo,
+        thinking: state.thinking,
+        targetRoleId,
+        onRunCreated: (run) => {
+          if (!isForegroundSubmissionActive(submission)) {
+            return;
+          }
+          state.currentSessionCanSwitchMode = false;
+          refreshSessionTopologyControls();
+          createLiveRound(run.run_id, promptPreviewText, displayInputParts);
+        },
       },
-    },
-  );
+    );
+  } finally {
+    finishForegroundSubmission(submission);
+  }
 }
 
 function restorePromptComposerAfterSendAbort() {

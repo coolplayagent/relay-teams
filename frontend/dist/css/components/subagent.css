@@ -37,6 +37,87 @@
     transition: opacity 0.14s ease;
 }
 
+.projects-list .session-run-indicator {
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--primary);
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.projects-list .session-run-indicator-glyph {
+    display: block;
+}
+
+.projects-list .session-run-indicator-running .session-run-indicator-glyph {
+    width: 12px;
+    height: 12px;
+    border: 2px solid color-mix(in srgb, var(--primary) 20%, var(--border-color));
+    border-top-color: color-mix(in srgb, var(--primary) 82%, var(--text-primary));
+    border-radius: 50%;
+    animation: sessionRunIndicatorSpin 0.82s linear infinite;
+}
+
+.projects-list .session-run-indicator-unread .session-run-indicator-glyph {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--primary) 86%, var(--text-primary));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.projects-list .session-run-indicator-stopped .session-run-indicator-glyph,
+.projects-list .session-run-indicator-failed .session-run-indicator-glyph {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+
+.projects-list .session-run-indicator-stopped .session-run-indicator-glyph {
+    background: color-mix(in srgb, var(--warning) 82%, var(--text-primary));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+.projects-list .session-run-indicator-failed .session-run-indicator-glyph {
+    background: color-mix(in srgb, var(--danger) 86%, var(--text-primary));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.projects-list .session-item.has-run-indicator .session-time {
+    display: none;
+}
+
+.projects-list .session-item.active.has-run-indicator-unread .session-run-indicator,
+.projects-list .session-item.active.has-run-indicator-stopped .session-run-indicator,
+.projects-list .session-item.active.has-run-indicator-failed .session-run-indicator {
+    display: none;
+}
+
+.projects-list .session-item.active.has-run-indicator-unread .session-time,
+.projects-list .session-item.active.has-run-indicator-stopped .session-time,
+.projects-list .session-item.active.has-run-indicator-failed .session-time {
+    display: inline;
+}
+
+.projects-list .session-item.session-run-indicator-viewed .session-run-indicator-unread,
+.projects-list .session-item.session-run-indicator-viewed .session-run-indicator-stopped,
+.projects-list .session-item.session-run-indicator-viewed .session-run-indicator-failed {
+    opacity: 0;
+    transform: scale(0.68);
+    pointer-events: none;
+}
+
+.projects-list .session-item.session-run-indicator-viewed .session-time {
+    display: inline;
+    opacity: 1;
+}
+
+.projects-list .session-item.session-run-indicator-clearing .session-time {
+    animation: sessionRunTimeFadeIn 0.18s ease both;
+}
+
 .projects-list .session-actions {
     position: absolute;
     right: 0;
@@ -106,6 +187,21 @@
     gap: 0.1rem;
 }
 
+.projects-list .project-session-list.is-visibility-expanding .session-entry-visible-entering {
+    opacity: 0;
+    animation: projectSessionVisibilityEnter 0.16s ease forwards;
+    animation-delay: calc(min(var(--session-visibility-index), 8) * 10ms);
+}
+
+.projects-list .project-session-list.is-visibility-collapsing .session-entry-collapsing {
+    animation: projectSessionVisibilityExit 0.12s ease forwards;
+}
+
+.projects-list .project-session-list.is-visibility-height-collapsing {
+    transition: max-height 0.16s ease;
+    will-change: max-height;
+}
+
 .projects-list .session-subagent-list {
     --session-subagent-list-height: 0px;
     position: relative;
@@ -119,21 +215,19 @@
     opacity: 1;
     transform: translateY(0);
     transform-origin: top;
-    transition: max-height 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+    transition: max-height 0.16s ease, opacity 0.16s ease;
     pointer-events: auto;
 }
 
 .projects-list .session-subagent-list.is-expanded {
-    max-height: 100rem;
+    max-height: var(--session-subagent-list-height);
     opacity: 1;
-    transform: translateY(0);
     pointer-events: auto;
 }
 
 .projects-list .session-subagent-list.is-collapsed {
     max-height: 0;
     opacity: 0;
-    transform: translateY(-1px);
     pointer-events: none;
 }
 
@@ -185,7 +279,9 @@
 }
 
 .projects-list .session-item:hover .session-time,
-.projects-list .session-item:focus-within .session-time {
+.projects-list .session-item:focus-within .session-time,
+.projects-list .session-item:hover .session-run-indicator,
+.projects-list .session-item:focus-within .session-run-indicator {
     opacity: 0;
 }
 
@@ -227,6 +323,75 @@
     cursor: pointer;
 }
 
+@keyframes sessionRunIndicatorSpin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes sessionRunTimeFadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes projectSessionVisibilityEnter {
+    from {
+        opacity: 0;
+        transform: translateY(3px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes projectSessionVisibilityExit {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+
+    to {
+        opacity: 0;
+        transform: translateY(-2px);
+    }
+}
+
+@keyframes projectMenuEnter {
+    from {
+        opacity: 0;
+        transform: translateY(-2px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .projects-list .session-run-indicator-running .session-run-indicator-glyph {
+        animation: none;
+    }
+
+    .projects-list .session-item.session-run-indicator-clearing .session-time,
+    .projects-list .project-session-list.is-visibility-expanding .session-entry-visible-entering,
+    .projects-list .project-session-list.is-visibility-collapsing .session-entry-collapsing,
+    .projects-list .project-session-list.is-visibility-height-collapsing,
+    .projects-list .project-menu.is-opening,
+    .projects-list .project-body.is-animating,
+    .projects-list .session-subagent-list {
+        animation: none;
+        transition: none;
+    }
+}
+
 .subagent-session-view {
     display: flex;
     flex-direction: column;
@@ -254,11 +419,35 @@
     gap: 0.75rem;
 }
 
+.subagent-session-back-btn {
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 0.22rem 0.48rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    cursor: pointer;
+    transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.subagent-session-back-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--primary) 20%, var(--border-color));
+}
+
 .subagent-session-title {
+    min-width: 0;
+    flex: 1 1 auto;
     font-size: 1rem;
     font-weight: 600;
     line-height: 1.35;
     color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .subagent-session-meta {
@@ -329,7 +518,7 @@ body.light-theme .projects-list .session-item {
 }
 
 body.light-theme .projects-list .session-item.active {
-    background: color-mix(in srgb, var(--primary) 5%, transparent);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-surface-muted));
 }
 
 body.light-theme .projects-list .project-row {

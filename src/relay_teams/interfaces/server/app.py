@@ -20,6 +20,12 @@ from relay_teams.builtin import ensure_app_config_bootstrap
 from relay_teams.env.runtime_env import sync_app_env_to_process_env
 from relay_teams.interfaces.server.config_paths import get_frontend_dist_dir
 from relay_teams.interfaces.server.container import ServerContainer
+from relay_teams.interfaces.server.async_call import (
+    reset_default_route_work_class,
+    route_work_class_for_http_method,
+    RouteWorkRejectedError,
+    set_default_route_work_class,
+)
 from relay_teams.interfaces.server.public_access import (
     is_public_access_guard_enabled,
     is_public_host_allowed_request,
@@ -195,6 +201,20 @@ app.include_router(workspaces.router, prefix="/api")
 
 
 @app.middleware("http")
+async def route_work_class_middleware(
+    request: Request,
+    call_next: RequestHandler,
+) -> Response:
+    token = set_default_route_work_class(
+        route_work_class_for_http_method(request.method)
+    )
+    try:
+        return await call_next(request)
+    finally:
+        reset_default_route_work_class(token)
+
+
+@app.middleware("http")
 async def public_host_guard_middleware(
     request: Request,
     call_next: RequestHandler,
@@ -249,6 +269,22 @@ async def tracing_middleware(request: Request, call_next: RequestHandler) -> Res
                 },
             )
         return response
+
+
+@app.exception_handler(RouteWorkRejectedError)
+async def route_work_rejected_handler(
+    request: Request,
+    exc: RouteWorkRejectedError,
+) -> JSONResponse:
+    log_event(
+        logger,
+        logging.WARNING,
+        event="http.request.shed",
+        message="Server shed route work under load",
+        payload={"method": request.method, "path": request.url.path},
+        exc_info=exc,
+    )
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.exception_handler(Exception)

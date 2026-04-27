@@ -103,12 +103,26 @@
 }
 
 .project-body {
+    --project-body-height: auto;
     padding: 0 0.45rem 0.45rem;
     border-top: 1px solid var(--border-color);
+    overflow: hidden;
 }
 
 .project-body.is-collapsed {
-    display: none;
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.project-body.is-expanded {
+    max-height: var(--project-body-height);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.project-body.is-animating {
+    transition: max-height 0.16s ease, opacity 0.16s ease;
 }
 
 .project-session-list {
@@ -346,17 +360,64 @@
 
 
 .projects-list {
-    padding-top: 0.2rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.projects-workspace-shell {
+    min-height: 0;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg-surface);
+}
+
+.projects-workspace-scroll {
+    min-height: 0;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.18rem 0.8rem 0.8rem;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--text-secondary) 38%, transparent) transparent;
+}
+
+.projects-workspace-scroll::-webkit-scrollbar {
+    width: 8px;
+}
+
+.projects-workspace-scroll::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.projects-workspace-scroll::-webkit-scrollbar-thumb {
+    min-height: 2.8rem;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text-secondary) 34%, transparent);
+    background-clip: content-box;
+}
+
+.projects-workspace-scroll::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--primary) 48%, var(--text-secondary));
+    background-clip: content-box;
 }
 
 .projects-toolbar {
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
     min-height: 30px;
-    margin-bottom: 0.1rem;
+    margin: 0;
     padding: 0.08rem 0.65rem 0.18rem 0.78rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 82%, transparent);
+    background: var(--bg-surface);
 }
 
 .projects-toolbar-title {
@@ -498,10 +559,7 @@
 }
 
 .projects-list .project-path-hint {
-    position: absolute;
-    left: 1.72rem;
-    right: 3.15rem;
-    top: 0.16rem;
+    position: fixed;
     width: auto;
     min-width: 0;
     max-width: none;
@@ -514,21 +572,24 @@
     line-height: 1.35;
     opacity: 0;
     white-space: nowrap;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     pointer-events: none;
     border: 1px solid color-mix(in srgb, var(--border-color) 74%, transparent);
     border-radius: 6px;
-    background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
-    box-shadow: 0 3px 10px rgba(17, 19, 18, 0.045);
-    transform: translateY(calc(-100% - 4px));
-    z-index: 6;
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+    box-shadow: 0 3px 10px rgba(17, 19, 18, 0.055);
+    transform: translateY(-2px);
+    z-index: 1200;
     transition: opacity 0.14s ease, transform 0.14s ease;
 }
 
-.projects-list .project-row:hover + .project-path-hint,
-.projects-list .project-row:focus-within + .project-path-hint {
+.projects-list .project-path-hint.is-measuring {
+    opacity: 0;
+}
+
+.projects-list .project-path-hint.is-visible {
     opacity: 1;
-    transform: translateY(calc(-100% - 2px));
+    transform: translateY(0);
 }
 
 .projects-list .project-menu {
@@ -542,6 +603,10 @@
     background: var(--bg-surface);
     box-shadow: 0 8px 20px rgba(17, 19, 18, 0.08);
     z-index: 8;
+}
+
+.projects-list .project-menu.is-opening {
+    animation: projectMenuEnter 0.12s ease;
 }
 
 .projects-list .project-fork-btn,
@@ -572,32 +637,29 @@
 .projects-list .project-menu-workspace,
 .projects-list .project-menu-automation {
     min-width: 13.5rem;
-    padding: 0.45rem;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
-    box-shadow: 0 14px 30px rgba(17, 19, 18, 0.14);
-    backdrop-filter: blur(10px);
+    padding: 0.36rem;
+    border-radius: 8px;
+    background: var(--bg-surface);
+    box-shadow: 0 2px 8px rgba(17, 19, 18, 0.1);
 }
-
-.projects-list .project-workspace-menu-btn,
 
 .projects-list .project-workspace-menu-btn,
 .projects-list .project-run-automation-btn,
 .projects-list .project-toggle-automation-btn,
 .projects-list .project-remove-automation-btn {
     width: 100%;
-    min-height: 36px;
-    padding: 0.55rem 0.65rem;
+    min-height: 30px;
+    padding: 0.36rem 0.48rem;
     border: 1px solid transparent;
-    border-radius: 10px;
+    border-radius: 6px;
     background: transparent;
     color: var(--text-primary);
     display: flex;
     align-items: center;
-    gap: 0.65rem;
+    gap: 0.5rem;
     text-align: left;
     cursor: pointer;
-    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.12s ease;
+    transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .projects-list .project-workspace-menu-btn:hover,
@@ -606,7 +668,6 @@
 .projects-list .project-remove-automation-btn:hover {
     background: color-mix(in srgb, var(--primary) 10%, var(--bg-hover));
     border-color: color-mix(in srgb, var(--primary) 20%, transparent);
-    transform: translateY(-1px);
 }
 
 .projects-list .project-remove-automation-btn:hover {
@@ -616,14 +677,14 @@
 }
 
 .projects-list .project-menu-icon {
-    width: 1.65rem;
-    height: 1.65rem;
-    flex: 0 0 1.65rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    flex: 0 0 1.25rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--bg-hover) 86%, transparent);
+    border-radius: 6px;
+    background: transparent;
     color: inherit;
 }
 
@@ -633,12 +694,26 @@
 }
 
 .projects-list .project-body {
+    --project-body-height: auto;
     padding: 0;
     border-top: none;
+    overflow: hidden;
 }
 
 .projects-list .project-body.is-collapsed {
-    display: none;
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.projects-list .project-body.is-expanded {
+    max-height: var(--project-body-height);
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.projects-list .project-body.is-animating {
+    transition: max-height 0.16s ease, opacity 0.16s ease;
 }
 
 .projects-list .project-session-list {
@@ -685,9 +760,15 @@
 }
 
 .projects-list .session-item.active {
-    background: color-mix(in srgb, var(--primary) 5%, transparent);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-surface-muted));
     border: none;
-    box-shadow: inset 1.5px 0 0 var(--primary);
+    box-shadow:
+        inset 3px 0 0 var(--primary),
+        inset 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.projects-list .session-item.active .session-id {
+    font-weight: 600;
 }
 
 .projects-list .session-item.session-item-im {
@@ -701,10 +782,11 @@
 }
 
 .projects-list .session-item.session-item-im.active {
-    background: color-mix(in srgb, var(--primary) 5%, var(--success) 6%);
+    background: color-mix(in srgb, var(--primary) 11%, var(--success) 7%);
     box-shadow:
-        inset 1.5px 0 0 var(--primary),
-        inset 3px 0 0 color-mix(in srgb, var(--success) 22%, transparent);
+        inset 3px 0 0 var(--primary),
+        inset 4px 0 0 color-mix(in srgb, var(--success) 22%, transparent),
+        inset 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 .projects-list .session-item.session-item-automation {
@@ -718,10 +800,11 @@
 }
 
 .projects-list .session-item.session-item-automation.active {
-    background: color-mix(in srgb, var(--primary) 5%, #c97a1d 8%);
+    background: color-mix(in srgb, var(--primary) 11%, #c97a1d 9%);
     box-shadow:
-        inset 1.5px 0 0 var(--primary),
-        inset 3px 0 0 color-mix(in srgb, #c97a1d 26%, transparent);
+        inset 3px 0 0 var(--primary),
+        inset 4px 0 0 color-mix(in srgb, #c97a1d 26%, transparent),
+        inset 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 .projects-list .session-id {

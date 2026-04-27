@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketReposit
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_runtime_repo import (
+    RunRuntimeRecord,
     RunRuntimePhase,
     RunRuntimeRepository,
     RunRuntimeStatus,
@@ -73,11 +75,17 @@ def test_session_rounds_include_persisted_run_state_overlay(tmp_path: Path) -> N
         )
     )
     run_runtime_repo = RunRuntimeRepository(db_path)
-    _ = run_runtime_repo.ensure(
-        run_id="run-1",
-        session_id="session-1",
-        status=RunRuntimeStatus.RUNNING,
-        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    run_started_at = datetime(2026, 4, 25, 3, 10, 0, tzinfo=timezone.utc)
+    run_updated_at = run_started_at + timedelta(minutes=12, seconds=34)
+    runtime = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.RUNNING,
+            phase=RunRuntimePhase.COORDINATOR_RUNNING,
+            created_at=run_started_at,
+            updated_at=run_updated_at,
+        )
     )
 
     page = service.get_session_rounds("session-1", limit=8)
@@ -89,6 +97,8 @@ def test_session_rounds_include_persisted_run_state_overlay(tmp_path: Path) -> N
     assert first.get("intent_parts") == [{"kind": "text", "text": "do work"}]
     assert first.get("run_status") == "running"
     assert first.get("run_phase") == "running"
+    assert first.get("run_started_at") == runtime.created_at.isoformat()
+    assert first.get("run_updated_at") == runtime.updated_at.isoformat()
     assert first.get("is_recoverable") is True
 
 
@@ -251,11 +261,17 @@ def test_session_rounds_timeline_applies_runtime_phase_and_todo_overlay(
         )
     )
     run_runtime_repo = RunRuntimeRepository(db_path)
-    _ = run_runtime_repo.ensure(
-        run_id="run-1",
-        session_id="session-1",
-        status=RunRuntimeStatus.STOPPING,
-        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    run_started_at = datetime(2026, 4, 25, 3, 10, 0, tzinfo=timezone.utc)
+    run_updated_at = run_started_at + timedelta(minutes=8, seconds=12)
+    runtime = run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.STOPPING,
+            phase=RunRuntimePhase.COORDINATOR_RUNNING,
+            created_at=run_started_at,
+            updated_at=run_updated_at,
+        )
     )
     todo_service.replace_for_run(
         run_id="run-1",
@@ -271,6 +287,8 @@ def test_session_rounds_timeline_applies_runtime_phase_and_todo_overlay(
     assert isinstance(first, dict)
     assert first["run_status"] == "stopping"
     assert first["run_phase"] == "stopping"
+    assert first["run_started_at"] == runtime.created_at.isoformat()
+    assert first["run_updated_at"] == runtime.updated_at.isoformat()
     assert first["is_recoverable"] is False
     todo = first.get("todo")
     assert isinstance(todo, dict)
