@@ -119,6 +119,9 @@ def test_skills_help_explains_merge_order() -> None:
         "Inspect skills discovered from built-in, user, and project directories."
         in normalized_output
     )
+    assert "~/.codex/skills" in normalized_output
+    assert "~/.claude/skills" in normalized_output
+    assert "~/.config/opencode/skills" in normalized_output
     assert "~/.relay-teams/skills" in normalized_output
     assert "~/.agents/skills" in normalized_output
     assert "the later source wins" in normalized_output
@@ -182,6 +185,82 @@ def test_skills_list_can_filter_project_agents_source(
             "source": "project_agents",
             "directory": (project_agents_dir / "time").resolve().as_posix(),
             "description": "project agents time skill",
+        }
+    ]
+
+
+def test_skills_list_can_filter_project_opencode_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_opencode_dir = tmp_path / "repo" / ".opencode" / "skills"
+    _write_skill(
+        project_opencode_dir / "openspec-propose",
+        name="openspec-propose",
+        description="OpenCode OpenSpec proposal skill",
+        instructions="Create an OpenSpec proposal.",
+    )
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.PROJECT_OPENCODE, project_opencode_dir),)
+        )
+    )
+    monkeypatch.setattr(
+        "relay_teams.skills.skill_cli.load_skill_registry", lambda: registry
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        ["skills", "list", "--source", "project_opencode", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == [
+        {
+            "ref": "openspec-propose",
+            "name": "openspec-propose",
+            "source": "project_opencode",
+            "directory": (project_opencode_dir / "openspec-propose")
+            .resolve()
+            .as_posix(),
+            "description": "OpenCode OpenSpec proposal skill",
+        }
+    ]
+
+
+def test_skills_list_can_filter_user_opencode_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    user_opencode_dir = tmp_path / "home" / ".config" / "opencode" / "skills"
+    _write_skill(
+        user_opencode_dir / "global-plan",
+        name="global-plan",
+        description="OpenCode global plan skill",
+        instructions="Create a global plan.",
+    )
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_OPENCODE, user_opencode_dir),)
+        )
+    )
+    monkeypatch.setattr(
+        "relay_teams.skills.skill_cli.load_skill_registry", lambda: registry
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        ["skills", "list", "--source", "user_opencode", "--format", "json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == [
+        {
+            "ref": "global-plan",
+            "name": "global-plan",
+            "source": "user_opencode",
+            "directory": (user_opencode_dir / "global-plan").resolve().as_posix(),
+            "description": "OpenCode global plan skill",
         }
     ]
 

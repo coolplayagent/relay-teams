@@ -26,6 +26,11 @@ _SCRIPT_DESCRIPTION_PATTERN = re.compile(
     r"^- ([\w-]+):\s*(.*?)(?:\s*\((.*?)\))?$",
     re.MULTILINE,
 )
+_DISCOVERY_WARNING_SAMPLE_LIMIT = 5
+
+_SkillManifestSignature = tuple[tuple[str, str, int, int], ...]
+_SkillLoadWarningEntry = tuple[Path, str]
+_SkillDuplicateWarningEntry = tuple[str, Path, SkillSource, Path, SkillSource]
 
 
 def get_builtin_skills_dir_path() -> Path:
@@ -38,6 +43,21 @@ def get_app_skills_dir(user_home_dir: Path | None = None) -> Path:
 
 def get_user_skills_dir(user_home_dir: Path | None = None) -> Path:
     return get_app_skills_dir(user_home_dir=user_home_dir)
+
+
+def get_codex_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".codex" / "skills"
+
+
+def get_claude_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".claude" / "skills"
+
+
+def get_opencode_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".config" / "opencode" / "skills"
 
 
 def get_agents_skills_dir(user_home_dir: Path | None = None) -> Path:
@@ -62,6 +82,7 @@ class SkillsDirectory:
             (source, _resolve_dir(base_dir)) for source, base_dir in sources
         )
         self._skills: dict[str, Skill] = {}
+        self._manifest_signature: _SkillManifestSignature | None = None
         self._lock = RLock()
 
     @classmethod
@@ -90,6 +111,12 @@ class SkillsDirectory:
         return cls(
             sources=_build_default_sources(
                 builtin_skills_dir=get_builtin_skills_dir_path(),
+                codex_skills_dir=resolved_app_config_dir.parent / ".codex" / "skills",
+                claude_skills_dir=resolved_app_config_dir.parent / ".claude" / "skills",
+                opencode_skills_dir=resolved_app_config_dir.parent
+                / ".config"
+                / "opencode"
+                / "skills",
                 relay_teams_skills_dir=resolved_app_config_dir / "skills",
                 agents_skills_dir=resolved_app_config_dir.parent / ".agents" / "skills",
                 project_start_dir=project_start_dir,
@@ -108,6 +135,11 @@ class SkillsDirectory:
         return cls(
             sources=_build_default_sources(
                 builtin_skills_dir=get_builtin_skills_dir_path(),
+                codex_skills_dir=get_codex_skills_dir(user_home_dir=user_home_dir),
+                claude_skills_dir=get_claude_skills_dir(user_home_dir=user_home_dir),
+                opencode_skills_dir=get_opencode_skills_dir(
+                    user_home_dir=user_home_dir
+                ),
                 relay_teams_skills_dir=get_app_skills_dir(user_home_dir=user_home_dir),
                 agents_skills_dir=get_agents_skills_dir(user_home_dir=user_home_dir),
                 project_start_dir=start_dir,
@@ -128,33 +160,116 @@ class SkillsDirectory:
                 "max_depth": self.max_depth,
             },
         ):
+            manifest_signature = self._build_manifest_signature()
+            with self._lock:
+                if manifest_signature == self._manifest_signature:
+                    return
+
             discovered_skills: dict[str, Skill] = {}
+            duplicate_warnings: list[_SkillDuplicateWarningEntry] = []
+            load_warnings: list[_SkillLoadWarningEntry] = []
             for source, base_dir in self.sources:
                 if not base_dir.exists():
                     continue
-                for path in sorted(base_dir.rglob("SKILL.md")):
+                for path in self._iter_skill_manifest_paths(base_dir):
                     try:
-                        rel = path.relative_to(base_dir)
-                        if len(rel.parts) > self.max_depth + 1:
-                            continue
-                        skill = self._load_skill(path=path, source=source)
+                        skill = self._load_skill(
+                            path=path,
+                            source=source,
+                            load_warnings=load_warnings,
+                        )
                         if skill is None:
                             continue
                         existing_skill = discovered_skills.get(skill.metadata.name)
                         if existing_skill is not None:
-                            logger.warning(
-                                "Overriding duplicate skill %s from %s (%s) with %s (%s)",
-                                skill.metadata.name,
-                                existing_skill.directory,
-                                existing_skill.source.value,
-                                skill.directory,
-                                skill.source.value,
+                            duplicate_warnings.append(
+                                (
+                                    skill.metadata.name,
+                                    existing_skill.directory,
+                                    existing_skill.source,
+                                    skill.directory,
+                                    skill.source,
+                                )
                             )
                         discovered_skills[skill.metadata.name] = skill
                     except Exception as exc:
-                        logger.warning("Failed to load skill at %s: %s", path, exc)
+                        load_warnings.append((path, str(exc)))
             with self._lock:
                 self._skills = discovered_skills
+                self._manifest_signature = manifest_signature
+            self._log_discovery_warnings(
+                duplicate_warnings=duplicate_warnings,
+                load_warnings=load_warnings,
+            )
+
+    def _build_manifest_signature(self) -> _SkillManifestSignature:
+        signature: list[tuple[str, str, int, int]] = []
+        for source, base_dir in self.sources:
+            if not base_dir.exists():
+                continue
+            for path in self._iter_skill_manifest_paths(base_dir):
+                try:
+                    stat_result = path.stat()
+                    signature.append(
+                        (
+                            source.value,
+                            path.resolve().as_posix(),
+                            stat_result.st_mtime_ns,
+                            stat_result.st_size,
+                        )
+                    )
+                except OSError:
+                    signature.append((source.value, path.resolve().as_posix(), -1, -1))
+        return tuple(signature)
+
+    def _iter_skill_manifest_paths(self, base_dir: Path) -> tuple[Path, ...]:
+        return tuple(
+            path
+            for path in sorted(base_dir.rglob("SKILL.md"))
+            if len(path.relative_to(base_dir).parts) <= self.max_depth + 1
+        )
+
+    def _log_discovery_warnings(
+        self,
+        *,
+        duplicate_warnings: list[_SkillDuplicateWarningEntry],
+        load_warnings: list[_SkillLoadWarningEntry],
+    ) -> None:
+        if duplicate_warnings:
+            samples = tuple(
+                (
+                    f"{name}: {previous_path} ({previous_source.value}) -> "
+                    f"{selected_path} ({selected_source.value})"
+                )
+                for (
+                    name,
+                    previous_path,
+                    previous_source,
+                    selected_path,
+                    selected_source,
+                ) in duplicate_warnings[:_DISCOVERY_WARNING_SAMPLE_LIMIT]
+            )
+            logger.info(
+                "Resolved %s duplicate skill definitions by source precedence. %s",
+                len(duplicate_warnings),
+                _format_discovery_warning_samples(
+                    samples=samples,
+                    total_count=len(duplicate_warnings),
+                ),
+            )
+        if load_warnings:
+            samples = tuple(
+                f"{path}: {message}"
+                for path, message in load_warnings[:_DISCOVERY_WARNING_SAMPLE_LIMIT]
+            )
+            logger.warning(
+                "Skipped %s invalid skill manifests during discovery. %s",
+                len(load_warnings),
+                _format_discovery_warning_samples(
+                    samples=samples,
+                    total_count=len(load_warnings),
+                ),
+            )
 
     def list_skills(self) -> list[Skill]:
         with self._lock:
@@ -185,7 +300,13 @@ class SkillsDirectory:
         body = "".join(lines[end_index + 1 :])
         return front_matter, body
 
-    def _load_skill(self, *, path: Path, source: SkillSource) -> Skill | None:
+    def _load_skill(
+        self,
+        *,
+        path: Path,
+        source: SkillSource,
+        load_warnings: list[_SkillLoadWarningEntry] | None = None,
+    ) -> Skill | None:
         with trace_span(
             logger,
             component="skills.discovery",
@@ -197,7 +318,8 @@ class SkillsDirectory:
                 front_matter, body = self._split_front_matter(raw)
                 data = _as_object_mapping(yaml.safe_load(front_matter))
             except Exception as exc:
-                logger.warning("Skipping %s due to parsing error: %s", path, exc)
+                if load_warnings is not None:
+                    load_warnings.append((path, str(exc)))
                 return None
 
             if data is None:
@@ -283,12 +405,18 @@ class SkillsDirectory:
 def _build_default_sources(
     *,
     builtin_skills_dir: Path,
+    codex_skills_dir: Path,
+    claude_skills_dir: Path,
+    opencode_skills_dir: Path,
     relay_teams_skills_dir: Path,
     agents_skills_dir: Path,
     project_start_dir: Path | None,
 ) -> tuple[tuple[SkillSource, Path], ...]:
     sources: list[tuple[SkillSource, Path]] = [
         (SkillSource.BUILTIN, _resolve_dir(builtin_skills_dir)),
+        (SkillSource.USER_CODEX, _resolve_dir(codex_skills_dir)),
+        (SkillSource.USER_CLAUDE, _resolve_dir(claude_skills_dir)),
+        (SkillSource.USER_OPENCODE, _resolve_dir(opencode_skills_dir)),
         (SkillSource.USER_RELAY_TEAMS, _resolve_dir(relay_teams_skills_dir)),
         (SkillSource.USER_AGENTS, _resolve_dir(agents_skills_dir)),
     ]
@@ -302,21 +430,18 @@ def _project_skill_sources(*, start_dir: Path) -> tuple[tuple[SkillSource, Path]
     project_root = get_project_root_or_none(start_dir=resolved_start_dir)
     stop_dir = resolved_start_dir if project_root is None else project_root
     parent_dirs = _iter_parent_dirs(resolved_start_dir, stop_dir)
-    relay_teams_sources = [
-        (
-            SkillSource.PROJECT_RELAY_TEAMS,
-            current_dir / ".relay-teams" / "skills",
-        )
+    source_specs = (
+        (SkillSource.PROJECT_CODEX, ".codex"),
+        (SkillSource.PROJECT_CLAUDE, ".claude"),
+        (SkillSource.PROJECT_OPENCODE, ".opencode"),
+        (SkillSource.PROJECT_RELAY_TEAMS, ".relay-teams"),
+        (SkillSource.PROJECT_AGENTS, ".agents"),
+    )
+    sources = [
+        (source, current_dir / directory_name / "skills")
+        for source, directory_name in source_specs
         for current_dir in parent_dirs
     ]
-    agents_sources = [
-        (
-            SkillSource.PROJECT_AGENTS,
-            current_dir / ".agents" / "skills",
-        )
-        for current_dir in parent_dirs
-    ]
-    sources = relay_teams_sources + agents_sources
     return tuple((_source, _resolve_dir(path)) for _source, path in sources)
 
 
@@ -359,6 +484,20 @@ def _resolve_optional_path(base_dir: Path, value: object) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return base_dir / value
+
+
+def _format_discovery_warning_samples(
+    *,
+    samples: tuple[str, ...],
+    total_count: int,
+) -> str:
+    if not samples:
+        return "No examples available."
+    examples = "; ".join(samples)
+    omitted_count = total_count - len(samples)
+    if omitted_count <= 0:
+        return f"Examples: {examples}."
+    return f"Examples: {examples}; {omitted_count} more omitted."
 
 
 def _parse_frontmatter_hooks(value: object) -> HooksConfig:

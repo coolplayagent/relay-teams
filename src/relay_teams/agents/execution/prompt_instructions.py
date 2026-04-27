@@ -17,8 +17,6 @@ INSTRUCTION_FILE_CANDIDATES: tuple[str, str, str] = (
     "GEMINI.md",
 )
 PROMPTS_CONFIG_NAME = "prompts.json"
-GLOBAL_CLAUDE_FILE = Path("~/.claude/CLAUDE.md")
-GLOBAL_GEMINI_FILE = Path("~/.gemini/GEMINI.md")
 REMOTE_TIMEOUT_SECONDS = 5.0
 
 
@@ -160,14 +158,9 @@ class PromptInstructionResolver:
         return ()
 
     def _resolve_global_instruction_paths(self) -> tuple[Path, ...]:
-        candidates = (
-            self._app_config_dir / "AGENTS.md",
-            GLOBAL_CLAUDE_FILE.expanduser().resolve(),
-            GLOBAL_GEMINI_FILE.expanduser().resolve(),
-        )
-        for candidate in candidates:
-            if candidate.exists():
-                return (candidate.resolve(),)
+        candidate = self._app_config_dir / "AGENTS.md"
+        if candidate.exists():
+            return (candidate.resolve(),)
         return ()
 
     def _resolve_configured_instruction_sources(

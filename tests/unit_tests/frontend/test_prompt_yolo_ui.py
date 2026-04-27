@@ -1536,6 +1536,16 @@ const skillTabHandled = handlePromptComposerKeydown({
 });
 const skillCommandValue = els.promptInput.value;
 
+els.promptInput.value = "/Nope";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const unmatchedActionPanel = {
+    menuHidden: els.promptMentionMenu.hidden,
+    menuHtml: els.promptMentionMenu.innerHTML,
+};
+
 state.currentWorkspaceId = "workspace-files";
 globalThis.__resourceResponse = {
     workspace_id: "workspace-files",
@@ -1670,6 +1680,7 @@ console.log(JSON.stringify({
     skillCommandPanel,
     skillTabHandled,
     skillCommandValue,
+    unmatchedActionPanel,
     directoryPanel,
     directoryEnterHandled,
     directoryValue,
@@ -1700,15 +1711,6 @@ console.log(JSON.stringify({
     )
     rendered_command_text = re.sub(
         r"<[^>]+>", "", payload["beforeCommandSelect"]["menuHtml"]
-    )
-    rendered_empty_command_text = re.sub(
-        r"<[^>]+>", "", payload["emptyCommandPanel"]["menuHtml"]
-    )
-    rendered_no_workspace_command_text = re.sub(
-        r"<[^>]+>", "", payload["noWorkspaceCommandPanel"]["menuHtml"]
-    )
-    rendered_error_command_text = re.sub(
-        r"<[^>]+>", "", payload["errorCommandPanel"]["menuHtml"]
     )
     rendered_retry_command_text = re.sub(
         r"<[^>]+>", "", payload["retryCommandPanel"]["menuHtml"]
@@ -1760,18 +1762,16 @@ console.log(JSON.stringify({
     assert payload["commandValue"] == "/opsx-propose "
     assert payload["commandSelectionStart"] == 14
     assert payload["commandSelectionEnd"] == 14
-    assert payload["emptyCommandPanel"]["menuHidden"] is False
-    assert "prompt-mention-empty" in payload["emptyCommandPanel"]["menuHtml"]
-    assert "composer.command_empty" in rendered_empty_command_text
+    assert payload["emptyCommandPanel"]["menuHidden"] is True
+    assert payload["emptyCommandPanel"]["menuHtml"] == ""
     assert payload["emptyEnterHandled"] is False
-    assert payload["emptyEscapeHandled"] is True
+    assert payload["emptyEscapeHandled"] is False
     assert payload["emptyHiddenAfterEscape"] is True
-    assert payload["noWorkspaceCommandPanel"]["menuHidden"] is False
-    assert "composer.command_no_workspace" in rendered_no_workspace_command_text
+    assert payload["noWorkspaceCommandPanel"]["menuHidden"] is True
+    assert payload["noWorkspaceCommandPanel"]["menuHtml"] == ""
     assert payload["noWorkspaceTabHandled"] is False
-    assert payload["errorCommandPanel"]["menuHidden"] is False
-    assert "composer.command_load_failed" in rendered_error_command_text
-    assert "registry down" in rendered_error_command_text
+    assert payload["errorCommandPanel"]["menuHidden"] is True
+    assert payload["errorCommandPanel"]["menuHtml"] == ""
     assert payload["commandFetchCallsAfterRetry"] == (
         payload["commandFetchCallsAfterError"] + 1
     )
@@ -1791,6 +1791,8 @@ console.log(JSON.stringify({
     )
     assert payload["skillTabHandled"] is True
     assert payload["skillCommandValue"] == "/data-analysis "
+    assert payload["unmatchedActionPanel"]["menuHidden"] is True
+    assert payload["unmatchedActionPanel"]["menuHtml"] == ""
     assert payload["directoryPanel"]["menuHidden"] is False
     assert "src/" in rendered_directory_text
     assert payload["directoryEnterHandled"] is True
@@ -1934,6 +1936,654 @@ console.log(JSON.stringify({
             "kind": "text",
             "text": "/deepresearch topic",
         }
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == []
+
+
+def test_slash_menu_shows_same_named_command_and_skill_separately(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+
+console.log(JSON.stringify({
+    hidden: els.promptMentionMenu.hidden,
+    html: els.promptMentionMenu.innerHTML,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    rendered_text = re.sub(r"<[^>]+>", "", payload["html"])
+    assert payload["hidden"] is False
+    assert "/ 命令" in rendered_text
+    assert "Skills" in rendered_text
+    assert "Command probe" in rendered_text
+    assert "Skill probe" in rendered_text
+
+
+def test_selected_same_named_skill_does_not_resolve_as_command(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    handleSend,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+globalThis.__resolveCommandResponse = {
+    matched: true,
+    expanded_prompt: "Command should not run.",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const skillButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+).find((match) => match[0].includes('data-kind="skill"'));
+const skillMatch = skillButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: skillMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+els.promptInput.value = "/dedupe-probe topic";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == []
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {"kind": "text", "text": "topic"}
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == ["dedupe-probe"]
+
+
+def test_committing_resource_mention_preserves_selected_slash_skill(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    handleSend,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+globalThis.__resolveCommandResponse = {
+    matched: true,
+    expanded_prompt: "Command should not run.",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const skillButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+).find((match) => match[0].includes('data-kind="skill"'));
+const skillMatch = skillButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: skillMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+globalThis.__resourceResponse = {
+    workspace_id: "workspace-1",
+    query: "src",
+    results: [
+        { name: "main.py", path: "src/relay_teams/main.py", kind: "file", mount_name: "default" },
+    ],
+};
+els.promptInput.value = "/dedupe-probe @src";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 120));
+const resourceButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+)[0];
+const resourceMatch = resourceButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: resourceMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == []
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["skills"] == ["dedupe-probe"]
+
+
+def test_stale_selected_skill_falls_back_to_command_resolution(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    handleSend,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+globalThis.__resolveCommandResponse = {
+    matched: true,
+    expanded_prompt: "Command ran after skill removal.",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const skillButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+).find((match) => match[0].includes('data-kind="skill"'));
+const skillMatch = skillButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: skillMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+globalThis.__skillsResponse = [];
+await refreshRoleConfigOptions({ refreshControls: false });
+els.promptInput.value = "/dedupe-probe topic";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == [
+        {
+            "workspace_id": "workspace-1",
+            "raw_text": "/dedupe-probe topic",
+            "mode": "normal",
+        }
+    ]
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {"kind": "text", "text": "Command ran after skill removal."}
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == []
+
+
+def test_stale_selected_command_falls_back_to_skill_resolution(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    handleSend,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+globalThis.__resolveCommandResponse = {
+    matched: false,
+    expanded_prompt: "",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const commandButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+).find((match) => match[0].includes('data-kind="command"'));
+const commandMatch = commandButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: commandMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+globalThis.__commandsResponse = { commands: [] };
+invalidatePromptCommandsCache();
+els.promptInput.value = "/dedupe-probe topic";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == [
+        {
+            "workspace_id": "workspace-1",
+            "raw_text": "/dedupe-probe topic",
+            "mode": "normal",
+        }
+    ]
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {"kind": "text", "text": "topic"}
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == ["dedupe-probe"]
+
+
+def test_stale_selected_command_without_workspace_falls_back_to_skill(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    handleSend,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const commandButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+).find((match) => match[0].includes('data-kind="command"'));
+const commandMatch = commandButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: commandMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+
+state.currentWorkspaceId = "";
+globalThis.__commandsResponse = { commands: [] };
+invalidatePromptCommandsCache();
+els.promptInput.value = "/dedupe-probe topic";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await handleSend();
+
+console.log(JSON.stringify({
+    logs: globalThis.__logs,
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert all(
+        log["message"] != "Cannot resolve command without an active workspace."
+        for log in payload["logs"]
+    )
+    assert payload["resolveCalls"] == []
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {"kind": "text", "text": "topic"}
+    ]
+    assert payload["streamCalls"][0]["options"]["skills"] == ["dedupe-probe"]
+
+
+def test_selected_same_named_command_does_not_submit_skill(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerInput,
+    handleSend,
+    initializePromptMentionAutocomplete,
+    invalidatePromptCommandsCache,
+    refreshRoleConfigOptions,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+globalThis.__skillsResponse = [
+    {
+        ref: "dedupe-probe",
+        name: "dedupe-probe",
+        description: "Skill probe",
+        source: "project_agents",
+    },
+];
+globalThis.__commandsResponse = {
+    commands: [
+        {
+            name: "dedupe-probe",
+            aliases: [],
+            description: "Command probe",
+            argument_hint: "",
+            discovery_source: "project_relay_teams",
+        },
+    ],
+};
+globalThis.__resolveCommandResponse = {
+    matched: true,
+    expanded_prompt: "Command ran.",
+};
+state.currentWorkspaceId = "workspace-1";
+els.promptInput.value = "/dedu";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+
+await refreshRoleConfigOptions({ refreshControls: false });
+initializePromptMentionAutocomplete();
+invalidatePromptCommandsCache();
+handlePromptComposerInput();
+await new Promise(resolve => setTimeout(resolve, 0));
+const commandButton = Array.from(
+    els.promptMentionMenu.innerHTML.matchAll(/<button[\\s\\S]*?<\\/button>/g),
+).find((match) => match[0].includes('data-kind="command"'));
+const commandMatch = commandButton[0].match(/data-index="(\\d+)"/);
+els.promptMentionMenu._listeners.get("click")({
+    target: { dataset: { index: commandMatch[1] } },
+    preventDefault() { return undefined; },
+    stopPropagation() { return undefined; },
+});
+els.promptInput.value = "/dedupe-probe topic";
+els.promptInput.selectionStart = els.promptInput.value.length;
+els.promptInput.selectionEnd = els.promptInput.value.length;
+handlePromptComposerInput();
+await handleSend();
+
+console.log(JSON.stringify({
+    resolveCalls: globalThis.__resolveCommandCalls || [],
+    streamCalls: globalThis.__streamCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["resolveCalls"] == [
+        {
+            "workspace_id": "workspace-1",
+            "raw_text": "/dedupe-probe topic",
+            "mode": "normal",
+        }
+    ]
+    assert len(payload["streamCalls"]) == 1
+    assert payload["streamCalls"][0]["options"]["inputParts"] == [
+        {"kind": "text", "text": "Command ran."}
     ]
     assert payload["streamCalls"][0]["options"]["skills"] == []
 
@@ -2390,7 +3040,7 @@ export async function updateSessionTopology() {
 }
 
 export async function fetchCommands() {
-    return { commands: [] };
+    return globalThis.__commandsResponse || { commands: [] };
 }
 
 export async function resolveCommandPrompt(payload) {
@@ -2562,8 +3212,11 @@ function createElement(initial = {}) {
         selectionEnd: 0,
         scrollHeight: 36,
         style: { display: "", height: "" },
+        _listeners: new Map(),
         querySelectorAll() { return []; },
-        addEventListener() { return undefined; },
+        addEventListener(type, listener) {
+            this._listeners.set(type, listener);
+        },
         focus() { return undefined; },
         ...initial,
     };

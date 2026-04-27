@@ -23,10 +23,14 @@ skills_app = typer.Typer(
         "Inspect skills discovered from built-in, user, and project directories.\n\n"
         "Load order:\n"
         "1. built-in skills\n"
-        "2. ~/.relay-teams/skills\n"
-        "3. ~/.agents/skills\n"
-        "4. project .relay-teams/skills from cwd up to git root\n"
-        "5. project .agents/skills from cwd up to git root\n\n"
+        "2. user compatibility skills in ~/.codex/skills, ~/.claude/skills, "
+        "and ~/.config/opencode/skills\n"
+        "3. user native skills in ~/.relay-teams/skills and ~/.agents/skills\n"
+        "4. project .codex/skills, .claude/skills, and .opencode/skills "
+        "from cwd up to git root\n"
+        "5. project .relay-teams/skills from cwd up to git root\n"
+        "6. project .agents/skills "
+        "from cwd up to git root\n\n"
         "If multiple sources define the same skill name, the later source wins.\n\n"
         "Common usage:\n"
         "- relay-teams skills list\n"
@@ -44,8 +48,14 @@ class SkillOutputFormat(str, Enum):
 class SkillSourceFilter(str, Enum):
     ALL = "all"
     BUILTIN = "builtin"
+    USER_CODEX = "user_codex"
+    USER_CLAUDE = "user_claude"
+    USER_OPENCODE = "user_opencode"
     USER_RELAY_TEAMS = "user_relay_teams"
     USER_AGENTS = "user_agents"
+    PROJECT_CODEX = "project_codex"
+    PROJECT_CLAUDE = "project_claude"
+    PROJECT_OPENCODE = "project_opencode"
     PROJECT_RELAY_TEAMS = "project_relay_teams"
     PROJECT_AGENTS = "project_agents"
 
@@ -79,7 +89,7 @@ def skills_list(
     source: SkillSourceFilter = typer.Option(
         SkillSourceFilter.ALL,
         "--source",
-        help="Filter by resolved scope: all, builtin, or app.",
+        help="Filter by resolved source such as builtin, user_agents, or project_agents.",
         case_sensitive=False,
     ),
 ) -> None:

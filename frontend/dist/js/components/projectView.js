@@ -1826,8 +1826,14 @@ function resolveSkillScopeLabel(scope) {
     if (
         normalizedScope === 'user_relay_teams'
         || normalizedScope === 'user_agents'
+        || normalizedScope === 'user_claude'
+        || normalizedScope === 'user_codex'
+        || normalizedScope === 'user_opencode'
         || normalizedScope === 'project_relay_teams'
         || normalizedScope === 'project_agents'
+        || normalizedScope === 'project_claude'
+        || normalizedScope === 'project_codex'
+        || normalizedScope === 'project_opencode'
     ) {
         return t('feature.skills.scope_app');
     }

@@ -29,6 +29,107 @@ def test_project_command_overrides_app_command(tmp_path: Path) -> None:
     assert command.template == "Project review"
 
 
+def test_list_commands_returns_only_effective_command_for_duplicate_names(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    workspace_root = tmp_path / "workspace"
+    (app_config_dir / "commands").mkdir(parents=True)
+    (workspace_root / ".codex" / "commands").mkdir(parents=True)
+    (workspace_root / ".claude" / "commands").mkdir(parents=True)
+    (workspace_root / ".opencode" / "commands").mkdir(parents=True)
+    (workspace_root / ".relay-teams" / "commands").mkdir(parents=True)
+    (app_config_dir / "commands" / "shared.md").write_text(
+        "App shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".codex" / "commands" / "shared.md").write_text(
+        "Codex shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".claude" / "commands" / "shared.md").write_text(
+        "Claude shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".opencode" / "commands" / "shared.md").write_text(
+        "OpenCode shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".relay-teams" / "commands" / "shared.md").write_text(
+        "Relay Teams shared",
+        encoding="utf-8",
+    )
+    registry = CommandRegistry(app_config_dir=app_config_dir)
+
+    commands = registry.list_commands(workspace_root=workspace_root)
+
+    assert [(command.name, command.template) for command in commands] == [
+        ("shared", "Relay Teams shared")
+    ]
+
+
+def test_list_app_commands_returns_only_effective_duplicate_name(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    command_dir = app_config_dir / "commands"
+    command_dir.mkdir(parents=True)
+    (command_dir / "first.md").write_text(
+        "---\nname: shared\n---\nFirst shared",
+        encoding="utf-8",
+    )
+    (command_dir / "second.md").write_text(
+        "---\nname: shared\n---\nSecond shared",
+        encoding="utf-8",
+    )
+    registry = CommandRegistry(app_config_dir=app_config_dir)
+
+    commands = registry.list_app_commands()
+
+    assert [(command.name, command.template) for command in commands] == [
+        ("shared", "Second shared")
+    ]
+
+
+def test_list_project_commands_returns_only_effective_duplicate_name(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    workspace_root = tmp_path / "workspace"
+    (workspace_root / ".codex" / "commands").mkdir(parents=True)
+    (workspace_root / ".claude" / "commands").mkdir(parents=True)
+    (workspace_root / ".opencode" / "command").mkdir(parents=True)
+    (workspace_root / ".opencode" / "commands").mkdir(parents=True)
+    (workspace_root / ".relay-teams" / "commands").mkdir(parents=True)
+    (workspace_root / ".codex" / "commands" / "shared.md").write_text(
+        "Codex shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".claude" / "commands" / "shared.md").write_text(
+        "Claude shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".opencode" / "command" / "shared.md").write_text(
+        "OpenCode legacy shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".opencode" / "commands" / "shared.md").write_text(
+        "OpenCode shared",
+        encoding="utf-8",
+    )
+    (workspace_root / ".relay-teams" / "commands" / "shared.md").write_text(
+        "Relay Teams shared",
+        encoding="utf-8",
+    )
+    registry = CommandRegistry(app_config_dir=app_config_dir)
+
+    commands = registry.list_project_commands(workspace_root=workspace_root)
+
+    assert [(command.name, command.template) for command in commands] == [
+        ("shared", "Relay Teams shared")
+    ]
+
+
 def test_lists_app_and_project_commands(tmp_path: Path) -> None:
     app_config_dir = tmp_path / "app"
     workspace_root = tmp_path / "workspace"

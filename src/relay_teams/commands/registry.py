@@ -55,12 +55,15 @@ class CommandRegistry(BaseModel):
         return tuple(sorted(command_map.values(), key=_command_sort_key))
 
     def list_app_commands(self) -> tuple[CommandDefinition, ...]:
+        commands = _effective_commands(
+            discover_commands(
+                app_config_dir=self.app_config_dir,
+                workspace_root=None,
+            )
+        )
         return tuple(
             sorted(
-                discover_commands(
-                    app_config_dir=self.app_config_dir,
-                    workspace_root=None,
-                ),
+                commands,
                 key=_command_sort_key,
             )
         )
@@ -72,19 +75,37 @@ class CommandRegistry(BaseModel):
     ) -> tuple[CommandDefinition, ...]:
         if workspace_root is None:
             return ()
+        commands = _effective_commands(
+            tuple(
+                command
+                for command in discover_commands(
+                    app_config_dir=self.app_config_dir,
+                    workspace_root=workspace_root,
+                )
+                if command.scope == CommandScope.PROJECT
+            )
+        )
         return tuple(
             sorted(
-                (
-                    command
-                    for command in discover_commands(
-                        app_config_dir=self.app_config_dir,
-                        workspace_root=workspace_root,
-                    )
-                    if command.scope == CommandScope.PROJECT
-                ),
+                commands,
                 key=_command_sort_key,
             )
         )
+
+    def get_discovered_command_by_source_path(
+        self,
+        *,
+        source_path: Path,
+        workspace_root: Optional[Path],
+    ) -> Optional[CommandDefinition]:
+        target_path = source_path.resolve()
+        for command in discover_commands(
+            app_config_dir=self.app_config_dir,
+            workspace_root=workspace_root,
+        ):
+            if command.source_path.resolve() == target_path:
+                return command
+        return None
 
     def get_command(
         self,
@@ -152,30 +173,14 @@ class CommandRegistry(BaseModel):
         *,
         workspace_root: Optional[Path],
     ) -> tuple[dict[str, CommandDefinition], dict[str, CommandDefinition]]:
-        command_map: dict[str, CommandDefinition] = {}
-        effective_commands: list[CommandDefinition] = []
         alias_map: dict[str, CommandDefinition] = {}
-        for command in discover_commands(
-            app_config_dir=self.app_config_dir,
-            workspace_root=workspace_root,
-        ):
-            existing = command_map.get(command.name)
-            if existing is not None:
-                LOGGER.warning(
-                    "Overriding duplicate command %s from %s (%s) with %s (%s)",
-                    command.name,
-                    existing.source_path,
-                    existing.scope.value,
-                    command.source_path,
-                    command.scope.value,
-                )
-                effective_commands = [
-                    candidate
-                    for candidate in effective_commands
-                    if candidate.name != command.name
-                ]
-            command_map[command.name] = command
-            effective_commands.append(command)
+        effective_commands = _effective_commands(
+            discover_commands(
+                app_config_dir=self.app_config_dir,
+                workspace_root=workspace_root,
+            )
+        )
+        command_map = {command.name: command for command in effective_commands}
 
         for command in effective_commands:
             for alias in command.aliases:
@@ -191,6 +196,32 @@ class CommandRegistry(BaseModel):
                     )
                 alias_map[alias] = command
         return command_map, alias_map
+
+
+def _effective_commands(
+    commands: tuple[CommandDefinition, ...],
+) -> tuple[CommandDefinition, ...]:
+    command_map: dict[str, CommandDefinition] = {}
+    effective_commands: list[CommandDefinition] = []
+    for command in commands:
+        existing = command_map.get(command.name)
+        if existing is not None:
+            LOGGER.warning(
+                "Overriding duplicate command %s from %s (%s) with %s (%s)",
+                command.name,
+                existing.source_path,
+                existing.scope.value,
+                command.source_path,
+                command.scope.value,
+            )
+            effective_commands = [
+                candidate
+                for candidate in effective_commands
+                if candidate.name != command.name
+            ]
+        command_map[command.name] = command
+        effective_commands.append(command)
+    return tuple(effective_commands)
 
 
 def _parse_command_text(raw_text: str) -> tuple[Optional[str], str]:
