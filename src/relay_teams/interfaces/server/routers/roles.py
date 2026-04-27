@@ -139,7 +139,9 @@ def _build_role_config_options(
             for group in list_default_tool_groups(tool_registry)
         ),
         tools=tool_registry.list_configurable_names(),
-        mcp_servers=tuple(server.name for server in mcp_service.list_servers()),
+        mcp_servers=tuple(
+            server.name for server in mcp_service.list_servers() if server.enabled
+        ),
         skills=skill_options,
         agents=tuple(
             RoleAgentOption(

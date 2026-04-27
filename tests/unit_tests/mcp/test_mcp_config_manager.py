@@ -206,6 +206,149 @@ def test_load_registry_accepts_utf8_bom(tmp_path: Path) -> None:
     assert registry.list_names() == ("time-mcp",)
 
 
+def test_add_server_writes_app_mcp_config_and_reload_discovers_it(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    config_path = manager.add_server(
+        name="filesystem",
+        server_config={
+            "type": "local",
+            "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem"],
+        },
+    )
+
+    assert config_path == app_config_dir / "mcp.json"
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["filesystem"] == {
+        "type": "local",
+        "command": "npx",
+        "transport": "stdio",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+    }
+    registry = manager.load_registry()
+    assert registry.get_spec("filesystem").server_config["command"] == "npx"
+
+
+def test_add_server_rejects_duplicate_without_overwrite(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": {"filesystem": {"command": "npx"}}}),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.add_server(name="filesystem", server_config={"command": "uvx"})
+    except ValueError as exc:
+        assert "already exists" in str(exc)
+    else:
+        raise AssertionError("Expected duplicate MCP server to be rejected")
+
+
+def test_set_server_enabled_updates_app_mcp_config(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {"command": "npx"}}}),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.set_server_enabled(name="filesystem", enabled=False)
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["filesystem"]["enabled"] is False
+    registry = manager.load_registry()
+    spec = registry.get_spec("filesystem")
+    assert spec.enabled is False
+    assert registry.list_names() == ("filesystem",)
+    assert registry.list_enabled_names() == ()
+
+
+def test_update_server_preserves_enabled_state(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "filesystem": {
+                        "transport": "stdio",
+                        "command": "npx",
+                        "enabled": False,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.update_server(
+        name="filesystem",
+        server_config={
+            "transport": "stdio",
+            "command": "uvx",
+            "args": ["mcp-server-filesystem"],
+        },
+    )
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["filesystem"] == {
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-filesystem"],
+        "enabled": False,
+    }
+    assert manager.get_server_config("filesystem")["command"] == "uvx"
+
+
+def test_load_registry_accepts_disabled_alias(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {"mcpServers": {"filesystem": {"command": "npx", "disabled": True}}}
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+
+    assert registry.get_spec("filesystem").enabled is False
+
+
+def test_load_registry_normalizes_opencode_remote_type(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote-docs": {
+                        "type": "remote",
+                        "url": "https://example.com/mcp",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+
+    assert registry.get_spec("remote-docs").server_config["transport"] == "http"
+
+
 def test_load_registry_syncs_app_environment_for_stdio_mcp(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
