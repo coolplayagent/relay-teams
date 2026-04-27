@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import inspect
 from pathlib import Path
+import threading
+import time
 from types import SimpleNamespace
 from typing import Awaitable, Callable, cast
 
@@ -13,7 +16,7 @@ import pytest
 from relay_teams.computer import ComputerActionRisk
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.tools.runtime.context import ToolDeps
-from relay_teams.tools.runtime.models import ToolExecutionError
+from relay_teams.tools.runtime.models import ToolExecutionError, ToolResultProjection
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.web_tools import common, webfetch
 from relay_teams.tools.web_tools.preapproved import is_preapproved_webfetch_url
@@ -260,6 +263,17 @@ def _build_binary_transport(
         )
 
     return httpx.MockTransport(_handler)
+
+
+def test_body_has_automated_fetch_challenge_marker_scans_bounded_prefix() -> None:
+    marker = b"Enable JavaScript and cookies to continue"
+    assert webfetch.body_has_automated_fetch_challenge_marker(marker) is True
+    assert (
+        webfetch.body_has_automated_fetch_challenge_marker(
+            b"a" * (webfetch.AUTOMATED_FETCH_BLOCK_SCAN_BYTES + 1) + marker
+        )
+        is False
+    )
 
 
 def test_validate_web_url_rejects_non_http_scheme() -> None:
@@ -1096,6 +1110,175 @@ async def test_fetch_webfetch_projection_returns_redirect_result_for_cross_host_
     assert data["redirect_url"] == "https://docs.python.org/3/tutorial/"
     assert data["status_code"] == 302
     assert request_log == ["https://example.com/start"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_webfetch_projection_builds_projection_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    loop_thread_id = threading.get_ident()
+    projection_thread_ids: list[int] = []
+    projection_started = threading.Event()
+    projection_finished = threading.Event()
+    observed_projection_while_loop_was_live = False
+    heartbeat_done = False
+
+    def _fake_build_webfetch_projection(**kwargs: object) -> ToolResultProjection:
+        assert kwargs["body"] == b"ok"
+        projection_thread_ids.append(threading.get_ident())
+        projection_started.set()
+        time.sleep(0.05)
+        projection_finished.set()
+        return ToolResultProjection(
+            visible_data={"output": "ok"},
+            internal_data={"output": "ok"},
+        )
+
+    async def _heartbeat() -> None:
+        nonlocal observed_projection_while_loop_was_live
+        while not heartbeat_done:
+            await asyncio.sleep(0.001)
+            if projection_started.is_set() and not projection_finished.is_set():
+                observed_projection_while_loop_was_live = True
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/markdown", "content-length": "2"},
+            content=b"ok",
+        )
+
+    monkeypatch.setattr(
+        webfetch,
+        "build_webfetch_projection",
+        _fake_build_webfetch_projection,
+    )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    shared_store = _build_shared_store(tmp_path)
+    heartbeat_task = asyncio.create_task(_heartbeat())
+    try:
+        projection = await webfetch.fetch_webfetch_projection(
+            client=client,
+            requested_url="https://example.com/page",
+            response_format="markdown",
+            extract=webfetch.WebFetchExtractMode.NONE,
+            item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+            workspace_dir=tmp_path,
+            workspace_id="workspace-1",
+            shared_store=shared_store,
+            tool_call_id="webfetch",
+            cancel_check=lambda: None,
+        )
+    finally:
+        heartbeat_done = True
+        await heartbeat_task
+        await client.aclose()
+
+    assert projection.visible_data == {"output": "ok"}
+    assert projection_thread_ids
+    assert projection_thread_ids[0] != loop_thread_id
+    assert observed_projection_while_loop_was_live is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_webfetch_projection_keeps_projection_limit_until_cancelled_worker_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    started_events = {
+        "first": threading.Event(),
+        "second": threading.Event(),
+    }
+    release_events = {
+        "first": threading.Event(),
+        "second": threading.Event(),
+    }
+    started_order: list[str] = []
+
+    async def _wait_for_event(event: threading.Event) -> None:
+        deadline = time.perf_counter() + 1.0
+        while not event.is_set():
+            if time.perf_counter() >= deadline:
+                raise AssertionError("Timed out waiting for projection worker")
+            await asyncio.sleep(0.001)
+
+    def _fake_build_webfetch_projection(**kwargs: object) -> ToolResultProjection:
+        tool_call_id = str(kwargs["tool_call_id"])
+        started_order.append(tool_call_id)
+        started_events[tool_call_id].set()
+        assert release_events[tool_call_id].wait(timeout=2.0)
+        return ToolResultProjection(
+            visible_data={"output": tool_call_id},
+            internal_data={"output": tool_call_id},
+        )
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            request=request,
+            headers={"content-type": "text/markdown", "content-length": "2"},
+            content=b"ok",
+        )
+
+    monkeypatch.setattr(
+        webfetch,
+        "build_webfetch_projection",
+        _fake_build_webfetch_projection,
+    )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler))
+    shared_store = _build_shared_store(tmp_path)
+    try:
+        first_task = asyncio.create_task(
+            webfetch.fetch_webfetch_projection(
+                client=client,
+                requested_url="https://example.com/first",
+                response_format="markdown",
+                extract=webfetch.WebFetchExtractMode.NONE,
+                item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+                workspace_dir=tmp_path,
+                workspace_id="workspace-1",
+                shared_store=shared_store,
+                tool_call_id="first",
+                cancel_check=lambda: None,
+            )
+        )
+        await _wait_for_event(started_events["first"])
+        first_task.cancel()
+        first_result = await asyncio.gather(first_task, return_exceptions=True)
+        assert isinstance(first_result[0], asyncio.CancelledError)
+
+        second_task = asyncio.create_task(
+            webfetch.fetch_webfetch_projection(
+                client=client,
+                requested_url="https://example.com/second",
+                response_format="markdown",
+                extract=webfetch.WebFetchExtractMode.NONE,
+                item_limit=webfetch.DEFAULT_ITEM_LIMIT,
+                workspace_dir=tmp_path,
+                workspace_id="workspace-1",
+                shared_store=shared_store,
+                tool_call_id="second",
+                cancel_check=lambda: None,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert started_events["second"].is_set() is False
+
+        release_events["first"].set()
+        await _wait_for_event(started_events["second"])
+        release_events["second"].set()
+        second_projection = await second_task
+    finally:
+        release_events["first"].set()
+        release_events["second"].set()
+        await client.aclose()
+
+    assert second_projection.visible_data == {"output": "second"}
+    assert started_order == ["first", "second"]
 
 
 @pytest.mark.asyncio
