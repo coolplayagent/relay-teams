@@ -446,15 +446,29 @@ def test_skills_directory_discover_replaces_skill_cache_atomically(
     )
     directory = _skills_directory(tmp_path / "skills")
     directory.discover()
+    alpha_manifest = tmp_path / "skills" / "alpha" / "SKILL.md"
+    alpha_manifest.write_text(
+        f"{alpha_manifest.read_text(encoding='utf-8')}\n",
+        encoding="utf-8",
+    )
     original_load_skill = directory._load_skill
     load_started = threading.Event()
     allow_continue = threading.Event()
 
-    def blocking_load_skill(*, path: Path, source: SkillSource):
+    def blocking_load_skill(
+        *,
+        path: Path,
+        source: SkillSource,
+        load_warnings: list[tuple[Path, str]] | None = None,
+    ):
         if path.parent.name == "alpha":
             load_started.set()
             assert allow_continue.wait(timeout=5)
-        return original_load_skill(path=path, source=source)
+        return original_load_skill(
+            path=path,
+            source=source,
+            load_warnings=load_warnings,
+        )
 
     directory._load_skill = blocking_load_skill
     worker = threading.Thread(target=directory.discover)
