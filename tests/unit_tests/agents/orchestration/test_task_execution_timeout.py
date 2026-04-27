@@ -434,7 +434,7 @@ async def test_timeout_finalizer_preserves_worker_result_if_cancel_returns_one(
         timeout_seconds: float | None = None,
         context: Mapping[str, JsonValue] | None = None,
     ) -> TaskExecutionResult:
-        _ = (task_obj, suppress_exceptions, task_name, timeout_seconds, context)
+        del task_obj, suppress_exceptions, task_name, timeout_seconds, context
         return TaskExecutionResult(output="finished during cancellation")
 
     monkeypatch.setattr(
@@ -487,7 +487,7 @@ async def test_execute_heartbeat_failure_does_not_override_worker_result(
         *,
         assigned_instance_id: str | None = None,
     ) -> bool:
-        _ = (task_id, assigned_instance_id)
+        del task_id, assigned_instance_id
         raise RuntimeError("heartbeat unavailable")
 
     monkeypatch.setattr(task_repo, "heartbeat_running_async", _fail_heartbeat)
