@@ -40,9 +40,16 @@ class ToolResultStateService:
         visible_result = self.visible_tool_result_from_envelope(raw_result_envelope)
         if not isinstance(visible_result, dict):
             return None
-        if not self.tool_result_event_was_published(
-            result_envelope=raw_result_envelope,
-            visible_result=visible_result,
+        if (
+            state.result_event_id <= 0
+            and not self.tool_result_event_was_published(
+                result_envelope=raw_result_envelope,
+                visible_result=visible_result,
+            )
+            and not self.tool_result_was_durably_recorded(
+                result_envelope=raw_result_envelope,
+                visible_result=visible_result,
+            )
         ):
             return None
         normalized = to_json_compatible(visible_result)
@@ -77,6 +84,21 @@ class ToolResultStateService:
             return False
         return meta.get("tool_result_event_published") is True
 
+    @staticmethod
+    def tool_result_was_durably_recorded(
+        *,
+        result_envelope: dict[str, JsonValue],
+        visible_result: dict[str, JsonValue] | None = None,
+    ) -> bool:
+        runtime_meta = result_envelope.get("runtime_meta")
+        if isinstance(runtime_meta, dict):
+            return runtime_meta.get("tool_result_durably_recorded") is True
+        envelope = result_envelope if visible_result is None else visible_result
+        meta = envelope.get("meta")
+        if not isinstance(meta, dict):
+            return False
+        return meta.get("tool_result_durably_recorded") is True
+
     def tool_result_already_emitted_from_runtime(
         self,
         *,
@@ -103,6 +125,8 @@ class ToolResultStateService:
         result_envelope = state.result_envelope
         if not isinstance(result_envelope, dict):
             return False
+        if state.result_event_id > 0:
+            return True
         visible_result = self.visible_tool_result_from_envelope(result_envelope)
         return self.tool_result_event_was_published(
             result_envelope=result_envelope,
@@ -138,6 +162,8 @@ class ToolResultStateService:
         result_envelope = state.result_envelope
         if not isinstance(result_envelope, dict):
             return False
+        if state.result_event_id > 0:
+            return True
         visible_result = self.visible_tool_result_from_envelope(result_envelope)
         return self.tool_result_event_was_published(
             result_envelope=result_envelope,

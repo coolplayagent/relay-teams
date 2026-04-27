@@ -7,6 +7,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelRequestPart,
     ModelResponse,
+    RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -133,3 +134,75 @@ def test_normalize_replayed_messages_against_pending_keeps_request_fields() -> N
     assert request.timestamp == datetime(2026, 4, 2, 22, 44, 3, tzinfo=UTC)
     assert request.run_id == "run-123"
     assert request.metadata == {"source": "test"}
+
+
+def test_normalize_replayed_messages_drops_tool_result_name_mismatch() -> None:
+    messages = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="write",
+                    args={"content": "hello"},
+                    tool_call_id="call-real",
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="read",
+                    tool_call_id="call-real",
+                    content={"ok": True},
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="write",
+                    tool_call_id="call-real",
+                    content={"ok": True},
+                )
+            ]
+        ),
+    ]
+
+    sanitized = normalize_replayed_messages(messages)
+
+    assert len(sanitized) == 2
+    assert isinstance(sanitized[0], ModelResponse)
+    assert isinstance(sanitized[1], ModelRequest)
+    assert len(sanitized[1].parts) == 1
+    result_part = sanitized[1].parts[0]
+    assert isinstance(result_part, ToolReturnPart)
+    assert result_part.tool_name == "write"
+
+
+def test_normalize_replayed_messages_keeps_retry_prompt_without_tool_name() -> None:
+    messages = [
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="write",
+                    args={"content": "hello"},
+                    tool_call_id="call-real",
+                )
+            ]
+        ),
+        _request_with_metadata(
+            RetryPromptPart(
+                content="Input validation failed",
+                tool_call_id="call-real",
+            )
+        ),
+    ]
+
+    sanitized = normalize_replayed_messages(messages)
+
+    assert len(sanitized) == 2
+    request = sanitized[1]
+    assert isinstance(request, ModelRequest)
+    assert len(request.parts) == 1
+    retry_part = request.parts[0]
+    assert isinstance(retry_part, RetryPromptPart)
+    assert retry_part.tool_call_id == "call-real"

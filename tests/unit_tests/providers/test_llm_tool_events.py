@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import httpx
+import pytest
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
     ModelRequest,
@@ -33,6 +34,10 @@ from relay_teams.agents.instances.instance_repository import AgentInstanceReposi
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.event_publishing import (
+    EventPublishingService,
+    _args_preview,
+)
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
@@ -42,7 +47,10 @@ from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.persisted_state import (
+    ToolCallBatchStatus,
     ToolExecutionStatus,
+    load_tool_call_batch_state,
+    load_tool_call_state,
     merge_tool_call_state,
 )
 from relay_teams.tools.registry import ToolRegistry
@@ -60,6 +68,11 @@ class _FakeRunEventHub:
         self.events = []
 
     def publish(self, event) -> None:
+        self.events.append(event)
+
+
+class _FakeAsyncRunEventHub(_FakeRunEventHub):
+    async def publish_async(self, event) -> None:
         self.events.append(event)
 
 
@@ -238,6 +251,7 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
     event_types = [event.event_type for event in hub.events]
     assert event_types == [
         RunEventType.TOOL_CALL,
+        RunEventType.TOOL_CALL_BATCH_SEALED,
         RunEventType.TOOL_INPUT_VALIDATION_FAILED,
         RunEventType.TOOL_RESULT,
     ]
@@ -245,8 +259,20 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
     tool_call_payload = json.loads(hub.events[0].payload_json)
     assert tool_call_payload["tool_name"] == "orch_create_tasks"
     assert tool_call_payload["tool_call_id"] == "call-1"
+    assert tool_call_payload["batch_index"] == 0
+    assert tool_call_payload["batch_size"] == 1
 
-    validation_payload = json.loads(hub.events[1].payload_json)
+    batch_payload = json.loads(hub.events[1].payload_json)
+    assert batch_payload["tool_calls"] == [
+        {
+            "tool_call_id": "call-1",
+            "tool_name": "orch_create_tasks",
+            "args": '{"objective": "x"}',
+            "index": 0,
+        }
+    ]
+
+    validation_payload = json.loads(hub.events[2].payload_json)
     assert validation_payload["tool_name"] == "orch_create_tasks"
     assert validation_payload["tool_call_id"] == "call-1"
     assert (
@@ -256,7 +282,7 @@ def test_publish_tool_events_emits_call_validation_failure_and_result() -> None:
         validation_payload["details"] == "Invalid arguments for tool orch_create_tasks"
     )
 
-    tool_result_payload = json.loads(hub.events[2].payload_json)
+    tool_result_payload = json.loads(hub.events[3].payload_json)
     assert tool_result_payload["tool_name"] == "orch_create_tasks"
     assert tool_result_payload["tool_call_id"] == "call-2"
     assert tool_result_payload["error"] is False
@@ -377,7 +403,290 @@ def test_publish_tool_call_events_deduplicates_published_tool_call_ids() -> None
 
     assert emitted_first is True
     assert emitted_second is False
-    assert [event.event_type for event in hub.events] == [RunEventType.TOOL_CALL]
+    assert [event.event_type for event in hub.events] == [
+        RunEventType.TOOL_CALL,
+        RunEventType.TOOL_CALL_BATCH_SEALED,
+    ]
+
+
+def test_publish_tool_call_events_persists_sealed_parallel_batch() -> None:
+    hub = _FakeRunEventHub()
+    provider = _provider_with_hub(hub)
+    request = _request()
+
+    emitted = provider._publish_tool_call_events_from_messages(
+        request=request,
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="read",
+                        args={"path": "a.txt"},
+                        tool_call_id="call-a",
+                    ),
+                    ToolCallPart(
+                        tool_name="read",
+                        args={"path": "b.txt"},
+                        tool_call_id="call-b",
+                    ),
+                ]
+            )
+        ],
+    )
+
+    assert emitted is True
+    batch_payloads = [
+        json.loads(event.payload_json)
+        for event in hub.events
+        if event.event_type == RunEventType.TOOL_CALL_BATCH_SEALED
+    ]
+    assert len(batch_payloads) == 1
+    batch_id = str(batch_payloads[0]["batch_id"])
+    batch_state = load_tool_call_batch_state(
+        shared_store=provider._session._shared_store,
+        task_id=request.task_id,
+        batch_id=batch_id,
+    )
+    assert batch_state is not None
+    assert batch_state.status == ToolCallBatchStatus.SEALED
+    assert [item.tool_call_id for item in batch_state.items] == ["call-a", "call-b"]
+
+    first_call_state = load_tool_call_state(
+        shared_store=provider._session._shared_store,
+        task_id=request.task_id,
+        tool_call_id="call-a",
+    )
+    second_call_state = load_tool_call_state(
+        shared_store=provider._session._shared_store,
+        task_id=request.task_id,
+        tool_call_id="call-b",
+    )
+    assert first_call_state is not None
+    assert second_call_state is not None
+    assert first_call_state.batch_id == batch_id
+    assert second_call_state.batch_id == batch_id
+    assert first_call_state.batch_index == 0
+    assert second_call_state.batch_index == 1
+    assert first_call_state.batch_size == 2
+    assert second_call_state.batch_size == 2
+
+
+def test_event_publishing_service_covers_sync_batch_edge_cases(
+    tmp_path: Path,
+) -> None:
+    hub = _FakeRunEventHub()
+    shared_store = SharedStateRepository(tmp_path / "event-publishing-sync.db")
+    service = EventPublishingService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        shared_store=shared_store,
+    )
+    request = _request()
+
+    assert (
+        service.publish_tool_call_events_from_messages(
+            request=request,
+            messages=[ModelRequest(parts=[]), ModelResponse(parts=[])],
+        )
+        is False
+    )
+    assert (
+        service.publish_observed_tool_call_event(
+            request=request,
+            part=ToolCallPart(tool_name="", args={}, tool_call_id=""),
+            batch_id="batch-empty",
+            batch_index=0,
+            batch_size=1,
+        )
+        is False
+    )
+    service.seal_tool_call_batch(request=request, batch_id="batch-empty", tool_calls=[])
+    service.seal_tool_call_batch(
+        request=request,
+        batch_id="batch-invalid",
+        tool_calls=[(0, ToolCallPart(tool_name="", args={}, tool_call_id=""))],
+    )
+    emitted = service.publish_observed_tool_call_event(
+        request=request,
+        part=ToolCallPart(
+            tool_name="read", args={"path": "a.txt"}, tool_call_id="call-a"
+        ),
+        batch_id="batch-sealed",
+        batch_index=0,
+        batch_size=1,
+    )
+    service.seal_tool_call_batch(
+        request=request,
+        batch_id="batch-sealed",
+        tool_calls=[
+            (
+                0,
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-a",
+                ),
+            )
+        ],
+    )
+    event_count_after_first_seal = len(hub.events)
+    service.seal_tool_call_batch(
+        request=request,
+        batch_id="batch-sealed",
+        tool_calls=[
+            (
+                0,
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-a",
+                ),
+            )
+        ],
+    )
+    circular: list[object] = []
+    circular.append(circular)
+
+    assert emitted is True
+    assert len(hub.events) == event_count_after_first_seal
+    assert (
+        service._batch_id_for_tool_calls(
+            request=request,
+            tool_calls=[
+                (0, ToolCallPart(tool_name="read", args={}, tool_call_id="")),
+                (1, ToolCallPart(tool_name="read", args={}, tool_call_id="call-a")),
+            ],
+        )
+        == "batch-sealed"
+    )
+    assert _args_preview(circular).startswith("[[")
+
+
+@pytest.mark.asyncio
+async def test_event_publishing_service_covers_async_batch_edge_cases(
+    tmp_path: Path,
+) -> None:
+    hub = _FakeAsyncRunEventHub()
+    shared_store = SharedStateRepository(tmp_path / "event-publishing-async.db")
+    service = EventPublishingService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        shared_store=shared_store,
+    )
+    request = _request()
+
+    assert (
+        await service.publish_observed_tool_call_event_async(
+            request=request,
+            part=ToolCallPart(tool_name="", args={}, tool_call_id=""),
+            batch_id="batch-empty",
+            batch_index=0,
+            batch_size=1,
+        )
+        is False
+    )
+    published = {"call-a"}
+    assert (
+        await service.publish_observed_tool_call_event_async(
+            request=request,
+            part=ToolCallPart(tool_name="read", args={}, tool_call_id="call-a"),
+            batch_id="batch-empty",
+            batch_index=0,
+            batch_size=1,
+            published_tool_call_ids=published,
+        )
+        is False
+    )
+    await service.seal_tool_call_batch_async(
+        request=request,
+        batch_id="batch-empty",
+        tool_calls=[],
+    )
+    await service.seal_tool_call_batch_async(
+        request=request,
+        batch_id="batch-invalid",
+        tool_calls=[(0, ToolCallPart(tool_name="", args={}, tool_call_id=""))],
+    )
+    await service.publish_observed_tool_call_event_async(
+        request=request,
+        part=ToolCallPart(
+            tool_name="read", args={"path": "a.txt"}, tool_call_id="call-b"
+        ),
+        batch_id="batch-async",
+        batch_index=0,
+        batch_size=1,
+    )
+    await service.seal_tool_call_batch_async(
+        request=request,
+        batch_id="batch-async",
+        tool_calls=[
+            (
+                0,
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-b",
+                ),
+            )
+        ],
+    )
+    event_count_after_first_seal = len(hub.events)
+    await service.seal_tool_call_batch_async(
+        request=request,
+        batch_id="batch-async",
+        tool_calls=[
+            (
+                0,
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-b",
+                ),
+            )
+        ],
+    )
+    service_without_store = EventPublishingService(
+        run_event_hub=cast(RunEventHub, cast(object, hub)),
+        shared_store=None,
+    )
+
+    assert len(hub.events) == event_count_after_first_seal
+    assert (
+        await service._batch_id_for_tool_calls_async(
+            request=request,
+            tool_calls=[
+                (0, ToolCallPart(tool_name="read", args={}, tool_call_id="")),
+                (1, ToolCallPart(tool_name="read", args={}, tool_call_id="call-b")),
+            ],
+        )
+        == "batch-async"
+    )
+    assert (
+        await service_without_store._tool_call_batch_is_sealed_async(
+            request=request,
+            batch_id="missing",
+        )
+        is False
+    )
+    assert (
+        await service_without_store._tool_call_batch_has_observed_items_async(
+            request=request,
+            batch_id="missing",
+        )
+        is False
+    )
+    await service_without_store.seal_tool_call_batch_async(
+        request=request,
+        batch_id="batch-no-store",
+        tool_calls=[
+            (
+                0,
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "z.txt"},
+                    tool_call_id="call-z",
+                ),
+            )
+        ],
+    )
 
 
 def test_publish_tool_events_skips_retry_without_tool_name() -> None:

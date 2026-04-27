@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timezone
 from enum import Enum
 from json import dumps
 from typing import (
@@ -346,7 +347,6 @@ async def execute_tool(
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             meta["duration_ms"] = elapsed_ms
-            meta["tool_result_event_published"] = True
             envelope = _visible_envelope(
                 ok=False,
                 error=approval_error,
@@ -358,7 +358,7 @@ async def execute_tool(
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            await _persist_tool_record_async(
+            await _persist_and_publish_tool_result_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -373,12 +373,6 @@ async def execute_tool(
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=False,
-            )
-            await _publish_tool_result_event_async(
-                ctx=ctx,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                visible_envelope=envelope,
             )
             return envelope
 
@@ -399,6 +393,32 @@ async def execute_tool(
             ),
             last_error=None,
         )
+        try:
+            await _mark_tool_running_async(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                runtime_meta=meta,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="tool.running_state_persist_failed",
+                message=(
+                    "Tool call will run, but its pre-run recovery state could "
+                    "not be persisted"
+                ),
+                payload={
+                    "run_id": ctx.deps.run_id,
+                    "task_id": ctx.deps.task_id,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
 
         try:
             _raise_if_stopped(ctx)
@@ -428,7 +448,6 @@ async def execute_tool(
                 payload={"tool_name": tool_name},
             )
 
-            meta["tool_result_event_published"] = True
             envelope = _visible_envelope(
                 ok=True,
                 data=visible_data,
@@ -446,7 +465,6 @@ async def execute_tool(
                     tool_content_parts=tool_content_parts,
                 )
 
-            meta["tool_result_event_published"] = True
             envelope = await _apply_post_tool_hooks(
                 ctx=ctx,
                 tool_name=tool_name,
@@ -460,7 +478,7 @@ async def execute_tool(
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            await _persist_tool_record_async(
+            await _persist_and_publish_tool_result_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -476,12 +494,6 @@ async def execute_tool(
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=True,
-            )
-            await _publish_tool_result_event_async(
-                ctx=ctx,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                visible_envelope=envelope,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 await ctx.deps.approval_ticket_repo.mark_completed_async(
@@ -523,7 +535,6 @@ async def execute_tool(
                     "details": error.details,
                 },
             )
-            meta["tool_result_event_published"] = True
             envelope = _visible_envelope(
                 ok=False,
                 error=error,
@@ -542,7 +553,7 @@ async def execute_tool(
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            await _persist_tool_record_async(
+            await _persist_and_publish_tool_result_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
@@ -557,12 +568,6 @@ async def execute_tool(
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
                 success=False,
-            )
-            await _publish_tool_result_event_async(
-                ctx=ctx,
-                tool_call_id=tool_call_id,
-                tool_name=tool_name,
-                visible_envelope=envelope,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 await ctx.deps.approval_ticket_repo.mark_completed_async(
@@ -816,13 +821,13 @@ async def _publish_tool_result_event_async(
     tool_call_id: str,
     tool_name: str,
     visible_envelope: dict[str, JsonValue],
-) -> None:
+) -> int:
     result_payload = cast(
         JsonValue,
         sanitize_task_status_payload(visible_envelope),
     )
     is_error = bool(visible_envelope.get("ok") is False)
-    await publish_run_event_async(
+    return await publish_run_event_async(
         ctx.deps.run_event_hub,
         RunEvent(
             session_id=ctx.deps.session_id,
@@ -843,6 +848,131 @@ async def _publish_tool_result_event_async(
                 }
             ),
         ),
+    )
+
+
+def _mark_tool_result_event_state(
+    *,
+    runtime_meta: dict[str, JsonValue],
+    visible_envelope: dict[str, JsonValue],
+    published: bool,
+) -> None:
+    runtime_meta["tool_result_durably_recorded"] = True
+    runtime_meta["tool_result_event_published"] = published
+    raw_meta = visible_envelope.get("meta")
+    envelope_meta = (
+        dict(cast(dict[str, JsonValue], raw_meta)) if isinstance(raw_meta, dict) else {}
+    )
+    envelope_meta["tool_result_durably_recorded"] = True
+    envelope_meta["tool_result_event_published"] = published
+    visible_envelope["meta"] = envelope_meta
+
+
+async def _persist_and_publish_tool_result_async(
+    *,
+    ctx: ToolContext,
+    tool_call_id: str,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    visible_envelope: dict[str, JsonValue],
+    internal_data: JsonValue | None,
+    runtime_meta: dict[str, JsonValue],
+    execution_status: ToolExecutionStatus,
+    tool_content_parts: tuple[ContentPart, ...] = (),
+) -> None:
+    _mark_tool_result_event_state(
+        runtime_meta=runtime_meta,
+        visible_envelope=visible_envelope,
+        published=False,
+    )
+    await _persist_tool_record_async(
+        ctx=ctx,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        args_summary=args_summary,
+        visible_envelope=visible_envelope,
+        internal_data=internal_data,
+        runtime_meta=runtime_meta,
+        execution_status=execution_status,
+        tool_content_parts=tool_content_parts,
+    )
+    _mark_tool_result_event_state(
+        runtime_meta=runtime_meta,
+        visible_envelope=visible_envelope,
+        published=True,
+    )
+    result_event_id = await _publish_tool_result_event_async(
+        ctx=ctx,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        visible_envelope=visible_envelope,
+    )
+    try:
+        await _persist_tool_record_async(
+            ctx=ctx,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            args_summary=args_summary,
+            visible_envelope=visible_envelope,
+            internal_data=internal_data,
+            runtime_meta=runtime_meta,
+            execution_status=execution_status,
+            tool_content_parts=tool_content_parts,
+            result_event_id=result_event_id,
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="tool.result_linkage_persist_failed",
+            message=(
+                "Tool result event was published, but the result linkage state "
+                "could not be updated"
+            ),
+            payload={
+                "run_id": ctx.deps.run_id,
+                "task_id": ctx.deps.task_id,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "result_event_id": result_event_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+
+async def _mark_tool_running_async(
+    *,
+    ctx: ToolContext,
+    tool_call_id: str,
+    tool_name: str,
+    args_summary: dict[str, JsonValue],
+    runtime_meta: dict[str, JsonValue],
+) -> None:
+    current_state = await load_tool_call_state_async(
+        shared_store=ctx.deps.shared_store,
+        task_id=ctx.deps.task_id,
+        tool_call_id=tool_call_id,
+    )
+    existing_call_state = (
+        dict(current_state.call_state) if current_state is not None else {}
+    )
+    await merge_tool_call_state_async(
+        shared_store=ctx.deps.shared_store,
+        task_id=ctx.deps.task_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        run_id=ctx.deps.run_id,
+        session_id=ctx.deps.session_id,
+        instance_id=ctx.deps.instance_id,
+        role_id=ctx.deps.role_id,
+        args_preview=_safe_json(args_summary),
+        run_yolo=bool(runtime_meta.get("run_yolo") is True),
+        approval_mode=_approval_mode_from_meta(runtime_meta),
+        approval_status=_approval_status_from_meta(runtime_meta),
+        execution_status=ToolExecutionStatus.RUNNING,
+        call_state=existing_call_state,
+        started_at=datetime.now(tz=timezone.utc).isoformat(),
     )
 
 
@@ -1558,9 +1688,7 @@ async def _apply_post_tool_failure_hooks(
         return envelope
     error_payload = envelope.get("error")
     tool_error = (
-        cast(dict[str, JsonValue], error_payload)
-        if isinstance(error_payload, dict)
-        else {}
+        _normalize_json_object(error_payload) if isinstance(error_payload, dict) else {}
     )
     bundle = await hook_service.execute(
         event_input=PostToolUseFailureInput(
@@ -2476,6 +2604,7 @@ async def _persist_tool_record_async(
     runtime_meta: dict[str, JsonValue],
     execution_status: ToolExecutionStatus,
     tool_content_parts: tuple[ContentPart, ...] = (),
+    result_event_id: int = 0,
 ) -> None:
     approval_status = _approval_status_from_meta(runtime_meta)
     approval_mode = _approval_mode_from_meta(runtime_meta)
@@ -2511,6 +2640,8 @@ async def _persist_tool_record_async(
         execution_status=execution_status,
         result_envelope=result_record,
         call_state=existing_call_state,
+        result_event_id=result_event_id,
+        finished_at=datetime.now(tz=timezone.utc).isoformat(),
     )
 
 
