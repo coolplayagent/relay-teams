@@ -68,6 +68,8 @@ AsyncioExceptionHandler = Callable[
 ]
 _SUPPRESSED_SUCCESS_PATHS = (
     re.compile(r"^/api/system/health$"),
+    re.compile(r"^/api/system/live$"),
+    re.compile(r"^/api/system/control-plane$"),
     re.compile(r"^/api/sessions/[^/]+/recovery$"),
     re.compile(r"^/api/sessions/[^/]+/runs/[^/]+/token-usage$"),
 )

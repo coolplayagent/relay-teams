@@ -339,7 +339,8 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
         raise NotImplementedError
 
     async def _publish_committed_tool_outcome_events_from_messages_async(
@@ -347,7 +348,8 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         *,
         request: LLMRequest,
         messages: Sequence[ModelResponse | ModelRequest],
-    ) -> None:
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
         raise NotImplementedError
 
     @staticmethod
@@ -362,6 +364,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -376,6 +379,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -390,6 +394,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -404,6 +409,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         request: LLMRequest,
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],

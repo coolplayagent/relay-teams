@@ -23,6 +23,13 @@ from relay_teams.interfaces.server.runtime_identity import (
     build_server_runtime_identity,
     raise_if_runtime_mismatch,
 )
+from relay_teams.interfaces.server.control_plane import (
+    ControlPlaneServerHandle,
+    allocate_control_plane_config,
+    clear_control_plane_env,
+    publish_control_plane_env,
+    start_control_plane_server,
+)
 from relay_teams.net.clients import create_async_http_client
 from relay_teams.paths import get_project_config_dir
 
@@ -40,6 +47,8 @@ class ManagedServerProcess(BaseModel):
     pid: int
     host: str
     port: int
+    control_plane_host: str | None = None
+    control_plane_port: int | None = None
     python_executable: str | None = None
     package_root: str | None = None
     builtin_skills_dir: str | None = None
@@ -55,6 +64,11 @@ def _health_check_host(host: str) -> str:
     if host == "::":
         return "::1"
     return host
+
+
+def _server_bind_base_url(host: str, port: int) -> str:
+    url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"http://{url_host}:{port}"
 
 
 def get_server_health(base_url: str) -> ServerHealthPayload | None:
@@ -188,13 +202,20 @@ def start(
     fastapi_app = getattr(server_module, "app")
     uvicorn_run = cast(Callable[..., None], getattr(uvicorn_module, "run"))
     current_pid = os.getpid()
-
-    _register_managed_server(
-        _build_managed_server_process(pid=current_pid, host=host, port=port)
-    )
+    control_plane: ControlPlaneServerHandle | None = None
 
     try:
+        control_plane = _start_control_plane(host=host, port=port)
+        _register_managed_server(
+            _build_managed_server_process(
+                pid=current_pid,
+                host=host,
+                port=port,
+                control_plane=control_plane,
+            )
+        )
         typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
+        typer.echo(f"Control-plane liveness on {control_plane.config.live_url}")
         uvicorn_run(
             fastapi_app,
             host=host,
@@ -203,6 +224,9 @@ def start(
             timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
         )
     finally:
+        if control_plane is not None:
+            control_plane.stop()
+        clear_control_plane_env()
         _clear_managed_server(expected_pid=current_pid)
 
 
@@ -354,16 +378,30 @@ def _build_managed_server_process(
     pid: int,
     host: str,
     port: int,
+    control_plane: ControlPlaneServerHandle | None = None,
 ) -> ManagedServerProcess:
     runtime_identity = _get_current_runtime_identity()
     return ManagedServerProcess(
         pid=pid,
         host=host,
         port=port,
+        control_plane_host=control_plane.config.host if control_plane else None,
+        control_plane_port=control_plane.config.port if control_plane else None,
         python_executable=runtime_identity.python_executable,
         package_root=runtime_identity.package_root,
         builtin_skills_dir=runtime_identity.builtin_skills_dir,
     )
+
+
+def _start_control_plane(*, host: str, port: int) -> ControlPlaneServerHandle:
+    config = allocate_control_plane_config(
+        host=host,
+        port=port,
+        main_base_url=_server_bind_base_url(host, port),
+    )
+    handle = start_control_plane_server(config)
+    publish_control_plane_env(config)
+    return handle
 
 
 def _load_managed_server(*, raise_on_invalid: bool) -> ManagedServerProcess | None:

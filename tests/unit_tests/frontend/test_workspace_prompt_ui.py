@@ -157,7 +157,9 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert "initializeSessionTopologyControls" in bootstrap_script
     assert "is-resizing-rails" in navbar_script
     assert "marked.setOptions" not in state_script
-    assert "fetch('/api/system/health'" in backend_status_script
+    assert "probeJson('/api/system/control-plane'" in backend_status_script
+    assert "probeJson('/api/system/live'" in backend_status_script
+    assert "fetch('/api/system/health'" not in backend_status_script
     assert "fetchRunTokenUsage" in context_indicator_script
     assert "fetchSessionContextPreview" not in context_indicator_script
     assert "main-context-indicator" in context_indicator_script
@@ -204,6 +206,7 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert ".status-indicator.online span {" not in components_css
     assert ".status-indicator.offline > span:first-child" in components_css
     assert ".status-indicator.checking > span:first-child" in components_css
+    assert ".status-indicator.busy > span:first-child" in components_css
     assert (
         ".session-round-section.round-section-emphasis .round-detail-header"
         in components_css
