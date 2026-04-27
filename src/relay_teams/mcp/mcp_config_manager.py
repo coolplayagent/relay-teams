@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from json import loads
+from json import dumps, loads
 from pathlib import Path
 from typing import cast
 
@@ -87,14 +87,7 @@ class McpConfigManager:
 
             config_path = self._app_config_dir / _MCP_FILE_NAME
             payload = _load_json_object(config_path) if config_path.exists() else {}
-            existing_servers = payload.get("mcpServers")
-            servers: dict[str, JsonValue]
-            if isinstance(existing_servers, dict):
-                servers = cast(dict[str, JsonValue], existing_servers)
-            else:
-                servers = {}
-                payload = {}
-                payload["mcpServers"] = cast(JsonValue, servers)
+            payload, servers = _writable_mcp_servers_payload(payload)
 
             if normalized_name in servers and not overwrite:
                 raise ValueError(f"MCP server already exists: {normalized_name}")
@@ -116,7 +109,7 @@ class McpConfigManager:
             raise ValueError("MCP server name must be a non-empty string")
         config_path = self._app_config_dir / _MCP_FILE_NAME
         payload = _load_json_object(config_path) if config_path.exists() else {}
-        existing_servers = payload.get("mcpServers")
+        existing_servers = _extract_mcp_servers(payload)
         if not isinstance(existing_servers, dict):
             raise ValueError(f"Unknown MCP server: {normalized_name}")
         existing_config = existing_servers.get(normalized_name)
@@ -145,9 +138,9 @@ class McpConfigManager:
                 raise ValueError("MCP server name must be a non-empty string")
 
             config_path = self._app_config_dir / _MCP_FILE_NAME
-            payload = _load_json_object(config_path) if config_path.exists() else {}
-            existing_servers = payload.get("mcpServers")
-            if not isinstance(existing_servers, dict):
+            raw_payload = _load_json_object(config_path) if config_path.exists() else {}
+            payload, existing_servers = _writable_mcp_servers_payload(raw_payload)
+            if not existing_servers:
                 raise ValueError(f"Unknown MCP server: {normalized_name}")
             existing_config = existing_servers.get(normalized_name)
             if existing_config is None:
@@ -189,9 +182,9 @@ class McpConfigManager:
                 raise ValueError("MCP server name must be a non-empty string")
 
             config_path = self._app_config_dir / _MCP_FILE_NAME
-            payload = _load_json_object(config_path) if config_path.exists() else {}
-            existing_servers = payload.get("mcpServers")
-            if not isinstance(existing_servers, dict):
+            raw_payload = _load_json_object(config_path) if config_path.exists() else {}
+            payload, existing_servers = _writable_mcp_servers_payload(raw_payload)
+            if not existing_servers:
                 raise ValueError(f"Unknown MCP server: {normalized_name}")
 
             existing_config = existing_servers.get(normalized_name)
@@ -259,6 +252,30 @@ def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     if isinstance(raw, dict):
         return cast(dict[str, JsonValue], raw)
     return {}
+
+
+def _extract_mcp_servers(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    maybe_servers = payload.get("mcpServers", payload)
+    if isinstance(maybe_servers, dict):
+        return cast(dict[str, JsonValue], maybe_servers)
+    return {}
+
+
+def _writable_mcp_servers_payload(
+    payload: dict[str, JsonValue],
+) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+    existing_servers = payload.get("mcpServers")
+    if isinstance(existing_servers, dict):
+        return payload, cast(dict[str, JsonValue], existing_servers)
+    if "mcpServers" in payload:
+        servers: dict[str, JsonValue] = {}
+        writable_payload: dict[str, JsonValue] = {
+            "mcpServers": cast(JsonValue, servers)
+        }
+        return writable_payload, servers
+    servers = dict(payload)
+    writable_payload = {"mcpServers": cast(JsonValue, servers)}
+    return writable_payload, servers
 
 
 def _normalize_to_json_object(value: object) -> dict[str, JsonValue]:
@@ -336,9 +353,7 @@ def _normalize_json_value(value: object) -> JsonValue:
 
 
 def json_dumps(payload: dict[str, JsonValue]) -> str:
-    import json
-
-    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def _apply_proxy_env_to_mcp_server_config(

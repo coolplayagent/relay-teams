@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP
 
@@ -387,6 +389,32 @@ def test_list_servers_reports_enabled_state() -> None:
     servers = McpService(registry=registry).list_servers()
 
     assert servers[0].enabled is False
+
+
+def test_add_server_publishes_registry_updates_to_runtime_callback(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    published_registries: list[McpRegistry] = []
+    service = McpService(
+        registry=McpRegistry(()),
+        config_manager=manager,
+        on_registry_changed=published_registries.append,
+    )
+
+    service.add_server(
+        name="filesystem",
+        server_config={"transport": "stdio", "command": "npx"},
+    )
+
+    assert len(published_registries) == 1
+    assert published_registries[0].get_spec("filesystem").server_config["command"] == (
+        "npx"
+    )
 
 
 def test_registry_resolve_server_names_can_preserve_wildcard() -> None:

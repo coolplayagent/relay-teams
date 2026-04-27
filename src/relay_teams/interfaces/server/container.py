@@ -355,6 +355,7 @@ class ServerContainer:
         self.mcp_service: McpService = McpService(
             registry=self.mcp_registry,
             config_manager=self.mcp_config_manager,
+            on_registry_changed=self.replace_mcp_registry,
         )
         self.command_registry: CommandRegistry = CommandRegistry(
             app_config_dir=app_config_dir

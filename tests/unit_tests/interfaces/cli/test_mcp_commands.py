@@ -107,7 +107,7 @@ class _FailingMcpService:
 def test_mcp_list_supports_json_output(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.mcp.mcp_cli.load_mcp_service",
-        lambda: _FakeMcpService(),
+        _FakeMcpService,
     )
 
     result = runner.invoke(cli_app.app, ["mcp", "list", "--format", "json"])
@@ -122,7 +122,7 @@ def test_mcp_list_supports_json_output(monkeypatch) -> None:
 def test_mcp_tools_renders_table_by_default(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.mcp.mcp_cli.load_mcp_service",
-        lambda: _FakeMcpService(),
+        _FakeMcpService,
     )
 
     result = runner.invoke(cli_app.app, ["mcp", "tools", "filesystem"])

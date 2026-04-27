@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import JsonValue
 
 from relay_teams.logger import get_logger
@@ -27,12 +29,21 @@ class McpService:
         *,
         registry: McpRegistry,
         config_manager: McpConfigManager | None = None,
+        on_registry_changed: Callable[[McpRegistry], None] | None = None,
     ) -> None:
         self._registry: McpRegistry = registry
         self._config_manager: McpConfigManager | None = config_manager
+        self._on_registry_changed: Callable[[McpRegistry], None] | None = (
+            on_registry_changed
+        )
 
     def replace_registry(self, registry: McpRegistry) -> None:
         self._registry = registry
+
+    def _publish_registry(self, registry: McpRegistry) -> None:
+        self.replace_registry(registry)
+        if self._on_registry_changed is not None:
+            self._on_registry_changed(registry)
 
     def list_servers(self) -> tuple[McpServerSummary, ...]:
         with trace_span(
@@ -111,7 +122,7 @@ class McpService:
                 server_config=server_config,
                 overwrite=overwrite,
             )
-            self.replace_registry(self._config_manager.load_registry())
+            self._publish_registry(self._config_manager.load_registry())
             spec = self._registry.get_spec(name.strip())
             return McpServerAddResult(
                 server=McpServerSummary(
@@ -140,7 +151,7 @@ class McpService:
                 name=name,
                 enabled=request.enabled,
             )
-            self.replace_registry(self._config_manager.load_registry())
+            self._publish_registry(self._config_manager.load_registry())
             spec = self._registry.get_spec(name.strip())
             return McpServerSummary(
                 name=spec.name,
@@ -166,7 +177,7 @@ class McpService:
                 name=name,
                 server_config=request.config,
             )
-            self.replace_registry(self._config_manager.load_registry())
+            self._publish_registry(self._config_manager.load_registry())
             spec = self._registry.get_spec(name.strip())
             return McpServerConfigResult(
                 server=McpServerSummary(

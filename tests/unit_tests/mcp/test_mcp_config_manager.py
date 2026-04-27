@@ -233,6 +233,50 @@ def test_add_server_writes_app_mcp_config_and_reload_discovers_it(
     assert registry.get_spec("filesystem").server_config["command"] == "npx"
 
 
+def test_add_server_preserves_legacy_top_level_mcp_servers(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "existing": {
+                    "transport": "stdio",
+                    "command": "uvx",
+                    "args": ["existing-server"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.add_server(
+        name="filesystem",
+        server_config={
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+        },
+    )
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload == {
+        "mcpServers": {
+            "existing": {
+                "transport": "stdio",
+                "command": "uvx",
+                "args": ["existing-server"],
+            },
+            "filesystem": {
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+            },
+        }
+    }
+
+
 def test_add_server_rejects_duplicate_without_overwrite(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
