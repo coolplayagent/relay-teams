@@ -13,6 +13,7 @@ from pydantic_ai import Agent
 import relay_teams.tools.workspace_tools as workspace_tools_module
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskKind,
     BackgroundTaskRecord,
@@ -24,6 +25,7 @@ from relay_teams.tools.runtime.models import (
     ToolResultProjection,
 )
 from relay_teams.tools.runtime.models import ToolApprovalRequest
+from relay_teams.tools.runtime.persisted_state import load_tool_call_state
 from relay_teams.tools.workspace_tools import (
     register_background_tasks,
     register_list_background_tasks,
@@ -99,7 +101,7 @@ class _CapturingBackgroundTaskService:
 
     async def start_subagent(self, **kwargs: object):
         self.calls.append(dict(kwargs))
-        return BackgroundTaskRecord(
+        record = BackgroundTaskRecord(
             background_task_id="subagent_123",
             run_id="run-1",
             session_id="session-1",
@@ -117,9 +119,40 @@ class _CapturingBackgroundTaskService:
             subagent_task_id="task-1",
             subagent_instance_id="subagent-inst-1",
         )
+        callback = kwargs.get("on_launch_prepared")
+        if callable(callback):
+            launch_callback = cast(
+                Callable[[BackgroundTaskRecord], Awaitable[None]], callback
+            )
+            await launch_callback(record)
+        return record
 
     async def run_subagent(self, **kwargs: object):
         self.calls.append(dict(kwargs))
+        callback = kwargs.get("on_launch_prepared")
+        if callable(callback):
+            launch_callback = cast(
+                Callable[[BackgroundTaskRecord], Awaitable[None]], callback
+            )
+            record = BackgroundTaskRecord(
+                background_task_id="subagent_123",
+                run_id="run-1",
+                session_id="session-1",
+                kind=BackgroundTaskKind.SUBAGENT,
+                instance_id="inst-1",
+                role_id="writer",
+                tool_call_id=cast(str | None, kwargs.get("tool_call_id")),
+                title=str(kwargs["title"]),
+                command="subagent:Crafter",
+                cwd="C:/workspace",
+                execution_mode="foreground",
+                status=BackgroundTaskStatus.RUNNING,
+                subagent_role_id=str(kwargs["subagent_role_id"]),
+                subagent_run_id="subagent-run-1",
+                subagent_task_id="task-1",
+                subagent_instance_id="subagent-inst-1",
+            )
+            await launch_callback(record)
         return SimpleNamespace(
             run_id="subagent-run-1",
             instance_id="subagent-inst-1",
@@ -239,11 +272,14 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         fake_agent.tools["spawn_subagent"],
     )
     service = _CapturingBackgroundTaskService()
+    shared_store = SharedStateRepository(tmp_path / "spawn-subagent-state.db")
     workspace = _FakeWorkspace(tmp_path)
     role_registry = SimpleNamespace(resolve_subagent_role_id=lambda role_id: role_id)
     ctx = SimpleNamespace(
         tool_call_id="call-1",
         deps=SimpleNamespace(
+            shared_store=shared_store,
+            task_id="task-1",
             background_task_service=service,
             workspace=workspace,
             role_registry=role_registry,
@@ -281,10 +317,16 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         prompt="Inspect the failing tests and summarize the root cause.",
     )
 
-    assert service.calls[0] == {
+    call = dict(service.calls[0])
+    on_launch_prepared = call.pop("on_launch_prepared")
+    assert callable(on_launch_prepared)
+    assert call == {
         "run_id": "run-1",
         "session_id": "session-1",
         "workspace_id": "workspace-1",
+        "tool_call_id": "call-1",
+        "parent_instance_id": "inst-1",
+        "parent_role_id": "writer",
         "subagent_role_id": "Crafter",
         "subagent_role": None,
         "title": "Investigate test failures",
@@ -294,6 +336,14 @@ async def test_spawn_subagent_runs_synchronously_by_default(
         "completed": True,
         "output": "root cause found",
     }
+    state = load_tool_call_state(
+        shared_store=shared_store,
+        task_id="task-1",
+        tool_call_id="call-1",
+    )
+    assert state is not None
+    assert state.call_state["kind"] == "spawn_subagent_sync"
+    assert state.call_state["subagent_run_id"] == "subagent-run-1"
 
 
 @pytest.mark.asyncio
@@ -507,11 +557,14 @@ async def test_spawn_subagent_starts_background_subagent_task_when_requested(
         fake_agent.tools["spawn_subagent"],
     )
     service = _CapturingBackgroundTaskService()
+    shared_store = SharedStateRepository(tmp_path / "spawn-background-state.db")
     workspace = _FakeWorkspace(tmp_path)
     role_registry = SimpleNamespace(resolve_subagent_role_id=lambda role_id: role_id)
     ctx = SimpleNamespace(
         tool_call_id="call-1",
         deps=SimpleNamespace(
+            shared_store=shared_store,
+            task_id="task-1",
             background_task_service=service,
             workspace=workspace,
             role_registry=role_registry,
@@ -550,10 +603,21 @@ async def test_spawn_subagent_starts_background_subagent_task_when_requested(
         background=True,
     )
 
-    assert service.calls[0]["subagent_role_id"] == "Crafter"
-    assert service.calls[0]["tool_call_id"] == "call-1"
+    call = service.calls[0]
+    assert callable(call["on_launch_prepared"])
+    assert call["subagent_role_id"] == "Crafter"
+    assert call["tool_call_id"] == "call-1"
     assert result["background_task_id"] == "subagent_123"
     assert result["completed"] is False
+    state = load_tool_call_state(
+        shared_store=shared_store,
+        task_id="task-1",
+        tool_call_id="call-1",
+    )
+    assert state is not None
+    assert state.call_state["kind"] == "spawn_subagent_background"
+    assert state.call_state["background_task_id"] == "subagent_123"
+    assert state.call_state["subagent_run_id"] == "subagent-run-1"
 
 
 @pytest.mark.asyncio

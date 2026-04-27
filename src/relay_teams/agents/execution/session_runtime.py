@@ -15,12 +15,14 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    PartEndEvent,
     RetryPromptPart,
     ToolCallPart,
     ToolCallPartDelta,
     ToolReturnPart,
 )
 from pydantic_ai.usage import UsageLimits
+from uuid import uuid4
 
 from relay_teams.agents.execution.message_commit import (
     tool_input_validation_failure_to_tool_return,
@@ -485,6 +487,17 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                         allowed_skills=self._allowed_skills,
                     )
                     coordination_agent = cast(CoordinationAgent, agent)
+            (
+                history,
+                _recovered_batch_tool_count,
+            ) = await self._recover_uncommitted_tool_batches_async(
+                request=request,
+                history=history,
+                deps=deps,
+                recover_ready_calls=(
+                    retry_number == 0 and not skip_initial_user_prompt_persist
+                ),
+            )
             seen_count = 0
             buffered_messages: list[ModelRequest | ModelResponse] = []
             restarted = False
@@ -526,6 +539,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     dict[int, ToolCallPart | ToolCallPartDelta],
                                     {},
                                 )
+                                active_tool_call_batch_id = (
+                                    f"toolbatch_{uuid4().hex[:16]}"
+                                )
                                 streamed_text_start = len(emitted_text_chunks)
                                 usage_before = deepcopy(agent_run.usage())
                                 async with streamable_node.stream(
@@ -547,6 +563,23 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                                 started_thinking_parts=started_thinking_parts,
                                                 streamed_tool_calls=streamed_tool_calls,
                                             )
+                                            if isinstance(
+                                                stream_event, PartEndEvent
+                                            ) and isinstance(
+                                                stream_event.part, ToolCallPart
+                                            ):
+                                                tool_call_event_emitted = await self._event_publishing_service().publish_observed_tool_call_event_async(
+                                                    request=request,
+                                                    part=stream_event.part,
+                                                    batch_id=active_tool_call_batch_id,
+                                                    batch_index=stream_event.index,
+                                                    batch_size=0,
+                                                    published_tool_call_ids=published_tool_call_ids,
+                                                )
+                                                if tool_call_event_emitted:
+                                                    attempt_tool_call_event_emitted = (
+                                                        True
+                                                    )
                                             if text_emitted:
                                                 printed_any = True
                                                 attempt_text_emitted = True

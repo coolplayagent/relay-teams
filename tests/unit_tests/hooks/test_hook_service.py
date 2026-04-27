@@ -521,12 +521,13 @@ async def test_execute_publishes_hook_events_with_async_publisher(
             super().__init__()
             self.events: list[RunEvent] = []
 
-        def publish(self, event: RunEvent) -> None:
+        def publish(self, event: RunEvent) -> int:
             _ = event
             raise AssertionError("HookService must not call sync publish in async flow")
 
-        async def publish_async(self, event: RunEvent) -> None:
+        async def publish_async(self, event: RunEvent) -> int:
             self.events.append(event)
+            return 1
 
     class AllowCommandExecutor(CommandHookExecutor):
         async def execute(

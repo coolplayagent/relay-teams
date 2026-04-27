@@ -11,24 +11,25 @@ from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 
 @runtime_checkable
 class AsyncRunEventPublisher(Protocol):
-    async def publish_async(self, event: RunEvent) -> None:
+    async def publish_async(self, event: RunEvent) -> int | None:
         pass
 
 
 @runtime_checkable
 class SyncRunEventPublisher(Protocol):
-    def publish(self, event: RunEvent) -> None:
+    def publish(self, event: RunEvent) -> int | None:
         pass
 
 
 async def publish_run_event_async(
     publisher: AsyncRunEventPublisher | SyncRunEventPublisher,
     event: RunEvent,
-) -> None:
+) -> int:
     if isinstance(publisher, AsyncRunEventPublisher):
-        await publisher.publish_async(event)
-        return
-    publisher.publish(event)
+        event_id = await publisher.publish_async(event)
+        return event_id if isinstance(event_id, int) else 0
+    event_id = publisher.publish(event)
+    return event_id if isinstance(event_id, int) else 0
 
 
 class RunEventHub:
@@ -68,11 +69,11 @@ class RunEventHub:
         if not self._subscribers[run_id]:
             self._subscribers.pop(run_id, None)
 
-    def publish(self, event: RunEvent) -> None:
+    def publish(self, event: RunEvent) -> int:
         if self._publish_from_running_loop(event):
-            return
+            return int(event.event_id or 0)
         with self._publish_lock:
-            self._publish_sync_with_lock(event)
+            return self._publish_sync_with_lock(event)
 
     def _publish_from_running_loop(self, event: RunEvent) -> bool:
         try:
@@ -81,7 +82,9 @@ class RunEventHub:
             return False
         if self._publish_lock.acquire(blocking=False):
             try:
-                self._publish_sync_with_lock(event)
+                event_id = self._publish_sync_with_lock(event)
+                if event_id > 0:
+                    event.event_id = event_id
             finally:
                 self._publish_lock.release()
             return True
@@ -90,7 +93,7 @@ class RunEventHub:
             "a running event loop; use publish_async instead."
         )
 
-    def _publish_sync_with_lock(self, event: RunEvent) -> None:
+    def _publish_sync_with_lock(self, event: RunEvent) -> int:
         event_id = 0
         if self._event_log:
             event_id = self._event_log.emit_run_event(event)
@@ -103,17 +106,18 @@ class RunEventHub:
         listeners = self._subscribers.get(event.run_id, [])
         for queue in listeners:
             queue.put_nowait(event)
+        return event_id
 
-    async def publish_async(self, event: RunEvent) -> None:
+    async def publish_async(self, event: RunEvent) -> int:
         await self._acquire_publish_lock_async()
         task = asyncio.create_task(self._publish_async_with_lock(event))
         try:
-            _ = await asyncio.shield(task)
+            return await asyncio.shield(task)
         except asyncio.CancelledError:
             _ = await task
             raise
 
-    async def _publish_async_with_lock(self, event: RunEvent) -> None:
+    async def _publish_async_with_lock(self, event: RunEvent) -> int:
         try:
             event_id = 0
             if self._event_log:
@@ -130,6 +134,7 @@ class RunEventHub:
             listeners = self._subscribers.get(event.run_id, [])
             for queue in listeners:
                 queue.put_nowait(event)
+            return event_id
         finally:
             self._publish_lock.release()
 

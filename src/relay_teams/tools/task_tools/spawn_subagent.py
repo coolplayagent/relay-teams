@@ -14,10 +14,12 @@ from relay_teams.tools.runtime.context import (
 )
 from relay_teams.tools.runtime.execution import execute_tool_call
 from relay_teams.tools.runtime.models import ToolResultProjection
+from relay_teams.tools.runtime.persisted_state import update_tool_call_call_state_async
 from relay_teams.tools.workspace_tools.background_task_tool_support import (
     project_background_task_tool_result,
     require_background_task_service,
 )
+from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 
 DESCRIPTION = load_tool_description(__file__)
 _ROLE_REGISTRY_ATTR = "_agent_teams_role_registry"
@@ -43,6 +45,20 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             service = require_background_task_service(ctx)
             resolved_role_id, role_snapshot = _resolve_subagent_role(ctx, role_id)
             if background:
+
+                async def _on_background_launch_prepared(
+                    prepared_record: BackgroundTaskRecord,
+                ) -> None:
+                    await _persist_spawn_subagent_call_state(
+                        ctx=ctx,
+                        record=prepared_record,
+                        requested_role_id=role_id,
+                        resolved_role_id=resolved_role_id,
+                        description=description,
+                        prompt=prompt,
+                        background=True,
+                    )
+
                 record = await service.start_subagent(
                     run_id=ctx.deps.run_id,
                     session_id=ctx.deps.session_id,
@@ -55,20 +71,39 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     subagent_role=role_snapshot,
                     title=description,
                     prompt=prompt,
+                    on_launch_prepared=_on_background_launch_prepared,
                 )
                 return project_background_task_tool_result(
                     record,
                     completed=False,
                     include_task_id=True,
                 )
+
+            async def _on_launch_prepared(
+                prepared_record: BackgroundTaskRecord,
+            ) -> None:
+                await _persist_spawn_subagent_call_state(
+                    ctx=ctx,
+                    record=prepared_record,
+                    requested_role_id=role_id,
+                    resolved_role_id=resolved_role_id,
+                    description=description,
+                    prompt=prompt,
+                    background=False,
+                )
+
             result = await service.run_subagent(
                 run_id=ctx.deps.run_id,
                 session_id=ctx.deps.session_id,
                 workspace_id=ctx.deps.workspace.ref.workspace_id,
+                tool_call_id=ctx.tool_call_id,
+                parent_instance_id=ctx.deps.instance_id,
+                parent_role_id=ctx.deps.role_id,
                 subagent_role_id=resolved_role_id,
                 subagent_role=role_snapshot,
                 title=description,
                 prompt=prompt,
+                on_launch_prepared=_on_launch_prepared,
             )
             visible_payload: dict[str, JsonValue] = {
                 "completed": True,
@@ -98,6 +133,60 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             action=_action,
             raw_args=locals(),
         )
+
+
+async def _persist_spawn_subagent_call_state(
+    *,
+    ctx: ToolContext,
+    record: BackgroundTaskRecord,
+    requested_role_id: str,
+    resolved_role_id: str,
+    description: str,
+    prompt: str,
+    background: bool,
+) -> None:
+    tool_call_id = str(ctx.tool_call_id or "").strip()
+    if not tool_call_id:
+        return
+    try:
+        shared_store = ctx.deps.shared_store
+        task_id = ctx.deps.task_id
+        instance_id = ctx.deps.instance_id
+        parent_role_id = ctx.deps.role_id
+    except AttributeError:
+        return
+
+    def mutate(current: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        next_state = dict(current)
+        next_state.update(
+            {
+                "kind": (
+                    "spawn_subagent_background" if background else "spawn_subagent_sync"
+                ),
+                "background": background,
+                "background_task_id": record.background_task_id,
+                "subagent_run_id": record.subagent_run_id or "",
+                "subagent_instance_id": record.subagent_instance_id or "",
+                "subagent_task_id": record.subagent_task_id or "",
+                "subagent_role_id": record.subagent_role_id or resolved_role_id,
+                "requested_role_id": requested_role_id,
+                "resolved_role_id": resolved_role_id,
+                "description": description,
+                "title": record.title,
+                "prompt": prompt,
+            }
+        )
+        return next_state
+
+    await update_tool_call_call_state_async(
+        shared_store=shared_store,
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+        tool_name="spawn_subagent",
+        instance_id=instance_id,
+        role_id=parent_role_id,
+        mutate=mutate,
+    )
 
 
 def _build_spawn_subagent_description(agent: Agent[ToolDeps, str]) -> str:

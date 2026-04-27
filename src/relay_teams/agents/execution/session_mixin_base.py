@@ -80,6 +80,7 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.runtime.persisted_state import PersistedToolCallState
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
@@ -498,6 +499,16 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         *,
         request: LLMRequest,
         pending_messages: Sequence[ModelRequest | ModelResponse],
+    ) -> tuple[list[ModelRequest | ModelResponse], int]:
+        raise NotImplementedError
+
+    async def _recover_uncommitted_tool_batches_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        deps: ToolDeps,
+        recover_ready_calls: bool,
     ) -> tuple[list[ModelRequest | ModelResponse], int]:
         raise NotImplementedError
 

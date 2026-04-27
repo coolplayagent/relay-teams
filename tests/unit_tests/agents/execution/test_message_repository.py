@@ -422,6 +422,43 @@ def test_message_repo_drops_orphan_tool_return_request_from_history(
     assert history[0].parts[0].content == "continue"
 
 
+def test_message_repo_skips_invalid_history_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "message_repo_invalid_row.db"
+    repo = MessageRepository(db_path)
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="continue")])],
+    )
+    repo._conn.execute(
+        "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "session-1",
+            "default",
+            "inst-1",
+            "time",
+            "inst-1",
+            "task-1",
+            "run-1",
+            "assistant",
+            "{not valid json",
+            "2026-03-07T10:00:01+00:00",
+        ),
+    )
+    repo._conn.commit()
+
+    history = repo.get_history("inst-1")
+
+    assert len(history) == 1
+    assert isinstance(history[0], ModelRequest)
+    assert isinstance(history[0].parts[0], UserPromptPart)
+    assert history[0].parts[0].content == "continue"
+
+
 def test_message_repo_append_is_thread_safe_under_parallel_writes(
     tmp_path: Path,
 ) -> None:

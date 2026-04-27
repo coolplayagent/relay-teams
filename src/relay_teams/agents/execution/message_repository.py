@@ -4,6 +4,7 @@ from __future__ import annotations
 from pydantic import JsonValue
 
 import json
+import logging
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
@@ -34,7 +35,11 @@ from relay_teams.sessions.session_history_marker_models import SessionHistoryMar
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
+from relay_teams.logger import get_logger, log_event
 from relay_teams.system_reminder_text import is_rendered_system_reminder_text
+
+
+LOGGER = get_logger(__name__)
 
 
 class MessageRepository(SharedSqliteRepository):
@@ -193,7 +198,7 @@ class MessageRepository(SharedSqliteRepository):
 
     def get_history(self, instance_id: str) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
             (instance_id,),
         )
 
@@ -202,7 +207,7 @@ class MessageRepository(SharedSqliteRepository):
 
     def get_history_for_conversation(self, conversation_id: str) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
             (conversation_id,),
         )
 
@@ -800,7 +805,7 @@ class MessageRepository(SharedSqliteRepository):
         self, instance_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
             (instance_id, task_id),
         )
 
@@ -815,7 +820,7 @@ class MessageRepository(SharedSqliteRepository):
         self, conversation_id: str, task_id: str
     ) -> list[ModelMessage]:
         return self._read_history(
-            "SELECT session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
             (conversation_id, task_id),
         )
 
@@ -840,9 +845,7 @@ class MessageRepository(SharedSqliteRepository):
         )
         result: list[ModelMessage] = []
         for row in rows:
-            msgs = ModelMessagesTypeAdapter.validate_json(
-                _sanitize_message_json(str(row["message_json"]))
-            )
+            msgs = _validate_message_row(row)
             result.extend(msgs)
         return _truncate_model_history_to_safe_boundary(result)
 
@@ -1282,11 +1285,41 @@ def _safe_row_ids(rows: Sequence[sqlite3.Row]) -> set[int]:
         row_id = row["id"]
         if not isinstance(row_id, int):
             continue
-        messages = ModelMessagesTypeAdapter.validate_json(
-            _sanitize_message_json(str(row["message_json"]))
-        )
+        messages = _validate_message_row(row)
+        if not messages:
+            continue
         history_rows.append((row_id, messages))
     return collect_safe_row_ids(history_rows)
+
+
+def _validate_message_row(row: sqlite3.Row) -> list[ModelMessage]:
+    try:
+        return list(
+            ModelMessagesTypeAdapter.validate_json(
+                _sanitize_message_json(str(row["message_json"]))
+            )
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.history.dropped_invalid_message_row",
+            message="Dropped invalid persisted message row during history replay",
+            payload={
+                "row_id": _row_id(row),
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            },
+        )
+        return []
+
+
+def _row_id(row: sqlite3.Row) -> int:
+    try:
+        raw_row_id = row["id"]
+    except (IndexError, KeyError):
+        return 0
+    return raw_row_id if isinstance(raw_row_id, int) else 0
 
 
 def _ensure_after_iso_value(candidate: datetime, raw_value: str | None) -> datetime:

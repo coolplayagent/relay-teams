@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai.messages import ModelResponse, TextPart
 
 
@@ -142,7 +142,7 @@ def build_tool_error_result(
     *,
     error_code: str,
     message: str,
-) -> dict[str, object]:
+) -> dict[str, JsonValue]:
     return {
         "ok": False,
         "error": {

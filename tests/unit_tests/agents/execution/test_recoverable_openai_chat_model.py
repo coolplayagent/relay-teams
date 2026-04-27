@@ -12,6 +12,7 @@ from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -169,6 +170,23 @@ def test_sanitize_replayed_messages_drops_duplicate_late_tool_results() -> None:
     assert len(sanitized[2].parts) == 1
     assert isinstance(sanitized[2].parts[0], UserPromptPart)
     assert sanitized[2].parts[0].content == "optimize it"
+
+
+def test_sanitize_replayed_messages_drops_thinking_only_response() -> None:
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content="continue")]),
+        ModelResponse(parts=[ThinkingPart(content="internal notes")]),
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="write", args={}, tool_call_id="call-1")]
+        ),
+    ]
+
+    sanitized = RecoverableOpenAIChatModel._sanitize_replayed_messages(messages)
+
+    assert len(sanitized) == 2
+    assert isinstance(sanitized[0], ModelRequest)
+    assert isinstance(sanitized[1], ModelResponse)
+    assert isinstance(sanitized[1].parts[0], ToolCallPart)
 
 
 @pytest.mark.asyncio

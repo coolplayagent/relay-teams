@@ -12,6 +12,7 @@ import httpx
 import pytest
 from openai import APIError, APIStatusError
 from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
@@ -85,6 +86,7 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.runtime.context import ToolContext, ToolDeps
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.workspace import WorkspaceManager, build_conversation_id
@@ -749,6 +751,7 @@ def _build_provider(
     run_control_manager: object | None = None,
     subagent_reflection_service: object | None = None,
     task_execution_service: object | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> tuple[OpenAICompatibleProvider, MessageRepository]:
     registry = (
         cast(SkillRegistry, skill_registry)
@@ -814,7 +817,7 @@ def _build_provider(
             SubagentReflectionService | None,
             subagent_reflection_service,
         ),
-        tool_registry=cast(ToolRegistry, object()),
+        tool_registry=tool_registry or cast(ToolRegistry, object()),
         mcp_registry=resolved_mcp_registry,
         skill_registry=registry,
         allowed_tools=allowed_tools,
@@ -836,6 +839,22 @@ def _build_provider(
         tool_approval_policy=ToolApprovalPolicy(),
     )
     return provider, message_repo
+
+
+def _current_time_tool_registry() -> ToolRegistry:
+    def _register(agent: Agent[ToolDeps, str]) -> None:
+        @agent.tool(description="Return a fixed test timestamp.")
+        async def current_time(
+            ctx: ToolContext,
+            timezone: str,
+        ) -> dict[str, str]:
+            _ = ctx
+            return {
+                "time": "2026-03-07T10:00:00Z",
+                "timezone": timezone,
+            }
+
+    return ToolRegistry({"current_time": _register})
 
 
 @pytest.mark.asyncio
@@ -2533,7 +2552,11 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
 ) -> None:
     db_path = tmp_path / "subagent_tool_call_cancel.db"
     cancel_hub = _FakeRunEventHub()
-    provider, message_repo = _build_provider(db_path, cancel_hub)
+    provider, message_repo = _build_provider(
+        db_path,
+        cancel_hub,
+        tool_registry=_current_time_tool_registry(),
+    )
     _seed_request(
         message_repo,
         session_id="session-sub",
@@ -2601,7 +2624,11 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
     )
 
     resume_hub = _FakeRunEventHub()
-    resume_provider, resume_repo = _build_provider(db_path, resume_hub)
+    resume_provider, resume_repo = _build_provider(
+        db_path,
+        resume_hub,
+        tool_registry=_current_time_tool_registry(),
+    )
     resumed_agent = _SequentialAgent(
         [
             _ScriptedAgentRun(
@@ -2609,27 +2636,7 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
                 messages_by_step=[],
                 result=_ScriptedResult(
                     response=ModelResponse(parts=[TextPart(content="done")]),
-                    messages=[
-                        ModelResponse(
-                            parts=[
-                                ToolCallPart(
-                                    tool_name="current_time",
-                                    args={"timezone": "UTC"},
-                                    tool_call_id="call-resume",
-                                )
-                            ]
-                        ),
-                        ModelRequest(
-                            parts=[
-                                ToolReturnPart(
-                                    tool_name="current_time",
-                                    tool_call_id="call-resume",
-                                    content={"time": "2026-03-07T10:00:00Z"},
-                                )
-                            ]
-                        ),
-                        ModelResponse(parts=[TextPart(content="done")]),
-                    ],
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
                 ),
             )
         ]
@@ -2658,8 +2665,154 @@ async def test_subagent_resume_after_tool_call_cancellation_replays_from_safe_bo
         for part in message.parts
         if isinstance(part, ToolReturnPart)
     ]
-    assert tool_calls == ["call-resume"]
-    assert tool_returns == ["call-resume"]
+    assert tool_calls == ["call-pre"]
+    assert tool_returns == ["call-pre"]
+    recovered_return = next(
+        part
+        for message in history_after_resume
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    )
+    assert isinstance(recovered_return.content, dict)
+    assert recovered_return.content["time"] == "2026-03-07T10:00:00Z"
+    assert recovered_return.content["timezone"] == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_subagent_resume_recovers_parallel_tool_call_batch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "subagent_parallel_tool_call_cancel.db"
+    cancel_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        db_path,
+        cancel_hub,
+        tool_registry=_current_time_tool_registry(),
+    )
+    _seed_request(
+        message_repo,
+        session_id="session-sub",
+        instance_id="inst-sub",
+        task_id="task-sub",
+        trace_id="run-sub",
+        content="query time",
+        role_id="time",
+    )
+    cancelled_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[object()],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="current_time",
+                                    args={"timezone": "UTC"},
+                                    tool_call_id="call-a",
+                                ),
+                                ToolCallPart(
+                                    tool_name="current_time",
+                                    args={"timezone": "Asia/Shanghai"},
+                                    tool_call_id="call-b",
+                                ),
+                            ]
+                        )
+                    ]
+                ],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=asyncio.CancelledError(),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: cancelled_agent,
+    )
+    request = LLMRequest(
+        run_id="run-sub",
+        trace_id="run-sub",
+        task_id="task-sub",
+        session_id="session-sub",
+        workspace_id="default",
+        instance_id="inst-sub",
+        role_id="time",
+        system_prompt="system",
+        user_prompt=None,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.generate(request)
+
+    assert len(message_repo.get_history("inst-sub")) == 1
+    sealed_batches = [
+        json.loads(event.payload_json)
+        for event in cancel_hub.events
+        if event.event_type == RunEventType.TOOL_CALL_BATCH_SEALED
+    ]
+    assert len(sealed_batches) == 1
+    assert [item["tool_call_id"] for item in sealed_batches[0]["tool_calls"]] == [
+        "call-a",
+        "call-b",
+    ]
+
+    resume_hub = _FakeRunEventHub()
+    resume_provider, resume_repo = _build_provider(
+        db_path,
+        resume_hub,
+        tool_registry=_current_time_tool_registry(),
+    )
+    resumed_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="done")]),
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: resumed_agent,
+    )
+
+    result = await resume_provider.generate(request)
+
+    assert result == "done"
+    history_after_resume = resume_repo.get_history("inst-sub")
+    recovered_call_message = history_after_resume[1]
+    recovered_result_message = history_after_resume[2]
+    assert isinstance(recovered_call_message, ModelResponse)
+    assert isinstance(recovered_result_message, ModelRequest)
+    recovered_call_ids = [
+        part.tool_call_id
+        for part in recovered_call_message.parts
+        if isinstance(part, ToolCallPart)
+    ]
+    recovered_return_ids = [
+        part.tool_call_id
+        for part in recovered_result_message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+    assert recovered_call_ids == ["call-a", "call-b"]
+    assert recovered_return_ids == ["call-a", "call-b"]
+
+    return_payloads = [
+        part.content
+        for part in recovered_result_message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+    assert return_payloads == [
+        {"time": "2026-03-07T10:00:00Z", "timezone": "UTC"},
+        {"time": "2026-03-07T10:00:00Z", "timezone": "Asia/Shanghai"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -2669,7 +2822,11 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
 ) -> None:
     db_path = tmp_path / "subagent_tool_result_commit_cancel.db"
     cancel_hub = _FakeRunEventHub()
-    provider, message_repo = _build_provider(db_path, cancel_hub)
+    provider, message_repo = _build_provider(
+        db_path,
+        cancel_hub,
+        tool_registry=_current_time_tool_registry(),
+    )
     _seed_request(
         message_repo,
         session_id="session-sub",
@@ -2742,7 +2899,11 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
     assert len(history_after_cancel) == 1
 
     resume_hub = _FakeRunEventHub()
-    resume_provider, resume_repo = _build_provider(db_path, resume_hub)
+    resume_provider, resume_repo = _build_provider(
+        db_path,
+        resume_hub,
+        tool_registry=_current_time_tool_registry(),
+    )
     resumed_agent = _SequentialAgent(
         [
             _ScriptedAgentRun(
@@ -2750,7 +2911,7 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
                 messages_by_step=[],
                 result=_ScriptedResult(
                     response=ModelResponse(parts=[TextPart(content="done")]),
-                    messages=scripted_messages,
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
                 ),
             )
         ]
@@ -2776,6 +2937,7 @@ async def test_subagent_resume_after_tool_result_before_commit_retries_cleanly(
     assert tool_returns[0].tool_call_id == "call-once"
     assert isinstance(tool_returns[0].content, dict)
     assert tool_returns[0].content.get("time") == "2026-03-07T10:00:00Z"
+    assert tool_returns[0].content.get("timezone") == "UTC"
 
 
 @pytest.mark.asyncio
@@ -2842,6 +3004,87 @@ async def test_generate_retries_retryable_status_error_before_side_effects(
     assert event_types.count(RunEventType.MODEL_STEP_STARTED) == 2
     assert RunEventType.LLM_RETRY_SCHEDULED in event_types
     history = message_repo.get_history("inst-retry-success")
+    assert len(history) == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_retries_retryable_error_after_preflight_batch_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "retry_after_preflight_recovery.db",
+        fake_hub,
+    )
+    provider._session._retry_config.jitter = False
+    provider._session._retry_config.initial_delay_ms = 1
+
+    async def _fast_sleep(delay: float) -> None:
+        _ = delay
+
+    async def _recover_uncommitted_tool_batches_async(
+        **kwargs: object,
+    ) -> tuple[list[ModelRequest | ModelResponse], int]:
+        history = cast(list[ModelRequest | ModelResponse], kwargs["history"])
+        return history, 1
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_retry_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(llm_module, "compute_retry_delay_ms", lambda **_: 0)
+    provider._session.__dict__["_recover_uncommitted_tool_batches_async"] = (
+        _recover_uncommitted_tool_batches_async
+    )
+    request_error = APIStatusError(
+        "lock timeout",
+        response=httpx.Response(
+            409,
+            request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+        ),
+        body={"error": {"code": "conflict", "message": "busy"}},
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(response="unused", messages=[]),
+                raise_on_exhaust=request_error,
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="after retry")]),
+                    messages=[ModelResponse(parts=[TextPart(content="after retry")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+    request = LLMRequest(
+        run_id="run-retry-after-preflight-recovery",
+        trace_id="run-retry-after-preflight-recovery",
+        task_id="task-retry-after-preflight-recovery",
+        session_id="session-retry-after-preflight-recovery",
+        workspace_id="default",
+        instance_id="inst-retry-after-preflight-recovery",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="retry me",
+    )
+
+    result = await provider.generate(request)
+
+    assert result == "after retry"
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.count(RunEventType.MODEL_STEP_STARTED) == 2
+    assert RunEventType.LLM_RETRY_SCHEDULED in event_types
+    history = message_repo.get_history("inst-retry-after-preflight-recovery")
     assert len(history) == 2
 
 
