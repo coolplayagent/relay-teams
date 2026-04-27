@@ -111,6 +111,9 @@ class RuntimeRoleResolver:
     def cleanup_run(self, *, run_id: str) -> None:
         self._temporary_role_repository.delete_by_run(run_id)
 
+    async def cleanup_run_async(self, *, run_id: str) -> None:
+        await self._temporary_role_repository.delete_by_run_async(run_id)
+
     def _merge_with_template(
         self, *, run_id: str, role: TemporaryRoleSpec
     ) -> TemporaryRoleSpec:

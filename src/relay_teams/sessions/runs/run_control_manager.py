@@ -672,6 +672,63 @@ class RunControlManager:
             )
         return stopped
 
+    async def handle_instance_cancelled_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+    ) -> bool:
+        stopped = self.is_cancelled(run_id=task.trace_id, instance_id=instance_id)
+        if stopped:
+            await self._require_task_repo().update_status_async(
+                task.task_id,
+                TaskStatus.STOPPED,
+                error_message="Task stopped by user",
+            )
+            await self._require_agent_repo().mark_status_async(
+                instance_id, InstanceStatus.STOPPED
+            )
+            await self._require_event_bus().emit_async(
+                EventEnvelope(
+                    event_type=EventType.TASK_STOPPED,
+                    trace_id=task.trace_id,
+                    session_id=task.session_id,
+                    task_id=task.task_id,
+                    instance_id=instance_id,
+                    payload_json="{}",
+                )
+            )
+            await self._require_event_bus().emit_async(
+                EventEnvelope(
+                    event_type=EventType.INSTANCE_STOPPED,
+                    trace_id=task.trace_id,
+                    session_id=task.session_id,
+                    task_id=task.task_id,
+                    instance_id=instance_id,
+                    payload_json="{}",
+                )
+            )
+        else:
+            await self._require_task_repo().update_status_async(
+                task.task_id,
+                TaskStatus.FAILED,
+                error_message="Task cancelled",
+            )
+            await self._require_agent_repo().mark_status_async(
+                instance_id, InstanceStatus.FAILED
+            )
+            await self._require_event_bus().emit_async(
+                EventEnvelope(
+                    event_type=EventType.TASK_FAILED,
+                    trace_id=task.trace_id,
+                    session_id=task.session_id,
+                    task_id=task.task_id,
+                    instance_id=instance_id,
+                    payload_json="{}",
+                )
+            )
+        return stopped
+
     def request_subagent_stop(
         self, *, run_id: str, instance_id: str
     ) -> PausedSubagent | None:

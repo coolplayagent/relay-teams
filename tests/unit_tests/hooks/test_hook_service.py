@@ -64,6 +64,7 @@ from relay_teams.hooks.hook_service import (
 from relay_teams.media import UserPromptContent
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.run_models import RunEvent
 
 
 def test_merge_decisions_retries_subagent_stop() -> None:
@@ -509,6 +510,89 @@ async def test_supported_events_dispatch_supported_handler_types(
     assert RunEventType.HOOK_MATCHED in published_event_types
     assert RunEventType.HOOK_COMPLETED in published_event_types
     assert RunEventType.HOOK_DECISION_APPLIED in published_event_types
+
+
+@pytest.mark.asyncio
+async def test_execute_publishes_hook_events_with_async_publisher(
+    tmp_path: Path,
+) -> None:
+    class AsyncOnlyRunEventHub(RunEventHub):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: list[RunEvent] = []
+
+        def publish(self, event: RunEvent) -> None:
+            _ = event
+            raise AssertionError("HookService must not call sync publish in async flow")
+
+        async def publish_async(self, event: RunEvent) -> None:
+            self.events.append(event)
+
+    class AllowCommandExecutor(CommandHookExecutor):
+        async def execute(
+            self,
+            *,
+            handler: HookHandlerConfig,
+            event_input: HookEventInput,
+        ) -> HookDecision:
+            _ = handler
+            _ = event_input
+            return HookDecision(decision=HookDecisionType.ALLOW)
+
+    source = HookSourceInfo(scope=HookSourceScope.USER, path=tmp_path / "hooks.json")
+    service = HookService(
+        loader=HookLoader(app_config_dir=tmp_path, project_root=None),
+        runtime_state=HookRuntimeState(),
+        command_executor=AllowCommandExecutor(),
+        http_executor=HttpHookExecutor(),
+    )
+    service.set_run_snapshot(
+        "run-1",
+        HookRuntimeSnapshot(
+            sources=(source,),
+            hooks={
+                HookEventName.TASK_CREATED: (
+                    ResolvedHookMatcherGroup(
+                        source=source,
+                        event_name=HookEventName.TASK_CREATED,
+                        group=HookMatcherGroup(
+                            matcher="*",
+                            hooks=(
+                                HookHandlerConfig(
+                                    type=HookHandlerType.COMMAND,
+                                    name="allow-task-created",
+                                    command="echo ok",
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+            },
+        ),
+    )
+    event_hub = AsyncOnlyRunEventHub()
+
+    _ = await service.execute(
+        event_input=TaskCreatedInput(
+            event_name=HookEventName.TASK_CREATED,
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            created_task_id="task-1",
+            parent_task_id="root-task",
+            title="Created task",
+            objective="Create a child task",
+        ),
+        run_event_hub=event_hub,
+    )
+
+    assert [event.event_type for event in event_hub.events] == [
+        RunEventType.HOOK_MATCHED,
+        RunEventType.HOOK_STARTED,
+        RunEventType.HOOK_COMPLETED,
+        RunEventType.HOOK_DECISION_APPLIED,
+    ]
 
 
 def test_runtime_view_prefers_group_name_for_loaded_hook_name(tmp_path: Path) -> None:

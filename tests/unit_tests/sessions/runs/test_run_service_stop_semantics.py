@@ -18,6 +18,7 @@ from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskMan
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import IntentInput, RunResult
+from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.notifications import (
     NotificationChannel,
     NotificationConfig,
@@ -109,6 +110,18 @@ class _RunRuntimeRepo:
         return ()
 
 
+class _BlockingRuntimeRoleResolver:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cleaned_runs: list[str] = []
+
+    async def cleanup_run_async(self, *, run_id: str) -> None:
+        self.started.set()
+        await self.release.wait()
+        self.cleaned_runs.append(run_id)
+
+
 class _FailingRunEventHub:
     def publish(self, event) -> None:
         _ = event
@@ -136,6 +149,9 @@ class _SessionRepo:
             workspace_id="default",
         )
 
+    async def get_async(self, session_id: str) -> SessionRecord:
+        return self.get(session_id)
+
     def create(
         self, session_id: str, metadata: dict[str, str] | None = None
     ) -> SessionRecord:
@@ -147,6 +163,9 @@ class _SessionRepo:
 
     def mark_started(self, session_id: str) -> SessionRecord:
         return self.get(session_id)
+
+    async def mark_started_async(self, session_id: str) -> SessionRecord:
+        return self.mark_started(session_id)
 
 
 def _make_run_service(
@@ -367,6 +386,41 @@ def test_stop_active_runs_for_shutdown_skips_missing_and_failed_stops(
 
     assert stopped_count == 1
     assert set(stopped_run_ids) == {"ok-run", "missing-run", "broken-run"}
+
+
+@pytest.mark.asyncio
+async def test_safe_finalize_run_async_finishes_after_repeated_cancellation() -> None:
+    control = RunControlManager()
+    manager = _make_run_service(control)
+    resolver = _BlockingRuntimeRoleResolver()
+    manager._runtime_role_resolver = cast(
+        RuntimeRoleResolver,
+        cast(object, resolver),
+    )
+    manager._running_run_ids.add("run-1")
+    manager._active_run_registry.remember_active_run(
+        session_id="session-1",
+        run_id="run-1",
+    )
+
+    finalizer = asyncio.create_task(
+        manager._safe_finalize_run_async(run_id="run-1", session_id="session-1")
+    )
+    await resolver.started.wait()
+    finalizer.cancel()
+    await asyncio.sleep(0)
+    assert not finalizer.done()
+    finalizer.cancel()
+    await asyncio.sleep(0)
+    assert not finalizer.done()
+
+    resolver.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await finalizer
+
+    assert resolver.cleaned_runs == ["run-1"]
+    assert "run-1" not in manager._running_run_ids
+    assert manager._active_run_registry.get_active_run_id("session-1") is None
 
 
 def test_completed_notification_uses_final_run_output() -> None:

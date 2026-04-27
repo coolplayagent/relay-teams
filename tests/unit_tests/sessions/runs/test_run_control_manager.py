@@ -301,6 +301,68 @@ async def test_inject_to_running_agents_async_publishes_event(
     assert events[-1]["event_type"] == RunEventType.INJECTION_ENQUEUED.value
 
 
+@pytest.mark.asyncio
+async def test_handle_instance_cancelled_async_persists_stop_without_sync_write(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_async_cancel.db"
+    event_log = EventLog(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(),
+        injection_manager=RunInjectionManager(),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=MessageRepository(db_path),
+        event_bus=event_log,
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="MainAgent",
+        objective="cancel me",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = await task_repo.create_async(task)
+    await agent_repo.upsert_instance_async(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="MainAgent",
+        workspace_id="workspace-1",
+        status=InstanceStatus.RUNNING,
+    )
+
+    async def _worker() -> None:
+        await asyncio.sleep(10)
+
+    run_task = asyncio.create_task(_worker())
+    mgr.register_run_task(run_id="run-1", session_id="session-1", task=run_task)
+    assert mgr.request_run_stop("run-1") is True
+    stopped = await mgr.handle_instance_cancelled_async(
+        task=task,
+        instance_id="inst-1",
+    )
+    await asyncio.gather(run_task, return_exceptions=True)
+
+    assert stopped is True
+    assert (await task_repo.get_async("task-1")).status == TaskStatus.STOPPED
+    assert (
+        await agent_repo.get_instance_async("inst-1")
+    ).status == InstanceStatus.STOPPED
+    events = await event_log.list_by_session_async("session-1")
+    assert [event["event_type"] for event in events] == [
+        "task_stopped",
+        "instance_stopped",
+    ]
+
+
 def test_context_raises_when_cancelled() -> None:
     mgr = RunControlManager()
     mgr.pause_subagent(

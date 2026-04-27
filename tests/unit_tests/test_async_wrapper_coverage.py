@@ -20,130 +20,421 @@ class _WrapperSpec(NamedTuple):
     method_name: str
 
 
-class _AsyncWrapperReceiver:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def __getattr__(self, name: str) -> Callable[..., object]:
-        def sync_method(*args: object, **kwargs: object) -> object:
-            _ = (args, kwargs)
-            self.calls.append(name)
-            return {"called": name}
-
-        return sync_method
-
-    async def _call_sync_async(
-        self,
-        function: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        return function(*args, **kwargs)
-
-
-def _simple_call_sync_async_wrappers() -> tuple[_WrapperSpec, ...]:
-    project_root = Path(__file__).resolve().parents[2]
-    source_root = project_root / "src" / "relay_teams"
-    specs: list[_WrapperSpec] = []
-    for path in sorted(source_root.rglob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        if "_call_sync_async" not in source:
-            continue
-        module_name = _module_name_for(path=path, source_root=source_root)
-        tree = ast.parse(source)
-        for node in tree.body:
-            if not isinstance(node, ast.ClassDef):
-                continue
-            for item in node.body:
-                if not isinstance(item, ast.AsyncFunctionDef):
-                    continue
-                if _is_simple_call_sync_async_wrapper(item):
-                    specs.append(
-                        _WrapperSpec(
-                            module_name=module_name,
-                            class_name=node.name,
-                            method_name=item.name,
-                        )
-                    )
-    return tuple(specs)
-
-
-def _is_simple_call_sync_async_wrapper(node: ast.AsyncFunctionDef) -> bool:
-    if len(node.body) != 1:
-        return False
-    statement = node.body[0]
-    if not isinstance(statement, ast.Return):
-        return False
-    value = statement.value
-    if not isinstance(value, ast.Await):
-        return False
-    call = value.value
-    if not isinstance(call, ast.Call):
-        return False
-    function = call.func
-    return isinstance(function, ast.Attribute) and function.attr == "_call_sync_async"
-
-
-def _module_name_for(*, path: Path, source_root: Path) -> str:
-    relative = path.relative_to(source_root.parent).with_suffix("")
-    return ".".join(relative.parts)
-
-
 def _module_class(*, module: ModuleType, class_name: str) -> type[object]:
     return cast(type[object], getattr(module, class_name))
 
 
-def _arguments_for(
-    signature: inspect.Signature,
-) -> tuple[list[object], dict[str, object]]:
-    args: list[object] = []
-    kwargs: dict[str, object] = {}
-    parameters = tuple(signature.parameters.values())
-    for parameter in parameters[1:]:
-        if parameter.default is not inspect.Parameter.empty:
-            continue
-        value = _value_for_parameter(parameter.name)
-        if parameter.kind in {
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        }:
-            args.append(value)
-        elif parameter.kind == inspect.Parameter.KEYWORD_ONLY:
-            kwargs[parameter.name] = value
-    return args, kwargs
+_RUNTIME_LIFECYCLE_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service", "SessionRunService", "run_intent"
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "create_run_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "create_detached_run_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "ensure_run_started_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "run_intent_stream",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "inject_message_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service", "SessionRunService", "stop_run_async"
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service", "SessionRunService", "resume_run_async"
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "resolve_tool_approval_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_service",
+        "SessionRunService",
+        "stop_subagent_async",
+    ),
+)
+
+_BACKGROUND_TASK_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "upsert_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "get_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "list_by_run_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "list_by_session_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "list_all_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "list_interruptible_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "delete_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "delete_by_session_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.background_tasks.repository",
+        "BackgroundTaskRepository",
+        "mark_transient_background_tasks_interrupted_async",
+    ),
+)
+
+_RUN_INTENT_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_intent_repo",
+        "RunIntentRepository",
+        "upsert_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_intent_repo",
+        "RunIntentRepository",
+        "append_followup_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_intent_repo",
+        "RunIntentRepository",
+        "get_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_intent_repo",
+        "RunIntentRepository",
+        "list_by_session_async",
+    ),
+)
+
+_AGENT_INSTANCE_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.agents.instances.instance_repository",
+        "AgentInstanceRepository",
+        "upsert_instance_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.agents.instances.instance_repository",
+        "AgentInstanceRepository",
+        "update_runtime_snapshot_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.agents.instances.instance_repository",
+        "AgentInstanceRepository",
+        "mark_status_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.agents.instances.instance_repository",
+        "AgentInstanceRepository",
+        "list_by_run_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.agents.instances.instance_repository",
+        "AgentInstanceRepository",
+        "get_instance_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.agents.instances.instance_repository",
+        "AgentInstanceRepository",
+        "get_session_role_instance_async",
+    ),
+)
+
+_SESSION_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "create_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "update_topology_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "update_metadata_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "update_workspace_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "mark_started_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "reconcile_orchestration_presets_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "get_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "list_all_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
+        "delete_async",
+    ),
+)
+
+_RUN_EVENT_PUBLISHER_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_event_publisher",
+        "RunEventPublisher",
+        "safe_runtime_update_async",
+    ),
+)
+
+_TEMPORARY_ROLE_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.roles.temporary_role_repository",
+        "TemporaryRoleRepository",
+        "upsert_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.roles.temporary_role_repository",
+        "TemporaryRoleRepository",
+        "get_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.roles.temporary_role_repository",
+        "TemporaryRoleRepository",
+        "list_by_run_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.roles.temporary_role_repository",
+        "TemporaryRoleRepository",
+        "delete_by_run_async",
+    ),
+)
+
+_SYNC_LIFECYCLE_METHOD_NAMES = frozenset(
+    {
+        "active_run_id",
+        "create_detached_run",
+        "create_run",
+        "ensure_run_started",
+        "is_session_busy",
+        "require_started",
+        "resume_run",
+        "start_run",
+        "stop_run",
+        "submit",
+    }
+)
+
+_SYNC_LIFECYCLE_TARGET_NAMES = frozenset(
+    {
+        "self",
+        "self._inbound_runtime",
+        "self._run_service",
+        "self._session_ingress_service",
+    }
+)
 
 
-def _value_for_parameter(name: str) -> object:
-    if name.endswith("_ids"):
-        return ("id-1",)
-    if name in {"limit", "timeout_ms", "yield_time_ms", "columns", "rows"}:
-        return 1
-    if name.startswith("is_") or name.startswith("include_"):
-        return False
-    if name in {"now", "created_at", "updated_at"}:
-        return "2026-04-25T00:00:00+00:00"
-    return f"{name}-value"
-
-
-@pytest.mark.asyncio
-@pytest.mark.timeout(10)
-@pytest.mark.parametrize("spec", _simple_call_sync_async_wrappers())
-async def test_simple_call_sync_async_wrappers_delegate_to_shared_helper(
+@pytest.mark.parametrize("spec", _RUNTIME_LIFECYCLE_ASYNC_METHODS)
+def test_runtime_lifecycle_async_methods_do_not_use_call_sync_async(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
     class_object = _module_class(module=module, class_name=spec.class_name)
-    method = cast(
-        Callable[..., Awaitable[object]],
-        getattr(class_object, spec.method_name),
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _BACKGROUND_TASK_REPOSITORY_ASYNC_METHODS)
+def test_background_task_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _RUN_INTENT_REPOSITORY_ASYNC_METHODS)
+def test_run_intent_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _AGENT_INSTANCE_REPOSITORY_ASYNC_METHODS)
+def test_agent_instance_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _SESSION_REPOSITORY_ASYNC_METHODS)
+def test_session_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _RUN_EVENT_PUBLISHER_ASYNC_METHODS)
+def test_run_event_publisher_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _TEMPORARY_ROLE_REPOSITORY_ASYNC_METHODS)
+def test_temporary_role_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.timeout(5)
+def test_async_runtime_entrypoints_do_not_call_sync_lifecycle_methods() -> None:
+    violations = _async_sync_lifecycle_calls()
+
+    assert violations == ()
+
+
+def _async_sync_lifecycle_calls() -> tuple[str, ...]:
+    project_root = Path(__file__).resolve().parents[2]
+    source_root = project_root / "src" / "relay_teams"
+    scoped_roots = (
+        source_root / "automation",
+        source_root / "gateway",
+        source_root / "interfaces" / "server",
+        source_root / "sessions" / "runs",
+        source_root / "triggers",
     )
-    receiver = _AsyncWrapperReceiver()
-    args, kwargs = _arguments_for(inspect.signature(method))
+    violations: list[str] = []
+    for scoped_root in scoped_roots:
+        for path in sorted(scoped_root.rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            visitor = _AsyncSyncLifecycleVisitor(path=path, source_root=source_root)
+            visitor.visit(tree)
+            violations.extend(visitor.violations)
+    return tuple(violations)
 
-    _ = await method(receiver, *args, **kwargs)
 
-    assert receiver.calls
+class _AsyncSyncLifecycleVisitor(ast.NodeVisitor):
+    def __init__(self, *, path: Path, source_root: Path) -> None:
+        self._path = path
+        self._source_root = source_root
+        self._async_stack: list[str] = []
+        self.violations: list[str] = []
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._async_stack.append(node.name)
+        self.generic_visit(node)
+        _ = self._async_stack.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        if self._async_stack:
+            return
+        self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if self._async_stack:
+            self._record_call_violation(node)
+        self.generic_visit(node)
+
+    def _record_call_violation(self, node: ast.Call) -> None:
+        function = node.func
+        if not isinstance(function, ast.Attribute):
+            return
+        if function.attr not in _SYNC_LIFECYCLE_METHOD_NAMES:
+            return
+        target = _attribute_name(function.value)
+        if target not in _SYNC_LIFECYCLE_TARGET_NAMES:
+            return
+        relative_path = self._path.relative_to(self._source_root.parent)
+        self.violations.append(
+            f"{relative_path}:{node.lineno}: "
+            f"async {self._async_stack[-1]} calls {target}.{function.attr}"
+        )
+
+
+def _attribute_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f"{_attribute_name(node.value)}.{node.attr}"
+    return ""
 
 
 _PERMISSIVE_ASYNC_SPECS: tuple[_WrapperSpec, ...] = (
@@ -323,6 +614,11 @@ _PERMISSIVE_ASYNC_SPECS: tuple[_WrapperSpec, ...] = (
         "relay_teams.sessions.runs.run_control_manager",
         "RunControlManager",
         "publish_run_stopped_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.runs.run_control_manager",
+        "RunControlManager",
+        "handle_instance_cancelled_async",
     ),
     _WrapperSpec(
         "relay_teams.sessions.runs.run_control_manager",
@@ -1171,6 +1467,10 @@ class _PermissiveAsyncReceiver:
         return None
 
     def is_run_stop_requested(self, *args: object, **kwargs: object) -> bool:
+        _ = (args, kwargs)
+        return False
+
+    def is_cancelled(self, *args: object, **kwargs: object) -> bool:
         _ = (args, kwargs)
         return False
 

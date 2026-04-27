@@ -91,6 +91,37 @@ def test_run_intent_repo_lists_intents_by_session(tmp_path: Path) -> None:
     assert records["run-1"].display_intent == "display first"
 
 
+@pytest.mark.asyncio
+async def test_run_intent_repo_async_methods_match_sync_behavior(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_async.db"
+    repo = RunIntentRepository(db_path)
+
+    await repo.upsert_async(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+            display_input=content_parts_from_text("display first"),
+            execution_mode=ExecutionMode.AI,
+            yolo=True,
+        ),
+    )
+    await repo.append_followup_async(run_id="run-1", content="second")
+
+    record = await repo.get_async("run-1")
+    records = await repo.list_by_session_async("session-1")
+
+    assert record.execution_mode == ExecutionMode.AI
+    assert record.yolo is True
+    assert record.intent == "first\n\nsecond"
+    assert record.display_intent == "first\n\nsecond"
+    assert tuple(records) == ("run-1",)
+    assert records["run-1"].intent == "first\n\nsecond"
+
+
 def test_run_intent_repo_list_by_session_skips_invalid_rows(
     tmp_path: Path,
 ) -> None:

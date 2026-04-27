@@ -431,78 +431,17 @@ class TaskExecutionService(BaseModel):
                     },
                 )
                 raise
-            paused_subagent = False
-            if self.run_control_manager is not None:
-                run_stop_requested = self.run_control_manager.is_run_stop_requested(
-                    task.trace_id
-                )
-                subagent_stop_requested = (
-                    self.run_control_manager.is_subagent_stop_requested(
-                        run_id=task.trace_id,
-                        instance_id=instance_id,
-                    )
-                )
-                stopped = self.run_control_manager.handle_instance_cancelled(
+            cleanup_task = asyncio.create_task(
+                self._persist_cancelled_execution_async(
                     task=task,
                     instance_id=instance_id,
+                    role_id=role_id,
+                    is_coordinator=is_coordinator,
                 )
-                paused_subagent = (
-                    stopped
-                    and not is_coordinator
-                    and subagent_stop_requested
-                    and not run_stop_requested
-                )
-            else:
-                stopped = False
-                await self.task_repo.update_status_async(
-                    task.task_id,
-                    TaskStatus.FAILED,
-                    error_message="Task cancelled",
-                )
-                await self.agent_repo.mark_status_async(
-                    instance_id, InstanceStatus.FAILED
-                )
-                await self.event_bus.emit_async(
-                    EventEnvelope(
-                        event_type=EventType.TASK_FAILED,
-                        trace_id=task.trace_id,
-                        session_id=task.session_id,
-                        task_id=task.task_id,
-                        instance_id=instance_id,
-                        payload_json="{}",
-                    )
-                )
-            last_error = "Task stopped by user" if stopped else "Task cancelled"
-            if paused_subagent:
-                if not await self._promote_running_runtime_lane_async(
-                    run_id=task.trace_id,
-                    terminal_task_id=task.task_id,
-                    last_error=last_error,
-                ):
-                    await self.run_runtime_repo.update_async(
-                        task.trace_id,
-                        status=RunRuntimeStatus.STOPPED,
-                        phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
-                        active_instance_id=None,
-                        active_task_id=task.task_id,
-                        active_role_id=role_id,
-                        active_subagent_instance_id=instance_id,
-                        last_error=last_error,
-                    )
-            else:
-                await self._mark_runtime_after_terminal_task_update_async(
-                    run_id=task.trace_id,
-                    terminal_task_id=task.task_id,
-                    status=(
-                        RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED
-                    ),
-                    phase=RunRuntimePhase.IDLE,
-                    active_instance_id=None,
-                    active_task_id=None,
-                    active_role_id=None,
-                    active_subagent_instance_id=None,
-                    last_error=last_error,
-                )
+            )
+            stopped, paused_subagent = await _await_cancellation_resistant_task(
+                cleanup_task
+            )
             log_event(
                 LOGGER,
                 logging.WARNING if stopped else logging.ERROR,
@@ -1369,6 +1308,84 @@ class TaskExecutionService(BaseModel):
             last_error=last_error,
         )
 
+    async def _persist_cancelled_execution_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        is_coordinator: bool,
+    ) -> tuple[bool, bool]:
+        paused_subagent = False
+        if self.run_control_manager is not None:
+            run_stop_requested = self.run_control_manager.is_run_stop_requested(
+                task.trace_id
+            )
+            subagent_stop_requested = (
+                self.run_control_manager.is_subagent_stop_requested(
+                    run_id=task.trace_id,
+                    instance_id=instance_id,
+                )
+            )
+            stopped = await self.run_control_manager.handle_instance_cancelled_async(
+                task=task,
+                instance_id=instance_id,
+            )
+            paused_subagent = (
+                stopped
+                and not is_coordinator
+                and subagent_stop_requested
+                and not run_stop_requested
+            )
+        else:
+            stopped = False
+            await self.task_repo.update_status_async(
+                task.task_id,
+                TaskStatus.FAILED,
+                error_message="Task cancelled",
+            )
+            await self.agent_repo.mark_status_async(instance_id, InstanceStatus.FAILED)
+            await self.event_bus.emit_async(
+                EventEnvelope(
+                    event_type=EventType.TASK_FAILED,
+                    trace_id=task.trace_id,
+                    session_id=task.session_id,
+                    task_id=task.task_id,
+                    instance_id=instance_id,
+                    payload_json="{}",
+                )
+            )
+        last_error = "Task stopped by user" if stopped else "Task cancelled"
+        if paused_subagent:
+            if not await self._promote_running_runtime_lane_async(
+                run_id=task.trace_id,
+                terminal_task_id=task.task_id,
+                last_error=last_error,
+            ):
+                await self.run_runtime_repo.update_async(
+                    task.trace_id,
+                    status=RunRuntimeStatus.STOPPED,
+                    phase=RunRuntimePhase.AWAITING_SUBAGENT_FOLLOWUP,
+                    active_instance_id=None,
+                    active_task_id=task.task_id,
+                    active_role_id=role_id,
+                    active_subagent_instance_id=instance_id,
+                    last_error=last_error,
+                )
+        else:
+            await self._mark_runtime_after_terminal_task_update_async(
+                run_id=task.trace_id,
+                terminal_task_id=task.task_id,
+                status=RunRuntimeStatus.STOPPED if stopped else RunRuntimeStatus.FAILED,
+                phase=RunRuntimePhase.IDLE,
+                active_instance_id=None,
+                active_task_id=None,
+                active_role_id=None,
+                active_subagent_instance_id=None,
+                last_error=last_error,
+            )
+        return stopped, paused_subagent
+
     def _promote_running_runtime_lane(
         self,
         *,
@@ -1634,6 +1651,25 @@ async def _cancel_and_wait(
             },
         )
         return None
+
+
+async def _await_cancellation_resistant_task(
+    task: asyncio.Task[TaskResultT],
+) -> TaskResultT:
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            _clear_current_task_cancellation_requests()
+    return task.result()
+
+
+def _clear_current_task_cancellation_requests() -> None:
+    current_task = asyncio.current_task()
+    if current_task is None:
+        return
+    while current_task.cancelling():
+        current_task.uncancel()
 
 
 def _raise_if_timeout_cancellation_requested(

@@ -151,6 +151,30 @@ class RunEventPublisher:
                     exc_info=exc,
                 )
 
+    async def safe_runtime_update_async(self, run_id: str, **changes: object) -> None:
+        run_runtime_repo = self._get_run_runtime_repo()
+        if run_runtime_repo is None:
+            return
+        try:
+            await run_runtime_repo.update_async(run_id, **changes)
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id="",
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.runtime.update_failed",
+                    message="Run runtime update failed",
+                    payload={
+                        "change_count": len(changes),
+                        "change_keys": ",".join(sorted(changes.keys())),
+                    },
+                    exc_info=exc,
+                )
+
     def safe_publish_run_event(
         self,
         event: RunEvent,

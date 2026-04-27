@@ -133,6 +133,29 @@ class _InterruptingProvider:
         raise asyncio.CancelledError
 
 
+class _BlockingRunControlManager(RunControlManager):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.completed = False
+
+    async def handle_instance_cancelled_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+    ) -> bool:
+        self.started.set()
+        await self.release.wait()
+        stopped = await super().handle_instance_cancelled_async(
+            task=task,
+            instance_id=instance_id,
+        )
+        self.completed = True
+        return stopped
+
+
 class _ExplodingProvider:
     async def generate(self, request: object) -> str:
         _ = request
@@ -1067,6 +1090,67 @@ async def test_execute_marks_run_stop_as_stopped_idle_not_paused_followup(
     record = task_repo.get(task.task_id)
     assert record.status == TaskStatus.STOPPED
     assert record.error_message == "Task stopped by user"
+
+
+@pytest.mark.asyncio
+async def test_execute_finishes_cancelled_persistence_after_repeated_cancel(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        agent_repo,
+        message_repo,
+        run_runtime_repo,
+        _run_control_manager,
+    ) = _build_service_with_control(
+        tmp_path / "task_execution_service_repeated_cancel.db",
+        _InterruptingProvider(),
+    )
+    control = _BlockingRunControlManager()
+    control.bind_runtime(
+        run_event_hub=RunEventHub(),
+        injection_manager=RunInjectionManager(),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=message_repo,
+        event_bus=service.event_bus,
+        run_runtime_repo=run_runtime_repo,
+    )
+    service.run_control_manager = control
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    _ = control.request_run_stop("run-1")
+
+    execution = asyncio.create_task(
+        service.execute(
+            instance_id=instance_id,
+            role_id="time",
+            task=task,
+        )
+    )
+    await control.started.wait()
+    execution.cancel()
+    await asyncio.sleep(0)
+    assert not execution.done()
+    execution.cancel()
+    await asyncio.sleep(0)
+    assert not execution.done()
+
+    control.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await execution
+
+    runtime = run_runtime_repo.get("run-1")
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert runtime.phase == RunRuntimePhase.IDLE
+    assert control.completed is True
+    assert task_repo.get(task.task_id).status == TaskStatus.STOPPED
+    assert agent_repo.get_instance(instance_id).status == InstanceStatus.STOPPED
 
 
 @pytest.mark.asyncio

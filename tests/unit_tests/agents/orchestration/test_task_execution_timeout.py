@@ -356,6 +356,7 @@ async def test_execute_external_cancel_during_timeout_finalization_keeps_timeout
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(10)
 async def test_execute_applies_timeout_when_worker_cancel_wait_expires(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -377,9 +378,7 @@ async def test_execute_applies_timeout_when_worker_cancel_wait_expires(
     )
     task = task_repo.update_envelope(
         task.task_id,
-        task.model_copy(
-            update={"lifecycle": TaskLifecyclePolicy(timeout_seconds=0.05)}
-        ),
+        task.model_copy(update={"lifecycle": TaskLifecyclePolicy(timeout_seconds=2.0)}),
     ).envelope
 
     execution = asyncio.create_task(

@@ -9,6 +9,7 @@ from pathlib import Path
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
+from relay_teams.persistence import async_fetchall, async_fetchone
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.session_models import ProjectKind, SessionMode, SessionRecord
 from relay_teams.validation import (
@@ -163,17 +164,62 @@ class SessionRepository(SharedSqliteRepository):
         normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
-        return await self._call_sync_async(
-            self.create,
+        now = datetime.now(tz=timezone.utc).isoformat()
+        metadata_dict = metadata or {}
+        resolved_project_id = (project_id or workspace_id).strip()
+        record = SessionRecord(
             session_id=session_id,
             workspace_id=workspace_id,
-            metadata=metadata,
             project_kind=project_kind,
-            project_id=project_id,
+            project_id=resolved_project_id,
+            metadata=metadata_dict,
             session_mode=session_mode,
             normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
+            created_at=datetime.fromisoformat(now),
+            updated_at=datetime.fromisoformat(now),
         )
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO sessions(
+                    session_id,
+                    workspace_id,
+                    project_kind,
+                    project_id,
+                    metadata,
+                    session_mode,
+                    normal_root_role_id,
+                    orchestration_preset_id,
+                    started_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.session_id,
+                    record.workspace_id,
+                    record.project_kind.value,
+                    record.project_id,
+                    json.dumps(record.metadata),
+                    record.session_mode.value,
+                    record.normal_root_role_id,
+                    record.orchestration_preset_id,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_async",
+            operation=lambda _conn: operation(),
+        )
+        return record
 
     def update_topology(
         self,
@@ -217,13 +263,37 @@ class SessionRepository(SharedSqliteRepository):
         normal_root_role_id: str | None,
         orchestration_preset_id: str | None,
     ) -> None:
-        return await self._call_sync_async(
-            self.update_topology,
-            session_id,
-            session_mode=session_mode,
-            normal_root_role_id=normal_root_role_id,
-            orchestration_preset_id=orchestration_preset_id,
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation() -> int:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                UPDATE sessions
+                SET session_mode=?, normal_root_role_id=?, orchestration_preset_id=?, updated_at=?
+                WHERE session_id=? AND started_at IS NULL
+                """,
+                (
+                    session_mode.value,
+                    normal_root_role_id,
+                    orchestration_preset_id,
+                    now,
+                    session_id,
+                ),
+            )
+            affected_rows = cursor.rowcount
+            await cursor.close()
+            return affected_rows
+
+        updated_count = await self._run_async_write(
+            operation_name="update_topology_async",
+            operation=lambda _conn: operation(),
         )
+        if updated_count == 0:
+            existing = await self.get_async(session_id)
+            if existing.started_at is not None:
+                raise RuntimeError("Session mode can no longer be changed")
+            raise KeyError(f"Unknown session_id: {session_id}")
 
     def update_metadata(self, session_id: str, metadata: dict[str, str]) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -246,7 +316,28 @@ class SessionRepository(SharedSqliteRepository):
     async def update_metadata_async(
         self, session_id: str, metadata: dict[str, str]
     ) -> None:
-        return await self._call_sync_async(self.update_metadata, session_id, metadata)
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation() -> int:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                UPDATE sessions
+                SET metadata=?, updated_at=?
+                WHERE session_id=?
+                """,
+                (json.dumps(metadata), now, session_id),
+            )
+            affected_rows = cursor.rowcount
+            await cursor.close()
+            return affected_rows
+
+        updated_count = await self._run_async_write(
+            operation_name="update_metadata_async",
+            operation=lambda _conn: operation(),
+        )
+        if updated_count == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
 
     def update_workspace(
         self,
@@ -275,12 +366,28 @@ class SessionRepository(SharedSqliteRepository):
     async def update_workspace_async(
         self, session_id: str, *, workspace_id: str, project_id: str
     ) -> None:
-        return await self._call_sync_async(
-            self.update_workspace,
-            session_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation() -> int:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                UPDATE sessions
+                SET workspace_id=?, project_id=?, updated_at=?
+                WHERE session_id=?
+                """,
+                (workspace_id, project_id, now, session_id),
+            )
+            affected_rows = cursor.rowcount
+            await cursor.close()
+            return affected_rows
+
+        updated_count = await self._run_async_write(
+            operation_name="update_workspace_async",
+            operation=lambda _conn: operation(),
         )
+        if updated_count == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
 
     def mark_started(self, session_id: str) -> SessionRecord:
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -302,7 +409,29 @@ class SessionRepository(SharedSqliteRepository):
         return self.get(session_id)
 
     async def mark_started_async(self, session_id: str) -> SessionRecord:
-        return await self._call_sync_async(self.mark_started, session_id)
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation() -> int:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                UPDATE sessions
+                SET started_at=COALESCE(started_at, ?), updated_at=?
+                WHERE session_id=?
+                """,
+                (now, now, session_id),
+            )
+            affected_rows = cursor.rowcount
+            await cursor.close()
+            return affected_rows
+
+        updated_count = await self._run_async_write(
+            operation_name="mark_started_async",
+            operation=lambda _conn: operation(),
+        )
+        if updated_count == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
+        return await self.get_async(session_id)
 
     def reconcile_orchestration_presets(
         self,
@@ -359,11 +488,52 @@ class SessionRepository(SharedSqliteRepository):
     async def reconcile_orchestration_presets_async(
         self, *, valid_preset_ids: tuple[str, ...], default_preset_id: str | None
     ) -> None:
-        return await self._call_sync_async(
-            self.reconcile_orchestration_presets,
-            valid_preset_ids=valid_preset_ids,
-            default_preset_id=default_preset_id,
+        valid_ids = set(valid_preset_ids)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT session_id, session_mode, orchestration_preset_id, started_at
+                     , normal_root_role_id
+                FROM sessions
+                """,
+            )
         )
+        for row in rows:
+            try:
+                started_at = normalize_persisted_text(row["started_at"])
+                if started_at is not None:
+                    continue
+                session_id = require_persisted_identifier(
+                    row["session_id"],
+                    field_name="session_id",
+                )
+                session_mode = SessionMode(str(row["session_mode"] or "normal"))
+                normal_root_role_id = normalize_persisted_text(
+                    row["normal_root_role_id"]
+                )
+                preset_id = normalize_persisted_text(row["orchestration_preset_id"])
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_session_row(row=row, error=exc)
+                continue
+            next_mode = session_mode
+            next_normal_root_role_id = normal_root_role_id
+            next_preset_id = preset_id
+            if preset_id and preset_id not in valid_ids:
+                next_preset_id = default_preset_id
+            if next_mode == SessionMode.ORCHESTRATION and next_preset_id is None:
+                next_mode = SessionMode.NORMAL
+            if (
+                next_mode != session_mode
+                or next_normal_root_role_id != normal_root_role_id
+                or next_preset_id != preset_id
+            ):
+                await self.update_topology_async(
+                    session_id,
+                    session_mode=next_mode,
+                    normal_root_role_id=next_normal_root_role_id,
+                    orchestration_preset_id=next_preset_id,
+                )
 
     def get(self, session_id: str) -> SessionRecord:
         row = self._run_read(
@@ -380,7 +550,20 @@ class SessionRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown session_id: {session_id}") from exc
 
     async def get_async(self, session_id: str) -> SessionRecord:
-        return await self._call_sync_async(self.get, session_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM sessions WHERE session_id=?",
+                (session_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown session_id: {session_id}")
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError) as exc:
+            _log_invalid_session_row(row=row, error=exc)
+            raise KeyError(f"Unknown session_id: {session_id}") from exc
 
     def list_all(self) -> tuple[SessionRecord, ...]:
         rows = self._run_read(
@@ -397,7 +580,19 @@ class SessionRepository(SharedSqliteRepository):
         return tuple(records)
 
     async def list_all_async(self) -> tuple[SessionRecord, ...]:
-        return await self._call_sync_async(self.list_all)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT * FROM sessions ORDER BY created_at DESC",
+            )
+        )
+        records: list[SessionRecord] = []
+        for row in rows:
+            try:
+                records.append(self._to_record(row))
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_session_row(row=row, error=exc)
+        return tuple(records)
 
     def delete(self, session_id: str) -> None:
         self._run_write(
@@ -408,7 +603,18 @@ class SessionRepository(SharedSqliteRepository):
         )
 
     async def delete_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete, session_id)
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM sessions WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_async",
+            operation=lambda _conn: operation(),
+        )
 
     def _to_record(self, row: sqlite3.Row) -> SessionRecord:
         session_id = require_persisted_identifier(
@@ -571,11 +777,11 @@ def _log_invalid_session_timestamp(
 
 def _log_invalid_session_row(*, row: sqlite3.Row, error: Exception) -> None:
     payload: dict[str, JsonValue] = {
-        "session_id": _persisted_value_preview(row["session_id"]),
-        "workspace_id": _persisted_value_preview(row["workspace_id"]),
-        "started_at": _persisted_value_preview(row["started_at"]),
-        "created_at": _persisted_value_preview(row["created_at"]),
-        "updated_at": _persisted_value_preview(row["updated_at"]),
+        "session_id": _persisted_value_preview(_row_value(row, "session_id")),
+        "workspace_id": _persisted_value_preview(_row_value(row, "workspace_id")),
+        "started_at": _persisted_value_preview(_row_value(row, "started_at")),
+        "created_at": _persisted_value_preview(_row_value(row, "created_at")),
+        "updated_at": _persisted_value_preview(_row_value(row, "updated_at")),
         "error_type": type(error).__name__,
         "error": str(error),
     }
@@ -586,3 +792,9 @@ def _log_invalid_session_row(*, row: sqlite3.Row, error: Exception) -> None:
         message="Skipping invalid persisted session row",
         payload=payload,
     )
+
+
+def _row_value(row: sqlite3.Row, key: str) -> object | None:
+    if key not in row.keys():
+        return None
+    return row[key]

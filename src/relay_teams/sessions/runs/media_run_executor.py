@@ -74,7 +74,7 @@ class MediaRunExecutor:
         run_id: str,
         intent: IntentInput,
     ) -> RunResult:
-        session = self._session_repo.get(intent.session_id)
+        session = await self._session_repo.get_async(intent.session_id)
         role_id = self.resolve_generation_role_id(intent)
         role_registry = self._require_role_registry()
         role = role_registry.get(role_id)
@@ -97,7 +97,7 @@ class MediaRunExecutor:
         )
         agent_repo = self._require_agent_repo()
         task_repo = self._require_task_repo()
-        agent_repo.upsert_instance(
+        await agent_repo.upsert_instance_async(
             run_id=run_id,
             trace_id=run_id,
             session_id=intent.session_id,
@@ -107,13 +107,13 @@ class MediaRunExecutor:
             conversation_id=conversation_id,
             status=InstanceStatus.RUNNING,
         )
-        _ = task_repo.create(root_task)
-        task_repo.update_status(
+        _ = await task_repo.create_async(root_task)
+        await task_repo.update_status_async(
             root_task.task_id,
             TaskStatus.RUNNING,
             assigned_instance_id=instance.instance_id,
         )
-        self._event_publisher.safe_runtime_update(
+        await self._event_publisher.safe_runtime_update_async(
             run_id,
             root_task_id=root_task.task_id,
             status=RunRuntimeStatus.RUNNING,
@@ -217,13 +217,16 @@ class MediaRunExecutor:
                 ),
                 failure_event="run.event.publish_failed",
             )
-            task_repo.update_status(
+            await task_repo.update_status_async(
                 root_task.task_id,
                 TaskStatus.COMPLETED,
                 assigned_instance_id=instance.instance_id,
                 result=content_parts_to_text(output),
             )
-            agent_repo.mark_status(instance.instance_id, InstanceStatus.COMPLETED)
+            await agent_repo.mark_status_async(
+                instance.instance_id,
+                InstanceStatus.COMPLETED,
+            )
             return RunResult(
                 trace_id=run_id,
                 root_task_id=root_task.task_id,
@@ -243,14 +246,17 @@ class MediaRunExecutor:
                 error_code="native_generation_failed",
                 error_message=str(exc),
             )
-            task_repo.update_status(
+            await task_repo.update_status_async(
                 root_task.task_id,
                 TaskStatus.COMPLETED,
                 assigned_instance_id=instance.instance_id,
                 result=result.output_text,
                 error_message=result.error_message,
             )
-            agent_repo.mark_status(instance.instance_id, InstanceStatus.COMPLETED)
+            await agent_repo.mark_status_async(
+                instance.instance_id,
+                InstanceStatus.COMPLETED,
+            )
             await self.publish_generation_progress_async(
                 run_id=run_id,
                 session_id=intent.session_id,

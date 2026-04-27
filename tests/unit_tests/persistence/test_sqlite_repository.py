@@ -16,6 +16,7 @@ from relay_teams.persistence.sqlite_repository import (
     BlockingAsyncSqliteConnection,
     SharedSqliteRepository,
     async_fetchone,
+    close_live_sqlite_repositories_async,
 )
 from relay_teams.retrieval.sqlite_store import SqliteFts5RetrievalStore
 
@@ -97,6 +98,20 @@ def test_sqlite_retrieval_store_uses_stable_repository_name(tmp_path: Path) -> N
     store = SqliteFts5RetrievalStore(tmp_path / "retrieval.db")
 
     assert store._repository_name == "retrieval.sqlite"
+
+
+def test_shared_sqlite_repository_close_clears_cached_connections(
+    tmp_path: Path,
+) -> None:
+    repo = _DummyRepository(tmp_path / "shared_repo_close.db")
+    repo._conn.execute("CREATE TABLE items (value TEXT NOT NULL)")
+    repo._conn.commit()
+
+    assert repo._async_conns
+
+    repo.close()
+
+    assert not repo._async_conns
 
 
 @pytest.mark.asyncio
@@ -232,6 +247,20 @@ async def test_shared_sqlite_repository_sync_facade_writes_are_visible_to_async_
 
     assert row is not None
     assert row["value"] == "sync"
+
+
+@pytest.mark.asyncio
+async def test_close_live_sqlite_repositories_async_closes_registered_repositories(
+    tmp_path: Path,
+) -> None:
+    repo = _DummyRepository(tmp_path / "shared_repo_live_close.db")
+    await repo._run_async_read(lambda _conn: _async_value("ok"))
+
+    assert repo._async_conns
+
+    await close_live_sqlite_repositories_async()
+
+    assert not repo._async_conns
 
 
 async def _async_value(value: str) -> str:

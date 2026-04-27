@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlite3 import Row
 from typing import Literal, Optional
 
+import aiosqlite
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from relay_teams.logger import get_logger, log_event
@@ -16,6 +17,7 @@ from relay_teams.media import (
     content_parts_to_text,
     text_part,
 )
+from relay_teams.persistence import async_fetchall, async_fetchone
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import (
@@ -51,6 +53,49 @@ _RUN_INTENT_SELECT_COLUMNS = """
     session_mode,
     topology_json,
     conversation_context_json
+    """
+_RUN_INTENT_UPSERT_SQL = """
+    INSERT INTO run_intents(
+        run_id,
+        session_id,
+        intent,
+        input_json,
+        display_input_json,
+        run_kind,
+        generation_config_json,
+        execution_mode,
+        yolo,
+        reuse_root_instance,
+        thinking_enabled,
+        thinking_effort,
+        target_role_id,
+        skills_json,
+        session_mode,
+        topology_json,
+        conversation_context_json,
+        created_at,
+        updated_at
+    )
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(run_id)
+    DO UPDATE SET
+        session_id=excluded.session_id,
+        intent=excluded.intent,
+        input_json=excluded.input_json,
+        display_input_json=excluded.display_input_json,
+        run_kind=excluded.run_kind,
+        generation_config_json=excluded.generation_config_json,
+        execution_mode=excluded.execution_mode,
+        yolo=excluded.yolo,
+        reuse_root_instance=excluded.reuse_root_instance,
+        thinking_enabled=excluded.thinking_enabled,
+        thinking_effort=excluded.thinking_effort,
+        target_role_id=excluded.target_role_id,
+        skills_json=excluded.skills_json,
+        session_mode=excluded.session_mode,
+        topology_json=excluded.topology_json,
+        conversation_context_json=excluded.conversation_context_json,
+        updated_at=excluded.updated_at
 """
 
 
@@ -155,91 +200,12 @@ class RunIntentRepository(SharedSqliteRepository):
         self._run_write(
             operation_name="upsert",
             operation=lambda: self._conn.execute(
-                """
-                INSERT INTO run_intents(
-                    run_id,
-                    session_id,
-                    intent,
-                    input_json,
-                    display_input_json,
-                    run_kind,
-                    generation_config_json,
-                    execution_mode,
-                    yolo,
-                    reuse_root_instance,
-                    thinking_enabled,
-                    thinking_effort,
-                    target_role_id,
-                    skills_json,
-                    session_mode,
-                    topology_json,
-                    conversation_context_json,
-                    created_at,
-                    updated_at
-                )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id)
-                DO UPDATE SET
-                    session_id=excluded.session_id,
-                    intent=excluded.intent,
-                    input_json=excluded.input_json,
-                    display_input_json=excluded.display_input_json,
-                    run_kind=excluded.run_kind,
-                    generation_config_json=excluded.generation_config_json,
-                    execution_mode=excluded.execution_mode,
-                    yolo=excluded.yolo,
-                    reuse_root_instance=excluded.reuse_root_instance,
-                    thinking_enabled=excluded.thinking_enabled,
-                    thinking_effort=excluded.thinking_effort,
-                    target_role_id=excluded.target_role_id,
-                    skills_json=excluded.skills_json,
-                    session_mode=excluded.session_mode,
-                    topology_json=excluded.topology_json,
-                    conversation_context_json=excluded.conversation_context_json,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    run_id,
-                    session_id,
-                    intent.intent,
-                    ContentPartsAdapter.dump_json(intent.input).decode("utf-8"),
-                    (
-                        ContentPartsAdapter.dump_json(intent.display_input).decode(
-                            "utf-8"
-                        )
-                        if intent.display_input
-                        else None
-                    ),
-                    intent.run_kind.value,
-                    (
-                        intent.generation_config.model_dump_json()
-                        if intent.generation_config is not None
-                        else None
-                    ),
-                    intent.execution_mode.value,
-                    "true" if intent.yolo else "false",
-                    "true" if intent.reuse_root_instance else "false",
-                    "true" if intent.thinking.enabled else "false",
-                    intent.thinking.effort,
-                    intent.target_role_id,
-                    (
-                        json.dumps(tuple(intent.skills), ensure_ascii=False)
-                        if intent.skills is not None
-                        else None
-                    ),
-                    intent.session_mode.value,
-                    (
-                        intent.topology.model_dump_json()
-                        if intent.topology is not None
-                        else None
-                    ),
-                    (
-                        intent.conversation_context.model_dump_json()
-                        if intent.conversation_context is not None
-                        else None
-                    ),
-                    now,
-                    now,
+                _RUN_INTENT_UPSERT_SQL,
+                _run_intent_upsert_params(
+                    run_id=run_id,
+                    session_id=session_id,
+                    intent=intent,
+                    now=now,
                 ),
             ),
         )
@@ -247,8 +213,23 @@ class RunIntentRepository(SharedSqliteRepository):
     async def upsert_async(
         self, *, run_id: str, session_id: str, intent: IntentInput
     ) -> None:
-        return await self._call_sync_async(
-            self.upsert, run_id=run_id, session_id=session_id, intent=intent
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                _RUN_INTENT_UPSERT_SQL,
+                _run_intent_upsert_params(
+                    run_id=run_id,
+                    session_id=session_id,
+                    intent=intent,
+                    now=now,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_async",
+            operation=operation,
         )
 
     def append_followup(self, *, run_id: str, content: str) -> None:
@@ -282,8 +263,38 @@ class RunIntentRepository(SharedSqliteRepository):
         self._run_write(operation_name="append_followup", operation=operation)
 
     async def append_followup_async(self, *, run_id: str, content: str) -> None:
-        return await self._call_sync_async(
-            self.append_followup, run_id=run_id, content=content
+        async def operation(conn: aiosqlite.Connection) -> None:
+            row = await async_fetchone(
+                conn,
+                "SELECT intent, input_json FROM run_intents WHERE run_id=?",
+                (run_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown run_id: {run_id}")
+            current_parts = _coerce_input_parts(row["input_json"], row["intent"])
+            next_part = text_part(content)
+            next_parts = (
+                current_parts if next_part is None else current_parts + (next_part,)
+            )
+            next_intent = content_parts_to_text(next_parts)
+            cursor = await conn.execute(
+                """
+                UPDATE run_intents
+                SET intent=?, input_json=?, display_input_json=NULL, updated_at=?
+                WHERE run_id=?
+                """,
+                (
+                    next_intent,
+                    ContentPartsAdapter.dump_json(next_parts).decode("utf-8"),
+                    datetime.now(tz=timezone.utc).isoformat(),
+                    run_id,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="append_followup_async",
+            operation=operation,
         )
 
     def get(
@@ -309,9 +320,20 @@ class RunIntentRepository(SharedSqliteRepository):
     async def get_async(
         self, run_id: str, *, fallback_session_id: str | None = None
     ) -> IntentInput:
-        return await self._call_sync_async(
-            self.get, run_id, fallback_session_id=fallback_session_id
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                f"""
+                SELECT {_RUN_INTENT_SELECT_COLUMNS}
+                FROM run_intents
+                WHERE run_id=?
+                """,
+                (run_id,),
+            )
         )
+        if row is None:
+            raise KeyError(f"Unknown run_id: {run_id}")
+        return _intent_input_from_row(row, fallback_session_id=fallback_session_id)
 
     def list_by_session(self, session_id: str) -> dict[str, IntentInput]:
         rows = self._run_read(
@@ -342,7 +364,79 @@ class RunIntentRepository(SharedSqliteRepository):
         return records
 
     async def list_by_session_async(self, session_id: str) -> dict[str, IntentInput]:
-        return await self._call_sync_async(self.list_by_session, session_id)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                f"""
+                SELECT
+                    run_id,
+                    {_RUN_INTENT_SELECT_COLUMNS}
+                FROM run_intents
+                WHERE session_id=?
+                ORDER BY created_at ASC
+                """,
+                (session_id,),
+            )
+        )
+        records: dict[str, IntentInput] = {}
+        for row in rows:
+            run_id = str(row["run_id"] or "").strip()
+            if not run_id:
+                continue
+            try:
+                records[run_id] = _intent_input_from_row(
+                    row,
+                    fallback_session_id=session_id,
+                )
+            except (KeyError, ValueError, ValidationError) as exc:
+                _log_invalid_run_intent_row(row=row, error=exc)
+        return records
+
+
+def _run_intent_upsert_params(
+    *,
+    run_id: str,
+    session_id: str,
+    intent: IntentInput,
+    now: str,
+) -> tuple[object, ...]:
+    return (
+        run_id,
+        session_id,
+        intent.intent,
+        ContentPartsAdapter.dump_json(intent.input).decode("utf-8"),
+        (
+            ContentPartsAdapter.dump_json(intent.display_input).decode("utf-8")
+            if intent.display_input
+            else None
+        ),
+        intent.run_kind.value,
+        (
+            intent.generation_config.model_dump_json()
+            if intent.generation_config is not None
+            else None
+        ),
+        intent.execution_mode.value,
+        "true" if intent.yolo else "false",
+        "true" if intent.reuse_root_instance else "false",
+        "true" if intent.thinking.enabled else "false",
+        intent.thinking.effort,
+        intent.target_role_id,
+        (
+            json.dumps(tuple(intent.skills), ensure_ascii=False)
+            if intent.skills is not None
+            else None
+        ),
+        intent.session_mode.value,
+        intent.topology.model_dump_json() if intent.topology is not None else None,
+        (
+            intent.conversation_context.model_dump_json()
+            if intent.conversation_context is not None
+            else None
+        ),
+        now,
+        now,
+    )
 
 
 def _intent_input_from_row(

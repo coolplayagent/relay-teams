@@ -179,6 +179,7 @@ class RunRecoveryService:
         *,
         get_event_log: Callable[[], EventLog | None],
         get_runtime: Callable[[str], RunRuntimeRecord | None],
+        get_runtime_async: Callable[[str], Awaitable[RunRuntimeRecord | None]],
         event_publisher: RunEventPublisher,
         append_followup_to_instance: AppendFollowupToInstance,
         append_followup_to_coordinator: AppendFollowupToCoordinator,
@@ -186,6 +187,7 @@ class RunRecoveryService:
     ) -> None:
         self._get_event_log = get_event_log
         self._get_runtime = get_runtime
+        self._get_runtime_async = get_runtime_async
         self._event_publisher = event_publisher
         self._append_followup_to_instance = append_followup_to_instance
         self._append_followup_to_coordinator = append_followup_to_coordinator
@@ -219,7 +221,7 @@ class RunRecoveryService:
                     attempt=attempt,
                 )
                 self._queue_prompt(payload=exc.payload, policy=policy)
-                resume_payload = self.transition_run_to_resumed(
+                resume_payload = await self.transition_run_to_resumed_async(
                     run_id=run_id,
                     session_id=session_id,
                     reason=policy.reason,
@@ -286,6 +288,44 @@ class RunRecoveryService:
             max_attempts=max_attempts,
         )
         self._event_publisher.safe_publish_run_event(
+            RunEvent(
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                task_id=None,
+                event_type=RunEventType.RUN_RESUMED,
+                payload_json=dumps(payload),
+            ),
+            failure_event="run.event.publish_failed",
+        )
+        return payload
+
+    async def transition_run_to_resumed_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        reason: str,
+        attempt: int | None = None,
+        max_attempts: int | None = None,
+    ) -> dict[str, JsonValue]:
+        runtime = await self._get_runtime_async(run_id)
+        phase = RunRuntimePhase.COORDINATOR_RUNNING
+        if runtime is not None and runtime.phase != RunRuntimePhase.TERMINAL:
+            phase = runtime.phase
+        await self._event_publisher.safe_runtime_update_async(
+            run_id,
+            status=RunRuntimeStatus.RUNNING,
+            phase=phase,
+            last_error=None,
+        )
+        payload = self._build_run_resumed_payload(
+            session_id=session_id,
+            reason=reason,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        await self._event_publisher.safe_publish_run_event_async(
             RunEvent(
                 session_id=session_id,
                 run_id=run_id,

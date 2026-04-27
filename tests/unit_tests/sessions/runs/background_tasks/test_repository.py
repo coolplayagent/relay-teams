@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
 
 from relay_teams.sessions.runs.background_tasks.models import (
     BackgroundTaskRecord,
@@ -194,3 +196,87 @@ def test_background_task_repository_can_interrupt_specific_records(
     assert interrupted is not None
     assert interrupted.status == BackgroundTaskStatus.STOPPED
     assert interrupted.pid is None
+
+
+@pytest.mark.asyncio
+async def test_background_task_repository_async_methods_match_sync_behavior(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-terminals-async.db"
+    repo = BackgroundTaskRepository(db_path)
+    running = BackgroundTaskRecord(
+        background_task_id="exec-running",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.RUNNING,
+        recent_output=("booting",),
+        output_excerpt="booting",
+        pid=111,
+        log_path="tmp/background_tasks/exec-running.log",
+    )
+    blocked = BackgroundTaskRecord(
+        background_task_id="exec-blocked",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 60",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.BLOCKED,
+        pid=222,
+        log_path="tmp/background_tasks/exec-blocked.log",
+    )
+    other_session = BackgroundTaskRecord(
+        background_task_id="exec-other",
+        run_id="run-2",
+        session_id="session-2",
+        command="echo ok",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.COMPLETED,
+        log_path="tmp/background_tasks/exec-other.log",
+    )
+
+    persisted = await repo.upsert_async(running)
+    _ = await repo.upsert_async(blocked)
+    _ = await repo.upsert_async(other_session)
+
+    loaded = await repo.get_async("exec-running")
+    by_run = await repo.list_by_run_async("run-1")
+    by_session = await repo.list_by_session_async("session-1")
+    all_records = await repo.list_all_async()
+    interruptible = await repo.list_interruptible_async()
+    affected = await repo.mark_transient_background_tasks_interrupted_async(
+        background_task_ids=("exec-blocked",)
+    )
+    still_running = await repo.get_async("exec-running")
+    interrupted = await repo.get_async("exec-blocked")
+    await repo.delete_async("exec-running")
+    await repo.delete_by_session_async("session-2")
+
+    assert persisted.background_task_id == "exec-running"
+    assert loaded is not None
+    assert loaded.output_excerpt == "booting"
+    assert tuple(record.background_task_id for record in by_run) == (
+        "exec-blocked",
+        "exec-running",
+    )
+    assert tuple(record.background_task_id for record in by_session) == (
+        "exec-blocked",
+        "exec-running",
+    )
+    assert tuple(record.background_task_id for record in all_records) == (
+        "exec-other",
+        "exec-blocked",
+        "exec-running",
+    )
+    assert tuple(record.background_task_id for record in interruptible) == (
+        "exec-blocked",
+        "exec-running",
+    )
+    assert affected == 1
+    assert still_running is not None
+    assert still_running.status == BackgroundTaskStatus.RUNNING
+    assert interrupted is not None
+    assert interrupted.status == BackgroundTaskStatus.STOPPED
+    assert await repo.get_async("exec-running") is None
+    assert await repo.list_by_session_async("session-2") == ()

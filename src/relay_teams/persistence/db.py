@@ -114,7 +114,7 @@ class CrossModeWriteCoordinator:
         )
         initial_depth = self._owned_depth(token)
         try:
-            while not await asyncio.to_thread(self._try_acquire, token):
+            while not self._try_acquire(token):
                 await asyncio.sleep(0.001)
         except asyncio.CancelledError:
             self._release_cancelled_acquire(token, initial_depth)

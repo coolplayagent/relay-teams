@@ -34,6 +34,7 @@ from relay_teams.sessions.runs.run_models import (
     RunKind,
     RunTopologySnapshot,
 )
+from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.run_terminal_results import RunTerminalResultService
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.session_models import SessionMode
@@ -168,6 +169,32 @@ async def test_run_event_publisher_async_uses_async_notification_emit() -> None:
             run_kind="generate_image",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_event_publisher_async_runtime_update_does_not_call_sync() -> None:
+    class _RuntimeRepo:
+        def __init__(self) -> None:
+            self.async_changes: dict[str, object] | None = None
+
+        def update(self, run_id: str, **changes: object) -> None:
+            _ = (run_id, changes)
+            raise AssertionError("sync update should not be called")
+
+        async def update_async(self, run_id: str, **changes: object) -> None:
+            self.async_changes = {"run_id": run_id, **changes}
+
+    runtime_repo = _RuntimeRepo()
+    publisher = RunEventPublisher(
+        run_event_hub=RunEventHub(),
+        get_runtime=lambda _run_id: None,
+        get_run_runtime_repo=lambda: cast(RunRuntimeRepository, runtime_repo),
+        get_notification_service=lambda: None,
+    )
+
+    await publisher.safe_runtime_update_async("run-1", phase="terminal")
+
+    assert runtime_repo.async_changes == {"run_id": "run-1", "phase": "terminal"}
 
 
 def test_execute_native_generation_rejects_inline_media_output() -> None:

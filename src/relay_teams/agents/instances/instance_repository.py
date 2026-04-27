@@ -8,9 +8,12 @@ from typing import Optional
 
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
-from relay_teams.persistence import async_fetchall, async_fetchone
+from relay_teams.persistence import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.workspace import build_conversation_id
 
 _SQLITE_SAFE_VARIABLE_LIMIT = 900
@@ -495,26 +498,26 @@ class AgentInstanceRepository(SharedSqliteRepository):
         if len(session_ids) == 0:
             return {}
         subagent_counts: dict[str, int] = {}
-        for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
-            session_id_chunk = session_ids[index : index + _SQLITE_SAFE_VARIABLE_LIMIT]
-            placeholders = ", ".join("?" for _ in session_id_chunk)
-            rows = await self._run_async_read(
-                lambda conn, query=placeholders, parameters=session_id_chunk: (
-                    async_fetchall(
-                        conn,
-                        f"""
+        async with self._async_lock_for_current_loop():
+            conn = await self._get_async_conn()
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
                     SELECT session_id, COUNT(*) AS subagent_count
                     FROM agent_instances
-                    WHERE session_id IN ({query})
+                    WHERE session_id IN ({placeholders})
                       AND run_id GLOB 'subagent_run_*'
                     GROUP BY session_id
                     """,
-                        parameters,
-                    )
+                    session_id_chunk,
                 )
-            )
-            for row in rows:
-                subagent_counts[str(row["session_id"])] = int(row["subagent_count"])
+                for row in rows:
+                    subagent_counts[str(row["session_id"])] = int(row["subagent_count"])
         return subagent_counts
 
     def list_session_role_instances(

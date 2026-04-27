@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -193,15 +192,13 @@ async def test_cross_write_coordinator_releases_cancelled_async_acquire(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     coordinator = db_module.CrossModeWriteCoordinator()
+    original_try_acquire = coordinator._try_acquire
 
-    async def _cancel_after_acquire(
-        func: Callable[[tuple[str, int]], bool],
-        token: tuple[str, int],
-    ) -> bool:
-        assert func(token) is True
+    def _cancel_after_acquire(token: tuple[str, int]) -> bool:
+        assert original_try_acquire(token) is True
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(db_module.asyncio, "to_thread", _cancel_after_acquire)
+    monkeypatch.setattr(coordinator, "_try_acquire", _cancel_after_acquire)
 
     with pytest.raises(asyncio.CancelledError):
         await coordinator.acquire_async()
@@ -216,15 +213,13 @@ async def test_cross_write_coordinator_cancelled_reentry_preserves_outer_lock(
 ) -> None:
     coordinator = db_module.CrossModeWriteCoordinator()
     first_token = await coordinator.acquire_async()
+    original_try_acquire = coordinator._try_acquire
 
-    async def _cancel_after_reentry(
-        func: Callable[[tuple[str, int]], bool],
-        token: tuple[str, int],
-    ) -> bool:
-        assert func(token) is True
+    def _cancel_after_reentry(token: tuple[str, int]) -> bool:
+        assert original_try_acquire(token) is True
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(db_module.asyncio, "to_thread", _cancel_after_reentry)
+    monkeypatch.setattr(coordinator, "_try_acquire", _cancel_after_reentry)
 
     with pytest.raises(asyncio.CancelledError):
         await coordinator.acquire_async()
@@ -233,6 +228,24 @@ async def test_cross_write_coordinator_cancelled_reentry_preserves_outer_lock(
     assert coordinator._depth == 1
 
     coordinator.release(first_token)
+
+
+@pytest.mark.asyncio
+async def test_cross_write_coordinator_async_acquire_does_not_use_default_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator = db_module.CrossModeWriteCoordinator()
+
+    async def _fail_to_thread(
+        function: object, /, *args: object, **kwargs: object
+    ) -> bool:
+        _ = (function, args, kwargs)
+        raise AssertionError("async coordinator acquire used the default executor")
+
+    monkeypatch.setattr(db_module.asyncio, "to_thread", _fail_to_thread)
+
+    token = await coordinator.acquire_async()
+    coordinator.release(token)
     assert coordinator._owner is None
     assert coordinator._depth == 0
 
