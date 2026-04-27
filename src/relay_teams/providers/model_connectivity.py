@@ -326,42 +326,71 @@ class ModelConnectivityProbeService:
                 f"Model profile '{profile_name}' does not have CodeAgent auth configured."
             )
         checked_at = datetime.now(timezone.utc)
-        try:
-            auth_config = self._resolve_codeagent_auth_for_request(
-                config.codeagent_auth
-            )
-            get_codeagent_token_service().get_token_result_sync(
-                base_url=config.base_url,
-                auth_config=auth_config,
-                ssl_verify=config.ssl_verify,
-                connect_timeout_seconds=config.connect_timeout_seconds,
-                force_refresh=True,
-            )
-        except httpx.TimeoutException as exc:
-            return CodeAgentAuthVerifyResult(
-                status="error",
-                checked_at=checked_at,
-                detail=str(exc) or "Connection timed out.",
-            )
-        except httpx.RequestError as exc:
-            return CodeAgentAuthVerifyResult(
-                status="error",
-                checked_at=checked_at,
-                detail=str(exc) or "Failed to reach CodeAgent endpoint.",
-            )
-        except CodeAgentOAuthError as exc:
-            return CodeAgentAuthVerifyResult(
-                status=(
-                    "reauth_required"
-                    if self._is_codeagent_auth_invalid_error(exc)
-                    else "error"
-                ),
-                checked_at=checked_at,
-                detail=str(exc) or "CodeAgent OAuth request failed.",
-            )
-        return CodeAgentAuthVerifyResult(
-            status="valid",
+        return self._verify_codeagent_auth_config(
+            config=config,
             checked_at=checked_at,
+        )
+
+    def _verify_codeagent_auth_config(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        checked_at: datetime,
+    ) -> CodeAgentAuthVerifyResult:
+        token_or_result = self._get_codeagent_token_for_verify(
+            config=config,
+            checked_at=checked_at,
+        )
+        if isinstance(token_or_result, CodeAgentAuthVerifyResult):
+            return token_or_result
+        response_or_result = self._send_codeagent_auth_verify_request(
+            config=config,
+            checked_at=checked_at,
+            token=token_or_result,
+        )
+        if isinstance(response_or_result, CodeAgentAuthVerifyResult):
+            return response_or_result
+        response = response_or_result
+        if response.status_code < 400:
+            return CodeAgentAuthVerifyResult(
+                status="valid",
+                checked_at=checked_at,
+            )
+        if response.status_code not in {401, 403}:
+            return self._build_codeagent_auth_verify_http_error_result(
+                checked_at=checked_at,
+                response=response,
+            )
+        retry_token_or_result = self._get_codeagent_token_for_verify(
+            config=config,
+            checked_at=checked_at,
+            force_refresh=True,
+        )
+        if isinstance(retry_token_or_result, CodeAgentAuthVerifyResult):
+            return retry_token_or_result
+        retry_response_or_result = self._send_codeagent_auth_verify_request(
+            config=config,
+            checked_at=checked_at,
+            token=retry_token_or_result,
+        )
+        if isinstance(retry_response_or_result, CodeAgentAuthVerifyResult):
+            return retry_response_or_result
+        retry_response = retry_response_or_result
+        if retry_response.status_code < 400:
+            return CodeAgentAuthVerifyResult(
+                status="valid",
+                checked_at=checked_at,
+            )
+        if retry_response.status_code in {401, 403}:
+            return CodeAgentAuthVerifyResult(
+                status="reauth_required",
+                checked_at=checked_at,
+                detail=self._extract_codeagent_auth_verify_error_message(retry_response)
+                or "CodeAgent authentication is no longer valid.",
+            )
+        return self._build_codeagent_auth_verify_http_error_result(
+            checked_at=checked_at,
+            response=retry_response,
         )
 
     def _resolve_endpoint_config(
@@ -1658,6 +1687,47 @@ class ModelConnectivityProbeService:
                 error=exc,
             )
 
+    def _get_codeagent_token_for_verify(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        checked_at: datetime,
+        force_refresh: bool = False,
+    ) -> str | CodeAgentAuthVerifyResult:
+        try:
+            auth_config = self._resolve_codeagent_auth_for_request(
+                cast(CodeAgentAuthConfig, config.codeagent_auth)
+            )
+            return get_codeagent_token_service().get_token_sync(
+                base_url=config.base_url,
+                auth_config=auth_config,
+                ssl_verify=config.ssl_verify,
+                connect_timeout_seconds=config.connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+        except httpx.TimeoutException as exc:
+            return CodeAgentAuthVerifyResult(
+                status="error",
+                checked_at=checked_at,
+                detail=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return CodeAgentAuthVerifyResult(
+                status="error",
+                checked_at=checked_at,
+                detail=str(exc) or "Failed to reach CodeAgent endpoint.",
+            )
+        except CodeAgentOAuthError as exc:
+            return CodeAgentAuthVerifyResult(
+                status=(
+                    "reauth_required"
+                    if self._is_codeagent_auth_invalid_error(exc)
+                    else "error"
+                ),
+                checked_at=checked_at,
+                detail=str(exc) or "CodeAgent OAuth request failed.",
+            )
+
     def _get_codeagent_token_for_discovery(
         self,
         *,
@@ -1736,6 +1806,50 @@ class ModelConnectivityProbeService:
         raise CodeAgentOAuthError(
             "CodeAgent OAuth session is missing, expired, or already consumed.",
             status_code=400,
+        )
+
+    def _send_codeagent_auth_verify_request(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        checked_at: datetime,
+        token: str,
+    ) -> httpx.Response | CodeAgentAuthVerifyResult:
+        endpoint = f"{config.base_url.rstrip('/')}/chat/modles?checkUserPermission=TRUE"
+        try:
+            with create_sync_http_client(
+                timeout_seconds=config.connect_timeout_seconds,
+                connect_timeout_seconds=config.connect_timeout_seconds,
+                ssl_verify=config.ssl_verify,
+            ) as client:
+                return client.get(
+                    endpoint,
+                    headers=build_codeagent_request_headers(token=token),
+                )
+        except httpx.TimeoutException as exc:
+            return CodeAgentAuthVerifyResult(
+                status="error",
+                checked_at=checked_at,
+                detail=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return CodeAgentAuthVerifyResult(
+                status="error",
+                checked_at=checked_at,
+                detail=str(exc) or "Failed to reach CodeAgent endpoint.",
+            )
+
+    def _build_codeagent_auth_verify_http_error_result(
+        self,
+        *,
+        checked_at: datetime,
+        response: httpx.Response,
+    ) -> CodeAgentAuthVerifyResult:
+        return CodeAgentAuthVerifyResult(
+            status="error",
+            checked_at=checked_at,
+            detail=self._extract_codeagent_auth_verify_error_message(response)
+            or "Failed to verify CodeAgent authentication.",
         )
 
     def _build_codeagent_oauth_error_result(
@@ -2184,7 +2298,7 @@ class ModelConnectivityProbeService:
     def _extract_error_message(self, payload: object) -> str | None:
         if not isinstance(payload, dict):
             return None
-        for key in ("message", "detail", "error_description"):
+        for key in ("message", "detail", "error_description", "error_msg"):
             value = payload.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -2196,6 +2310,13 @@ class ModelConnectivityProbeService:
         if isinstance(error_payload, str) and error_payload.strip():
             return error_payload.strip()
         return None
+
+    def _extract_codeagent_auth_verify_error_message(
+        self,
+        response: httpx.Response,
+    ) -> str | None:
+        payload = self._response_payload(response)
+        return self._extract_error_message(payload) or response.text.strip() or None
 
     def _extract_model_entries(
         self,
