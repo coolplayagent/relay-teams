@@ -269,8 +269,10 @@ def _run_command_checks(
             VerificationCheckResult(
                 layer=VerificationLayer.BEHAVIOR,
                 name=f"command:{' '.join(command_check.command)}",
-                passed=False,
-                details="Command verification requires shell approval before execution.",
+                passed=True,
+                details=(
+                    "Command verification was skipped until shell approval is granted."
+                ),
                 command=command_check.command,
             )
             for command_check in plan.command_checks

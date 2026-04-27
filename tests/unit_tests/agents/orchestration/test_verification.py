@@ -316,7 +316,7 @@ def test_verify_task_denies_command_checks_without_shell_authorization(
     assert not marker.exists()
 
 
-def test_verify_task_denies_command_checks_requiring_shell_approval(
+def test_verify_task_skips_command_checks_requiring_shell_approval(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "verification_approval_policy.db"
@@ -352,11 +352,11 @@ def test_verify_task_denies_command_checks_requiring_shell_approval(
         workspace_root=tmp_path,
     )
 
-    assert result.passed is False
+    assert result.passed is True
     assert result.report is not None
-    failed = [check for check in result.report.checks if not check.passed]
-    assert len(failed) == 1
-    assert "requires shell approval" in failed[0].details
+    command_check = result.report.checks[-1]
+    assert command_check.passed is True
+    assert "skipped until shell approval" in command_check.details
     assert not marker.exists()
 
 

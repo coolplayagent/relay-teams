@@ -402,6 +402,7 @@ async def get_session_token_usage(
             role_id: {
                 "role_id": agent.role_id,
                 "input_tokens": agent.input_tokens,
+                "latest_input_tokens": agent.latest_input_tokens,
                 "cached_input_tokens": agent.cached_input_tokens,
                 "latest_input_tokens": agent.latest_input_tokens,
                 "max_input_tokens": agent.max_input_tokens,
@@ -440,6 +441,7 @@ async def get_run_token_usage(
                 "instance_id": a.instance_id,
                 "role_id": a.role_id,
                 "input_tokens": a.input_tokens,
+                "latest_input_tokens": a.latest_input_tokens,
                 "cached_input_tokens": a.cached_input_tokens,
                 "latest_input_tokens": a.latest_input_tokens,
                 "max_input_tokens": a.max_input_tokens,

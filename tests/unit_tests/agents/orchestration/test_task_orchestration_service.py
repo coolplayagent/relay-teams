@@ -28,6 +28,7 @@ from relay_teams.agents.orchestration.task_execution_service import TaskExecutio
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
+    TaskHandoff,
     TaskLifecyclePolicy,
     TaskSpec,
     VerificationPlan,
@@ -449,6 +450,47 @@ def test_update_task_recomputes_verification_when_spec_changes(
     )
     assert verification_payload["acceptance_criteria"] == ["new acceptance"]
     assert verification_payload["evidence_expectations"] == ["pytest output"]
+
+
+def test_update_task_handoff_only_preserves_missing_title(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_handoff_only.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title=None,
+            objective="Initial objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    task_repo.update_status(created.envelope.task_id, TaskStatus.ASSIGNED)
+
+    updated = service.update_task(
+        run_id="run-1",
+        task_id=created.envelope.task_id,
+        update=TaskUpdate(
+            handoff=TaskHandoff(
+                incomplete=("Collect more logs",),
+                reason="waiting on operator",
+            )
+        ),
+    )
+
+    updated_record = task_repo.get(created.envelope.task_id)
+    updated_task = cast(dict[str, JsonValue], updated["task"])
+
+    assert updated_record.envelope.title is None
+    assert updated_task["title"] == "Initial objective"
+    assert cast(dict[str, JsonValue], updated_task["handoff"])["reason"] == (
+        "waiting on operator"
+    )
 
 
 @pytest.mark.asyncio

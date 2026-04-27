@@ -858,7 +858,7 @@ class TaskExecutionService(BaseModel):
         timeout_cancellation: asyncio.Event,
     ) -> TaskExecutionResult:
         timeout_cancellation.set()
-        _ = await _cancel_and_wait(
+        cancel_result = await _cancel_and_wait(
             worker,
             suppress_exceptions=True,
             task_name="task_worker",
@@ -869,6 +869,8 @@ class TaskExecutionService(BaseModel):
                 "role_id": role_id,
             },
         )
+        if cancel_result is not None:
+            return cancel_result
         return await self._complete_task_timeout_async(
             task=task,
             instance_id=instance_id,

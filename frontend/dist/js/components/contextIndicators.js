@@ -3,7 +3,7 @@
  * Provider-reported token usage badges for coordinator and subagent composers.
  */
 import { fetchModelProfiles, fetchRunTokenUsage } from '../core/api.js';
-import { state, getPrimaryRoleId } from '../core/state.js';
+import { state, getPrimaryRoleId, getRoleOption } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { formatMessage, t } from '../utils/i18n.js';
 import { currentRounds } from './rounds/timeline.js';
@@ -148,7 +148,11 @@ async function fetchAndRenderUsage({
             renderIdle(indicator);
             return;
         }
-        renderUsage(indicator, agentUsage, resolveContextWindow(profiles, agentUsage));
+        renderUsage(
+            indicator,
+            agentUsage,
+            resolveContextWindow(profiles, agentUsage, agentUsage.role_id || roleId),
+        );
     } catch (error) {
         if (error?.name === 'AbortError') return;
         if (previewState.requestId !== nextRequestId) return;
@@ -278,7 +282,7 @@ function selectAgentUsage(usage, { roleId = '', instanceId = '' } = {}) {
     return agents.length === 1 ? agents[0] : null;
 }
 
-function resolveContextWindow(profiles, usage) {
+function resolveContextWindow(profiles, usage, roleId = '') {
     const usageContextWindow = Number(usage?.context_window);
     if (Number.isFinite(usageContextWindow) && usageContextWindow > 0) {
         return usageContextWindow;
@@ -293,8 +297,20 @@ function resolveContextWindow(profiles, usage) {
             return profileContextWindow;
         }
     }
-    const profileEntries = Object.values(profiles).filter(profile => profile && typeof profile === 'object');
-    const defaultProfile = profileEntries.find(profile => profile.is_default === true);
+    const profileEntries = Object.entries(profiles).filter(([, profile]) => (
+        profile && typeof profile === 'object'
+    ));
+    const roleProfileName = String(getRoleOption(roleId)?.model_profile || '').trim();
+    if (roleProfileName) {
+        const activeProfile = profileEntries.find(([name]) => name === roleProfileName)?.[1];
+        const activeContextWindow = Number(activeProfile?.context_window);
+        if (Number.isFinite(activeContextWindow) && activeContextWindow > 0) {
+            return activeContextWindow;
+        }
+    }
+    const defaultProfile = profileEntries
+        .map(([, profile]) => profile)
+        .find(profile => profile.is_default === true);
     const contextWindow = Number(defaultProfile?.context_window);
     return Number.isFinite(contextWindow) && contextWindow > 0 ? contextWindow : null;
 }

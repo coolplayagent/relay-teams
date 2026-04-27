@@ -144,10 +144,15 @@ class TaskOrchestrationService:
         if not next_objective:
             raise ValueError("objective must not be empty")
 
+        handoff_only_update = _is_handoff_only_update(update)
         next_title = (
-            _resolved_title(update.title, next_objective)
-            if update.title is not None
-            else current.title or _resolved_title(None, next_objective)
+            current.title
+            if handoff_only_update
+            else (
+                _resolved_title(update.title, next_objective)
+                if update.title is not None
+                else current.title or _resolved_title(None, next_objective)
+            )
         )
         updated = self._task_repo.update_envelope(
             task_id,
@@ -202,10 +207,15 @@ class TaskOrchestrationService:
         if not next_objective:
             raise ValueError("objective must not be empty")
 
+        handoff_only_update = _is_handoff_only_update(update)
         next_title = (
-            _resolved_title(update.title, next_objective)
-            if update.title is not None
-            else current.title or _resolved_title(None, next_objective)
+            current.title
+            if handoff_only_update
+            else (
+                _resolved_title(update.title, next_objective)
+                if update.title is not None
+                else current.title or _resolved_title(None, next_objective)
+            )
         )
         updated = await self._task_repo.update_envelope_async(
             task_id,
@@ -806,7 +816,7 @@ def _is_handoff_only_update(update: TaskUpdate) -> bool:
 def _task_update_fields(
     update: TaskUpdate,
     next_objective: str,
-    next_title: str,
+    next_title: str | None,
 ) -> dict[str, object]:
     fields: dict[str, object] = {
         "objective": next_objective,

@@ -406,6 +406,62 @@ async def test_execute_applies_timeout_when_worker_cancel_wait_expires(
 
 
 @pytest.mark.asyncio
+async def test_timeout_finalizer_preserves_worker_result_if_cancel_returns_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_timeout_cancel_result.db",
+        _SlowProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    async def _blocked_worker() -> TaskExecutionResult:
+        await asyncio.sleep(60)
+        return TaskExecutionResult(output="late")
+
+    worker = asyncio.create_task(_blocked_worker())
+
+    async def _return_result_from_cancel(
+        task_obj: asyncio.Task[object],
+        *,
+        suppress_exceptions: bool = False,
+        task_name: str = "task",
+        timeout_seconds: float | None = None,
+        context: Mapping[str, JsonValue] | None = None,
+    ) -> TaskExecutionResult:
+        _ = (task_obj, suppress_exceptions, task_name, timeout_seconds, context)
+        return TaskExecutionResult(output="finished during cancellation")
+
+    monkeypatch.setattr(
+        task_execution_module,
+        "_cancel_and_wait",
+        _return_result_from_cancel,
+    )
+
+    try:
+        result = await service._complete_timeout_after_worker_cancel_async(
+            task=task,
+            instance_id=instance_id,
+            role_id="time",
+            timeout_seconds=0.01,
+            worker=worker,
+            timeout_cancellation=asyncio.Event(),
+        )
+    finally:
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+
+    assert result.output == "finished during cancellation"
+    assert result.error_code is None
+
+
+@pytest.mark.asyncio
 async def test_execute_heartbeat_failure_does_not_override_worker_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
