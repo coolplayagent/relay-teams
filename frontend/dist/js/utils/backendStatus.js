@@ -65,26 +65,20 @@ async function probeBackendHealth() {
         forgetControlPlaneLiveUrl(controlUrl);
     }
 
-    for (const fallbackUrl of inferControlPlaneLiveUrls()) {
-        if (fallbackUrl === controlUrl) {
-            continue;
-        }
-        const fallbackProbe = await probeJson(fallbackUrl, CONTROL_PLANE_TIMEOUT_MS);
-        if (fallbackProbe.ok && isControlPlaneLivePayload(fallbackProbe.payload)) {
-            rememberControlPlaneLiveUrl(fallbackUrl);
-            if (await confirmMainBackendOnline()) {
-                return true;
-            }
-            markBackendBusy(t('backend.status.busy'));
-            return true;
-        }
-    }
-
-    const mainProbe = await probeJson('/api/system/live', MAIN_LIVE_TIMEOUT_MS);
-    if (mainProbe.ok && isLivePayload(mainProbe.payload)) {
-        markBackendOnline(t('backend.status.connected'));
+    if (await confirmMainBackendOnline()) {
         return true;
     }
+
+    const fallbackProbe = await probeFallbackControlPlaneUrls(controlUrl);
+    if (fallbackProbe) {
+        rememberControlPlaneLiveUrl(fallbackProbe.liveUrl);
+        if (await confirmMainBackendOnline()) {
+            return true;
+        }
+        markBackendBusy(t('backend.status.busy'));
+        return true;
+    }
+
     markBackendOffline(t('backend.status.offline'));
     return false;
 }
@@ -148,6 +142,18 @@ async function probeJson(url, timeoutMs) {
     }
 }
 
+async function probeFallbackControlPlaneUrls(controlUrl) {
+    const fallbackUrls = inferControlPlaneLiveUrls()
+        .filter(fallbackUrl => fallbackUrl !== controlUrl);
+    const probes = await Promise.all(fallbackUrls.map(async liveUrl => ({
+        liveUrl,
+        result: await probeJson(liveUrl, CONTROL_PLANE_TIMEOUT_MS),
+    })));
+    return probes.find(({ result }) => (
+        result.ok && isControlPlaneLivePayload(result.payload)
+    )) || null;
+}
+
 function applyBackendStatus(nextStatus, label) {
     backendStatus = nextStatus;
     if (!els.backendStatus) return;
@@ -184,9 +190,9 @@ function isControlPlaneLivePayload(payload) {
         return false;
     }
     const mainBaseUrl = String(payload?.main_base_url || '').trim();
-    return !mainBaseUrl
-        || baseUrlMatchesCurrentOrigin(mainBaseUrl)
-        || isInternalBaseUrl(mainBaseUrl);
+    return Boolean(mainBaseUrl)
+        && (baseUrlMatchesCurrentOrigin(mainBaseUrl)
+            || isInternalBaseUrl(mainBaseUrl));
 }
 
 function normalizeControlPlaneLiveUrl(rawUrl) {
