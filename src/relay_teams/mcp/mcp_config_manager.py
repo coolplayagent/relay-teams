@@ -293,7 +293,7 @@ def _normalize_mcp_server_config(
     raw_type = normalized.get("type")
     if raw_type == "local":
         normalized["transport"] = "stdio"
-    if raw_type == "remote":
+    if raw_type == "remote" and "transport" not in normalized:
         normalized["transport"] = _detect_url_transport(normalized.get("url"))
 
     raw_command = normalized.get("command")

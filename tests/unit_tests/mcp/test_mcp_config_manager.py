@@ -551,6 +551,32 @@ def test_load_registry_normalizes_opencode_remote_sse_type(tmp_path: Path) -> No
     assert registry.get_spec("remote-events").server_config["transport"] == "sse"
 
 
+def test_load_registry_preserves_explicit_opencode_remote_transport(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote-events": {
+                        "type": "remote",
+                        "transport": "sse",
+                        "url": "https://example.com/events",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+
+    assert registry.get_spec("remote-events").server_config["transport"] == "sse"
+
+
 def test_load_registry_ignores_invalid_mcp_servers_value(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
