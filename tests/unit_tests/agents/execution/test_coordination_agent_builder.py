@@ -239,7 +239,7 @@ def test_build_coordination_agent_ignores_unknown_skills(
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,

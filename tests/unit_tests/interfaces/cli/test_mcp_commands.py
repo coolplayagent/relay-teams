@@ -361,6 +361,30 @@ def test_mcp_add_rejects_stdio_transport_for_remote_url(monkeypatch) -> None:
     assert fake_service.added_config is None
 
 
+def test_mcp_add_rejects_unsupported_transport_for_remote_url(monkeypatch) -> None:
+    fake_service = _FakeMcpService()
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_cli.load_mcp_service",
+        lambda: fake_service,
+    )
+
+    result = runner.invoke(
+        cli_app.app,
+        [
+            "mcp",
+            "add",
+            "docs",
+            "--url",
+            "https://example.com/mcp",
+            "--transport",
+            "grpc",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert fake_service.added_config is None
+
+
 def test_mcp_enable_supports_json_output(monkeypatch) -> None:
     fake_service = _FakeMcpService()
     monkeypatch.setattr(

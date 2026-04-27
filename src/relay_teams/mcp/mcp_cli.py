@@ -42,6 +42,7 @@ mcp_app = typer.Typer(
 
 _JOB_OBJECT_WARNING = "Failed to create Job Object for process tree management"
 _STDIO_PARSE_WARNING = "Failed to parse JSONRPC message from server"
+_REMOTE_TRANSPORTS = frozenset(("http", "sse", "streamable-http"))
 
 
 class McpOutputFormat(str, Enum):
@@ -423,7 +424,7 @@ def _build_server_config(
     if url is None or not url.strip():
         raise typer.BadParameter("--url must be non-empty")
     resolved_transport = transport or ("sse" if "/sse" in url else "http")
-    if resolved_transport == "stdio":
+    if resolved_transport not in _REMOTE_TRANSPORTS:
         raise typer.BadParameter(
             "--transport must be http, sse, or streamable-http when using --url"
         )

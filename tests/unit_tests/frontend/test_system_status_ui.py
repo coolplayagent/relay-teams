@@ -422,6 +422,103 @@ console.log(JSON.stringify({
     assert "APP" in html
 
 
+def test_mcp_editor_preserves_hidden_config_fields_on_update(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: ['filesystem'],
+    },
+    skills: {
+        skills: [],
+    },
+};
+
+export async function fetchConfigStatus() {
+    return status;
+}
+
+export async function fetchMcpServer(serverName) {
+    return {
+        server: { name: serverName, source: 'app', transport: 'stdio', enabled: true },
+        config: {
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', 'server-filesystem'],
+            env: { TOKEN: 'old' },
+            cwd: 'C:/workspace',
+            read_timeout: 300,
+        },
+    };
+}
+
+export async function updateMcpServer(serverName, payload) {
+    globalThis.__updateMcpServerCalls.push({ serverName, payload });
+    return { status: 'ok' };
+}
+
+export async function fetchMcpServerTools(serverName) {
+    return { server: serverName, source: 'app', transport: 'stdio', tools: [] };
+}
+
+export async function reloadMcpConfig() {
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+globalThis.__updateMcpServerCalls = [];
+
+bindSystemStatusHandlers();
+await globalThis.__agentTeamsEditMcpServer('filesystem');
+
+document.getElementById('mcp-server-name-input').value = 'filesystem';
+document.getElementById('mcp-server-transport-input').value = 'stdio';
+document.getElementById('mcp-server-command-input').value = 'uvx';
+document.getElementById('mcp-server-args-input').value = 'server-filesystem';
+document.getElementById('mcp-server-extra-input').value = 'TOKEN=new';
+await document.getElementById('save-mcp-server-btn').onclick();
+
+console.log(JSON.stringify({
+    updateCalls: globalThis.__updateMcpServerCalls,
+}));
+""".strip(),
+    )
+
+    update_calls = cast(list[dict[str, JsonValue]], payload["updateCalls"])
+    assert len(update_calls) == 1
+    update_payload = cast(dict[str, JsonValue], update_calls[0]["payload"])
+    config = cast(dict[str, JsonValue], update_payload["config"])
+    assert config["transport"] == "stdio"
+    assert config["command"] == "uvx"
+    assert config["args"] == ["server-filesystem"]
+    assert config["env"] == {"TOKEN": "new"}
+    assert config["cwd"] == "C:/workspace"
+    assert config["read_timeout"] == 300
+
+
 def test_skills_status_panel_accepts_new_source_field_and_bare_refs(
     tmp_path: Path,
 ) -> None:

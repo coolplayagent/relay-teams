@@ -631,7 +631,9 @@ function buildMcpServerPayloadFromForm() {
         throw new Error(t('settings.mcp.name_required'));
     }
     const transport = String(getInputValue('mcp-server-transport-input') || 'stdio').trim() || 'stdio';
-    const config = { transport };
+    const config = mcpEditorMode === 'edit' && editingMcpServerConfig
+        ? { ...editingMcpServerConfig, transport }
+        : { transport };
     if (transport === 'stdio') {
         const command = String(getInputValue('mcp-server-command-input')).trim();
         if (!command) {
@@ -642,7 +644,11 @@ function buildMcpServerPayloadFromForm() {
         const env = parseKeyValueLines(getInputValue('mcp-server-extra-input'), t('settings.mcp.extra'));
         if (Object.keys(env).length > 0) {
             config.env = env;
+        } else {
+            delete config.env;
         }
+        delete config.url;
+        delete config.headers;
     } else {
         const url = String(getInputValue('mcp-server-url-input')).trim();
         if (!url) {
@@ -652,7 +658,11 @@ function buildMcpServerPayloadFromForm() {
         const headers = parseKeyValueLines(getInputValue('mcp-server-extra-input'), t('settings.mcp.extra'));
         if (Object.keys(headers).length > 0) {
             config.headers = headers;
+        } else {
+            delete config.headers;
         }
+        delete config.command;
+        delete config.args;
     }
     return {
         name,
