@@ -45,6 +45,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.tools.runtime.context import ToolContext
 from relay_teams.tools.runtime.execution import (
+    _apply_permission_denied_hooks,
     execute_tool,
     execute_tool_call,
 )
@@ -164,6 +165,8 @@ class _FakeDeps:
         self.trace_id = "trace-1"
         self.task_id = "task-1"
         self.session_id = "session-1"
+        self.session_mode = "orchestration"
+        self.run_kind = "generate_image"
         self.workspace_id = "workspace-1"
         self.instance_id = "inst-1"
         self.role_id = "spec_coder"
@@ -1493,16 +1496,22 @@ class _FakeHookService:
         *,
         reason: str = "",
         bundles: dict[HookEventName, HookDecisionBundle] | None = None,
+        failing_events: set[HookEventName] | None = None,
     ) -> None:
         self.decision = decision or HookDecisionType.ALLOW
         self.reason = reason
         self.bundles = bundles or {}
+        self.failing_events = failing_events or set()
+        self.event_inputs: list[object] = []
 
     async def execute(
         self, *, event_input: object, run_event_hub: object
     ) -> HookDecisionBundle:
         _ = run_event_hub
+        self.event_inputs.append(event_input)
         event_name = cast(HookEventName, getattr(event_input, "event_name"))
+        if event_name in self.failing_events:
+            raise RuntimeError("hook transport failed")
         if event_name in self.bundles:
             return self.bundles[event_name]
         return HookDecisionBundle(decision=self.decision, reason=self.reason)
@@ -1581,6 +1590,85 @@ def test_execute_tool_denies_pre_tool_use_when_hook_blocks_call() -> None:
     assert result["ok"] is False
     assert error["type"] == "hook_denied"
     assert "blocked" in str(error["message"]).lower()
+
+
+def test_execute_tool_runs_permission_denied_hook_when_user_denies() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("deny", "too risky")),
+        policy=_FakePolicy(needs_approval=True),
+    )
+    deps.hook_service = _FakeHookService(
+        bundles={
+            HookEventName.PRE_TOOL_USE: HookDecisionBundle(
+                decision=HookDecisionType.ALLOW,
+            ),
+            HookEventName.PERMISSION_REQUEST: HookDecisionBundle(
+                decision=HookDecisionType.CONTINUE,
+            ),
+            HookEventName.PERMISSION_DENIED: HookDecisionBundle(
+                decision=HookDecisionType.OBSERVE,
+                additional_context=("choose a safer edit",),
+            ),
+        }
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-user-deny-hook"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="write",
+            args_summary={"path": "a.txt"},
+            action=lambda: "should_not_run",
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    denied_inputs = [
+        event_input
+        for event_input in deps.hook_service.event_inputs
+        if cast(HookEventName, getattr(event_input, "event_name"))
+        == HookEventName.PERMISSION_DENIED
+    ]
+    assert result["ok"] is False
+    assert error["type"] == "approval_denied"
+    assert len(denied_inputs) == 1
+    denied_input = denied_inputs[0]
+    assert getattr(denied_input, "tool_name") == "write"
+    assert getattr(denied_input, "tool_input") == {"path": "a.txt"}
+    assert getattr(denied_input, "session_mode") == "orchestration"
+    assert getattr(denied_input, "run_kind") == "generate_image"
+    assert getattr(denied_input, "denial_source") == "user_approval"
+    assert getattr(denied_input, "denial_reason") == "too risky"
+    assert [record.content for record in deps.injection_manager.records] == [
+        "choose a safer edit"
+    ]
+
+
+def test_permission_denied_hook_failure_is_best_effort() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("deny", "too risky")),
+        policy=_FakePolicy(needs_approval=True),
+    )
+    deps.hook_service = _FakeHookService(
+        failing_events={HookEventName.PERMISSION_DENIED},
+    )
+    ctx = _FakeCtx(deps)
+
+    asyncio.run(
+        _apply_permission_denied_hooks(
+            ctx=cast(ToolContext, cast(object, ctx)),
+            tool_name="write",
+            tool_call_id="call-user-deny-hook-fails",
+            tool_input={"path": "a.txt"},
+            denial_source="user_approval",
+            denial_reason="too risky",
+            approval_status="denied",
+        )
+    )
+
+    assert len(deps.hook_service.event_inputs) == 1
+    assert deps.injection_manager.records == []
 
 
 def test_execute_tool_allows_permission_request_when_hook_overrides_approval() -> None:

@@ -5,6 +5,8 @@ from typing import Optional
 
 from relay_teams.hooks.hook_event_models import (
     HookEventInput,
+    InstructionsLoadedInput,
+    NotificationInput,
     PostCompactInput,
     PreCompactInput,
     SessionEndInput,
@@ -31,6 +33,7 @@ def get_matcher_target(
     if event_input.event_name in {
         HookEventName.PRE_TOOL_USE,
         HookEventName.PERMISSION_REQUEST,
+        HookEventName.PERMISSION_DENIED,
         HookEventName.POST_TOOL_USE,
         HookEventName.POST_TOOL_USE_FAILURE,
     }:
@@ -50,6 +53,12 @@ def get_matcher_target(
     if event_input.event_name == HookEventName.SUBAGENT_STOP:
         typed = SubagentStopInput.model_validate(event_input.model_dump())
         return typed.subagent_type or typed.subagent_role_id or None
+    if event_input.event_name == HookEventName.NOTIFICATION:
+        typed = NotificationInput.model_validate(event_input.model_dump())
+        return typed.notification_type or event_input.event_name.value
+    if event_input.event_name == HookEventName.INSTRUCTIONS_LOADED:
+        typed = InstructionsLoadedInput.model_validate(event_input.model_dump())
+        return typed.load_reason or event_input.role_id or None
     if event_input.event_name == HookEventName.PRE_COMPACT:
         typed = PreCompactInput.model_validate(event_input.model_dump())
         return typed.compact_trigger or event_input.event_name.value
@@ -79,4 +88,12 @@ def hook_matches_event(
         return True
     if not matcher_target:
         return False
-    return fnmatch.fnmatchcase(matcher_target, matcher)
+    return _matcher_matches(matcher_target=matcher_target, matcher=matcher)
+
+
+def _matcher_matches(*, matcher_target: str, matcher: str) -> bool:
+    return any(
+        fnmatch.fnmatchcase(matcher_target, part.strip())
+        for part in matcher.split("|")
+        if part.strip()
+    )

@@ -59,5 +59,6 @@ class RunEventType(str, Enum):
     HOOK_STARTED = "hook_started"
     HOOK_COMPLETED = "hook_completed"
     HOOK_FAILED = "hook_failed"
+    HOOK_CONFLICT = "hook_conflict"
     HOOK_DECISION_APPLIED = "hook_decision_applied"
     HOOK_DEFERRED = "hook_deferred"

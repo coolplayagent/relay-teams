@@ -87,12 +87,6 @@ def test_hook_handler_config_accepts_alias_fields() -> None:
             },
             "agent hook requires prompt",
         ),
-        (
-            {
-                "type": "agent",
-            },
-            "agent hook requires role_id",
-        ),
     ],
 )
 def test_hook_handler_config_rejects_missing_type_specific_required_fields(
@@ -101,6 +95,18 @@ def test_hook_handler_config_rejects_missing_type_specific_required_fields(
 ) -> None:
     with pytest.raises(ValueError, match=error_message):
         HookHandlerConfig.model_validate(payload)
+
+
+def test_hook_handler_config_allows_agent_without_role_id() -> None:
+    handler = HookHandlerConfig.model_validate(
+        {
+            "type": "agent",
+            "prompt": "review output",
+        }
+    )
+
+    assert handler.role_id is None
+    assert handler.prompt == "review output"
 
 
 def test_hook_matcher_group_allows_empty_handlers_for_tolerant_runtime_parsing() -> (

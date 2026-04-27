@@ -346,7 +346,7 @@ class SessionRunService:
                 )
             ),
             emit_notification=(
-                lambda notification_type, session_id, run_id, trace_id, title, body: (
+                lambda notification_type, session_id, run_id, trace_id, title, body, session_mode, run_kind: (
                     self._emit_notification(
                         notification_type=notification_type,
                         session_id=session_id,
@@ -354,6 +354,8 @@ class SessionRunService:
                         trace_id=trace_id,
                         title=title,
                         body=body,
+                        session_mode=session_mode,
+                        run_kind=run_kind,
                     )
                 )
             ),
@@ -971,6 +973,17 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error="stopped_by_user",
             )
+        intent = self._pending_runs.get(run_id)
+        await self._emit_notification_async(
+            notification_type=NotificationType.RUN_STOPPED,
+            session_id=session_id,
+            run_id=run_id,
+            trace_id=run_id,
+            title="Run Stopped",
+            body=f"Run {run_id} was stopped by user.",
+            session_mode=intent.session_mode.value if intent is not None else "normal",
+            run_kind=intent.run_kind.value if intent is not None else "conversation",
+        )
         await self._run_control_manager.publish_run_stopped_async(
             session_id=session_id,
             run_id=run_id,
@@ -984,14 +997,6 @@ class SessionRunService:
                 message="Run cancelled during startup",
                 payload={"reason": "stopped_by_user"},
             )
-        self._emit_notification(
-            notification_type=NotificationType.RUN_STOPPED,
-            session_id=session_id,
-            run_id=run_id,
-            trace_id=run_id,
-            title="Run Stopped",
-            body=f"Run {run_id} was stopped by user.",
-        )
         await self._hook_pipeline.execute_session_end_hooks(
             run_id=run_id,
             session_id=session_id,
@@ -1175,8 +1180,8 @@ class SessionRunService:
                 event="run.started",
                 message="Run worker started",
             )
+        runtime_intent = None
         try:
-            runtime_intent = None
             if self._run_intent_repo is not None:
                 try:
                     runtime_intent = self._run_intent_repo.get(
@@ -1226,6 +1231,16 @@ class SessionRunService:
                     else f"Run {run_id} completed successfully."
                 )
             )
+            notification_session_mode = (
+                runtime_intent.session_mode.value
+                if runtime_intent is not None
+                else "normal"
+            )
+            notification_run_kind = (
+                runtime_intent.run_kind.value
+                if runtime_intent is not None
+                else "conversation"
+            )
             self._safe_runtime_update(
                 run_id,
                 root_task_id=result.root_task_id,
@@ -1236,6 +1251,16 @@ class SessionRunService:
                 active_role_id=None,
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
+            )
+            await self._emit_notification_async(
+                notification_type=notification_type,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=result.trace_id,
+                title=notification_title,
+                body=notification_body,
+                session_mode=notification_session_mode,
+                run_kind=notification_run_kind,
             )
             await self._safe_publish_run_event_async(
                 RunEvent(
@@ -1262,14 +1287,6 @@ class SessionRunService:
                         "completion_reason": completion_reason.value,
                     },
                 )
-            self._emit_notification(
-                notification_type=notification_type,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=result.trace_id,
-                title=notification_title,
-                body=notification_body,
-            )
             await self._hook_pipeline.execute_session_end_hooks(
                 run_id=run_id,
                 session_id=session_id,
@@ -1326,6 +1343,24 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error="stopped_by_user",
             )
+            await self._emit_notification_async(
+                notification_type=NotificationType.RUN_STOPPED,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=run_id,
+                title="Run Stopped",
+                body=f"Run {run_id} was stopped by user.",
+                session_mode=(
+                    runtime_intent.session_mode.value
+                    if runtime_intent is not None
+                    else "normal"
+                ),
+                run_kind=(
+                    runtime_intent.run_kind.value
+                    if runtime_intent is not None
+                    else "conversation"
+                ),
+            )
             await self._run_control_manager.publish_run_stopped_async(
                 session_id=session_id,
                 run_id=run_id,
@@ -1341,14 +1376,6 @@ class SessionRunService:
                     message="Run cancelled",
                     payload={"reason": "stopped_by_user"},
                 )
-            self._emit_notification(
-                notification_type=NotificationType.RUN_STOPPED,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=run_id,
-                title="Run Stopped",
-                body=f"Run {run_id} was stopped by user.",
-            )
             await self._hook_pipeline.execute_session_end_hooks(
                 run_id=run_id,
                 session_id=session_id,
@@ -1382,6 +1409,32 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
+            await self._emit_notification_async(
+                notification_type=(
+                    NotificationType.RUN_FAILED
+                    if failed
+                    else NotificationType.RUN_COMPLETED
+                ),
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=result.trace_id,
+                title="Run Failed" if failed else "Run Completed",
+                body=(
+                    output_text
+                    if output_text
+                    else (f"Run {run_id} failed." if failed else "")
+                ),
+                session_mode=(
+                    runtime_intent.session_mode.value
+                    if runtime_intent is not None
+                    else "normal"
+                ),
+                run_kind=(
+                    runtime_intent.run_kind.value
+                    if runtime_intent is not None
+                    else "conversation"
+                ),
+            )
             await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
@@ -1412,22 +1465,6 @@ class SessionRunService:
                         "completion_reason": result.completion_reason.value,
                     },
                 )
-            self._emit_notification(
-                notification_type=(
-                    NotificationType.RUN_FAILED
-                    if failed
-                    else NotificationType.RUN_COMPLETED
-                ),
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=result.trace_id,
-                title="Run Failed" if failed else "Run Completed",
-                body=(
-                    output_text
-                    if output_text
-                    else (f"Run {run_id} failed." if failed else "")
-                ),
-            )
         finally:
             if self._background_task_manager is not None:
                 try:
@@ -1693,18 +1730,20 @@ class SessionRunService:
                     active_subagent_instance_id=None,
                     last_error="stopped_before_start",
                 )
-            await self._run_control_manager.publish_run_stopped_async(
-                session_id=session_id,
-                run_id=run_id,
-                reason="stopped_before_start",
-            )
-            self._emit_notification(
+            await self._emit_notification_async(
                 notification_type=NotificationType.RUN_STOPPED,
                 session_id=session_id,
                 run_id=run_id,
                 trace_id=run_id,
                 title="Run Stopped",
                 body=f"Run {run_id} was stopped before start.",
+                session_mode=intent.session_mode.value,
+                run_kind=intent.run_kind.value,
+            )
+            await self._run_control_manager.publish_run_stopped_async(
+                session_id=session_id,
+                run_id=run_id,
+                reason="stopped_before_start",
             )
             with bind_trace_context(
                 trace_id=run_id, run_id=run_id, session_id=session_id
@@ -2363,6 +2402,8 @@ class SessionRunService:
         trace_id: str,
         title: str,
         body: str,
+        session_mode: str = "normal",
+        run_kind: str = "conversation",
     ) -> None:
         self._event_publisher.emit_notification(
             notification_type=notification_type,
@@ -2371,6 +2412,31 @@ class SessionRunService:
             trace_id=trace_id,
             title=title,
             body=body,
+            session_mode=session_mode,
+            run_kind=run_kind,
+        )
+
+    async def _emit_notification_async(
+        self,
+        *,
+        notification_type: NotificationType,
+        session_id: str,
+        run_id: str,
+        trace_id: str,
+        title: str,
+        body: str,
+        session_mode: str = "normal",
+        run_kind: str = "conversation",
+    ) -> None:
+        await self._event_publisher.emit_notification_async(
+            notification_type=notification_type,
+            session_id=session_id,
+            run_id=run_id,
+            trace_id=trace_id,
+            title=title,
+            body=body,
+            session_mode=session_mode,
+            run_kind=run_kind,
         )
 
     def _safe_runtime_update(self, run_id: str, **changes: object) -> None:

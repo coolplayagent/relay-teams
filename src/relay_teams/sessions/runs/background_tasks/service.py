@@ -57,6 +57,8 @@ from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.env.hook_runtime_env import merge_tool_hook_runtime_env
 from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
     HookEventName,
     HookRuntimeSnapshot,
     HookService,
@@ -150,6 +152,9 @@ class _BackgroundTaskAgentRepository(Protocol):
         lifecycle: Optional[InstanceLifecycle] = None,
         parent_instance_id: Optional[str] = None,
     ) -> None: ...
+
+    def mark_status(self, instance_id: str, status: InstanceStatus) -> None:
+        pass
 
 
 class _BackgroundTaskTaskRepository(Protocol):
@@ -407,10 +412,24 @@ class BackgroundTaskService:
                 subagent_instance_id=prepared.subagent_instance.instance_id,
             ),
         )
-        await self._execute_subagent_start_hooks(
-            run_id=run_id,
-            session_id=session_id,
-            prepared=prepared,
+        try:
+            hook_context = await self._execute_subagent_start_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                prepared=prepared,
+            )
+        except Exception as exc:
+            record = self._finalize_subagent_launch_failure(
+                background_task_id=background_task_id,
+                prepared=prepared,
+                output=str(exc),
+                synchronous=False,
+            )
+            await self._handle_background_task_completion(record)
+            raise
+        launch_prompt = _append_subagent_start_context(
+            prompt=prepared.normalized_prompt,
+            contexts=hook_context,
         )
 
         worker_start_gate = asyncio.Event()
@@ -422,7 +441,7 @@ class BackgroundTaskService:
                     instance_id=prepared.subagent_instance.instance_id,
                     role_id=prepared.subagent_role_id,
                     task=prepared.subagent_task,
-                    user_prompt_override=prepared.normalized_prompt,
+                    user_prompt_override=launch_prompt,
                 )
             except asyncio.CancelledError:
                 stopped = run_control_manager.is_run_stop_requested(
@@ -439,12 +458,12 @@ class BackgroundTaskService:
                     output="Task cancelled",
                 )
                 return
-            except Exception as exc:
+            except Exception as worker_error:
                 await self._finalize_subagent_record(
                     background_task_id=background_task_id,
                     status=BackgroundTaskStatus.FAILED,
                     exit_code=1,
-                    output=str(exc),
+                    output=str(worker_error),
                 )
                 return
             status, exit_code = _status_from_execution_result(result)
@@ -516,13 +535,65 @@ class BackgroundTaskService:
                 prepared=prepared,
             ),
         )
-        await self._execute_subagent_start_hooks(
-            run_id=run_id,
-            session_id=session_id,
-            prepared=prepared,
+        try:
+            hook_context = await self._execute_subagent_start_hooks(
+                run_id=run_id,
+                session_id=session_id,
+                prepared=prepared,
+            )
+        except Exception as exc:
+            self._finalize_subagent_launch_failure(
+                background_task_id=background_task_id,
+                prepared=prepared,
+                output=str(exc),
+                synchronous=True,
+            )
+            raise
+        launch_prompt = _append_subagent_start_context(
+            prompt=prepared.normalized_prompt,
+            contexts=hook_context,
         )
 
         result_holder: dict[str, SynchronousSubagentResult] = {}
+
+        async def finalize_after_stop_hooks(
+            *,
+            status: BackgroundTaskStatus,
+            output: str,
+        ) -> None:
+            hook_error: Exception | None = None
+            final_status = status
+            final_output = output
+            try:
+                await self._execute_subagent_stop_hooks_for_launch(
+                    run_id=run_id,
+                    session_id=session_id,
+                    prepared=prepared,
+                    status=status,
+                    output_text=output,
+                )
+            except Exception as stop_hook_error:
+                hook_error = stop_hook_error
+                if final_status == BackgroundTaskStatus.COMPLETED:
+                    final_status = BackgroundTaskStatus.FAILED
+                final_output = (
+                    output.strip()
+                    + "\n\n"
+                    + f"Subagent stop hook failed: {stop_hook_error}"
+                ).strip()
+            self._finalize_synchronous_subagent_record(
+                background_task_id=background_task_id,
+                status=final_status,
+                output=final_output,
+            )
+            await asyncio.to_thread(
+                self._finalize_subagent_run_runtime,
+                subagent_run_id=prepared.subagent_run_id,
+                status=final_status,
+                output=final_output,
+            )
+            if hook_error is not None:
+                raise hook_error
 
         async def run_worker() -> None:
             try:
@@ -530,7 +601,7 @@ class BackgroundTaskService:
                     instance_id=prepared.subagent_instance.instance_id,
                     role_id=prepared.subagent_role_id,
                     task=prepared.subagent_task,
-                    user_prompt_override=prepared.normalized_prompt,
+                    user_prompt_override=launch_prompt,
                 )
             except asyncio.CancelledError:
                 stopped = run_control_manager.is_run_stop_requested(
@@ -542,67 +613,22 @@ class BackgroundTaskService:
                     else BackgroundTaskStatus.FAILED
                 )
                 output = "Task cancelled"
-                await self._execute_subagent_stop_hooks_for_launch(
-                    run_id=run_id,
-                    session_id=session_id,
-                    prepared=prepared,
-                    status=status,
-                    output_text=output,
-                )
-                await asyncio.to_thread(
-                    self._finalize_synchronous_subagent_record,
-                    background_task_id=background_task_id,
-                    status=status,
-                    output=output,
-                )
-                await asyncio.to_thread(
-                    self._finalize_subagent_run_runtime,
-                    subagent_run_id=prepared.subagent_run_id,
+                await finalize_after_stop_hooks(
                     status=status,
                     output=output,
                 )
                 raise
-            except Exception as exc:
-                output = str(exc)
-                await self._execute_subagent_stop_hooks_for_launch(
-                    run_id=run_id,
-                    session_id=session_id,
-                    prepared=prepared,
-                    status=BackgroundTaskStatus.FAILED,
-                    output_text=output,
-                )
-                await asyncio.to_thread(
-                    self._finalize_synchronous_subagent_record,
-                    background_task_id=background_task_id,
+            except Exception as worker_error:
+                output = str(worker_error)
+                await finalize_after_stop_hooks(
                     status=BackgroundTaskStatus.FAILED,
                     output=output,
                 )
-                await asyncio.to_thread(
-                    self._finalize_subagent_run_runtime,
-                    subagent_run_id=prepared.subagent_run_id,
-                    status=BackgroundTaskStatus.FAILED,
-                    output=output,
-                )
-                raise RuntimeError(output) from exc
+                raise RuntimeError(output) from worker_error
 
             status, _ = _status_from_execution_result(result)
             output = result.output.strip()
-            await self._execute_subagent_stop_hooks_for_launch(
-                run_id=run_id,
-                session_id=session_id,
-                prepared=prepared,
-                status=status,
-                output_text=output,
-            )
-            await asyncio.to_thread(
-                self._finalize_synchronous_subagent_record,
-                background_task_id=background_task_id,
-                status=status,
-                output=output,
-            )
-            await asyncio.to_thread(
-                self._finalize_subagent_run_runtime,
-                subagent_run_id=prepared.subagent_run_id,
+            await finalize_after_stop_hooks(
                 status=status,
                 output=output,
             )
@@ -819,10 +845,6 @@ class BackgroundTaskService:
                 }
             )
         )
-        await self._execute_subagent_stop_hooks(
-            record=record,
-            output_text=summarized_output,
-        )
         runtime = self._subagent_runtimes.pop(background_task_id, None)
         subagent_run_id = (
             runtime.subagent_run_id if runtime is not None else record.subagent_run_id
@@ -846,9 +868,75 @@ class BackgroundTaskService:
             ),
             record=record,
         )
+        await self._execute_subagent_stop_hooks(
+            record=record,
+            output_text=summarized_output,
+        )
         if status != BackgroundTaskStatus.STOPPED:
             await self._handle_background_task_completion(record)
         return record
+
+    def _finalize_subagent_launch_failure(
+        self,
+        *,
+        background_task_id: str,
+        prepared: _PreparedSubagentLaunch,
+        output: str,
+        synchronous: bool,
+    ) -> BackgroundTaskRecord:
+        self._mark_subagent_launch_entities_failed(prepared=prepared, output=output)
+        if synchronous:
+            record = self._finalize_synchronous_subagent_record(
+                background_task_id=background_task_id,
+                status=BackgroundTaskStatus.FAILED,
+                output=output,
+            )
+        else:
+            current = self._repository.get(background_task_id)
+            if current is None:
+                raise KeyError(f"Unknown background task: {background_task_id}")
+            completed_at = datetime.now(tz=timezone.utc)
+            summarized_output = output.strip()
+            record = self._repository.upsert(
+                current.model_copy(
+                    update={
+                        "status": BackgroundTaskStatus.FAILED,
+                        "exit_code": 1,
+                        "recent_output": _recent_output_lines(summarized_output),
+                        "output_excerpt": summarized_output,
+                        "updated_at": completed_at,
+                        "completed_at": completed_at,
+                    }
+                )
+            )
+            self._publish_background_task_event(
+                event_type=RunEventType.BACKGROUND_TASK_COMPLETED,
+                record=record,
+            )
+        self._finalize_subagent_run_runtime(
+            subagent_run_id=prepared.subagent_run_id,
+            status=BackgroundTaskStatus.FAILED,
+            output=output,
+        )
+        return record
+
+    def _mark_subagent_launch_entities_failed(
+        self,
+        *,
+        prepared: _PreparedSubagentLaunch,
+        output: str,
+    ) -> None:
+        summarized_output = output.strip()
+        self._require_task_repo().update_status(
+            prepared.subagent_task.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=prepared.subagent_instance.instance_id,
+            error_message=summarized_output,
+        )
+        self._require_agent_repo().mark_status(
+            prepared.subagent_instance.instance_id,
+            InstanceStatus.FAILED,
+        )
 
     @staticmethod
     def _build_synchronous_subagent_record(
@@ -1372,10 +1460,10 @@ class BackgroundTaskService:
         run_id: str,
         session_id: str,
         prepared: _PreparedSubagentLaunch,
-    ) -> None:
+    ) -> tuple[str, ...]:
         if self._hook_service is None or prepared.suppress_hooks:
-            return
-        _ = await self._hook_service.execute(
+            return ()
+        bundle = await self._hook_service.execute(
             event_input=SubagentStartInput(
                 event_name=HookEventName.SUBAGENT_START,
                 session_id=session_id,
@@ -1392,6 +1480,7 @@ class BackgroundTaskService:
             ),
             run_event_hub=self._run_event_hub,
         )
+        return bundle.additional_context
 
     async def _execute_subagent_stop_hooks(
         self,
@@ -1401,7 +1490,7 @@ class BackgroundTaskService:
     ) -> None:
         if self._hook_service is None:
             return
-        _ = await self._hook_service.execute(
+        bundle = await self._hook_service.execute(
             event_input=SubagentStopInput(
                 event_name=HookEventName.SUBAGENT_STOP,
                 session_id=record.session_id,
@@ -1419,6 +1508,7 @@ class BackgroundTaskService:
             ),
             run_event_hub=self._run_event_hub,
         )
+        _raise_for_subagent_stop_decision(bundle)
 
     async def _execute_subagent_stop_hooks_for_launch(
         self,
@@ -1431,7 +1521,7 @@ class BackgroundTaskService:
     ) -> None:
         if self._hook_service is None or prepared.suppress_hooks:
             return
-        _ = await self._hook_service.execute(
+        bundle = await self._hook_service.execute(
             event_input=SubagentStopInput(
                 event_name=HookEventName.SUBAGENT_STOP,
                 session_id=session_id,
@@ -1449,6 +1539,7 @@ class BackgroundTaskService:
             ),
             run_event_hub=self._run_event_hub,
         )
+        _raise_for_subagent_stop_decision(bundle)
 
     def _require_manager(self) -> BackgroundTaskManager:
         if self._background_task_manager is None:
@@ -1552,6 +1643,32 @@ def _default_subagent_title(*, role_id: str, prompt: str) -> str:
     if not summary:
         return role_id
     return f"{role_id}: {summary[:80]}"
+
+
+def _append_subagent_start_context(
+    *,
+    prompt: str,
+    contexts: tuple[str, ...],
+) -> str:
+    context_text = "\n\n".join(item.strip() for item in contexts if item.strip())
+    if not context_text:
+        return prompt
+    if not prompt.strip():
+        return context_text
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + "Additional context from SubagentStart hooks:\n"
+        + context_text
+    )
+
+
+def _raise_for_subagent_stop_decision(bundle: HookDecisionBundle) -> None:
+    if bundle.decision not in {HookDecisionType.DENY, HookDecisionType.RETRY}:
+        return
+    reason_parts = [bundle.reason, *bundle.additional_context]
+    reason = "\n\n".join(part.strip() for part in reason_parts if part.strip())
+    raise RuntimeError(reason or "Subagent stop rejected by runtime hooks.")
 
 
 def _recent_output_lines(output: str) -> tuple[str, ...]:

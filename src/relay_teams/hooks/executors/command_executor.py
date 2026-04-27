@@ -7,7 +7,20 @@ import subprocess
 import sys
 
 from relay_teams.hooks.hook_event_models import HookEventInput
-from relay_teams.hooks.hook_models import HookDecision, HookHandlerConfig
+from relay_teams.hooks.hook_models import (
+    HookDecision,
+    HookDecisionType,
+    HookEventName,
+    HookHandlerConfig,
+    HookShell,
+)
+from relay_teams.hooks.executors.output_parser import (
+    parse_empty_hook_output,
+    parse_hook_decision_payload,
+)
+
+_MAX_STDOUT_BYTES = 1024 * 1024
+_MAX_STDERR_BYTES = 64 * 1024
 
 
 class CommandHookExecutor:
@@ -20,9 +33,7 @@ class CommandHookExecutor:
         command = str(handler.command or "").strip()
         if not command:
             raise ValueError("Command hook requires a command")
-        args = shlex.split(command, posix=(not sys.platform.startswith("win")))
-        if sys.platform.startswith("win"):
-            args = [_strip_wrapping_quotes(arg) for arg in args]
+        args = _build_command_args(command=command, shell=handler.shell)
         payload = event_input.model_dump_json().encode("utf-8")
         try:
             process = await asyncio.create_subprocess_exec(
@@ -50,17 +61,70 @@ class CommandHookExecutor:
             stderr = completed.stderr
             return_code = completed.returncode
         if return_code != 0:
-            message = stderr.decode("utf-8", errors="ignore").strip() or (
-                f"Command hook exited with status {return_code}"
-            )
+            raw_stderr = _decode_limited(
+                stderr,
+                limit_bytes=_MAX_STDERR_BYTES,
+                stream_name="stderr",
+            ).strip()
+            if return_code == 2:
+                return HookDecision(
+                    decision=_exit_code_2_decision(event_input),
+                    reason=raw_stderr,
+                )
+            message = raw_stderr or f"Command hook exited with status {return_code}"
             raise RuntimeError(message)
-        raw_stdout = stdout.decode("utf-8", errors="ignore").strip()
+        raw_stdout = _decode_limited(
+            stdout,
+            limit_bytes=_MAX_STDOUT_BYTES,
+            stream_name="stdout",
+        ).strip()
         if not raw_stdout:
-            raise ValueError("Command hook returned no JSON payload")
-        return HookDecision.model_validate(json.loads(raw_stdout))
+            return parse_empty_hook_output(event_name=event_input.event_name)
+        return parse_hook_decision_payload(
+            json.loads(raw_stdout),
+            event_name=event_input.event_name,
+        )
 
 
 def _strip_wrapping_quotes(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         return value[1:-1]
     return value
+
+
+def _build_command_args(*, command: str, shell: HookShell | None) -> list[str]:
+    if shell == HookShell.BASH:
+        return ["bash", "-lc", command]
+    if shell == HookShell.POWERSHELL:
+        executable = "powershell.exe" if sys.platform.startswith("win") else "pwsh"
+        return [executable, "-NoProfile", "-NonInteractive", "-Command", command]
+    args = shlex.split(command, posix=(not sys.platform.startswith("win")))
+    if sys.platform.startswith("win"):
+        return [_strip_wrapping_quotes(arg) for arg in args]
+    return args
+
+
+def _decode_limited(data: bytes, *, limit_bytes: int, stream_name: str) -> str:
+    if len(data) > limit_bytes:
+        raise RuntimeError(
+            f"Command hook {stream_name} exceeded {limit_bytes} byte limit"
+        )
+    return data.decode("utf-8", errors="ignore")
+
+
+def _exit_code_2_decision(event_input: HookEventInput) -> HookDecisionType:
+    if event_input.event_name in {
+        HookEventName.STOP,
+        HookEventName.SUBAGENT_STOP,
+    }:
+        return HookDecisionType.RETRY
+    if event_input.event_name in {
+        HookEventName.TASK_CREATED,
+        HookEventName.TASK_COMPLETED,
+        HookEventName.PRE_COMPACT,
+        HookEventName.USER_PROMPT_SUBMIT,
+        HookEventName.PRE_TOOL_USE,
+        HookEventName.PERMISSION_REQUEST,
+    }:
+        return HookDecisionType.DENY
+    return HookDecisionType.OBSERVE

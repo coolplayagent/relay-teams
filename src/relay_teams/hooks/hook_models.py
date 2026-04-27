@@ -20,6 +20,7 @@ class HookEventName(str, Enum):
     USER_PROMPT_SUBMIT = "UserPromptSubmit"
     PRE_TOOL_USE = "PreToolUse"
     PERMISSION_REQUEST = "PermissionRequest"
+    PERMISSION_DENIED = "PermissionDenied"
     POST_TOOL_USE = "PostToolUse"
     POST_TOOL_USE_FAILURE = "PostToolUseFailure"
     STOP = "Stop"
@@ -30,6 +31,8 @@ class HookEventName(str, Enum):
     TASK_COMPLETED = "TaskCompleted"
     PRE_COMPACT = "PreCompact"
     POST_COMPACT = "PostCompact"
+    NOTIFICATION = "Notification"
+    INSTRUCTIONS_LOADED = "InstructionsLoaded"
 
 
 class HookHandlerType(str, Enum):
@@ -142,8 +145,6 @@ class HookHandlerConfig(BaseModel):
             if not str(self.prompt or "").strip():
                 raise ValueError("prompt hook requires prompt")
             return self
-        if not str(self.role_id or "").strip():
-            raise ValueError("agent hook requires role_id")
         if not str(self.prompt or "").strip():
             raise ValueError("agent hook requires prompt")
         return self
@@ -152,6 +153,7 @@ class HookHandlerConfig(BaseModel):
 class HookMatcherGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    name: str = ""
     matcher: str = "*"
     role_ids: tuple[str, ...] = ()
     session_modes: tuple[str, ...] = ()

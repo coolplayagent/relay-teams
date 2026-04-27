@@ -79,6 +79,7 @@ from relay_teams.hooks import (
     HookDecisionBundle,
     HookDecisionType,
     HookEventName,
+    PermissionDeniedInput,
     PermissionRequestInput,
     PostToolUseFailureInput,
     PostToolUseInput,
@@ -1230,6 +1231,15 @@ async def _apply_pre_tool_hooks(
         run_event_hub=ctx.deps.run_event_hub,
     )
     if bundle.decision == HookDecisionType.DENY:
+        await _apply_permission_denied_hooks(
+            ctx=ctx,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=tool_input,
+            denial_source="pre_tool_hook",
+            denial_reason=bundle.reason,
+            approval_status="hook_denied",
+        )
         return (
             tool_input,
             ToolError(
@@ -1272,6 +1282,15 @@ async def _apply_permission_request_hooks(
         run_event_hub=ctx.deps.run_event_hub,
     )
     if bundle.decision == HookDecisionType.DENY:
+        await _apply_permission_denied_hooks(
+            ctx=ctx,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=args_summary,
+            denial_source="permission_request_hook",
+            denial_reason=bundle.reason,
+            approval_status="hook_denied",
+        )
         return (
             False,
             ToolError(
@@ -1281,6 +1300,74 @@ async def _apply_permission_request_hooks(
             ),
         )
     return bundle.decision == HookDecisionType.ALLOW, None
+
+
+async def _apply_permission_denied_hooks(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    tool_input: dict[str, JsonValue],
+    denial_source: str,
+    denial_reason: str,
+    approval_status: str,
+) -> None:
+    hook_service = getattr(ctx.deps, "hook_service", None)
+    if hook_service is None:
+        return
+    try:
+        bundle = await hook_service.execute(
+            event_input=PermissionDeniedInput(
+                event_name=HookEventName.PERMISSION_DENIED,
+                session_id=ctx.deps.session_id,
+                run_id=ctx.deps.run_id,
+                trace_id=ctx.deps.trace_id,
+                task_id=ctx.deps.task_id,
+                instance_id=ctx.deps.instance_id,
+                role_id=ctx.deps.role_id,
+                session_mode=ctx.deps.session_mode,
+                run_kind=ctx.deps.run_kind,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_input=tool_input,
+                denial_source=denial_source,
+                denial_reason=denial_reason,
+                approval_status=approval_status,
+            ),
+            run_event_hub=ctx.deps.run_event_hub,
+        )
+        if bundle.additional_context:
+            await _enqueue_system_followup_async(
+                ctx=ctx,
+                content="\n\n".join(
+                    str(context).strip()
+                    for context in bundle.additional_context
+                    if str(context).strip()
+                ),
+            )
+        if bundle.deferred_action:
+            await _enqueue_deferred_followup_async(
+                ctx=ctx,
+                hook_event=HookEventName.PERMISSION_DENIED,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                deferred_action=bundle.deferred_action,
+            )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="tools.permission_denied_hook.failed",
+            message="PermissionDenied hook failed after tool approval denial",
+            payload={
+                "run_id": ctx.deps.run_id,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "denial_source": denial_source,
+                "approval_status": approval_status,
+                "error": str(exc),
+            },
+        )
 
 
 async def _apply_post_tool_hooks(
@@ -1652,6 +1739,7 @@ async def _handle_tool_approval(
                 ctx=ctx,
                 ticket_id=reusable_ticket.tool_call_id,
                 tool_name=tool_name,
+                args_summary=args_summary,
                 args_preview=args_preview,
                 meta=meta,
                 decision=decision,
@@ -1660,6 +1748,15 @@ async def _handle_tool_approval(
             meta["approval_status"] = "deny"
             if reusable_ticket.feedback:
                 meta["approval_feedback"] = reusable_ticket.feedback
+            await _apply_permission_denied_hooks(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=reusable_ticket.tool_call_id,
+                tool_input=args_summary,
+                denial_source="cached_user_approval",
+                denial_reason=reusable_ticket.feedback,
+                approval_status="deny",
+            )
             return reusable_ticket.tool_call_id, ToolError(
                 type="approval_denied",
                 message="Tool call was denied by user.",
@@ -1667,6 +1764,15 @@ async def _handle_tool_approval(
             )
         if reusable_ticket.status == ApprovalTicketStatus.TIMED_OUT:
             meta["approval_status"] = "timeout"
+            await _apply_permission_denied_hooks(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=reusable_ticket.tool_call_id,
+                tool_input=args_summary,
+                denial_source="cached_user_approval",
+                denial_reason="Tool approval timed out.",
+                approval_status="timeout",
+            )
             return reusable_ticket.tool_call_id, ToolError(
                 type="approval_timeout",
                 message="Tool approval timed out.",
@@ -1689,6 +1795,7 @@ async def _handle_tool_approval(
         ctx=ctx,
         ticket_id=ticket.tool_call_id,
         tool_name=tool_name,
+        args_summary=args_summary,
         args_preview=args_preview,
         meta=meta,
         decision=decision,
@@ -1701,6 +1808,7 @@ async def _wait_for_ticket_resolution(
     ctx: ToolContext,
     ticket_id: str,
     tool_name: str,
+    args_summary: dict[str, JsonValue],
     args_preview: str,
     meta: dict[str, JsonValue],
     decision: ToolApprovalDecision,
@@ -1855,6 +1963,21 @@ async def _wait_for_ticket_resolution(
                 "role_id": ctx.deps.role_id,
             },
         )
+        if resolved_action in {"deny", "timeout"}:
+            await _apply_permission_denied_hooks(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=ticket_id,
+                tool_input=args_summary,
+                denial_source="user_approval",
+                denial_reason=resolved_ticket.feedback
+                or (
+                    "Tool approval timed out."
+                    if resolved_action == "timeout"
+                    else "Tool call was denied by user."
+                ),
+                approval_status=resolved_action,
+            )
         return ticket_id, resolved_error
 
     ctx.deps.tool_approval_manager.close_approval(
@@ -1905,6 +2028,15 @@ async def _wait_for_ticket_resolution(
         },
     )
     if resolved_action == "deny":
+        await _apply_permission_denied_hooks(
+            ctx=ctx,
+            tool_name=tool_name,
+            tool_call_id=ticket_id,
+            tool_input=args_summary,
+            denial_source="user_approval",
+            denial_reason=resolved_ticket.feedback or "Tool call was denied by user.",
+            approval_status="deny",
+        )
         await _update_run_runtime_async(
             ctx=ctx,
             status=RunRuntimeStatus.PAUSED,
@@ -1917,6 +2049,15 @@ async def _wait_for_ticket_resolution(
         )
         return ticket_id, resolved_error
     if resolved_action == "timeout":
+        await _apply_permission_denied_hooks(
+            ctx=ctx,
+            tool_name=tool_name,
+            tool_call_id=ticket_id,
+            tool_input=args_summary,
+            denial_source="user_approval",
+            denial_reason="Tool approval timed out.",
+            approval_status="timeout",
+        )
         await _update_run_runtime_async(
             ctx=ctx,
             status=RunRuntimeStatus.PAUSED,

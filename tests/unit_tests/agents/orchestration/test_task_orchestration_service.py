@@ -14,7 +14,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
-from relay_teams.hooks import HookService
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
@@ -108,7 +108,8 @@ class _BlockingTaskExecutionService:
 
 
 class _CapturingHookService:
-    def __init__(self) -> None:
+    def __init__(self, decision: HookDecisionType = HookDecisionType.ALLOW) -> None:
+        self.decision = decision
         self.calls: list[tuple[object, object | None]] = []
 
     async def execute(
@@ -116,9 +117,9 @@ class _CapturingHookService:
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
-        return object()
+        return HookDecisionBundle(decision=self.decision)
 
 
 def _build_role_registry() -> RoleRegistry:
@@ -355,6 +356,38 @@ async def test_create_tasks_emits_task_created_hooks_with_created_task_identity(
     assert getattr(event_input, "task_id") == created_task_id
     assert getattr(event_input, "parent_task_id") == "task-root"
     assert captured_run_event_hub is run_event_hub
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_denied_by_hook_does_not_persist_task(
+    tmp_path: Path,
+) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hook_deny.db")
+    agent_repo = AgentInstanceRepository(tmp_path / "task_orchestration_hook_deny.db")
+    message_repo = MessageRepository(tmp_path / "task_orchestration_hook_deny.db")
+    session_repo = SessionRepository(tmp_path / "task_orchestration_hook_deny.db")
+    execution_service = _FakeTaskExecutionService(task_repo)
+    hook_service = _CapturingHookService(HookDecisionType.DENY)
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=cast(RunEventHub, object()),
+    )
+
+    with pytest.raises(ValueError, match="Task creation denied"):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[TaskDraft(objective="Implement the endpoint")],
+        )
+
+    assert [record.envelope.task_id for record in task_repo.list_all()] == ["task-root"]
 
 
 def test_update_task_allows_created_only(tmp_path: Path) -> None:

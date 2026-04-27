@@ -42,6 +42,8 @@ def _write_fake_clawhub(
                     f"INSTALL_DESCRIPTION = {install_description!r}",
                     "",
                     "args = sys.argv[1:]",
+                    "if args and Path(args[0]).name.lower() in {'clawhub.cmd', 'clawhub.exe', 'clawhub.ps1'}:",
+                    "    args = args[1:]",
                     "if args and args[0] == 'search':",
                     "    for line in SEARCH_LINES:",
                     "        print(line)",
@@ -339,6 +341,7 @@ def test_install_clawhub_skill_script_reports_runtime_identity(
     assert payload["installed_skill"]["ref"] == "skill-creator"
 
 
+@pytest.mark.timeout(10)
 def test_search_and_install_clawhub_skill_script_runs_both_steps(
     tmp_path: Path,
 ) -> None:

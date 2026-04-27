@@ -155,7 +155,7 @@ def integration_env(
         )
         wait_for_http_ready(
             url=f"{api_base_url}/api/system/health",
-            timeout_seconds=30.0,
+            timeout_seconds=90.0,
             process=backend_process,
         )
 

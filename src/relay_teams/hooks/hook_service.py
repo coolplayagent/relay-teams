@@ -1,19 +1,33 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from json import dumps
+from typing import Optional, Protocol
 
 from pydantic import JsonValue
 
 from relay_teams.hooks.executors.command_executor import CommandHookExecutor
 from relay_teams.hooks.executors.agent_executor import AgentHookExecutor
-from relay_teams.hooks.executors.http_executor import HttpHookExecutor
+from relay_teams.hooks.executors.http_executor import (
+    HttpHookExecutor,
+    NonBlockingHttpHookError,
+)
 from relay_teams.hooks.executors.prompt_executor import PromptHookExecutor
-from relay_teams.hooks.hook_event_models import HookEventInput, PreToolUseInput
+from relay_teams.hooks.hook_conditions import hook_handler_condition_matches
+from relay_teams.hooks.hook_event_models import (
+    HookEventInput,
+    PermissionDeniedInput,
+    PermissionRequestInput,
+    PostToolUseFailureInput,
+    PostToolUseInput,
+    PreToolUseInput,
+)
 from relay_teams.hooks.hook_loader import HookLoader
 from relay_teams.hooks.hook_matcher import hook_matches_event
 from relay_teams.hooks.hook_models import (
+    HookDecision,
     HookDecisionBundle,
     HookDecisionType,
     HookEventName,
@@ -21,19 +35,47 @@ from relay_teams.hooks.hook_models import (
     HookExecutionStatus,
     HookHandlerConfig,
     HookHandlerType,
+    HookOnError,
     HookRuntimeSnapshot,
     HookRuntimeView,
     HookSourceInfo,
     HooksConfig,
     LoadedHookRuntimeView,
+    ResolvedHookMatcherGroup,
 )
 from relay_teams.hooks.hook_runtime_state import HookRuntimeState
 from relay_teams.logger import get_logger, log_event
-from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
 
 LOGGER = get_logger(__name__)
+_OBSERVE_ONLY_EVENTS = frozenset(
+    {
+        HookEventName.SESSION_END,
+        HookEventName.STOP_FAILURE,
+        HookEventName.SUBAGENT_START,
+        HookEventName.POST_COMPACT,
+        HookEventName.NOTIFICATION,
+        HookEventName.INSTRUCTIONS_LOADED,
+    }
+)
+
+
+class _RunInjectionManager(Protocol):
+    def is_active(self, run_id: str) -> bool:
+        raise NotImplementedError
+
+    def enqueue(
+        self,
+        run_id: str,
+        recipient_instance_id: str,
+        source: InjectionSource,
+        content: str,
+        sender_instance_id: Optional[str] = None,
+        sender_role_id: Optional[str] = None,
+    ) -> object:
+        raise NotImplementedError
 
 
 class HookService:
@@ -53,6 +95,8 @@ class HookService:
         self._http_executor = http_executor
         self._prompt_executor = prompt_executor
         self._agent_executor = agent_executor
+        self._injection_manager: _RunInjectionManager | None = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     def get_user_config(self) -> HooksConfig:
         return self._loader.get_user_config()
@@ -69,7 +113,8 @@ class HookService:
                     loaded_hooks.append(
                         LoadedHookRuntimeView(
                             name=(
-                                handler.name
+                                resolved.group.name
+                                or handler.name
                                 or handler.command
                                 or handler.url
                                 or handler.prompt
@@ -119,6 +164,12 @@ class HookService:
     def set_agent_executor(self, executor: AgentHookExecutor | None) -> None:
         self._agent_executor = executor
 
+    def set_injection_manager(
+        self,
+        injection_manager: _RunInjectionManager | None,
+    ) -> None:
+        self._injection_manager = injection_manager
+
     def get_run_env(self, run_id: str) -> dict[str, str]:
         return self._runtime_state.get_env(run_id)
 
@@ -135,8 +186,14 @@ class HookService:
         tool_name = ""
         if isinstance(event_input, PreToolUseInput):
             tool_name = event_input.tool_name
-        elif hasattr(event_input, "tool_name"):
-            tool_name = str(getattr(event_input, "tool_name") or "")
+        elif isinstance(event_input, PermissionDeniedInput):
+            tool_name = event_input.tool_name
+        elif isinstance(event_input, PermissionRequestInput):
+            tool_name = event_input.tool_name
+        elif isinstance(event_input, PostToolUseInput):
+            tool_name = event_input.tool_name
+        elif isinstance(event_input, PostToolUseFailureInput):
+            tool_name = event_input.tool_name
         for resolved in snapshot.hooks.get(event_input.event_name, ()):
             if hook_matches_event(resolved.group, event_input, tool_name=tool_name):
                 matches.append(resolved)
@@ -153,20 +210,78 @@ class HookService:
                     },
                 )
         executions: list[HookExecutionResult] = []
+        sync_invocations: list[tuple[ResolvedHookMatcherGroup, HookHandlerConfig]] = []
+        seen_sync_keys: set[tuple[str, ...]] = set()
+        seen_async_keys: set[tuple[str, ...]] = set()
         for resolved in matches:
             for handler in resolved.group.hooks:
-                executions.append(
-                    await self._execute_handler(
+                if not hook_handler_condition_matches(
+                    if_rule=handler.if_rule,
+                    event_input=event_input,
+                    tool_name=tool_name,
+                ):
+                    continue
+                dedup_key = _handler_dedup_key(handler)
+                if handler.run_async:
+                    if dedup_key is not None and dedup_key in seen_async_keys:
+                        continue
+                    if dedup_key is not None:
+                        seen_async_keys.add(dedup_key)
+                    self._schedule_async_handler(
                         event_input=event_input,
                         handler=handler,
                         source=resolved.source,
                         run_event_hub=run_event_hub,
+                    )
+                    continue
+                if dedup_key is not None and dedup_key in seen_sync_keys:
+                    continue
+                if dedup_key is not None:
+                    seen_sync_keys.add(dedup_key)
+                sync_invocations.append((resolved, handler))
+        if sync_invocations:
+            if any(
+                handler.on_error == HookOnError.FAIL for _, handler in sync_invocations
+            ):
+                for resolved, handler in sync_invocations:
+                    executions.append(
+                        await self._execute_handler(
+                            event_input=event_input,
+                            handler=handler,
+                            source=resolved.source,
+                            run_event_hub=run_event_hub,
+                        )
+                    )
+            else:
+                executions.extend(
+                    await asyncio.gather(
+                        *(
+                            self._execute_handler(
+                                event_input=event_input,
+                                handler=handler,
+                                source=resolved.source,
+                                run_event_hub=run_event_hub,
+                            )
+                            for resolved, handler in sync_invocations
+                        )
                     )
                 )
         bundle = _merge_decisions(event_input.event_name, executions)
         if bundle.set_env:
             self._runtime_state.set_env(event_input.run_id, bundle.set_env)
         if bundle.executions:
+            conflicts = _decision_conflicts(bundle.executions)
+            if conflicts:
+                _publish_hook_event(
+                    run_event_hub=run_event_hub,
+                    event_input=event_input,
+                    event_type=RunEventType.HOOK_CONFLICT,
+                    payload={
+                        "hook_event": event_input.event_name.value,
+                        "decision": bundle.decision.value,
+                        "conflicts": list(conflicts),
+                    },
+                )
             _publish_hook_event(
                 run_event_hub=run_event_hub,
                 event_input=event_input,
@@ -179,6 +294,81 @@ class HookService:
                 },
             )
         return bundle
+
+    def _schedule_async_handler(
+        self,
+        *,
+        event_input: HookEventInput,
+        handler: HookHandlerConfig,
+        source: HookSourceInfo,
+        run_event_hub: RunEventHub | None,
+    ) -> None:
+        async def run_background_hook() -> None:
+            try:
+                result = await self._execute_handler(
+                    event_input=event_input,
+                    handler=handler,
+                    source=source,
+                    run_event_hub=run_event_hub,
+                )
+                self._apply_async_rewake(
+                    event_input=event_input,
+                    handler=handler,
+                    result=result,
+                    run_event_hub=run_event_hub,
+                )
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="hooks.async_execution.failed",
+                    message="Async hook execution failed",
+                    payload={
+                        "hook_event": event_input.event_name.value,
+                        "handler_type": handler.type.value,
+                    },
+                    exc_info=exc,
+                )
+
+        task = asyncio.create_task(run_background_hook())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _apply_async_rewake(
+        self,
+        *,
+        event_input: HookEventInput,
+        handler: HookHandlerConfig,
+        result: HookExecutionResult,
+        run_event_hub: RunEventHub | None,
+    ) -> None:
+        if not handler.async_rewake or result.decision is None:
+            return
+        if self._injection_manager is None:
+            return
+        if not event_input.instance_id:
+            return
+        if not self._injection_manager.is_active(event_input.run_id):
+            return
+        content = _async_rewake_content(result.decision)
+        if not content:
+            return
+        _ = self._injection_manager.enqueue(
+            event_input.run_id,
+            event_input.instance_id,
+            source=InjectionSource.SYSTEM,
+            content=content,
+        )
+        _publish_hook_event(
+            run_event_hub=run_event_hub,
+            event_input=event_input,
+            event_type=RunEventType.HOOK_DEFERRED,
+            payload={
+                "hook_event": event_input.event_name.value,
+                "hook_name": result.handler_name,
+                "deferred_action": content,
+            },
+        )
 
     async def _execute_handler(
         self,
@@ -242,6 +432,10 @@ class HookService:
                     handler=handler,
                     event_input=event_input,
                 )
+            decision = _normalize_decision_for_event(
+                event_input.event_name,
+                decision,
+            )
             result = HookExecutionResult(
                 source=source,
                 event_name=event_input.event_name,
@@ -266,6 +460,31 @@ class HookService:
                 },
             )
             return result
+        except NonBlockingHttpHookError as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            _publish_hook_event(
+                run_event_hub=run_event_hub,
+                event_input=event_input,
+                event_type=RunEventType.HOOK_FAILED,
+                payload={
+                    "hook_event": event_input.event_name.value,
+                    "hook_source": source.scope.value,
+                    "hook_name": handler_name,
+                    "hook_handler_type": handler.type.value,
+                    "reason": str(exc),
+                    "duration_ms": duration_ms,
+                    "non_blocking": True,
+                },
+            )
+            return HookExecutionResult(
+                source=source,
+                event_name=event_input.event_name,
+                handler_name=handler_name,
+                handler_type=handler.type,
+                status=HookExecutionStatus.FAILED,
+                error=str(exc),
+                duration_ms=duration_ms,
+            )
         except Exception as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
             log_event(
@@ -293,6 +512,8 @@ class HookService:
                     "duration_ms": duration_ms,
                 },
             )
+            if handler.on_error == HookOnError.FAIL:
+                raise
             return HookExecutionResult(
                 source=source,
                 event_name=event_input.event_name,
@@ -324,7 +545,7 @@ def _merge_decisions(
         winner = HookDecisionType.DENY
     elif any(item.decision == HookDecisionType.ASK for item in decisions):
         winner = HookDecisionType.ASK
-    elif event_name == HookEventName.STOP and any(
+    elif event_name in {HookEventName.STOP, HookEventName.SUBAGENT_STOP} and any(
         item.decision == HookDecisionType.RETRY for item in decisions
     ):
         winner = HookDecisionType.RETRY
@@ -358,13 +579,126 @@ def _merge_decisions(
     )
 
 
+def _normalize_decision_for_event(
+    event_name: HookEventName,
+    decision: HookDecision,
+) -> HookDecision:
+    if event_name == HookEventName.PERMISSION_DENIED:
+        return HookDecision(
+            decision=HookDecisionType.OBSERVE,
+            reason=decision.reason,
+            additional_context=decision.additional_context,
+            deferred_action=decision.deferred_action,
+        )
+    if event_name in {
+        HookEventName.NOTIFICATION,
+        HookEventName.SUBAGENT_START,
+    }:
+        return HookDecision(
+            decision=HookDecisionType.OBSERVE,
+            reason=decision.reason,
+            additional_context=decision.additional_context,
+        )
+    if event_name in _OBSERVE_ONLY_EVENTS:
+        return HookDecision(
+            decision=HookDecisionType.OBSERVE,
+            reason=decision.reason,
+        )
+    return decision
+
+
+def _handler_dedup_key(
+    handler: HookHandlerConfig,
+) -> Optional[tuple[str, ...]]:
+    common = (
+        handler.type.value,
+        handler.name.strip(),
+        str(handler.if_rule or "").strip(),
+        str(handler.timeout_seconds),
+        handler.on_error.value,
+    )
+    if handler.type == HookHandlerType.COMMAND:
+        command = str(handler.command or "").strip()
+        if not command:
+            return None
+        return (
+            *common,
+            str(handler.shell or ""),
+            command,
+        )
+    if handler.type == HookHandlerType.HTTP:
+        url = str(handler.url or "").strip()
+        if not url:
+            return None
+        headers = tuple(
+            f"{key}:{value}" for key, value in sorted(handler.headers.items())
+        )
+        return (
+            *common,
+            url,
+            ",".join(headers),
+            ",".join(handler.allowed_env_vars),
+        )
+    return None
+
+
+def _decision_conflicts(
+    executions: tuple[HookExecutionResult, ...],
+) -> tuple[str, ...]:
+    decisions = [
+        item.decision
+        for item in executions
+        if item.status == HookExecutionStatus.COMPLETED and item.decision is not None
+    ]
+    if len(decisions) <= 1:
+        return ()
+    conflicts: list[str] = []
+    decision_values = {item.decision for item in decisions}
+    control_values = decision_values & {
+        HookDecisionType.DENY,
+        HookDecisionType.ASK,
+        HookDecisionType.RETRY,
+        HookDecisionType.UPDATED_INPUT,
+        HookDecisionType.SET_ENV,
+        HookDecisionType.DEFER,
+    }
+    if len(control_values) > 1:
+        conflicts.append(
+            "conflicting_control_decisions:"
+            + ",".join(sorted(item.value for item in control_values))
+        )
+    updated_input_count = sum(
+        1
+        for item in decisions
+        if item.decision == HookDecisionType.UPDATED_INPUT
+        and item.updated_input is not None
+    )
+    if updated_input_count > 1:
+        conflicts.append("multiple_updated_input_decisions")
+    deferred_count = sum(1 for item in decisions if item.deferred_action)
+    if deferred_count > 1:
+        conflicts.append("multiple_deferred_actions")
+    return tuple(conflicts)
+
+
+def _async_rewake_content(decision: HookDecision) -> str:
+    deferred_action = decision.deferred_action.strip()
+    context_text = "\n\n".join(
+        item.strip() for item in decision.additional_context if item.strip()
+    )
+    return "\n\n".join(item for item in (context_text, deferred_action) if item).strip()
+
+
 def _default_decision(event_name: HookEventName) -> HookDecisionType:
     if event_name in {
         HookEventName.POST_TOOL_USE,
         HookEventName.POST_TOOL_USE_FAILURE,
     }:
         return HookDecisionType.CONTINUE
-    if event_name == HookEventName.SESSION_END:
+    if (
+        event_name in _OBSERVE_ONLY_EVENTS
+        or event_name == HookEventName.PERMISSION_DENIED
+    ):
         return HookDecisionType.OBSERVE
     return HookDecisionType.ALLOW
 

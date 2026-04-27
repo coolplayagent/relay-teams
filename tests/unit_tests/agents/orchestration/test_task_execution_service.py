@@ -23,7 +23,7 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.hooks import HookService
+from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.media import (
     MediaAssetRepository,
     MediaAssetService,
@@ -84,7 +84,7 @@ async def _close_async_sqlite_repositories_after_test() -> AsyncIterator[None]:
     repositories = tuple(
         repository
         for repository in gc.get_objects()
-        if isinstance(repository, SharedSqliteRepository)
+        if issubclass(type(repository), SharedSqliteRepository)
     )
     for repository in repositories:
         await repository.close_async()
@@ -158,7 +158,8 @@ class _RecoverablePauseProvider:
 
 
 class _CapturingHookService:
-    def __init__(self) -> None:
+    def __init__(self, decision: HookDecisionType = HookDecisionType.ALLOW) -> None:
+        self.decision = decision
         self.calls: list[tuple[object, object | None]] = []
 
     async def execute(
@@ -166,9 +167,9 @@ class _CapturingHookService:
         *,
         event_input: object,
         run_event_hub: object | None,
-    ) -> object:
+    ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
-        return object()
+        return HookDecisionBundle(decision=self.decision)
 
 
 class _StaticPromptBuilder(RuntimePromptBuilder):
@@ -587,6 +588,36 @@ async def test_execute_does_not_emit_task_completed_hook_for_root_task(
     )
 
     assert hook_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_execute_task_completed_hook_denial_prevents_completed_state(
+    tmp_path: Path,
+) -> None:
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_service_completion_hook_deny.db",
+        provider,
+    )
+    hook_service = _CapturingHookService(HookDecisionType.DENY)
+    service.hook_service = cast(HookService, hook_service)
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    record = task_repo.get(task.task_id)
+    assert record.status == TaskStatus.FAILED
+    assert "Task completion denied" in result.output
+    assert provider.prompts == [None]
+    assert len(hook_service.calls) == 1
 
 
 @pytest.mark.asyncio

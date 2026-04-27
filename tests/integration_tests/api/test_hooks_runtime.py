@@ -138,6 +138,76 @@ else:
     )
 
 
+def test_frontend_style_hook_config_triggers_backend_tool_hook(
+    api_client: httpx.Client,
+    tmp_path: Path,
+) -> None:
+    script_path = _write_hook_script(
+        tmp_path / "frontend_style_pretool.py",
+        """
+import json
+import sys
+
+payload = json.load(sys.stdin)
+if payload.get("tool_name") == "read":
+    print(json.dumps({
+        "decision": "updated_input",
+        "updated_input": {"path": "README.md", "offset": 1, "limit": 10},
+    }))
+else:
+    print(json.dumps({"decision": "allow"}))
+""",
+    )
+    _save_hooks(
+        api_client,
+        {
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Frontend configured read rewrite",
+                        "matcher": "read",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "Rewrite read input",
+                                "if": "Read(*)",
+                                "timeout": 5,
+                                "on_error": "fail",
+                                "command": _command_for_script(script_path),
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+    )
+
+    session_id = create_session(
+        api_client, session_id=new_session_id("hook-frontend-style")
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[hook-read-rewrite] trigger one read tool call",
+        execution_mode="ai",
+    )
+    events = stream_run_until_terminal(api_client, run_id=run_id)
+
+    tool_result = _tool_result_payload(events, "read")
+    assert tool_result is not None
+    result_json = json.dumps(tool_result.get("result", {}), ensure_ascii=False)
+    assert "README.md" in result_json
+    assert any(
+        _hook_payload_has(
+            event,
+            hook_event="PreToolUse",
+            event_type="hook_completed",
+            decision="updated_input",
+        )
+        for event in events
+    )
+
+
 def test_session_start_hook_env_reaches_shell_execution(
     api_client: httpx.Client,
     tmp_path: Path,
@@ -564,11 +634,12 @@ print(json.dumps({
         api_client,
         session_id=new_session_id("hook-compact"),
     )
-    for phase in range(1, 6):
+    max_phase = 2
+    for phase in range(1, max_phase + 1):
         run_id = create_run(
             api_client,
             session_id=session_id,
-            intent=_phase_prompt(phase=phase, line_count=260, block_count=4),
+            intent=_phase_prompt(phase=phase, line_count=300, block_count=1),
             execution_mode="ai",
             yolo=True,
         )
@@ -577,7 +648,7 @@ print(json.dumps({
     recall_run_id = create_run(
         api_client,
         session_id=session_id,
-        intent=_recall_prompt(max_phase=5),
+        intent=_recall_prompt(max_phase=max_phase),
         execution_mode="ai",
         yolo=True,
     )

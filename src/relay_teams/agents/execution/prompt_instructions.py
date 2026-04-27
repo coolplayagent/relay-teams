@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from glob import glob
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
@@ -26,11 +27,22 @@ class PromptInstructionsConfig(BaseModel):
     instructions: tuple[str, ...] = ()
 
 
+class LoadedPromptInstructionSource(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
+
+    source: str
+    source_type: str
+    local_path: Optional[Path] = None
+    load_reason: str = "initial"
+    memory_type: str = ""
+
+
 class LoadedPromptInstructions(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, arbitrary_types_allowed=True)
 
     sections: tuple[str, ...] = ()
     local_paths: tuple[Path, ...] = ()
+    sources: tuple[LoadedPromptInstructionSource, ...] = ()
 
 
 class PromptInstructionResolver:
@@ -110,6 +122,7 @@ class PromptInstructionResolver:
     ) -> LoadedPromptInstructions:
         sections: list[str] = []
         local_paths: list[Path] = []
+        loaded_sources: list[LoadedPromptInstructionSource] = []
         seen_local_paths: set[Path] = set()
 
         for source in sources:
@@ -125,14 +138,28 @@ class PromptInstructionResolver:
                     + resolved_path.read_text(encoding="utf-8").strip()
                 )
                 local_paths.append(resolved_path)
+                loaded_sources.append(
+                    LoadedPromptInstructionSource(
+                        source=str(resolved_path),
+                        source_type="local",
+                        local_path=resolved_path,
+                        memory_type=_instruction_memory_type_for_path(resolved_path),
+                    )
+                )
                 continue
-            sections.append(
-                "Instructions from: " + source + "\n" + (await self._fetch_url(source))
+            remote_text = await self._fetch_url(source)
+            sections.append("Instructions from: " + source + "\n" + remote_text)
+            loaded_sources.append(
+                LoadedPromptInstructionSource(
+                    source=source,
+                    source_type="remote",
+                )
             )
 
         return LoadedPromptInstructions(
             sections=tuple(section for section in sections if section.strip()),
             local_paths=tuple(local_paths),
+            sources=tuple(loaded_sources),
         )
 
     async def _fetch_url(self, url: str) -> str:
@@ -259,3 +286,14 @@ def _iter_dirs_up(*, start_dir: Path, stop_dir: Path) -> tuple[Path, ...]:
 def _is_remote_source(value: str) -> bool:
     parsed = urlsplit(value)
     return parsed.scheme in {"http", "https"}
+
+
+def _instruction_memory_type_for_path(path: Path) -> str:
+    file_name = path.name.casefold()
+    if file_name == "agents.md":
+        return "project"
+    if file_name == "claude.md":
+        return "claude"
+    if file_name == "gemini.md":
+        return "gemini"
+    return "configured"

@@ -162,6 +162,7 @@ class MediaRunExecutor:
             system_prompt="",
             user_prompt=intent.intent or None,
             input=intent.input,
+            session_mode=intent.session_mode.value,
             run_kind=intent.run_kind,
             generation_config=intent.generation_config,
             thinking=intent.thinking,

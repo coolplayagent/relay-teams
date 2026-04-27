@@ -38,6 +38,7 @@ class RunEventHub:
         run_state_repo: RunStateRepository | None = None,
     ) -> None:
         self._subscribers: dict[str, list[asyncio.Queue[RunEvent]]] = {}
+        self._subscriber_loops: dict[int, asyncio.AbstractEventLoop] = {}
         self._event_log = event_log
         self._run_state_repo = run_state_repo
         self._publish_lock = Lock()
@@ -45,13 +46,25 @@ class RunEventHub:
     def subscribe(self, run_id: str) -> asyncio.Queue[RunEvent]:
         queue: asyncio.Queue[RunEvent] = asyncio.Queue()
         self._subscribers.setdefault(run_id, []).append(queue)
+        try:
+            self._subscriber_loops[id(queue)] = asyncio.get_running_loop()
+        except RuntimeError:
+            # Sync subscribers do not have a loop to associate with the queue.
+            pass
         return queue
+
+    def loop_for_run(self, run_id: str) -> asyncio.AbstractEventLoop | None:
+        listeners = self._subscribers.get(run_id, [])
+        if not listeners:
+            return None
+        return self._subscriber_loops.get(id(listeners[0]))
 
     def unsubscribe(self, run_id: str, queue: asyncio.Queue[RunEvent]) -> None:
         listeners = self._subscribers.get(run_id)
         if not listeners:
             return
         self._subscribers[run_id] = [item for item in listeners if item is not queue]
+        self._subscriber_loops.pop(id(queue), None)
         if not self._subscribers[run_id]:
             self._subscribers.pop(run_id, None)
 
@@ -125,7 +138,9 @@ class RunEventHub:
             await asyncio.sleep(0.001)
 
     def unsubscribe_all(self, run_id: str) -> None:
-        self._subscribers.pop(run_id, None)
+        listeners = self._subscribers.pop(run_id, [])
+        for queue in listeners:
+            self._subscriber_loops.pop(id(queue), None)
 
     def has_subscribers(self, run_id: str) -> bool:
         return bool(self._subscribers.get(run_id))

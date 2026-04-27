@@ -36,6 +36,7 @@ class LLMRequest(BaseModel):
     system_prompt: str
     user_prompt: str | None
     input: tuple[ContentPart, ...] = ()
+    session_mode: str = "normal"
     run_kind: RunKind = RunKind.CONVERSATION
     generation_config: MediaGenerationConfig | None = None
     thinking: RunThinkingConfig = RunThinkingConfig()

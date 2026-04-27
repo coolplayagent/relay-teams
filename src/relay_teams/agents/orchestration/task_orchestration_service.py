@@ -28,7 +28,13 @@ from relay_teams.agents.tasks.models import (
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
-from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.hooks import (
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCreatedInput,
+)
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -79,22 +85,21 @@ class TaskOrchestrationService:
         root = await self._get_root_task_async(run_id)
         created_records: list[TaskRecord] = []
         for draft in tasks:
-            record = await self._task_repo.create_async(
-                TaskEnvelope(
-                    task_id=new_task_id().value,
-                    session_id=root.envelope.session_id,
-                    parent_task_id=root.envelope.task_id,
-                    trace_id=root.envelope.trace_id,
-                    role_id=None,
-                    title=_resolved_title(draft.title, draft.objective),
-                    objective=draft.objective,
-                    verification=_verification_for_task_draft(draft),
-                    spec=draft.spec,
-                    lifecycle=draft.lifecycle,
-                )
+            envelope = TaskEnvelope(
+                task_id=new_task_id().value,
+                session_id=root.envelope.session_id,
+                parent_task_id=root.envelope.task_id,
+                trace_id=root.envelope.trace_id,
+                role_id=None,
+                title=_resolved_title(draft.title, draft.objective),
+                objective=draft.objective,
+                verification=_verification_for_task_draft(draft),
+                spec=draft.spec,
+                lifecycle=draft.lifecycle,
             )
+            await self._execute_task_created_hooks(envelope=envelope)
+            record = await self._task_repo.create_async(envelope)
             created_records.append(record)
-            await self._execute_task_created_hooks(record=record)
 
         response: dict[str, JsonValue] = {
             "created_count": len(created_records),
@@ -102,11 +107,10 @@ class TaskOrchestrationService:
         }
         return response
 
-    async def _execute_task_created_hooks(self, *, record: TaskRecord) -> None:
+    async def _execute_task_created_hooks(self, *, envelope: TaskEnvelope) -> None:
         if self._hook_service is None:
             return
-        envelope = record.envelope
-        _ = await self._hook_service.execute(
+        bundle = await self._hook_service.execute(
             event_input=TaskCreatedInput(
                 event_name=HookEventName.TASK_CREATED,
                 session_id=envelope.session_id,
@@ -121,6 +125,11 @@ class TaskOrchestrationService:
             ),
             run_event_hub=self._run_event_hub,
         )
+        if (
+            isinstance(bundle, HookDecisionBundle)
+            and bundle.decision == HookDecisionType.DENY
+        ):
+            raise ValueError(bundle.reason or "Task creation denied by runtime hooks.")
 
     def update_task(
         self,

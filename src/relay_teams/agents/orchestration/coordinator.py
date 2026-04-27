@@ -56,7 +56,12 @@ from relay_teams.agents.tasks.models import (
     VerificationResult,
 )
 from relay_teams.sessions.session_models import SessionMode
-from relay_teams.hooks import HookEventName, HookService, TaskCreatedInput
+from relay_teams.hooks import (
+    HookDecisionType,
+    HookEventName,
+    HookService,
+    TaskCreatedInput,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 MAX_ORCHESTRATION_CYCLES = 8
@@ -376,7 +381,7 @@ class CoordinatorGraph(BaseModel):
     async def _execute_task_created_hooks(self, *, root_task: TaskEnvelope) -> None:
         if self.hook_service is None or root_task.parent_task_id is None:
             return
-        _ = await self.hook_service.execute(
+        bundle = await self.hook_service.execute(
             event_input=TaskCreatedInput(
                 event_name=HookEventName.TASK_CREATED,
                 session_id=root_task.session_id,
@@ -391,6 +396,8 @@ class CoordinatorGraph(BaseModel):
             ),
             run_event_hub=self.run_event_hub,
         )
+        if bundle.decision == HookDecisionType.DENY:
+            raise ValueError(bundle.reason or "Task creation denied by runtime hooks.")
 
     async def _run_ai_mode(
         self,
