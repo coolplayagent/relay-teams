@@ -148,7 +148,7 @@ def test_mcp_list_renders_table_by_default(monkeypatch) -> None:
 def test_mcp_list_reports_empty_table(monkeypatch) -> None:
     monkeypatch.setattr(
         "relay_teams.mcp.mcp_cli.load_mcp_service",
-        lambda: _FailingMcpService(),
+        _FailingMcpService,
     )
 
     result = runner.invoke(cli_app.app, ["mcp", "list"])
