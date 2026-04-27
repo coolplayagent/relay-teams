@@ -22,6 +22,9 @@ def test_chat_input_renders_yolo_and_thinking_controls() -> None:
     orchestration_css = Path(
         "frontend/dist/css/components/orchestration.css"
     ).read_text(encoding="utf-8")
+    new_session_composer_css = Path(
+        "frontend/dist/css/components/new-session-draft-composer.css"
+    ).read_text(encoding="utf-8")
 
     assert 'id="yolo-toggle"' in html
     assert 'id="thinking-mode-toggle"' in html
@@ -31,6 +34,15 @@ def test_chat_input_renders_yolo_and_thinking_controls() -> None:
     assert 'id="prompt-mention-menu"' in html
     assert ".composer-preset-field[hidden]," in orchestration_css
     assert ".composer-mode-inline[hidden]" in orchestration_css
+    assert (
+        '#input-container.is-new-session-draft-composer .composer-mode-toggle[for="yolo-toggle"]'
+        in new_session_composer_css
+    )
+    assert "margin-left: auto;" in new_session_composer_css
+    assert "#input-container.is-new-session-draft-composer .composer-usage-strip" in (
+        new_session_composer_css
+    )
+    assert "display: none;" in new_session_composer_css
 
 
 def test_send_user_prompt_includes_yolo_and_thinking(tmp_path: Path) -> None:
@@ -2912,6 +2924,8 @@ console.log(JSON.stringify({
 def _write_new_session_draft_mock(tmp_path: Path) -> None:
     components_dir = tmp_path / "components"
     components_dir.mkdir(exist_ok=True)
+    core_dir = tmp_path / "core"
+    core_dir.mkdir(exist_ok=True)
     (components_dir / "newSessionDraft.js").write_text(
         """
 export function applyDraftSessionTopology() {
@@ -2924,6 +2938,22 @@ export async function ensureSessionForNewSessionDraft() {
 
 export function isNewSessionDraftActive() {
     return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (core_dir / "submission.js").write_text(
+        """
+export function beginForegroundSubmission() {
+    return { detached: false };
+}
+
+export function finishForegroundSubmission() {
+    return undefined;
+}
+
+export function isForegroundSubmissionActive(submission) {
+    return submission?.detached !== true;
 }
 """.strip(),
         encoding="utf-8",

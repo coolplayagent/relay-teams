@@ -8,7 +8,11 @@ import time
 
 import pytest
 
-from relay_teams.media import content_parts_from_text
+from relay_teams.media import (
+    InlineMediaContentPart,
+    MediaModality,
+    content_parts_from_text,
+)
 from relay_teams.sessions.runs.enums import ExecutionMode
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
@@ -187,6 +191,152 @@ def test_run_intent_repo_list_by_session_skips_invalid_rows(
 
     assert tuple(records) == ("run-good",)
     assert records["run-good"].intent == "good intent"
+
+
+def test_run_intent_repo_first_by_session_ids_picks_first_non_empty_intent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_first_by_session_ids.db"
+    repo = RunIntentRepository(db_path)
+    repo.upsert(
+        run_id="run-empty",
+        session_id="session-1",
+        intent=IntentInput(session_id="session-1"),
+    )
+    repo.upsert(
+        run_id="run-first",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("input first"),
+            display_input=content_parts_from_text("display first"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-ignored-later",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("later"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-other",
+        session_id="session-2",
+        intent=IntentInput(
+            session_id="session-2",
+            input=content_parts_from_text("other session"),
+        ),
+    )
+
+    records = repo.first_by_session_ids(("session-1", "session-2", "missing"))
+
+    assert repo.first_by_session_ids(()) == {}
+    assert tuple(records) == ("session-1", "session-2")
+    assert records["session-1"].display_intent == "display first"
+    assert records["session-2"].intent == "other session"
+
+
+def test_run_intent_repo_first_titles_by_session_ids_uses_prompt_titles(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_intent_first_titles_by_session_ids.db"
+    repo = RunIntentRepository(db_path)
+    repo.upsert(
+        run_id="run-invalid-title",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("should be skipped"),
+            display_input=content_parts_from_text("invalid display"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-title",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("input title"),
+            display_input=content_parts_from_text("display title"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-media",
+        session_id="session-2",
+        intent=IntentInput(
+            session_id="session-2",
+            input=(
+                InlineMediaContentPart(
+                    modality=MediaModality.IMAGE,
+                    mime_type="image/png",
+                    base64_data="AA==",
+                    name="diagram.png",
+                ),
+            ),
+        ),
+    )
+    repo.upsert(
+        run_id="run-no-media-label",
+        session_id="session-3",
+        intent=IntentInput(
+            session_id="session-3",
+            input=content_parts_from_text("ignored media"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-after-empty-media",
+        session_id="session-3",
+        intent=IntentInput(
+            session_id="session-3",
+            input=content_parts_from_text("after empty media"),
+        ),
+    )
+    repo.upsert(
+        run_id="run-legacy",
+        session_id="session-4",
+        intent=IntentInput(session_id="session-4"),
+    )
+    long_title = "x" * 140
+    repo.upsert(
+        run_id="run-long",
+        session_id="session-5",
+        intent=IntentInput(
+            session_id="session-5",
+            input=content_parts_from_text(long_title),
+        ),
+    )
+    repo._conn.execute(
+        "UPDATE run_intents SET display_input_json=?, created_at=? WHERE run_id=?",
+        ('{"bad": true}', "2026-03-20T00:00:00Z", "run-invalid-title"),
+    )
+    repo._conn.execute(
+        "UPDATE run_intents SET created_at=? WHERE run_id=?",
+        ("2026-03-20T00:00:01Z", "run-title"),
+    )
+    repo._conn.execute(
+        "UPDATE run_intents SET input_json=?, created_at=? WHERE run_id=?",
+        ('[{"kind":"inline_media"}]', "2026-03-20T00:00:00Z", "run-no-media-label"),
+    )
+    repo._conn.execute(
+        "UPDATE run_intents SET created_at=? WHERE run_id=?",
+        ("2026-03-20T00:00:01Z", "run-after-empty-media"),
+    )
+    repo._conn.execute(
+        "UPDATE run_intents SET intent=? WHERE run_id=?",
+        ("legacy title", "run-legacy"),
+    )
+    repo._conn.commit()
+
+    titles = repo.first_titles_by_session_ids(
+        ("session-1", "session-2", "session-3", "session-4", "session-5")
+    )
+
+    assert repo.first_titles_by_session_ids(()) == {}
+    assert titles["session-1"] == "display title"
+    assert titles["session-2"] == "[image: diagram.png]"
+    assert titles["session-3"] == "after empty media"
+    assert titles["session-4"] == "legacy title"
+    assert titles["session-5"] == f"{long_title[:117]}..."
 
 
 def test_run_intent_repo_does_not_backfill_yolo_from_legacy_approval_mode(

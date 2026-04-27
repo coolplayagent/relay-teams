@@ -33,6 +33,40 @@ console.log(JSON.stringify({ html }));
     )
 
 
+def test_retry_timeline_renders_stable_retry_item_with_spinner(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { renderRetryEventMarkup } = await import('./timeline.mjs');
+
+const html = renderRetryEventMarkup(
+    {
+        event_id: 'retry-run-1-2',
+        kind: 'retry',
+        phase: 'retrying',
+        is_active: true,
+        attempt_number: 2,
+        total_attempts: 6,
+        retry_in_ms: 1000,
+        error_code: 'rate_limit',
+    },
+    Date.now(),
+);
+
+console.log(JSON.stringify({ html }));
+""".strip(),
+    )
+
+    html = str(payload["html"])
+    assert 'data-retry-event-id="retry-run-1-2"' in html
+    assert "round-retry-item-active" in html
+    assert "round-retry-item-retrying" in html
+    assert "round-retry-spinner" in html
+    assert "Attempt 2/6 in progress" in html
+
+
 def test_load_session_rounds_uses_full_timeline_page_for_navigator(
     tmp_path: Path,
 ) -> None:
@@ -595,15 +629,31 @@ export function logError(code, message, payload) {
     )
     (tmp_path / "mockI18n.mjs").write_text(
         """
+const messages = {
+    'rounds.retry.scheduled_label': 'Retry scheduled',
+    'rounds.retry.retrying_label': 'Retrying',
+    'rounds.retry.failed_label': 'Retry failed',
+    'rounds.retry.succeeded_label': 'Retry resumed',
+    'rounds.retry.scheduled_copy': 'Attempt {attempt}/{total} in {seconds}',
+    'rounds.retry.retrying_copy': 'Attempt {attempt}/{total} in progress',
+    'rounds.retry.failed_copy': 'Attempt {attempt}/{total} failed',
+    'rounds.retry.succeeded_copy': 'Attempt {attempt}/{total} resumed',
+    'rounds.retry.fallback_label': 'Fallback',
+    'rounds.retry.fallback_failed_label': 'Fallback failed',
+    'rounds.retry.fallback_activated_copy': 'Fallback activated',
+    'rounds.retry.fallback_failed_copy': 'No fallback candidate succeeded',
+    'rounds.retry.fallback_switched_copy': 'Switched to {target}',
+};
+
 export function formatMessage(message, values = {}) {
     return Object.entries(values).reduce(
         (result, [key, value]) => result.replaceAll(`{${key}}`, String(value)),
-        String(message || ''),
+        t(message),
     );
 }
 
 export function t(key) {
-    return String(key || '');
+    return messages[key] || String(key || '');
 }
 """.strip(),
         encoding="utf-8",

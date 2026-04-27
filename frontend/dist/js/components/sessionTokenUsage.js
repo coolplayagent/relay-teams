@@ -20,7 +20,7 @@ export function initializeSessionTokenUsage() {
     renderIdle();
 }
 
-export function clearSessionTokenUsage() {
+export function clearSessionTokenUsage({ preserveDisplay = false } = {}) {
     if (refreshState.timerId) {
         clearTimeout(refreshState.timerId);
         refreshState.timerId = 0;
@@ -29,7 +29,11 @@ export function clearSessionTokenUsage() {
         refreshState.controller.abort();
         refreshState.controller = null;
     }
-    renderIdle();
+    if (preserveDisplay) {
+        renderLoading();
+    } else {
+        renderIdle();
+    }
 }
 
 export function scheduleSessionTokenUsageRefresh({ immediate = false } = {}) {

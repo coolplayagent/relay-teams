@@ -289,6 +289,8 @@ def build_session_rounds(
                 coordinator_messages = [reconstructed]
         created_at = _round_created_at(root_task, run_messages)
         runtime = run_runtime.get(run_id)
+        run_started_at = runtime.created_at.isoformat() if runtime is not None else None
+        run_updated_at = runtime.updated_at.isoformat() if runtime is not None else None
         pending_approvals = list(approval_tickets_by_run.get(run_id, []))
         intent_parts = _round_intent_parts(
             root_task,
@@ -311,6 +313,8 @@ def build_session_rounds(
             "task_status_map": task_status_map_by_run.get(run_id, {}),
             "pending_tool_approvals": pending_approvals,
             "pending_tool_approval_count": len(pending_approvals),
+            "run_started_at": run_started_at,
+            "run_updated_at": run_updated_at,
             "run_status": runtime.status.value if runtime is not None else None,
             "run_phase": runtime.phase.value if runtime is not None else None,
             "has_final_output": run_id in final_output_by_run,
@@ -398,6 +402,8 @@ def build_session_timeline_rounds(
             intent_input_parts=intent_input_parts,
         )
         runtime = run_runtime.get(run_id)
+        run_started_at = runtime.created_at.isoformat() if runtime is not None else None
+        run_updated_at = runtime.updated_at.isoformat() if runtime is not None else None
         pending_approvals = list(approval_tickets_by_run.get(run_id, []))
         rounds.append(
             {
@@ -411,6 +417,8 @@ def build_session_timeline_rounds(
                 "retry_events": retry_events_by_run.get(run_id, []),
                 "has_user_messages": bool(run_messages) or bool(intent_input_parts),
                 "pending_tool_approval_count": len(pending_approvals),
+                "run_started_at": run_started_at,
+                "run_updated_at": run_updated_at,
                 "run_status": runtime.status.value if runtime is not None else None,
                 "run_phase": runtime.phase.value if runtime is not None else None,
                 "has_final_output": run_id in final_output_by_run,
@@ -657,6 +665,8 @@ _TIMELINE_ROUND_KEYS = (
     "retry_events",
     "has_user_messages",
     "pending_tool_approval_count",
+    "run_started_at",
+    "run_updated_at",
     "run_status",
     "run_phase",
     "has_final_output",

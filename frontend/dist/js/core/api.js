@@ -12,6 +12,8 @@ export {
     fetchSessionAgents,
     fetchSessionSubagents,
     fetchSessionTasks,
+    invalidateSessionRecovery,
+    markSessionTerminalRunViewed,
     updateSessionTopology,
     fetchAgentMessages,
     fetchAgentReflection,

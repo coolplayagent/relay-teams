@@ -650,12 +650,14 @@ def test_get_workspace_tree_listing_runs_service_call_in_threadpool(
 
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    async def fake_to_thread(
+    async def fake_file_work(
+        operation: str,
         func: Callable[..., object],
         /,
         *args: object,
         **kwargs: object,
     ) -> object:
+        _ = operation
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
@@ -669,7 +671,7 @@ def test_get_workspace_tree_listing_runs_service_call_in_threadpool(
         workspace_id="project-alpha",
         root_path=tmp_path,
     )
-    monkeypatch.setattr(workspaces, "call_maybe_async", fake_to_thread)
+    monkeypatch.setattr(workspaces, "_call_workspace_file_work", fake_file_work)
 
     response = client.get("/api/workspaces/project-alpha/tree?path=src&mount=ops")
 
@@ -725,12 +727,14 @@ def test_workspace_diff_routes_run_service_calls_in_threadpool(
 
     calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
-    async def fake_to_thread(
+    async def fake_file_work(
+        operation: str,
         func: Callable[..., object],
         /,
         *args: object,
         **kwargs: object,
     ) -> object:
+        _ = operation
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
@@ -744,7 +748,7 @@ def test_workspace_diff_routes_run_service_calls_in_threadpool(
         workspace_id="project-alpha",
         root_path=tmp_path,
     )
-    monkeypatch.setattr(workspaces, "call_maybe_async", fake_to_thread)
+    monkeypatch.setattr(workspaces, "_call_workspace_file_work", fake_file_work)
 
     diffs_response = client.get("/api/workspaces/project-alpha/diffs?mount=ops")
     diff_file_response = client.get(

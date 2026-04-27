@@ -58,11 +58,15 @@ import {
     showLlmRetryStatus,
 } from "./retryStatus.mjs";
 
-globalThis.window = {
-    setInterval() {
-        return 1;
-    },
-    clearInterval() {},
+globalThis.__timerDelays = [];
+globalThis.__pendingTimer = null;
+globalThis.setTimeout = (callback, delay) => {
+    globalThis.__timerDelays.push(delay);
+    globalThis.__pendingTimer = callback;
+    return 41;
+};
+globalThis.clearTimeout = () => {
+    globalThis.__pendingTimer = null;
 };
 
 showLlmRetryStatus(
@@ -122,7 +126,12 @@ const beforeClear = {
     appended: appended.slice(),
     removed: removed.slice(),
     updated: updated.slice(),
+    timerDelays: globalThis.__timerDelays.slice(),
 };
+
+if (globalThis.__pendingTimer) {
+    globalThis.__pendingTimer();
+}
 
 clearLlmRetryStatus();
 
@@ -178,8 +187,13 @@ console.log(JSON.stringify({
     assert failed_update["payload"]["error_message"] == "final provider error"
 
     before_clear_removed = payload["beforeClear"]["removed"]
-    assert len(before_clear_removed) == 2
-    assert before_clear_removed[-1]["runId"] == "run-2"
+    before_clear_phases = [
+        item["payload"].get("phase") for item in payload["beforeClear"]["updated"]
+    ]
+    assert "succeeded" in before_clear_phases
+    assert payload["beforeClear"]["timerDelays"] == [900]
+    assert len(before_clear_removed) == 1
 
     after_clear_removed = payload["afterClear"]["removed"]
     assert len(after_clear_removed) == 2
+    assert after_clear_removed[-1]["runId"] == "run-2"

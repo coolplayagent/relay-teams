@@ -100,11 +100,14 @@ export function clearSessionTimeline() {
 
 export async function loadSessionRounds(sessionId, options = {}) {
     const renderPlan = captureRoundRenderPlan(options);
-    const timelinePageResult = fetchTimelineRoundsPage(sessionId)
+    const signal = options.signal || null;
+    throwIfAborted(signal);
+    const timelinePageResult = fetchTimelineRoundsPage(sessionId, { signal })
         .then(value => ({ status: 'fulfilled', value }))
         .catch(reason => ({ status: 'rejected', reason }));
     try {
-        const page = await fetchInitialRoundsPage(sessionId);
+        const page = await fetchInitialRoundsPage(sessionId, { signal });
+        throwIfAborted(signal);
         if (!isSessionLoadCurrent(sessionId)) {
             return;
         }
@@ -125,6 +128,7 @@ export async function loadSessionRounds(sessionId, options = {}) {
         }
 
         const timelineResult = await timelinePageResult;
+        throwIfAborted(signal);
         if (!isSessionLoadCurrent(sessionId)) {
             return;
         }
@@ -141,11 +145,20 @@ export async function loadSessionRounds(sessionId, options = {}) {
             );
         }
     } catch (e) {
+        if (e?.name === 'AbortError') {
+            throw e;
+        }
         logError(
             'frontend.rounds.load_failed',
             'Failed loading rounds',
             errorToPayload(e, { session_id: sessionId }),
         );
+    }
+}
+
+function throwIfAborted(signal) {
+    if (signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
     }
 }
 
@@ -459,15 +472,17 @@ export function appendRoundRetryEvent(runId, retryEvent) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId || !retryEvent || typeof retryEvent !== 'object') return;
 
+    const patchRetry = round => ({
+        ...round,
+        retry_events: [retryEvent],
+    });
     roundsState.currentRounds = roundsState.currentRounds.map(round => {
         if (round.run_id !== safeRunId) {
             return round;
         }
-        return {
-            ...round,
-            retry_events: [retryEvent],
-        };
+        return patchRetry(round);
     });
+    roundsState.timelineRounds = patchRoundCollection(roundsState.timelineRounds, safeRunId, patchRetry);
     if (roundsState.currentRound?.run_id === safeRunId) {
         roundsState.currentRound = roundsState.currentRounds.find(round => round.run_id === safeRunId) || roundsState.currentRound;
     }
@@ -481,7 +496,7 @@ export function updateRoundRetryEvent(runId, retryEventId, updates) {
     const safeRetryEventId = String(retryEventId || '').trim();
     if (!safeRunId || !safeRetryEventId || !updates || typeof updates !== 'object') return;
 
-    roundsState.currentRounds = roundsState.currentRounds.map(round => {
+    const patchRetry = round => {
         if (round.run_id !== safeRunId) {
             return round;
         }
@@ -494,7 +509,9 @@ export function updateRoundRetryEvent(runId, retryEventId, updates) {
                     : event
             )),
         };
-    });
+    };
+    roundsState.currentRounds = roundsState.currentRounds.map(patchRetry);
+    roundsState.timelineRounds = roundsState.timelineRounds.map(patchRetry);
     if (roundsState.currentRound?.run_id === safeRunId) {
         roundsState.currentRound = roundsState.currentRounds.find(round => round.run_id === safeRunId) || roundsState.currentRound;
     }
@@ -508,7 +525,7 @@ export function removeRoundRetryEvent(runId, retryEventId) {
     const safeRetryEventId = String(retryEventId || '').trim();
     if (!safeRunId || !safeRetryEventId) return;
 
-    roundsState.currentRounds = roundsState.currentRounds.map(round => {
+    const patchRetry = round => {
         if (round.run_id !== safeRunId) {
             return round;
         }
@@ -517,7 +534,9 @@ export function removeRoundRetryEvent(runId, retryEventId) {
             ...round,
             retry_events: existing.filter(event => event?.event_id !== safeRetryEventId),
         };
-    });
+    };
+    roundsState.currentRounds = roundsState.currentRounds.map(patchRetry);
+    roundsState.timelineRounds = roundsState.timelineRounds.map(patchRetry);
     if (roundsState.currentRound?.run_id === safeRunId) {
         roundsState.currentRound = roundsState.currentRounds.find(round => round.run_id === safeRunId) || roundsState.currentRound;
     }
@@ -1128,6 +1147,8 @@ function renderRoundSection(round, index) {
     section.dataset.runId = round.run_id;
     section.id = roundSectionId(round.run_id);
     if (round.created_at) section.dataset.roundCreatedAt = round.created_at;
+    if (round.run_started_at) section.dataset.roundStartedAt = round.run_started_at;
+    if (round.run_updated_at) section.dataset.roundUpdatedAt = round.run_updated_at;
 
     const time = new Date(round.created_at).toLocaleString();
     const stateLabel = roundStateLabel(round);
@@ -2071,11 +2092,20 @@ function patchRoundRetryEvents(runId) {
     const round = roundsState.currentRounds.find(item => item.run_id === runId);
     const section = document.querySelector(`.session-round-section[data-run-id="${runId}"]`);
     if (!round || !section) return;
+    const retryEvents = Array.isArray(round.retry_events) ? round.retry_events : [];
     const existing = section.querySelector('.round-retry-timeline');
-    if (existing) {
-        existing.remove();
+    if (retryEvents.length === 0) {
+        if (existing) {
+            existing.remove();
+        }
+        return;
     }
-    renderRoundRetryEvents(section, round.retry_events || []);
+    if (!existing) {
+        renderRoundRetryEvents(section, retryEvents);
+        return;
+    }
+    const nowMs = Date.now();
+    existing.innerHTML = retryEvents.map(event => renderRetryEventMarkup(event, nowMs)).join('');
 }
 
 function syncRetryTimelineTimer() {
@@ -2106,7 +2136,7 @@ function patchAllActiveRetryEvents() {
     roundsState.currentRounds.forEach(round => {
         const retryEvents = Array.isArray(round.retry_events) ? round.retry_events : [];
         if (retryEvents.some(isScheduledRetryEvent)) {
-            patchRoundRetryEvents(round.run_id);
+            updateScheduledRetryCountdowns(round.run_id, retryEvents);
         }
     });
 }
@@ -2152,10 +2182,11 @@ function renderRoundRetryEvents(section, retryEvents) {
     host.className = 'round-retry-timeline';
     const nowMs = Date.now();
     host.innerHTML = items.map(event => renderRetryEventMarkup(event, nowMs)).join('');
-    section.appendChild(host);
+    insertRoundRetryTimeline(section, host);
 }
 
 function renderRetryEventMarkup(event, nowMs) {
+    const eventId = retryEventDomId(event);
     const kind = String(event?.kind || 'retry').trim() || 'retry';
     const attemptNumber = Number(event?.attempt_number || 0);
     const totalAttempts = Number(event?.total_attempts || 0);
@@ -2174,27 +2205,52 @@ function renderRetryEventMarkup(event, nowMs) {
     const occurredLabel = occurredAt ? new Date(occurredAt).toLocaleTimeString() : '';
     const fallbackTarget = String(event?.to_profile_id || event?.to_model || '').trim();
     const fallbackCopy = phase === 'failed'
-        ? 'No fallback candidate succeeded'
+        ? formatMessage('rounds.retry.fallback_failed_copy', {})
         : fallbackTarget
-            ? `Switched to ${fallbackTarget}`
-            : 'Fallback activated';
+            ? formatMessage('rounds.retry.fallback_switched_copy', { target: fallbackTarget })
+            : formatMessage('rounds.retry.fallback_activated_copy', {});
     const retryCopy = phase === 'retrying'
-        ? `Attempt ${attemptNumber}/${totalAttempts} in progress`
+        ? formatMessage('rounds.retry.retrying_copy', {
+            attempt: attemptNumber,
+            total: totalAttempts,
+        })
         : phase === 'failed'
-            ? `Attempt ${attemptNumber}/${totalAttempts} failed`
-            : `Attempt ${attemptNumber}/${totalAttempts} in ${retrySeconds}`;
+            ? formatMessage('rounds.retry.failed_copy', {
+                attempt: attemptNumber,
+                total: totalAttempts,
+            })
+            : phase === 'succeeded'
+                ? formatMessage('rounds.retry.succeeded_copy', {
+                    attempt: attemptNumber,
+                    total: totalAttempts,
+                })
+                : formatMessage('rounds.retry.scheduled_copy', {
+                    attempt: attemptNumber,
+                    total: totalAttempts,
+                    seconds: retrySeconds,
+                });
     const copy = kind === 'fallback' ? fallbackCopy : retryCopy;
-    const fallbackLabel = phase === 'failed' ? 'Fallback failed' : 'Fallback';
+    const fallbackLabel = phase === 'failed'
+        ? t('rounds.retry.fallback_failed_label')
+        : t('rounds.retry.fallback_label');
     const retryLabel = phase === 'retrying'
-        ? 'Retrying'
+        ? t('rounds.retry.retrying_label')
         : phase === 'failed'
-            ? 'Retry failed'
-            : 'Retry scheduled';
+            ? t('rounds.retry.failed_label')
+            : phase === 'succeeded'
+                ? t('rounds.retry.succeeded_label')
+                : t('rounds.retry.scheduled_label');
     const label = kind === 'fallback' ? fallbackLabel : retryLabel;
+    const spinner = kind === 'retry' && (phase === 'scheduled' || phase === 'retrying')
+        ? '<span class="round-retry-spinner" aria-hidden="true"></span>'
+        : '';
+    const activeClass = isActive ? ' round-retry-item-active' : '';
+    const phaseClass = ` round-retry-item-${escAttributeToken(phase)}`;
+    const failedClass = phase === 'failed' ? ' round-retry-item-failed' : '';
     return `
-        <div class="round-retry-item${isActive ? ' round-retry-item-active' : ''}${phase === 'failed' ? ' round-retry-item-failed' : ''}">
+        <div class="round-retry-item${activeClass}${phaseClass}${failedClass}" data-retry-event-id="${esc(eventId)}">
             <div class="round-retry-main">
-                <span class="round-retry-label">${label}</span>
+                <span class="round-retry-label">${spinner}<span>${esc(label)}</span></span>
                 <span class="round-retry-copy">${esc(copy)}</span>
             </div>
             <div class="round-retry-meta">
@@ -2204,6 +2260,72 @@ function renderRetryEventMarkup(event, nowMs) {
             ${errorMessage ? `<div class="round-retry-detail">${esc(errorMessage)}</div>` : ''}
         </div>
     `;
+}
+
+function insertRoundRetryTimeline(section, host) {
+    const header = section.querySelector('.round-detail-header');
+    if (header?.nextSibling) {
+        section.insertBefore(host, header.nextSibling);
+        return;
+    }
+    section.appendChild(host);
+}
+
+function updateScheduledRetryCountdowns(runId, retryEvents) {
+    const section = document.querySelector(`.session-round-section[data-run-id="${runId}"]`);
+    const host = section?.querySelector('.round-retry-timeline');
+    if (!section || !host) {
+        patchRoundRetryEvents(runId);
+        return;
+    }
+    const nowMs = Date.now();
+    retryEvents.filter(isScheduledRetryEvent).forEach(event => {
+        const eventId = retryEventDomId(event);
+        const item = Array.from(host.querySelectorAll('.round-retry-item')).find(
+            element => element.dataset.retryEventId === eventId,
+        );
+        const copyEl = item?.querySelector('.round-retry-copy');
+        if (!copyEl) {
+            patchRoundRetryEvents(runId);
+            return;
+        }
+        copyEl.textContent = retryEventCopy(event, nowMs);
+    });
+}
+
+function retryEventCopy(event, nowMs) {
+    const attemptNumber = Number(event?.attempt_number || 0);
+    const totalAttempts = Number(event?.total_attempts || 0);
+    const displayRetryMs = isScheduledRetryEvent(event)
+        ? computeRetryRemainingMs(event, nowMs)
+        : Number(event?.retry_in_ms || 0);
+    const retrySeconds = displayRetryMs > 0
+        ? `${(displayRetryMs / 1000).toFixed(displayRetryMs >= 10000 ? 0 : 1)}s`
+        : '0s';
+    return formatMessage('rounds.retry.scheduled_copy', {
+        attempt: attemptNumber,
+        total: totalAttempts,
+        seconds: retrySeconds,
+    });
+}
+
+function retryEventDomId(event) {
+    const rawId = String(event?.event_id || '').trim();
+    if (rawId) {
+        return rawId;
+    }
+    const kind = String(event?.kind || 'retry').trim() || 'retry';
+    const occurredAt = String(event?.occurred_at || '').trim();
+    const attemptNumber = String(event?.attempt_number || 0);
+    return `${kind}-${occurredAt}-${attemptNumber}`;
+}
+
+function escAttributeToken(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(/[^a-z0-9_-]/g, '-')
+        || 'scheduled';
 }
 
 function isScheduledRetryEvent(event) {

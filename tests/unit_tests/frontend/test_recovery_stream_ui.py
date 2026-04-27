@@ -173,6 +173,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "const focusedRunId = String(activeConnection?.runId || '').trim();"
         in stream_script
     )
+    assert "|| String(state.currentSessionId || '').trim()" in stream_script
     assert "const backgroundRunIds = new Set();" in stream_script
     assert "if (focusedRunId && runId === focusedRunId) {" in stream_script
     assert "if (backgroundRunIds.has(runId)) {" in stream_script
@@ -183,8 +184,9 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     )
     assert "const unavailableRunCooldownUntil = new Map();" in stream_script
     assert "const RUN_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
-    assert "status: 'stopping'," in stream_script
-    assert "phase: 'stopping'," in stream_script
+    assert "status: 'stopped'," in stream_script
+    assert "phase: 'stopped'," in stream_script
+    assert "should_show_recover: true," in stream_script
     assert "pending_user_question_count: 0," in stream_script
     assert "pending_user_questions: []," in stream_script
     assert "if (isRunNotFoundError(data.error)) {" in stream_script

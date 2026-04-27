@@ -60,11 +60,27 @@
 }
 
 #input-container.is-new-session-draft-composer .input-controls {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    box-sizing: border-box;
     margin-top: 12px;
     gap: 16px;
     height: 36px;
-    grid-template-columns: minmax(0, 1fr) auto auto;
-    grid-template-areas: "topology yolo thinking";
+    overflow: hidden;
+}
+
+#input-container.is-new-session-draft-composer .composer-topology {
+    flex: 1 1 auto;
+    width: auto;
+}
+
+#input-container.is-new-session-draft-composer .composer-mode-toggle[for="yolo-toggle"] {
+    margin-left: auto;
+}
+
+#input-container.is-new-session-draft-composer .composer-usage-strip {
+    display: none;
 }
 
 #input-container.is-new-session-draft-composer .composer-topology-label::before {
@@ -153,5 +169,19 @@
 
     #input-container.is-new-session-draft-composer #send-btn .send-btn-label {
         display: none;
+    }
+
+    #input-container.is-new-session-draft-composer .input-controls {
+        flex-wrap: wrap;
+        height: auto;
+        row-gap: 10px;
+    }
+
+    #input-container.is-new-session-draft-composer .composer-topology {
+        flex-basis: 100%;
+    }
+
+    #input-container.is-new-session-draft-composer .composer-mode-toggle[for="yolo-toggle"] {
+        margin-left: 0;
     }
 }

@@ -22,6 +22,7 @@ from relay_teams.validation import (
 )
 
 LOGGER = get_logger(__name__)
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
 
 
 class RunRuntimeStatus(str, Enum):
@@ -348,6 +349,41 @@ class RunRuntimeRepository(SharedSqliteRepository):
                 for row in rows
                 if (record := self._record_or_none(row)) is not None
             )
+
+    def list_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, tuple[RunRuntimeRecord, ...]]:
+        if not session_ids:
+            return {}
+        grouped: dict[str, list[RunRuntimeRecord]] = {}
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT *
+                    FROM run_runtime
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, updated_at DESC
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    record = self._record_or_none(row)
+                    if record is None:
+                        continue
+                    grouped.setdefault(record.session_id, []).append(record)
+        return {session_id: tuple(records) for session_id, records in grouped.items()}
+
+    async def list_by_session_ids_async(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, tuple[RunRuntimeRecord, ...]]:
+        return await self._call_sync_async(self.list_by_session_ids, session_ids)
 
     async def list_by_session_async(
         self, session_id: str

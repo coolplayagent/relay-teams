@@ -54,6 +54,10 @@ import {
 import {
     coordinatorContainerFor,
 } from './utils.js';
+import { markSessionTerminalRunViewed } from '../api.js';
+
+const TERMINAL_VIEW_RETRY_DELAY_MS = 250;
+const TERMINAL_VIEW_MAX_ATTEMPTS = 3;
 
 export function handleRunStarted(eventMeta) {
     sysLog(`Run started (trace: ${eventMeta?.trace_id})`);
@@ -85,8 +89,8 @@ export function handleLlmFallbackExhausted(payload) {
 }
 
 export function handleModelStepStarted(eventMeta, instanceId, roleId) {
-    beginLlmRetryAttempt();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    beginLlmRetryAttempt(runId);
     const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
     if (instanceId && roleId) {
         if (!state.instanceRoleMap) state.instanceRoleMap = {};
@@ -119,8 +123,8 @@ export function handleModelStepStarted(eventMeta, instanceId, roleId) {
 }
 
 export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
-    markLlmRetrySucceeded();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    markLlmRetrySucceeded(runId);
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const primaryLabel = getRunPrimaryRoleLabel(runId);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
@@ -166,6 +170,7 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
 
 export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    markLlmRetrySucceeded(runId);
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const primaryLabel = getRunPrimaryRoleLabel(runId);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
@@ -238,8 +243,8 @@ export function handleGenerationProgress(payload) {
 }
 
 export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
-    markLlmRetrySucceeded();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    markLlmRetrySucceeded(runId);
     const primaryRoleId = getRunPrimaryRoleId(runId);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const label = isPrimary ? getRunPrimaryRoleLabel(runId) : (roleId || 'Agent');
@@ -401,7 +406,6 @@ export function handleModelStepFinished(eventMeta, instanceId, roleIdOverride = 
     }
     const key = isPrimary ? 'primary' : instanceId;
     if (!isPrimary && normalModeSubagent) {
-        updateNormalModeSubagentSessionStatus(state.currentSessionId, instanceId, 'completed');
         if (!getActiveSubagentSessionStreamContainer(instanceId)) {
             applyStreamOverlayEvent('model_step_finished', {}, {
                 runId,
@@ -444,8 +448,8 @@ export function handleSubagentRunTerminal(instanceId, status, eventMeta = null, 
 
 export function handleRunCompleted(eventMeta) {
     sysLog('Run completed.');
-    markLlmRetrySucceeded();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    markLlmRetrySucceeded(runId);
     if (runId) {
         markRunTerminalState(runId, {
             status: 'completed',
@@ -469,12 +473,13 @@ export function handleRunCompleted(eventMeta) {
     }
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     clearRunPrimaryRole(runId);
+    markCurrentSessionTerminalViewed(eventMeta);
 }
 
 export function handleRunStopped(eventMeta, payload) {
     sysLog(`Run stopped: ${payload?.reason || 'stopped_by_user'}`, 'log-info');
-    clearLlmRetryStatus();
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    clearLlmRetryStatus(runId);
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'stopped');
     }
@@ -502,12 +507,13 @@ export function handleRunStopped(eventMeta, payload) {
     }
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     clearRunPrimaryRole(runId);
+    markCurrentSessionTerminalViewed(eventMeta);
 }
 
 export function handleRunFailed(eventMeta, payload) {
     sysLog(`Run failed: ${payload?.error || ''}`, 'log-error');
-    markLlmRetryFailed(payload?.error || '');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
+    markLlmRetryFailed(payload?.error || '', runId);
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'failed');
     }
@@ -529,6 +535,59 @@ export function handleRunFailed(eventMeta, payload) {
     if (els.promptInput) els.promptInput.disabled = !!state.activeSubagentSession;
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     clearRunPrimaryRole(runId);
+    markCurrentSessionTerminalViewed(eventMeta);
+}
+
+function markCurrentSessionTerminalViewed(eventMeta = null) {
+    const currentSessionId = String(state.currentSessionId || '').trim();
+    const eventSessionId = String(eventMeta?.session_id || eventMeta?.sessionId || '').trim();
+    if (!currentSessionId) {
+        return;
+    }
+    if (eventSessionId && eventSessionId !== currentSessionId) {
+        return;
+    }
+    void markSessionTerminalRunViewedWithRetry(currentSessionId).catch(error => {
+        sysLog(
+            `Failed to mark session run viewed: ${error?.message || String(error)}`,
+            'log-error',
+        );
+    });
+}
+
+async function markSessionTerminalRunViewedWithRetry(sessionId) {
+    for (let attempt = 1; attempt <= TERMINAL_VIEW_MAX_ATTEMPTS; attempt += 1) {
+        let response;
+        try {
+            response = await markSessionTerminalRunViewed(sessionId);
+        } catch (error) {
+            if (
+                !isTerminalViewRetryableError(error)
+                || attempt >= TERMINAL_VIEW_MAX_ATTEMPTS
+            ) {
+                throw error;
+            }
+            await waitForTerminalViewRetry();
+            continue;
+        }
+        if (response?.status !== 'deferred') {
+            return;
+        }
+        if (attempt < TERMINAL_VIEW_MAX_ATTEMPTS) {
+            await waitForTerminalViewRetry();
+        }
+    }
+}
+
+function isTerminalViewRetryableError(error) {
+    return Number(error?.status || 0) === 503;
+}
+
+function waitForTerminalViewRetry() {
+    return new Promise(resolve => {
+        const timeout = setTimeout(resolve, TERMINAL_VIEW_RETRY_DELAY_MS);
+        timeout.unref?.();
+    });
 }
 
 export function handleLlmRetryScheduled(payload, eventMeta) {
@@ -549,7 +608,7 @@ export function handleLlmRetryExhausted(payload, eventMeta) {
         ...payload,
         retry_in_ms: 0,
     }, eventMeta);
-    markLlmRetryFailed(payload?.error_message || '');
+    markLlmRetryFailed(payload?.error_message || '', eventMeta?.run_id || eventMeta?.trace_id || '');
 }
 
 function isNormalModeSubagentRun(runId, roleId) {

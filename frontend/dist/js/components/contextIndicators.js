@@ -50,15 +50,23 @@ export function refreshVisibleContextIndicators({ immediate = false } = {}) {
     }
 }
 
-export function clearContextIndicators() {
+export function clearContextIndicators({ preserveDisplay = false } = {}) {
     resetPreviewState(mainPreviewState);
-    renderIdle(getMainIndicator());
+    if (preserveDisplay) {
+        renderLoading(getMainIndicator());
+    } else {
+        renderIdle(getMainIndicator());
+    }
     panelPreviewStates.forEach(previewState => {
         resetPreviewState(previewState);
     });
     getPanels().forEach(panel => {
         const indicator = panel?.panelEl?.querySelector('.panel-context-indicator');
-        renderIdle(indicator);
+        if (preserveDisplay) {
+            renderLoading(indicator);
+        } else {
+            renderIdle(indicator);
+        }
     });
 }
 

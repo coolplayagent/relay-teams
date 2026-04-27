@@ -43,6 +43,218 @@ def test_core_api_facade_exports_update_session() -> None:
     assert completed.stdout.strip() == "function"
 
 
+def test_core_api_facade_exports_session_terminal_view_helper() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.document = {"
+                "querySelector() { return null; },"
+                "querySelectorAll() { return []; },"
+                "getElementById() { return null; },"
+                "body: null"
+                "}; "
+                f"const mod = await import({api_module_path.as_uri()!r}); "
+                "console.log(typeof mod.markSessionTerminalRunViewed);"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert completed.stdout.strip() == "function"
+
+
+def test_session_terminal_view_invalidates_session_cache(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "sessions.js"
+    )
+    module_under_test_path = tmp_path / "sessions.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequests.push({
+        url,
+        options,
+        errorMessage,
+    });
+    return { status: 'ok' };
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage) {
+    return requestJson(url, options, errorMessage);
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "const result = await mod.markSessionTerminalRunViewed('session-a'); "
+                "console.log(JSON.stringify({"
+                "result,"
+                "requests: globalThis.__capturedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert json.loads(completed.stdout.strip()) == {
+        "result": {"status": "ok"},
+        "requests": [
+            {
+                "url": "/api/sessions/session-a/terminal-view",
+                "options": {"method": "POST"},
+                "errorMessage": "Failed to mark session run viewed",
+            }
+        ],
+        "invalidatedPrefixes": ["sessions:list", "sessions:session-a:record"],
+    }
+
+
+def test_fetch_sessions_force_refresh_invalidates_session_list_cache(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "sessions.js"
+    )
+    module_under_test_path = tmp_path / "sessions.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson() {
+    throw new Error('not used');
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return [{ session_id: 'session-a' }];
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSessions(); "
+                "await mod.fetchSessions({ forceRefresh: true }); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["invalidatedPrefixes"] == ["sessions:list"]
+    assert payload["managedRequests"] == [
+        {
+            "key": "sessions:list",
+            "url": "/api/sessions",
+            "options": {},
+            "errorMessage": "Failed to fetch sessions",
+            "config": {"ttlMs": 500},
+        },
+        {
+            "key": "sessions:list",
+            "url": "/api/sessions",
+            "options": {},
+            "errorMessage": "Failed to fetch sessions",
+            "config": {"ttlMs": 500},
+        },
+    ]
+
+
 def test_core_api_facade_exports_legacy_dispatch_human_task_alias() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
@@ -423,14 +635,20 @@ export async function requestJson(url, options, errorMessage) {
     };
     return globalThis.__capturedRequest;
 }
+
+export async function requestJsonManaged(key, url, options, errorMessage) {
+    return requestJson(url, options, errorMessage);
+}
+
+export function invalidateManagedRequests() {}
 """.strip(),
         encoding="utf-8",
     )
 
     source_text = source_path.read_text(encoding="utf-8")
     module_text = source_text.replace(
-        "import { requestJson } from './request.js';",
-        "import { requestJson } from './mockRequest.mjs';",
+        "from './request.js';",
+        "from './mockRequest.mjs';",
     )
     assert module_text != source_text
     module_under_test_path.write_text(module_text, encoding="utf-8")
@@ -489,14 +707,20 @@ export async function requestJson(url, options, errorMessage) {
     });
     return globalThis.__capturedRequests.at(-1);
 }
+
+export async function requestJsonManaged(key, url, options, errorMessage) {
+    return requestJson(url, options, errorMessage);
+}
+
+export function invalidateManagedRequests() {}
 """.strip(),
         encoding="utf-8",
     )
 
     source_text = source_path.read_text(encoding="utf-8")
     module_text = source_text.replace(
-        "import { requestJson } from './request.js';",
-        "import { requestJson } from './mockRequest.mjs';",
+        "from './request.js';",
+        "from './mockRequest.mjs';",
     )
     assert module_text != source_text
     module_under_test_path.write_text(module_text, encoding="utf-8")
@@ -575,14 +799,20 @@ export async function requestJson(url, options, errorMessage) {
     };
     return globalThis.__capturedRequest;
 }
+
+export async function requestJsonManaged(key, url, options, errorMessage) {
+    return requestJson(url, options, errorMessage);
+}
+
+export function invalidateManagedRequests() {}
 """.strip(),
         encoding="utf-8",
     )
 
     source_text = source_path.read_text(encoding="utf-8")
     module_text = source_text.replace(
-        "import { requestJson } from './request.js';",
-        "import { requestJson } from './mockRequest.mjs';",
+        "from './request.js';",
+        "from './mockRequest.mjs';",
     )
     module_under_test_path.write_text(module_text, encoding="utf-8")
 
@@ -659,14 +889,20 @@ export async function requestJson(url, options, errorMessage) {
     });
     return globalThis.__capturedRequests.at(-1);
 }
+
+export async function requestJsonManaged(key, url, options, errorMessage) {
+    return requestJson(url, options, errorMessage);
+}
+
+export function invalidateManagedRequests() {}
 """.strip(),
         encoding="utf-8",
     )
 
     source_text = source_path.read_text(encoding="utf-8")
     module_text = source_text.replace(
-        "import { requestJson } from './request.js';",
-        "import { requestJson } from './mockRequest.mjs';",
+        "from './request.js';",
+        "from './mockRequest.mjs';",
     )
     module_under_test_path.write_text(module_text, encoding="utf-8")
 
@@ -769,14 +1005,20 @@ export async function requestJson(url, options, errorMessage) {
     });
     return globalThis.__capturedRequests.at(-1);
 }
+
+export async function requestJsonManaged(key, url, options, errorMessage) {
+    return requestJson(url, options, errorMessage);
+}
+
+export function invalidateManagedRequests() {}
 """.strip(),
         encoding="utf-8",
     )
 
     source_text = source_path.read_text(encoding="utf-8")
     module_text = source_text.replace(
-        "import { requestJson } from './request.js';",
-        "import { requestJson } from './mockRequest.mjs';",
+        "from './request.js';",
+        "from './mockRequest.mjs';",
     )
     module_under_test_path.write_text(module_text, encoding="utf-8")
 

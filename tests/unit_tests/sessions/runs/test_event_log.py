@@ -69,3 +69,59 @@ async def test_event_log_async_hot_paths_do_not_reinitialize_schema(
 
     assert event_id > 0
     assert tuple(item["id"] for item in by_trace) == (event_id,)
+
+
+@pytest.mark.asyncio
+async def test_event_log_lists_session_events_after_id_and_filters_subagent_runs(
+    tmp_path: Path,
+) -> None:
+    event_log = EventLog(tmp_path / "event_log_session_after_id.db")
+    first_id = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-main",
+            trace_id="run-main",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json="{}",
+        )
+    )
+    subagent_id = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="subagent_run_1",
+            trace_id="subagent_run_1",
+            event_type=RunEventType.MODEL_STEP_STARTED,
+            payload_json="{}",
+        )
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-2",
+            run_id="subagent_run_2",
+            trace_id="subagent_run_2",
+            event_type=RunEventType.MODEL_STEP_STARTED,
+            payload_json="{}",
+        )
+    )
+
+    session_rows = event_log.list_by_session_after_id("session-1", first_id)
+    subagent_rows = event_log.list_subagent_run_events_by_session_after_id(
+        "session-1",
+        0,
+    )
+    async_session_rows = await event_log.list_by_session_after_id_async(
+        "session-1",
+        first_id,
+    )
+    async_subagent_rows = (
+        await event_log.list_subagent_run_events_by_session_after_id_async(
+            "session-1",
+            0,
+        )
+    )
+    await event_log.close_async()
+
+    assert tuple(row["id"] for row in session_rows) == (subagent_id,)
+    assert tuple(row["id"] for row in async_session_rows) == (subagent_id,)
+    assert tuple(row["id"] for row in subagent_rows) == (subagent_id,)
+    assert tuple(row["id"] for row in async_subagent_rows) == (subagent_id,)

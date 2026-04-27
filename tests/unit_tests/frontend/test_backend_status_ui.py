@@ -6,6 +6,105 @@ from pathlib import Path
 import subprocess
 
 
+def test_backend_status_applies_request_status_hints(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    backend_status_source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "backendStatus.js"
+    ).read_text(encoding="utf-8")
+    module_source = backend_status_source.replace(
+        "import { els } from './dom.js';",
+        "const els = globalThis.__backendStatusEls;",
+    ).replace(
+        "import { t } from './i18n.js';",
+        "const t = key => key;",
+    )
+    module_path = tmp_path / "backendStatus.test.mjs"
+    module_path.write_text(module_source, encoding="utf-8")
+    runner_path = tmp_path / "runner-hints.mjs"
+    runner_path.write_text(
+        """
+const classNames = new Set();
+const listeners = new Map();
+const backendStatusEl = {
+    classList: {
+        remove: (...names) => names.forEach(name => classNames.delete(name)),
+        add: name => classNames.add(name),
+    },
+    dataset: {},
+    title: '',
+    textContent: '',
+};
+const backendStatusLabel = { textContent: '' };
+const storage = new Map();
+
+globalThis.__backendStatusEls = {
+    backendStatus: backendStatusEl,
+    backendStatusLabel,
+};
+globalThis.window = {
+    location: new URL('http://127.0.0.1:8000/'),
+    localStorage: {
+        getItem: key => storage.get(key) || null,
+        setItem: (key, value) => storage.set(key, value),
+        removeItem: key => storage.delete(key),
+    },
+    addEventListener: (type, listener) => listeners.set(type, listener),
+    dispatchEvent: event => listeners.get(event.type)?.(event),
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+    setInterval: globalThis.setInterval.bind(globalThis),
+};
+
+const backendStatus = await import('./backendStatus.test.mjs');
+window.dispatchEvent({
+    type: 'agent-teams-backend-status-hint',
+    detail: { status: 'offline' },
+});
+const offlineSnapshot = {
+    classNames: Array.from(classNames).sort(),
+    label: backendStatusLabel.textContent,
+    status: backendStatus.getBackendStatus(),
+};
+
+window.dispatchEvent({
+    type: 'agent-teams-backend-status-hint',
+    detail: { status: 'online' },
+});
+
+console.log(JSON.stringify({
+    offlineSnapshot,
+    onlineSnapshot: {
+        classNames: Array.from(classNames).sort(),
+        label: backendStatusLabel.textContent,
+        status: backendStatus.getBackendStatus(),
+    },
+}));
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["node", str(runner_path)],
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload == {
+        "offlineSnapshot": {
+            "classNames": ["offline"],
+            "label": "backend.status.offline",
+            "status": "offline",
+        },
+        "onlineSnapshot": {
+            "classNames": ["online"],
+            "label": "backend.status.connected",
+            "status": "online",
+        },
+    }
+
+
 def test_backend_status_fallback_confirms_main_liveness(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     backend_status_source = (

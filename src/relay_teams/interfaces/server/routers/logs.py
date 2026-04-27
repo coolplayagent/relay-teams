@@ -7,7 +7,7 @@ from typing import ClassVar
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from relay_teams.interfaces.server.async_call import call_maybe_async
+from relay_teams.interfaces.server.async_call import RouteWorkClass, call_route_work
 from relay_teams.logger import get_logger, log_event
 from relay_teams.trace import bind_trace_context, generate_trace_id
 from relay_teams.validation import OptionalIdentifierStr
@@ -45,7 +45,12 @@ class FrontendLogBatchRequest(BaseModel):
 
 @router.post("/frontend")
 async def ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:
-    return await call_maybe_async(_ingest_frontend_logs, req)
+    return await call_route_work(
+        RouteWorkClass.LOGS_INGEST,
+        "logs.frontend.ingest",
+        _ingest_frontend_logs,
+        req,
+    )
 
 
 def _ingest_frontend_logs(req: FrontendLogBatchRequest) -> dict[str, int]:

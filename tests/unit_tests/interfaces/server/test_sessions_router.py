@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
@@ -17,6 +18,8 @@ from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.routers import sessions, system
 from relay_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
 from relay_teams.roles import SystemRolesUnavailableError
+from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.session_models import (
     SessionCreateMetadata,
     SessionMetadataPatch,
@@ -31,6 +34,7 @@ class _FakeSessionService:
         self.list_calls = 0
         self.get_calls: list[str] = []
         self.updated_calls: list[tuple[str, SessionMetadataPatch]] = []
+        self.terminal_view_calls: list[str] = []
         self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
         self.delete_subagent_calls: list[tuple[str, str]] = []
         self.reflection_refresh_calls: list[tuple[str, str]] = []
@@ -43,6 +47,8 @@ class _FakeSessionService:
         self.delete_error: Exception | None = None
         self.raise_missing_list_agents = False
         self.raise_missing_list_subagents = False
+        self.raise_missing_subagent_stream = False
+        self.subagent_stream_calls: list[tuple[str, int]] = []
         self.delete_subagent_error: Exception | None = None
 
     def create_session(
@@ -65,6 +71,11 @@ class _FakeSessionService:
         if self.raise_missing:
             raise KeyError(session_id)
         self.updated_calls.append((session_id, patch))
+
+    def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
+        if self.raise_missing:
+            raise KeyError(session_id)
+        self.terminal_view_calls.append(session_id)
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
         self.list_calls += 1
@@ -102,6 +113,25 @@ class _FakeSessionService:
                 "status": "completed",
                 "conversation_id": "conv_session_1_coordinator_inst_coordinator_1",
             },
+        )
+
+    async def stream_normal_mode_subagent_events(
+        self,
+        session_id: str,
+        *,
+        after_event_id: int = 0,
+    ) -> AsyncIterator[RunEvent]:
+        self.subagent_stream_calls.append((session_id, after_event_id))
+        if self.raise_missing_subagent_stream:
+            raise KeyError(session_id)
+        yield RunEvent(
+            session_id=session_id,
+            run_id="subagent_run_123",
+            trace_id="subagent_run_123",
+            instance_id="inst-subagent-1",
+            event_type=RunEventType.MODEL_STEP_STARTED,
+            payload_json="{}",
+            event_id=after_event_id + 1,
         )
 
     def get_session(self, session_id: str) -> SessionRecord:
@@ -374,6 +404,28 @@ def test_update_session_route_accepts_metadata_payload() -> None:
     ]
 
 
+def test_mark_session_terminal_viewed_route_calls_service() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/sessions/session-1/terminal-view")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert fake_service.terminal_view_calls == ["session-1"]
+
+
+def test_mark_session_terminal_viewed_route_returns_404_for_missing_session() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.raise_missing = True
+    client = _create_client(fake_service)
+
+    response = client.post("/api/sessions/session-1/terminal-view")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+
 @pytest.mark.timeout(5)
 def test_create_session_route_returns_created_session() -> None:
     fake_service = _FakeSessionService()
@@ -420,6 +472,7 @@ def test_session_routes_call_service() -> None:
     requests = [
         client.get("/api/sessions/session-1"),
         client.patch("/api/sessions/session-1", json={"title": "Renamed Session"}),
+        client.post("/api/sessions/session-1/terminal-view"),
         client.patch(
             "/api/sessions/session-1/topology",
             json={"session_mode": "orchestration"},
@@ -491,6 +544,49 @@ async def test_health_responds_while_recovery_uses_default_threadpool() -> None:
             assert recovery_response.status_code == 200
     finally:
         service.release.set()
+        executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_session_switch_reads_respond_while_default_threadpool_is_saturated() -> (
+    None
+):
+    service = _FakeSessionService()
+    executor = ThreadPoolExecutor(max_workers=1)
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(executor)
+    default_worker_started = threading.Event()
+    release_default_worker = threading.Event()
+    app = _create_client(service).app
+    transport = httpx.ASGITransport(app=app)
+
+    def block_default_worker() -> None:
+        default_worker_started.set()
+        _ = release_default_worker.wait(timeout=5.0)
+
+    blocking_task = asyncio.create_task(asyncio.to_thread(block_default_worker))
+
+    try:
+        assert await _wait_for_threading_event(default_worker_started) is True
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+            timeout=1.0,
+        ) as client:
+            responses = await asyncio.gather(
+                client.get("/api/sessions/session-1"),
+                client.get("/api/sessions/session-1/rounds"),
+                client.get("/api/sessions/session-1/recovery"),
+                client.get("/api/sessions/session-1/subagents"),
+                client.get("/api/sessions/session-1/token-usage"),
+            )
+
+        assert [response.status_code for response in responses] == [200] * 5
+        assert service.get_calls == ["session-1"]
+    finally:
+        release_default_worker.set()
+        completed = await blocking_task
+        assert completed is None
         executor.shutdown(wait=True)
 
 
@@ -784,6 +880,31 @@ def test_list_session_subagents_route_returns_projected_subagents() -> None:
             "conversation_id": "conv_session_1_explorer_inst_subagent_1",
         }
     ]
+
+
+def test_stream_session_subagent_events_route_returns_sse_events() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/session-1/subagents/events?after_event_id=9")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert fake_service.subagent_stream_calls == [("session-1", 9)]
+    assert '"run_id":"subagent_run_123"' in response.text
+    assert '"event_id":10' in response.text
+
+
+def test_stream_session_subagent_events_route_reports_missing_session() -> None:
+    fake_service = _FakeSessionService()
+    fake_service.raise_missing_subagent_stream = True
+    client = _create_client(fake_service)
+
+    response = client.get("/api/sessions/missing-session/subagents/events")
+
+    assert response.status_code == 200
+    assert response.text.strip() == 'data: {"error": "Session not found"}'
+    assert fake_service.subagent_stream_calls == [("missing-session", 0)]
 
 
 def test_delete_session_subagent_route_returns_ok() -> None:

@@ -253,6 +253,11 @@ class SessionRecord(BaseModel):
     active_run_id: OptionalIdentifierStr = None
     active_run_status: str | None = None
     active_run_phase: str | None = None
+    last_viewed_terminal_run_id: OptionalIdentifierStr = None
+    latest_terminal_run_id: OptionalIdentifierStr = None
+    latest_terminal_run_status: str | None = None
+    latest_terminal_run_updated_at: datetime | None = None
+    has_unread_terminal_run: bool = False
     pending_tool_approval_count: int = 0
     subagent_session_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))

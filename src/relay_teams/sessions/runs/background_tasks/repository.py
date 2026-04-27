@@ -23,6 +23,8 @@ from relay_teams.validation import (
     require_persisted_identifier,
 )
 
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
+
 
 class BackgroundTaskRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
@@ -106,6 +108,12 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 """
                 CREATE INDEX IF NOT EXISTS idx_background_tasks_run
                 ON background_tasks(run_id, updated_at DESC)
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_background_tasks_session
+                ON background_tasks(session_id, updated_at DESC)
                 """
             )
             self._conn.execute(
@@ -353,6 +361,39 @@ class BackgroundTaskRepository(SharedSqliteRepository):
                 (session_id,),
             ).fetchall()
         return tuple(_row_to_record(row) for row in rows)
+
+    def list_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, tuple[BackgroundTaskRecord, ...]]:
+        if not session_ids:
+            return {}
+        grouped: dict[str, list[BackgroundTaskRecord]] = {}
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT *
+                    FROM background_tasks
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, updated_at DESC, created_at DESC
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    record = _row_to_record(row)
+                    grouped.setdefault(record.session_id, []).append(record)
+        return {session_id: tuple(records) for session_id, records in grouped.items()}
+
+    async def list_by_session_ids_async(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, tuple[BackgroundTaskRecord, ...]]:
+        return await self._call_sync_async(self.list_by_session_ids, session_ids)
 
     async def list_by_session_async(
         self, session_id: str

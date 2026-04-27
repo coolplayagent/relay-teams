@@ -36,6 +36,8 @@ from relay_teams.sessions.session_history_marker_repository import (
 )
 from relay_teams.system_reminder_text import is_rendered_system_reminder_text
 
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
+
 
 class MessageRepository(SharedSqliteRepository):
     """Persists conversation-safe LLM message history."""
@@ -111,6 +113,9 @@ class MessageRepository(SharedSqliteRepository):
                 )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_session_role_id ON messages(session_id, role, id)"
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id)"
@@ -257,6 +262,84 @@ class MessageRepository(SharedSqliteRepository):
                 }
             )
         return _dedupe_duplicate_objective_messages(results)
+
+    def first_user_messages_by_session_ids(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, dict[str, JsonValue]]:
+        if not session_ids:
+            return {}
+        results: dict[str, dict[str, JsonValue]] = {}
+        with self._lock:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT
+                        id,
+                        session_id,
+                        conversation_id,
+                        agent_role_id,
+                        instance_id,
+                        task_id,
+                        trace_id,
+                        role,
+                        message_json,
+                        created_at,
+                        hidden_from_context,
+                        hidden_reason,
+                        hidden_at,
+                        hidden_marker_id
+                    FROM messages
+                    WHERE session_id IN ({placeholders})
+                      AND role='user'
+                    ORDER BY session_id ASC, id ASC
+                    """,
+                    session_id_chunk,
+                ).fetchall()
+                for row in rows:
+                    session_id = str(row["session_id"] or "").strip()
+                    if not session_id or session_id in results:
+                        continue
+                    msg_list = _load_message_list(str(row["message_json"]))
+                    msg = (
+                        msg_list[0]
+                        if msg_list and isinstance(msg_list[0], dict)
+                        else {}
+                    )
+                    if _is_system_reminder_projection_message(msg):
+                        continue
+                    if not _message_has_user_prompt_text(msg):
+                        continue
+                    results[session_id] = {
+                        "conversation_id": str(row["conversation_id"] or ""),
+                        "agent_role_id": str(row["agent_role_id"] or ""),
+                        "instance_id": str(row["instance_id"]),
+                        "task_id": str(row["task_id"]),
+                        "trace_id": str(row["trace_id"]),
+                        "role": str(row["role"]),
+                        "created_at": str(row["created_at"]),
+                        "hidden_from_context": bool(
+                            int(row["hidden_from_context"] or 0)
+                        ),
+                        "hidden_reason": str(row["hidden_reason"] or ""),
+                        "hidden_at": str(row["hidden_at"] or ""),
+                        "hidden_marker_id": str(row["hidden_marker_id"] or ""),
+                        "message": msg,
+                    }
+        return results
+
+    async def first_user_messages_by_session_ids_async(
+        self,
+        session_ids: tuple[str, ...],
+    ) -> dict[str, dict[str, JsonValue]]:
+        return await self._call_sync_async(
+            self.first_user_messages_by_session_ids,
+            session_ids,
+        )
 
     def get_user_messages_by_session(
         self,
@@ -1092,6 +1175,23 @@ def _load_message_list(message_json: str) -> list[object]:
     except Exception:
         return []
     return parsed if isinstance(parsed, list) else []
+
+
+def _message_has_user_prompt_text(message: object) -> bool:
+    if not isinstance(message, dict):
+        return False
+    raw_parts = message.get("parts")
+    if not isinstance(raw_parts, list):
+        return False
+    for raw_part in raw_parts:
+        if not isinstance(raw_part, dict):
+            continue
+        part_kind = str(raw_part.get("part_kind") or "").strip()
+        if part_kind != "user-prompt":
+            continue
+        if user_prompt_content_to_text(raw_part.get("content")).strip():
+            return True
+    return False
 
 
 def _dedupe_duplicate_objective_messages(

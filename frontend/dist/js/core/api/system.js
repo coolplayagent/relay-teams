@@ -2,7 +2,7 @@
  * core/api/system.js
  * System configuration related API wrappers.
  */
-import { requestJson } from './request.js';
+import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
 export async function fetchConfigStatus() {
     return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
@@ -330,12 +330,14 @@ export async function fetchModelConfig() {
 }
 
 export async function fetchModelProfiles(options = {}) {
-    return requestJson(
+    return requestJsonManaged(
+        'system:model-profiles',
         '/api/system/configs/model/profiles',
         {
             signal: options.signal,
         },
         'Failed to fetch model profiles',
+        { ttlMs: 2000 },
     );
 }
 
@@ -349,21 +351,25 @@ export async function fetchModelFallbackConfig() {
 
 export async function fetchModelCatalog(options = {}) {
     const refresh = options.refresh === true ? '?refresh=true' : '';
-    return requestJson(
+    return requestJsonManaged(
+        `system:model-catalog:${options.refresh === true ? 'refresh' : 'cached'}`,
         `/api/system/configs/model/catalog${refresh}`,
         {
             signal: options.signal,
         },
         'Failed to fetch model catalog',
+        { ttlMs: options.refresh === true ? 0 : 3000, lane: 'heavy' },
     );
 }
 
 export async function refreshModelCatalog() {
-    return requestJson(
+    const result = await requestJson(
         '/api/system/configs/model/catalog:refresh',
         { method: 'POST' },
         'Failed to refresh model catalog',
     );
+    invalidateManagedRequests('system:model-catalog:');
+    return result;
 }
 
 export async function probeModelConnection(payload) {
@@ -423,7 +429,7 @@ export async function verifyCodeAgentAuth(profileName) {
 }
 
 export async function saveModelProfile(name, profile) {
-    return requestJson(
+    const result = await requestJson(
         `/api/system/configs/model/profiles/${name}`,
         {
             method: 'PUT',
@@ -432,18 +438,22 @@ export async function saveModelProfile(name, profile) {
         },
         'Failed to save model profile',
     );
+    invalidateManagedRequests('system:model-profiles');
+    return result;
 }
 
 export async function deleteModelProfile(name) {
-    return requestJson(
+    const result = await requestJson(
         `/api/system/configs/model/profiles/${name}`,
         { method: 'DELETE' },
         'Failed to delete model profile',
     );
+    invalidateManagedRequests('system:model-profiles');
+    return result;
 }
 
 export async function saveModelConfig(config) {
-    return requestJson(
+    const result = await requestJson(
         '/api/system/configs/model',
         {
             method: 'PUT',
@@ -452,6 +462,8 @@ export async function saveModelConfig(config) {
         },
         'Failed to save model config',
     );
+    invalidateManagedRequests('system:model-');
+    return result;
 }
 
 export async function reloadModelConfig() {

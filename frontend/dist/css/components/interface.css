@@ -139,7 +139,71 @@
 }
 
 .session-item-activating {
-    animation: sessionItemActivate 0.24s ease;
+    animation: sessionItemActivate 0.14s ease;
+}
+
+.chat-container.is-session-switching .chat-scroll {
+    opacity: 0.66;
+}
+
+.chat-container.is-session-switch-ready .chat-scroll {
+    animation: sessionSwitchContentReady 0.14s ease;
+}
+
+.session-switch-loading {
+    position: absolute;
+    top: 1rem;
+    left: 50%;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 1.9rem;
+    padding: 0.32rem 0.58rem;
+    border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    box-shadow: 0 2px 8px rgba(17, 19, 18, 0.08);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -2px);
+    transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.chat-container.is-session-switching .session-switch-loading {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.session-switch-loading-spinner {
+    width: 0.72rem;
+    height: 0.72rem;
+    border: 1.5px solid color-mix(in srgb, var(--text-secondary) 26%, transparent);
+    border-top-color: color-mix(in srgb, var(--primary) 84%, var(--text-primary));
+    border-radius: 999px;
+    animation: sessionSwitchSpinner 0.72s linear infinite;
+}
+
+.current-session-id-badge {
+    position: absolute;
+    right: 0.85rem;
+    bottom: 0.45rem;
+    z-index: 4;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    line-height: 1.25;
+    white-space: nowrap;
+    opacity: 0.72;
+    pointer-events: auto;
+    cursor: text;
+    user-select: text;
+}
+
+.current-session-id-badge[hidden] {
+    display: none;
 }
 
 .session-id,
@@ -177,11 +241,41 @@
     }
 
     50% {
-        box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 10%, transparent);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 10%, transparent);
     }
 
     100% {
         box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+}
+
+@keyframes sessionSwitchSpinner {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes sessionSwitchContentReady {
+    from {
+        opacity: 0.88;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .session-item-entering,
+    .session-item-removing,
+    .session-item-activating,
+    .chat-container.is-session-switch-ready .chat-scroll,
+    .session-switch-loading-spinner {
+        animation: none;
+    }
+
+    .session-switch-loading {
+        transition: none;
     }
 }
 

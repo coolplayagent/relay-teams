@@ -26,6 +26,7 @@ from relay_teams.validation import (
 )
 
 LOGGER = get_logger(__name__)
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
 
 
 class UserQuestionStatusConflictError(RuntimeError):
@@ -402,6 +403,40 @@ class UserQuestionRepository(SharedSqliteRepository):
         return tuple(
             record for row in rows if (record := self._record_or_none(row)) is not None
         )
+
+    def count_open_by_run_ids(
+        self,
+        run_ids: tuple[str, ...],
+    ) -> dict[str, int]:
+        if not run_ids:
+            return {}
+        counts: dict[str, int] = {}
+        with self._lock:
+            for index in range(0, len(run_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                run_id_chunk = run_ids[index : index + _SQLITE_SAFE_VARIABLE_LIMIT]
+                placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows = self._conn.execute(
+                    f"""
+                    SELECT *
+                    FROM user_questions
+                    WHERE run_id IN ({placeholders})
+                      AND status=?
+                    ORDER BY run_id ASC, created_at ASC
+                    """,
+                    (*run_id_chunk, UserQuestionRequestStatus.REQUESTED.value),
+                ).fetchall()
+                for row in rows:
+                    record = self._record_or_none(row)
+                    if record is None:
+                        continue
+                    counts[record.run_id] = counts.get(record.run_id, 0) + 1
+        return counts
+
+    async def count_open_by_run_ids_async(
+        self,
+        run_ids: tuple[str, ...],
+    ) -> dict[str, int]:
+        return await self._call_sync_async(self.count_open_by_run_ids, run_ids)
 
     async def list_by_run_async(
         self,

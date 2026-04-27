@@ -280,3 +280,47 @@ async def test_background_task_repository_async_methods_match_sync_behavior(
     assert interrupted.status == BackgroundTaskStatus.STOPPED
     assert await repo.get_async("exec-running") is None
     assert await repo.list_by_session_async("session-2") == ()
+
+
+def test_background_task_repository_lists_records_by_session_ids(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-terminals-list-session-ids.db"
+    repo = BackgroundTaskRepository(db_path)
+    first = BackgroundTaskRecord(
+        background_task_id="exec-1",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.RUNNING,
+        log_path="tmp/background_tasks/exec-1.log",
+    )
+    second = BackgroundTaskRecord(
+        background_task_id="exec-2",
+        run_id="run-2",
+        session_id="session-2",
+        command="sleep 60",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.COMPLETED,
+        log_path="tmp/background_tasks/exec-2.log",
+    )
+    ignored = BackgroundTaskRecord(
+        background_task_id="exec-3",
+        run_id="run-3",
+        session_id="session-3",
+        command="echo ignored",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.COMPLETED,
+        log_path="tmp/background_tasks/exec-3.log",
+    )
+    repo.upsert(first)
+    repo.upsert(second)
+    repo.upsert(ignored)
+
+    records = repo.list_by_session_ids(("session-1", "session-2"))
+
+    assert repo.list_by_session_ids(()) == {}
+    assert tuple(records) == ("session-1", "session-2")
+    assert [item.background_task_id for item in records["session-1"]] == ["exec-1"]
+    assert [item.background_task_id for item in records["session-2"]] == ["exec-2"]

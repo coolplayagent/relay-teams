@@ -2,14 +2,20 @@
  * core/api/workspaces.js
  * Workspace and project related API wrappers.
  */
-import { requestJson } from './request.js';
+import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
-export async function fetchWorkspaces() {
-    return requestJson('/api/workspaces', undefined, 'Failed to fetch projects');
+export async function fetchWorkspaces(options = {}) {
+    return requestJsonManaged(
+        'workspaces:list',
+        '/api/workspaces',
+        { signal: options.signal },
+        'Failed to fetch projects',
+        { ttlMs: 800 },
+    );
 }
 
 export async function updateWorkspace(workspaceId, payload) {
-    return requestJson(
+    const result = await requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}`,
         {
             method: 'PUT',
@@ -18,6 +24,8 @@ export async function updateWorkspace(workspaceId, payload) {
         },
         'Failed to update project workspace',
     );
+    invalidateManagedRequests('workspaces:');
+    return result;
 }
 
 export function buildWorkspaceImagePreviewUrl(workspaceId, path) {
@@ -30,11 +38,13 @@ export function buildWorkspaceImagePreviewUrl(workspaceId, path) {
     return `/api/workspaces/${encodeURIComponent(safeWorkspaceId)}/preview-file?${query.toString()}`;
 }
 
-export async function fetchWorkspaceSnapshot(workspaceId) {
-    return requestJson(
+export async function fetchWorkspaceSnapshot(workspaceId, options = {}) {
+    return requestJsonManaged(
+        `workspaces:snapshot:${workspaceId}`,
         `/api/workspaces/${encodeURIComponent(workspaceId)}/snapshot`,
-        undefined,
+        { signal: options.signal },
         'Failed to fetch project workspace snapshot',
+        { ttlMs: 800, lane: 'heavy' },
     );
 }
 
@@ -116,18 +126,20 @@ export async function pickWorkspace(rootPath = null) {
         options.headers = { 'Content-Type': 'application/json' };
         options.body = JSON.stringify({ root_path: rootPath.trim() });
     }
-    return requestJson(
+    const result = await requestJson(
         '/api/workspaces/pick',
         options,
         'Failed to choose project directory',
     );
+    invalidateManagedRequests('workspaces:');
+    return result;
 }
 
 // Keep the legacy workspace picker name available for stale frontend imports.
 export const openWorkspace = pickWorkspace;
 
 export async function forkWorkspace(workspaceId, name) {
-    return requestJson(
+    const result = await requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}:fork`,
         {
             method: 'POST',
@@ -136,6 +148,8 @@ export async function forkWorkspace(workspaceId, name) {
         },
         'Failed to fork project',
     );
+    invalidateManagedRequests('workspaces:');
+    return result;
 }
 
 export async function deleteWorkspace(workspaceId, options = {}) {
@@ -148,9 +162,11 @@ export async function deleteWorkspace(workspaceId, options = {}) {
         requestOptions.headers = { 'Content-Type': 'application/json' };
         requestOptions.body = JSON.stringify({ force: true });
     }
-    return requestJson(
+    const result = await requestJson(
         `/api/workspaces/${encodeURIComponent(workspaceId)}${query}`,
         requestOptions,
         'Failed to remove project',
     );
+    invalidateManagedRequests('workspaces:');
+    return result;
 }

@@ -21,6 +21,7 @@ export const els = {
   systemLogs: qs("#system-logs"),
   chatMessages: qs("#chat-messages"),
   chatContainer: qs(".chat-container"),
+  currentSessionIdBadge: qs("#current-session-id-badge"),
   inputContainer: qs("#input-container"),
   projectView: qs("#project-view"),
   projectViewTitle: qs("#project-view-title"),

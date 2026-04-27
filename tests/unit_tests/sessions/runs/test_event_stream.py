@@ -119,6 +119,60 @@ async def test_run_event_hub_publish_async_serializes_state_updates() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_event_hub_publishes_to_session_subscribers() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    queue = hub.subscribe_session("session-1")
+
+    await hub.publish_async(_event(RunEventType.RUN_STARTED))
+
+    delivered = queue.get_nowait()
+
+    assert hub.has_session_subscribers("session-1") is True
+    assert delivered.session_id == "session-1"
+    assert delivered.run_id == "run-1"
+    assert delivered.event_id == 1
+
+    hub.unsubscribe_session("session-1", queue)
+
+    assert hub.has_session_subscribers("session-1") is False
+
+
+def test_run_event_hub_sync_publish_delivers_to_session_subscribers() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    queue = hub.subscribe_session("session-1")
+
+    hub.publish(_event(RunEventType.RUN_STARTED))
+
+    delivered = queue.get_nowait()
+    assert delivered.run_id == "run-1"
+    assert delivered.event_id == 1
+
+
+def test_run_event_hub_unsubscribe_session_ignores_unknown_queue() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    queue: asyncio.Queue[RunEvent] = asyncio.Queue()
+
+    hub.unsubscribe_session("session-1", queue)
+
+    assert hub.has_session_subscribers("session-1") is False
+
+
+@pytest.mark.asyncio
 async def test_run_event_hub_publish_async_finishes_projection_when_cancelled() -> None:
     event_log = _SequencedEventLog()
     run_state_repo = _ObservedRunStateRepository()

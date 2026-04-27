@@ -25,6 +25,7 @@ import {
     closeNormalModeSubagentStream,
     detachActiveStreamForSessionSwitch,
 } from '../core/stream.js';
+import { detachForegroundSubmission } from '../core/submission.js';
 import { clearSessionRecovery, stopSessionContinuity } from '../app/recovery.js';
 import { clearAllStreamState } from './messageRenderer.js';
 import { clearAllPanels } from './agentPanel.js';
@@ -53,6 +54,12 @@ import {
     isSubagentSessionListLoading,
     toggleSubagentSessionList,
 } from './subagentSessions.js';
+import {
+    configureSessionSearch,
+    openSessionSearch,
+    setSessionSearchEntries,
+} from './sessionSearch.js';
+import { syncSessionDebugBadge } from './sessionDebugBadge.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
 const AUTOMATION_INTERNAL_WORKSPACE_ID = 'automation-system';
@@ -64,24 +71,42 @@ const FEATURE_IDS = Object.freeze({
 
 let selectSessionHandler = null;
 let refreshTimer = null;
+let pendingSessionsRefreshForce = false;
 const expandedProjectIds = new Set();
 const expandedProjectSessionIds = new Set();
 const initializedProjectIds = new Set();
 const sessionWorkspaceMap = new Map();
 const automationBoundSessionIds = new Set();
 const renderedSubagentListExpandedState = new Map();
+const normalSubagentCountBySessionId = new Map();
 let projectSortMode = 'recent';
 let openProjectMenuId = null;
 let projectMenuDismissBound = false;
 let languageRefreshBound = false;
+let sessionSearchConfigured = false;
 let pendingSessionAnimation = null;
+let pendingSessionVisibilityAnimation = null;
 let loadProjectsRequestId = 0;
 let lastProjectsRenderSignature = '';
+let sidebarSelectionToken = 0;
+let sessionAnimationTokenSeed = 0;
+const sessionAnimationTokens = new WeakMap();
+let projectBodyAnimationTokenSeed = 0;
+const projectBodyAnimationTokens = new WeakMap();
+let subagentListAnimationTokenSeed = 0;
+const subagentListAnimationTokens = new WeakMap();
 const SIDEBAR_INTERACTION_REFRESH_DELAY_MS = 240;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
-const SESSION_ANIMATION_ACTIVATE_MS = 240;
+const SESSION_ANIMATION_ACTIVATE_MS = 140;
+const SESSION_VISIBILITY_ANIMATION_MS = 160;
+const PROJECT_BODY_ANIMATION_MS = 160;
+const SUBAGENT_LIST_ANIMATION_MS = 160;
+const SESSION_VISIBILITY_ANIMATED_ITEM_LIMIT = 24;
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'stopped']);
+const RUNNING_RUN_STATUSES = new Set(['queued', 'running', 'stopping']);
+const TERMINAL_RUN_INDICATOR_STATUSES = new Set(['failed', 'stopped']);
 
 export function setSelectSessionHandler(handler) {
     selectSessionHandler = handler;
@@ -111,13 +136,13 @@ function isProjectsListInteracting() {
 
 function clearActiveSessionView() {
     const sessionId = state.currentSessionId;
-    if (state.activeEventSource) {
-        detachActiveStreamForSessionSwitch({ focusPrompt: false });
-    }
+    detachForegroundSubmission({ focusPrompt: false });
+    detachActiveStreamForSessionSwitch({ focusPrompt: false });
     if (sessionId) {
         stopSessionContinuity(sessionId);
     }
     state.currentSessionId = null;
+    syncSessionDebugBadge('');
     clearNewSessionDraft();
     clearSessionRecovery();
     clearAllPanels();
@@ -181,7 +206,7 @@ function formatSessionLabel(session) {
             return label;
         }
     }
-    return String(session?.session_id || 'Session');
+    return t('sidebar.untitled_session');
 }
 
 function isAutomationSession(session) {
@@ -245,6 +270,86 @@ function getSessionSourceClassName(session) {
     return ` ${sourceKinds.map(sourceKind => `session-item-${sourceKind}`).join(' ')}`;
 }
 
+function isCurrentMainSession(session) {
+    return (
+        String(session?.session_id || '').trim() === String(state.currentSessionId || '').trim()
+        && !state.activeSubagentSession
+    );
+}
+
+function isSessionRunActive(session) {
+    if (!(session?.has_active_run || session?.hasActiveRun)) {
+        return false;
+    }
+    const status = String(session?.active_run_status || session?.activeRunStatus || '').trim().toLowerCase();
+    return RUNNING_RUN_STATUSES.has(status);
+}
+
+function hasUnreadTerminalRun(session) {
+    if (isCurrentMainSession(session)) {
+        return false;
+    }
+    return !!(session?.has_unread_terminal_run || session?.hasUnreadTerminalRun);
+}
+
+function getSessionTerminalStatus(session) {
+    const latestStatus = String(
+        session?.latest_terminal_run_status
+        || session?.latestTerminalRunStatus
+        || '',
+    ).trim().toLowerCase();
+    if (TERMINAL_RUN_STATUSES.has(latestStatus)) {
+        return latestStatus;
+    }
+    const activeStatus = String(
+        session?.active_run_status
+        || session?.activeRunStatus
+        || '',
+    ).trim().toLowerCase();
+    return TERMINAL_RUN_STATUSES.has(activeStatus) ? activeStatus : '';
+}
+
+function getSessionRunIndicatorType(session) {
+    if (isSessionRunActive(session)) {
+        return 'running';
+    }
+    if (hasUnreadTerminalRun(session)) {
+        const terminalStatus = getSessionTerminalStatus(session);
+        return TERMINAL_RUN_INDICATOR_STATUSES.has(terminalStatus)
+            ? terminalStatus
+            : 'unread';
+    }
+    return '';
+}
+
+function getSessionRunIndicatorClassName(session) {
+    const indicatorType = getSessionRunIndicatorType(session);
+    return indicatorType ? ` has-run-indicator has-run-indicator-${indicatorType}` : '';
+}
+
+function renderSessionRunIndicator(session) {
+    const indicatorType = getSessionRunIndicatorType(session);
+    if (!indicatorType) {
+        return '';
+    }
+    const labelByType = {
+        running: t('sidebar.session_running'),
+        failed: t('sidebar.session_failed'),
+        stopped: t('sidebar.session_stopped'),
+        unread: t('sidebar.session_unread_terminal'),
+    };
+    const label = labelByType[indicatorType] || t('sidebar.session_unread_terminal');
+    return `
+        <span
+            class="session-run-indicator session-run-indicator-${indicatorType}"
+            title="${escapeHtml(label)}"
+            aria-label="${escapeHtml(label)}"
+        >
+            <span class="session-run-indicator-glyph" aria-hidden="true"></span>
+        </span>
+    `;
+}
+
 function shouldRenderSubagentChildren(session) {
     return String(session?.session_mode || '').trim() === 'normal';
 }
@@ -260,8 +365,20 @@ function renderSubagentToggle(session) {
     const summaryCount = normalizeSubagentSessionCount(
         session?.subagent_session_count,
     );
-    const childCount = loaded ? children.length : summaryCount;
-    if (!loading && childCount === 0) {
+    const cachedCount = normalSubagentCountBySessionId.get(sessionId) || 0;
+    const childCount = resolveStableSubagentCount({
+        loaded,
+        loading,
+        children,
+        summaryCount,
+        cachedCount,
+    });
+    if (childCount > 0) {
+        normalSubagentCountBySessionId.set(sessionId, childCount);
+    } else if (loaded && !loading && summaryCount === 0) {
+        normalSubagentCountBySessionId.delete(sessionId);
+    }
+    if (childCount === 0) {
         return '';
     }
     const expanded = isSubagentSessionListExpanded(sessionId);
@@ -324,6 +441,7 @@ function renderSubagentChildren(session) {
                     && activeSubagent.sessionId === sessionId
                     && activeSubagent.instanceId === child.instanceId
                 );
+                const childLabel = buildSubagentSessionLabel(child);
                 return `
                     <div
                         class="session-item session-subagent-item${active ? ' active' : ''}"
@@ -337,7 +455,7 @@ function renderSubagentChildren(session) {
                     >
                         <span class="session-main">
                             <span class="session-id">
-                                <span class="session-label-text">${escapeHtml(buildSubagentSessionLabel(child))}</span>
+                                <span class="session-label-text" title="${escapeHtml(childLabel)}">${escapeHtml(childLabel)}</span>
                             </span>
                         </span>
                         <span class="session-meta">
@@ -350,7 +468,7 @@ function renderSubagentChildren(session) {
                                     data-session-id="${escapeHtml(sessionId)}"
                                     data-subagent-instance-id="${escapeHtml(child.instanceId)}"
                                     data-subagent-run-id="${escapeHtml(child.runId)}"
-                                    data-subagent-label="${escapeHtml(buildSubagentSessionLabel(child))}"
+                                    data-subagent-label="${escapeHtml(childLabel)}"
                                     title="${escapeHtml(t('sidebar.delete_subagent'))}"
                                     aria-label="${escapeHtml(t('sidebar.delete_subagent'))}"
                                 >
@@ -385,14 +503,9 @@ function syncSubagentSessionListVisualState() {
             }
             nextRenderedSessionIds.add(sessionId);
             const expanded = isSubagentSessionListExpanded(sessionId);
-            list.classList?.remove?.('is-expanded', 'is-collapsed');
-            list.classList?.add?.(expanded ? 'is-expanded' : 'is-collapsed');
+            setSubagentListExpandedState(list, expanded);
             list.setAttribute('aria-hidden', expanded ? 'false' : 'true');
             const shouldExpand = !!expanded;
-            list.style.setProperty(
-                '--session-subagent-list-height',
-                shouldExpand ? `${list.scrollHeight}px` : '0px',
-            );
             list.style.pointerEvents = expanded ? '' : 'none';
             const listItemTabIndex = shouldExpand ? '0' : '-1';
             for (const item of Array.from(list.querySelectorAll('.session-subagent-item'))) {
@@ -417,6 +530,69 @@ function syncSubagentSessionListVisualState() {
         return;
     }
     applyState();
+}
+
+function resolveStableSubagentCount({ loaded, loading, children, summaryCount, cachedCount }) {
+    const loadedCount = Array.isArray(children) ? children.length : 0;
+    if (loaded) {
+        return loadedCount;
+    }
+    if (loadedCount > 0) {
+        return loadedCount;
+    }
+    if (summaryCount > 0) {
+        return summaryCount;
+    }
+    if (loading && cachedCount > 0) {
+        return cachedCount;
+    }
+    if (cachedCount > 0) {
+        return cachedCount;
+    }
+    return cachedCount;
+}
+
+function setSubagentListExpandedState(list, expanded) {
+    if (!list?.classList) {
+        return;
+    }
+    const shouldExpand = expanded === true;
+    const alreadyExpanded = list.classList.contains('is-expanded');
+    const alreadyCollapsed = list.classList.contains('is-collapsed');
+    if (
+        (shouldExpand && alreadyExpanded)
+        || (!shouldExpand && alreadyCollapsed)
+    ) {
+        list.classList.toggle('is-expanded', shouldExpand);
+        list.classList.toggle('is-collapsed', !shouldExpand);
+        list.style.setProperty(
+            '--session-subagent-list-height',
+            shouldExpand ? `${list.scrollHeight}px` : '0px',
+        );
+        return;
+    }
+    const animationToken = ++subagentListAnimationTokenSeed;
+    subagentListAnimationTokens.set(list, animationToken);
+    const currentHeight = measureElementHeight(list);
+    list.classList.add('is-animating');
+    list.style.setProperty('--session-subagent-list-height', `${currentHeight}px`);
+    void list.offsetHeight;
+    list.classList.toggle('is-expanded', shouldExpand);
+    list.classList.toggle('is-collapsed', !shouldExpand);
+    list.style.setProperty(
+        '--session-subagent-list-height',
+        shouldExpand ? `${list.scrollHeight}px` : '0px',
+    );
+    globalThis.setTimeout(() => {
+        if (subagentListAnimationTokens.get(list) !== animationToken) {
+            return;
+        }
+        if (shouldExpand) {
+            list.style.setProperty('--session-subagent-list-height', `${list.scrollHeight}px`);
+        }
+        list.classList.remove('is-animating');
+        subagentListAnimationTokens.delete(list);
+    }, SUBAGENT_LIST_ANIMATION_MS);
 }
 
 function timestampValue(value) {
@@ -595,6 +771,39 @@ function buildProjectGroups(workspaces, sessions) {
     return groups.sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
 }
 
+function buildSessionSearchEntries(groups) {
+    return groups.flatMap(group => {
+        const projectLabel = formatProjectLabel(group);
+        return group.sessions.map(session => ({
+            sessionId: String(session?.session_id || '').trim(),
+            title: formatSessionLabel(session),
+            projectLabel,
+            groupKey: group.key,
+            updatedAtMs: timestampValue(
+                session?.updated_at
+                || session?.updatedAt
+                || session?.created_at
+                || session?.createdAt
+                || '',
+            ),
+        }));
+    }).sort((left, right) => (
+        right.updatedAtMs - left.updatedAtMs
+        || left.title.localeCompare(right.title)
+        || left.sessionId.localeCompare(right.sessionId)
+    ));
+}
+
+function ensureSessionSearchConfigured() {
+    if (sessionSearchConfigured) {
+        return;
+    }
+    configureSessionSearch({
+        onSelect: handleSessionSearchSelection,
+    });
+    sessionSearchConfigured = true;
+}
+
 function syncProjectSortButton() {
     const btn = els.projectsList?.querySelector('.projects-toolbar-sort-btn');
     if (!btn) return;
@@ -653,14 +862,29 @@ function renderProjectsToolbar() {
     return toolbar;
 }
 
+function renderProjectsWorkspaceShell(toolbar, contentNodes) {
+    const shell = document.createElement('section');
+    shell.className = 'projects-workspace-shell';
+    const scroll = document.createElement('div');
+    scroll.className = 'projects-workspace-scroll';
+    contentNodes.forEach(node => scroll.appendChild(node));
+    shell.appendChild(toolbar);
+    shell.appendChild(scroll);
+    return shell;
+}
+
 function renderNodeSignature(node) {
     if (!node) {
         return '';
     }
     const className = String(node.className || '').trim();
     const innerHtml = typeof node.innerHTML === 'string' ? node.innerHTML : '';
-    const textContent = typeof node.textContent === 'string' ? node.textContent : '';
-    return `${className}::${innerHtml}::${textContent}`;
+    const textContent = innerHtml ? '' : (typeof node.textContent === 'string' ? node.textContent : '');
+    const serializedContent = innerHtml || textContent;
+    const childSignature = serializedContent
+        ? ''
+        : Array.from(node.children || []).map(renderNodeSignature).join('::');
+    return `${className}::${serializedContent}::${childSignature}`;
 }
 
 function getActiveFeatureId() {
@@ -681,6 +905,18 @@ function renderFeatureNav() {
             <span>${escapeHtml(t('sidebar.new_session_primary'))}</span>
         </button>
         <div class="home-feature-list" role="navigation" aria-label="${escapeHtml(t('sidebar.feature_navigation'))}">
+            <button class="home-session-search-btn" type="button" title="${escapeHtml(t('sidebar.search_conversations_title'))}" aria-label="${escapeHtml(t('sidebar.search_conversations_title'))}">
+                <span class="home-session-search-main">
+                    <span class="home-feature-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" class="icon">
+                            <circle cx="11" cy="11" r="5.8" stroke="currentColor" stroke-width="1.8"/>
+                            <path d="m16 16 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <span class="home-feature-label">${escapeHtml(t('sidebar.search_conversations'))}</span>
+                </span>
+                <span class="home-session-search-shortcut">Ctrl+K</span>
+            </button>
             <button class="home-feature-item${activeFeatureId === FEATURE_IDS.skills ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.skills}">
                 <span class="home-feature-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-skills">
@@ -716,6 +952,7 @@ function renderFeatureNav() {
         </div>
     `;
     section.querySelector('.home-new-session-btn')?.addEventListener('click', () => void handlePrimaryNewSessionClick());
+    section.querySelector('.home-session-search-btn')?.addEventListener('click', () => openSessionSearch());
     section.querySelectorAll('.home-feature-item').forEach(button => {
         button.addEventListener('click', () => {
             const featureId = String(button.getAttribute('data-feature-id') || '').trim();
@@ -777,11 +1014,49 @@ async function requestAutomationProjectInput() {
     return requestAutomationProjectEditorInput({});
 }
 
-async function selectSessionById(sessionId) {
+async function selectSessionById(sessionId, selectionToken = null) {
     if (!selectSessionHandler) throw new Error('selectSession handler is not configured');
     const workspaceId = sessionWorkspaceMap.get(sessionId);
     if (workspaceId) state.currentWorkspaceId = workspaceId;
     await selectSessionHandler(sessionId);
+    if (selectionToken === null || isLatestSidebarSelection(selectionToken)) {
+        state.currentSessionId = sessionId;
+    }
+}
+
+function nextSidebarSelectionToken() {
+    sidebarSelectionToken += 1;
+    return sidebarSelectionToken;
+}
+
+function isLatestSidebarSelection(token) {
+    return token === sidebarSelectionToken;
+}
+
+async function handleSessionSearchSelection(result) {
+    const sessionId = String(result?.sessionId || '').trim();
+    const groupKeyValue = String(result?.groupKey || '').trim();
+    if (!sessionId) {
+        return;
+    }
+    const selectionToken = nextSidebarSelectionToken();
+    if (groupKeyValue) {
+        expandedProjectIds.add(groupKeyValue);
+        expandedProjectSessionIds.add(groupKeyValue);
+    }
+    await loadProjects();
+    if (!isLatestSidebarSelection(selectionToken)) {
+        return;
+    }
+    optimisticActivateSession(sessionId, { scroll: true, animate: true, updateState: false });
+    try {
+        await selectSessionById(sessionId, selectionToken);
+    } catch (error) {
+        if (!isLatestSidebarSelection(selectionToken)) {
+            return;
+        }
+        sysLog(formatMessage('sidebar.error.selecting_session', { error: error?.message || String(error) }), 'log-error');
+    }
 }
 
 function setPendingSessionAnimation(sessionId, animation) {
@@ -803,6 +1078,33 @@ function consumePendingSessionAnimation() {
     return pending;
 }
 
+function setPendingSessionVisibilityAnimation(groupKeyValue, direction) {
+    const safeGroupKey = String(groupKeyValue || '').trim();
+    const safeDirection = String(direction || '').trim();
+    if (!safeGroupKey || !['expand', 'collapse'].includes(safeDirection)) {
+        pendingSessionVisibilityAnimation = null;
+        return;
+    }
+    pendingSessionVisibilityAnimation = {
+        groupKey: safeGroupKey,
+        direction: safeDirection,
+    };
+}
+
+function consumePendingSessionVisibilityAnimation(groupKeyValue) {
+    const safeGroupKey = String(groupKeyValue || '').trim();
+    if (
+        !safeGroupKey
+        || !pendingSessionVisibilityAnimation
+        || pendingSessionVisibilityAnimation.groupKey !== safeGroupKey
+    ) {
+        return null;
+    }
+    const pending = pendingSessionVisibilityAnimation;
+    pendingSessionVisibilityAnimation = null;
+    return pending;
+}
+
 function findSessionItem(sessionId) {
     const safeSessionId = String(sessionId || '').trim();
     if (!safeSessionId || !els.projectsList) return null;
@@ -810,27 +1112,158 @@ function findSessionItem(sessionId) {
     return items.find(item => String(item?.getAttribute?.('data-session-id') || '').trim() === safeSessionId) || null;
 }
 
+function findSessionItems(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !els.projectsList) return [];
+    return Array.from(els.projectsList.querySelectorAll('.session-item')).filter(
+        item => String(item?.getAttribute?.('data-session-id') || '').trim() === safeSessionId,
+    );
+}
+
+function setElementClassFlag(element, className, enabled) {
+    if (!element || !className) return;
+    const current = new Set(String(element.className || '').split(/\s+/).filter(Boolean));
+    if (enabled) {
+        current.add(className);
+    } else {
+        current.delete(className);
+    }
+    element.className = Array.from(current).join(' ');
+    element.classList?.toggle?.(className, enabled);
+}
+
+function clearSessionUnreadIndicator(sessionId, preferredItem = null) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return;
+    const items = preferredItem
+        ? [preferredItem, ...findSessionItems(safeSessionId).filter(item => item !== preferredItem)]
+        : findSessionItems(safeSessionId);
+    for (const item of items) {
+        if (item.classList?.contains?.('session-subagent-item')) {
+            continue;
+        }
+        const classNames = String(item.className || '').split(/\s+/);
+        const hasTerminalIndicator = classNames.some(className => (
+            className === 'has-run-indicator-unread'
+            || className === 'has-run-indicator-failed'
+            || className === 'has-run-indicator-stopped'
+        ));
+        if (!hasTerminalIndicator) {
+            continue;
+        }
+        const hasRunningIndicator = classNames.includes('has-run-indicator-running');
+        setElementClassFlag(item, 'has-run-indicator-unread', false);
+        setElementClassFlag(item, 'has-run-indicator-failed', false);
+        setElementClassFlag(item, 'has-run-indicator-stopped', false);
+        if (!hasRunningIndicator) {
+            setElementClassFlag(item, 'has-run-indicator', false);
+        }
+        setElementClassFlag(item, 'session-run-indicator-viewed', true);
+        setElementClassFlag(item, 'session-run-indicator-clearing', true);
+        globalThis.setTimeout(() => {
+            setElementClassFlag(item, 'session-run-indicator-clearing', false);
+        }, SESSION_ANIMATION_REMOVE_MS);
+    }
+}
+
+function syncActiveSessionItem(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !els.projectsList) return null;
+    let activeItem = null;
+    for (const item of Array.from(els.projectsList.querySelectorAll('.session-item'))) {
+        const isSubagentItem = item.classList?.contains?.('session-subagent-item') === true;
+        const isActive = (
+            !isSubagentItem
+            && String(item?.getAttribute?.('data-session-id') || '').trim() === safeSessionId
+        );
+        setElementClassFlag(item, 'active', isActive);
+        if (isActive) {
+            activeItem = item;
+        }
+    }
+    return activeItem;
+}
+
+function optimisticActivateSession(
+    sessionId,
+    { scroll = false, animate = true, item: preferredItem = null, updateState = true } = {},
+) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) return null;
+    if (updateState) {
+        state.currentSessionId = safeSessionId;
+    }
+    state.activeSubagentSession = null;
+    clearSessionActivationAnimations();
+    const item = preferredItem || syncActiveSessionItem(safeSessionId) || findSessionItem(safeSessionId);
+    if (preferredItem) {
+        syncActiveSessionItem(safeSessionId);
+        setElementClassFlag(preferredItem, 'active', true);
+    }
+    clearSessionUnreadIndicator(safeSessionId, preferredItem);
+    if (scroll) {
+        item?.scrollIntoView?.({ block: 'nearest' });
+    }
+    if (animate) {
+        animateSessionItem(item, 'activating');
+    }
+    return item;
+}
+
+function clearSessionActivationAnimations() {
+    if (!els.projectsList?.querySelectorAll) {
+        return;
+    }
+    els.projectsList.querySelectorAll('.session-item-activating').forEach(item => {
+        item.classList?.remove?.('session-item-activating');
+        sessionAnimationTokens.delete(item);
+    });
+}
+
+function syncActivatedSessionFromEvent(event) {
+    const sessionId = String(event?.detail?.sessionId || '').trim();
+    if (!sessionId) return;
+    optimisticActivateSession(sessionId, { animate: false });
+}
+
+function syncSubagentSessionFromEvent(event) {
+    const sessionId = String(event?.detail?.sessionId || '').trim();
+    const instanceId = String(event?.detail?.instanceId || '').trim();
+    if (!sessionId || !instanceId || !els.projectsList) return;
+    for (const item of Array.from(els.projectsList.querySelectorAll('.session-item'))) {
+        const itemSessionId = String(item?.getAttribute?.('data-session-id') || '').trim();
+        const itemInstanceId = String(item?.getAttribute?.('data-subagent-instance-id') || '').trim();
+        setElementClassFlag(
+            item,
+            'active',
+            itemSessionId === sessionId && itemInstanceId === instanceId,
+        );
+    }
+}
+
 function animateSessionItem(item, animation) {
     if (!item) return;
     const safeAnimation = String(animation || '').trim();
     if (!safeAnimation) return;
     const animationClass = `session-item-${safeAnimation}`;
-    if (item.classList?.add) {
-        item.classList.remove('session-item-entering', 'session-item-removing', 'session-item-activating');
-        item.classList.add(animationClass);
-        const duration = safeAnimation === 'removing'
-            ? SESSION_ANIMATION_REMOVE_MS
-            : safeAnimation === 'entering'
-                ? SESSION_ANIMATION_ENTER_MS
-                : SESSION_ANIMATION_ACTIVATE_MS;
-        globalThis.setTimeout(() => {
-            item.classList?.remove?.(animationClass);
-        }, duration);
-        return;
-    }
-    if (typeof item.className === 'string' && !item.className.includes(animationClass)) {
-        item.className = `${item.className} ${animationClass}`.trim();
-    }
+    const animationToken = ++sessionAnimationTokenSeed;
+    sessionAnimationTokens.set(item, animationToken);
+    setElementClassFlag(item, 'session-item-entering', false);
+    setElementClassFlag(item, 'session-item-removing', false);
+    setElementClassFlag(item, 'session-item-activating', false);
+    setElementClassFlag(item, animationClass, true);
+    const duration = safeAnimation === 'removing'
+        ? SESSION_ANIMATION_REMOVE_MS
+        : safeAnimation === 'entering'
+            ? SESSION_ANIMATION_ENTER_MS
+            : SESSION_ANIMATION_ACTIVATE_MS;
+    globalThis.setTimeout(() => {
+        if (sessionAnimationTokens.get(item) !== animationToken) {
+            return;
+        }
+        setElementClassFlag(item, animationClass, false);
+        sessionAnimationTokens.delete(item);
+    }, duration);
 }
 
 function playPendingSessionAnimation() {
@@ -841,13 +1274,93 @@ function playPendingSessionAnimation() {
     animateSessionItem(item, pending.animation);
 }
 
+async function toggleProjectSessionVisibility(card, groupKeyValue) {
+    const safeGroupKey = String(groupKeyValue || '').trim();
+    if (!safeGroupKey) return;
+    const wasExpanded = expandedProjectSessionIds.has(safeGroupKey);
+    if (wasExpanded) {
+        await animateProjectSessionVisibilityCollapse(card);
+        expandedProjectSessionIds.delete(safeGroupKey);
+    } else {
+        expandedProjectSessionIds.add(safeGroupKey);
+        setPendingSessionVisibilityAnimation(safeGroupKey, 'expand');
+    }
+    await loadProjects();
+}
+
+async function animateProjectSessionVisibilityCollapse(card) {
+    const list = card?.querySelector?.('.project-session-list') || null;
+    if (!list?.classList?.add) {
+        return;
+    }
+    const fromHeight = measureElementHeight(list);
+    const toHeight = measureCollapsedSessionListHeight(list);
+    if (fromHeight > 0 && toHeight >= 0 && toHeight < fromHeight) {
+        list.classList.add('is-visibility-height-collapsing');
+        list.style?.setProperty?.('max-height', `${fromHeight}px`);
+        list.style?.setProperty?.('overflow', 'hidden');
+        void list.offsetHeight;
+        list.style?.setProperty?.('max-height', `${toHeight}px`);
+        await new Promise(resolve => globalThis.setTimeout(resolve, SESSION_VISIBILITY_ANIMATION_MS));
+        return;
+    }
+    list.classList.add('is-visibility-collapsing');
+    const entries = Array.from(list.querySelectorAll?.('.session-entry[data-session-index]') || []);
+    let animatedCount = 0;
+    for (const entry of entries) {
+        const index = Number(entry?.getAttribute?.('data-session-index') || 0);
+        if (index < DEFAULT_VISIBLE_SESSION_COUNT) {
+            continue;
+        }
+        if (animatedCount >= SESSION_VISIBILITY_ANIMATED_ITEM_LIMIT) {
+            break;
+        }
+        entry.style?.setProperty?.('--session-visibility-index', String(animatedCount));
+        entry.classList?.add?.('session-entry-collapsing');
+        animatedCount += 1;
+    }
+    if (animatedCount === 0) {
+        return;
+    }
+    await new Promise(resolve => globalThis.setTimeout(resolve, SESSION_VISIBILITY_ANIMATION_MS));
+}
+
+function measureElementHeight(element) {
+    const rect = element?.getBoundingClientRect?.();
+    const rectHeight = Number(rect?.height || 0);
+    if (rectHeight > 0) {
+        return rectHeight;
+    }
+    const scrollHeight = Number(element?.scrollHeight || 0);
+    return scrollHeight > 0 ? scrollHeight : 0;
+}
+
+function measureCollapsedSessionListHeight(list) {
+    const entries = Array.from(list?.querySelectorAll?.('.session-entry[data-session-index]') || []);
+    if (entries.length <= DEFAULT_VISIBLE_SESSION_COUNT) {
+        return measureElementHeight(list);
+    }
+    const lastVisibleEntry = entries[DEFAULT_VISIBLE_SESSION_COUNT - 1];
+    const listRect = list?.getBoundingClientRect?.();
+    const entryRect = lastVisibleEntry?.getBoundingClientRect?.();
+    const listTop = Number(listRect?.top || 0);
+    const entryBottom = Number(entryRect?.bottom || 0);
+    if (entryBottom > listTop) {
+        return Math.ceil(entryBottom - listTop);
+    }
+    const entryHeight = Number(lastVisibleEntry?.offsetHeight || 0);
+    if (entryHeight > 0) {
+        return Math.ceil(entryHeight * DEFAULT_VISIBLE_SESSION_COUNT);
+    }
+    return 0;
+}
+
 function bindProjectCard(card, group) {
     const projectId = group.id;
     const groupKeyValue = group.key;
+    bindProjectPathHint(card);
     card.querySelector('.project-toggle')?.addEventListener('click', () => {
-        if (expandedProjectIds.has(groupKeyValue)) expandedProjectIds.delete(groupKeyValue);
-        else expandedProjectIds.add(groupKeyValue);
-        void loadProjects();
+        toggleProjectExpandedState(card, groupKeyValue);
     });
     card.querySelector('.project-title-btn')?.addEventListener('click', async event => {
         event?.stopPropagation?.();
@@ -865,9 +1378,7 @@ function bindProjectCard(card, group) {
     });
     card.querySelector('.project-session-visibility-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
-        if (expandedProjectSessionIds.has(groupKeyValue)) expandedProjectSessionIds.delete(groupKeyValue);
-        else expandedProjectSessionIds.add(groupKeyValue);
-        void loadProjects();
+        void toggleProjectSessionVisibility(card, groupKeyValue);
     });
     card.querySelector('.project-fork-btn')?.addEventListener('click', event => {
         event?.stopPropagation?.();
@@ -886,9 +1397,14 @@ function bindProjectCard(card, group) {
             const sessionId = String(button.getAttribute('data-session-id') || '').trim();
             const targetWorkspaceId = String(button.getAttribute('data-workspace-id') || '').trim();
             if (!sessionId) return;
+            const selectionToken = nextSidebarSelectionToken();
             state.currentWorkspaceId = targetWorkspaceId || projectId;
-            void selectSessionById(sessionId).then(() => {
-                animateSessionItem(button, 'activating');
+            optimisticActivateSession(sessionId, { animate: true, item: button, updateState: false });
+            void selectSessionById(sessionId, selectionToken).catch(error => {
+                if (!isLatestSidebarSelection(selectionToken)) {
+                    return;
+                }
+                sysLog(formatMessage('sidebar.error.selecting_session', { error: error?.message || String(error) }), 'log-error');
             });
         };
         button.addEventListener('click', selectTarget);
@@ -960,13 +1476,18 @@ function bindProjectCard(card, group) {
                 confirmLabel: t('settings.action.save'),
                 cancelLabel: t('settings.action.cancel'),
                 placeholder: t('sidebar.session_name_placeholder'),
-                value: currentTitle || sessionId,
+                value: currentTitle,
             });
             if (nextTitle === null) return;
             const normalizedTitle = String(nextTitle || '').trim();
             const nextMetadata = { ...metadata };
-            if (normalizedTitle) nextMetadata.title = normalizedTitle;
-            else delete nextMetadata.title;
+            if (normalizedTitle) {
+                nextMetadata.title = normalizedTitle;
+                nextMetadata.title_source = 'manual';
+            } else {
+                delete nextMetadata.title;
+                delete nextMetadata.title_source;
+            }
             await updateSession(sessionId, nextMetadata);
             await loadProjects();
         });
@@ -1044,6 +1565,93 @@ function bindProjectCard(card, group) {
     });
 }
 
+function toggleProjectExpandedState(card, groupKeyValue) {
+    const safeGroupKey = String(groupKeyValue || '').trim();
+    if (!safeGroupKey) {
+        return;
+    }
+    const nextExpanded = !expandedProjectIds.has(safeGroupKey);
+    if (nextExpanded) {
+        expandedProjectIds.add(safeGroupKey);
+    } else {
+        expandedProjectIds.delete(safeGroupKey);
+    }
+    const toggle = card?.querySelector?.('.project-toggle') || null;
+    const toggleIcon = card?.querySelector?.('.project-toggle-icon') || null;
+    toggle?.setAttribute?.('aria-expanded', nextExpanded ? 'true' : 'false');
+    if (toggleIcon) {
+        toggleIcon.innerHTML = nextExpanded ? '&#9662;' : '&#9656;';
+    }
+    setProjectBodyExpandedState(card?.querySelector?.('.project-body') || null, nextExpanded);
+}
+
+function setProjectBodyExpandedState(body, expanded) {
+    if (!body?.classList) {
+        return;
+    }
+    const animationToken = ++projectBodyAnimationTokenSeed;
+    projectBodyAnimationTokens.set(body, animationToken);
+    const shouldExpand = expanded === true;
+    const currentHeight = measureElementHeight(body);
+    body.classList.add('is-animating');
+    body.style.setProperty('--project-body-height', `${currentHeight}px`);
+    void body.offsetHeight;
+    body.classList.toggle('is-expanded', shouldExpand);
+    body.classList.toggle('is-collapsed', !shouldExpand);
+    body.style.setProperty(
+        '--project-body-height',
+        shouldExpand ? `${body.scrollHeight}px` : '0px',
+    );
+    globalThis.setTimeout(() => {
+        if (projectBodyAnimationTokens.get(body) !== animationToken) {
+            return;
+        }
+        if (shouldExpand) {
+            body.style.removeProperty('--project-body-height');
+        }
+        body.classList.remove('is-animating');
+        projectBodyAnimationTokens.delete(body);
+    }, PROJECT_BODY_ANIMATION_MS);
+}
+
+function bindProjectPathHint(card) {
+    const row = card?.querySelector?.('.project-row') || null;
+    const hint = card?.querySelector?.('.project-path-hint') || null;
+    if (!row || !hint) return;
+    const show = () => showProjectPathHint(row, hint);
+    const hide = () => hideProjectPathHint(card, hint);
+    row.addEventListener?.('mouseenter', show);
+    row.addEventListener?.('focusin', show);
+    row.addEventListener?.('mouseleave', hide);
+    row.addEventListener?.('focusout', event => {
+        if (row.contains?.(event?.relatedTarget)) return;
+        hide();
+    });
+}
+
+function showProjectPathHint(row, hint) {
+    const rowRect = row?.getBoundingClientRect?.();
+    if (!rowRect) return;
+    const left = Math.max(8, Number(rowRect.left || 0) + 28);
+    const viewportWidth = Number(globalThis.innerWidth || document?.documentElement?.clientWidth || 0);
+    const maxWidth = Math.max(160, viewportWidth > 0 ? viewportWidth - left - 12 : 720);
+    hint.style?.setProperty?.('left', `${left}px`);
+    hint.style?.setProperty?.('max-width', `${maxWidth}px`);
+    hint.style?.setProperty?.('top', '0px');
+    hint.classList?.add?.('is-measuring');
+    const hintRect = hint.getBoundingClientRect?.();
+    const hintHeight = Math.max(18, Number(hintRect?.height || 0));
+    const top = Math.max(4, Number(rowRect.top || 0) - hintHeight - 4);
+    hint.style?.setProperty?.('top', `${top}px`);
+    hint.classList?.remove?.('is-measuring');
+    hint.classList?.add?.('is-visible');
+}
+
+function hideProjectPathHint(card, hint) {
+    hint?.classList?.remove?.('is-visible', 'is-measuring');
+    card?.classList?.remove?.('is-path-hint-visible');
+}
+
 function renderProjectCard(group) {
     const projectKey = group.key;
     const projectId = group.id;
@@ -1054,6 +1662,11 @@ function renderProjectCard(group) {
     const visibleSessions = visibleSessionsForGroup(group, {
         sessionsExpanded,
     });
+    const visibilityAnimation = consumePendingSessionVisibilityAnimation(projectKey);
+    const visibilityDirection = String(visibilityAnimation?.direction || '').trim();
+    const listVisibilityClass = visibilityDirection
+        ? ` is-visibility-${visibilityDirection === 'expand' ? 'expanding' : 'collapsed'}`
+        : '';
     const hasHiddenSessions = group.sessions.length > DEFAULT_VISIBLE_SESSION_COUNT;
     const projectViewActive = state.currentMainView === 'project' && state.currentProjectViewWorkspaceId === projectId;
     const pathHint = String(group.pathHint || group.workspace?.root_path || '').trim();
@@ -1072,18 +1685,29 @@ function renderProjectCard(group) {
             </div>
         </div>
         <div class="project-path-hint">${escapeHtml(pathHint)}</div>
-        ${menuOpen ? `<div class="project-menu project-menu-workspace" role="menu"><button class="project-fork-btn project-workspace-menu-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M9 5H6.75A1.75 1.75 0 0 0 5 6.75v10.5C5 18.22 5.78 19 6.75 19h10.5A1.75 1.75 0 0 0 19 17.25V15M15 5h4m0 0v4m0-4-7.5 7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.fork'))}</span></button><button class="project-remove-btn project-workspace-menu-btn project-remove-workspace-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M6 7h12M9 7V5.8c0-.44 0-.66.09-.83a1 1 0 0 1 .42-.42C9.74 4.5 9.96 4.5 10.4 4.5h3.2c.44 0 .66 0 .83.08a1 1 0 0 1 .42.42c.09.17.09.39.09.83V7m-7 0 .55 9.18c.03.55.05.82.17 1.03a1 1 0 0 0 .43.4c.22.1.49.1 1.03.1h4.64c.54 0 .81 0 1.03-.1a1 1 0 0 0 .43-.4c.12-.21.14-.48.17-1.03L18 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.remove'))}</span></button></div>` : ''}
-        <div class="project-body${expanded ? '' : ' is-collapsed'}">
-            <div class="project-session-list">
+        ${menuOpen ? `<div class="project-menu project-menu-workspace is-opening" role="menu"><button class="project-fork-btn project-workspace-menu-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M9 5H6.75A1.75 1.75 0 0 0 5 6.75v10.5C5 18.22 5.78 19 6.75 19h10.5A1.75 1.75 0 0 0 19 17.25V15M15 5h4m0 0v4m0-4-7.5 7.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.fork'))}</span></button><button class="project-remove-btn project-workspace-menu-btn project-remove-workspace-btn" type="button" role="menuitem"><span class="project-menu-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" class="icon-sm"><path d="M6 7h12M9 7V5.8c0-.44 0-.66.09-.83a1 1 0 0 1 .42-.42C9.74 4.5 9.96 4.5 10.4 4.5h3.2c.44 0 .66 0 .83.08a1 1 0 0 1 .42.42c.09.17.09.39.09.83V7m-7 0 .55 9.18c.03.55.05.82.17 1.03a1 1 0 0 0 .43.4c.22.1.49.1 1.03.1h4.64c.54 0 .81 0 1.03-.1a1 1 0 0 0 .43-.4c.12-.21.14-.48.17-1.03L18 7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>${escapeHtml(t('sidebar.remove'))}</span></button></div>` : ''}
+        <div class="project-body${expanded ? ' is-expanded' : ' is-collapsed'}">
+            <div class="project-session-list${listVisibilityClass}">
                 ${
                     visibleSessions.length > 0
-                        ? visibleSessions.map(session => {
+                        ? visibleSessions.map((session, sessionIndex) => {
                             const sessionMetadata = getSessionMetadata(session);
                             const sourceClassName = getSessionSourceClassName(session);
+                            const runIndicatorClassName = getSessionRunIndicatorClassName(session);
+                            const sessionLabel = formatSessionLabel(session);
+                            const enteringVisibility = visibilityDirection === 'expand'
+                                && sessionIndex >= DEFAULT_VISIBLE_SESSION_COUNT
+                                && sessionIndex < DEFAULT_VISIBLE_SESSION_COUNT + SESSION_VISIBILITY_ANIMATED_ITEM_LIMIT;
+                            const sessionEntryClassName = enteringVisibility
+                                ? 'session-entry session-entry-visible-entering'
+                                : 'session-entry';
+                            const sessionEntryStyle = enteringVisibility
+                                ? ` style="--session-visibility-index: ${sessionIndex - DEFAULT_VISIBLE_SESSION_COUNT};"`
+                                : '';
                             return `
-                                <div class="session-entry">
+                                <div class="${sessionEntryClassName}" data-session-index="${sessionIndex}"${sessionEntryStyle}>
                                     <div
-                                        class="session-item${sourceClassName}${session.session_id === state.currentSessionId && !state.activeSubagentSession ? ' active' : ''}"
+                                        class="session-item${sourceClassName}${runIndicatorClassName}${isCurrentMainSession(session) ? ' active' : ''}"
                                         tabindex="0"
                                         role="button"
                                         data-session-id="${escapeHtml(session.session_id)}"
@@ -1091,9 +1715,10 @@ function renderProjectCard(group) {
                                     >
                                         <span class="session-main">
                                             ${renderSubagentToggle(session)}
-                                            <span class="session-id">${renderSessionSourceIcon(session)}<span class="session-label-text">${escapeHtml(formatSessionLabel(session))}</span></span>
+                                            <span class="session-id">${renderSessionSourceIcon(session)}<span class="session-label-text" title="${escapeHtml(sessionLabel)}">${escapeHtml(sessionLabel)}</span></span>
                                         </span>
                                         <span class="session-meta">
+                                            ${renderSessionRunIndicator(session)}
                                             <span class="session-time">${escapeHtml(formatRelativeTime(session.updated_at))}</span>
                                             <span class="session-actions">
                                                 <button class="session-rename-btn" type="button" data-session-id="${escapeHtml(session.session_id)}" data-session-metadata="${escapeHtml(JSON.stringify(sessionMetadata))}" title="${escapeHtml(t('sidebar.rename_session'))}" aria-label="${escapeHtml(t('sidebar.rename_session'))}">
@@ -1149,8 +1774,9 @@ function visibleSessionsForGroup(group, { sessionsExpanded = false } = {}) {
     return nextVisibleSessions;
 }
 
-export async function loadProjects() {
+export async function loadProjects({ forceRefresh = false } = {}) {
     if (!els.projectsList) return;
+    ensureSessionSearchConfigured();
     if (!languageRefreshBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => void loadProjects());
         document.addEventListener('agent-teams-projects-changed', () => void loadProjects());
@@ -1158,13 +1784,14 @@ export async function loadProjects() {
             const detail = event?.detail;
             const forceRefresh = detail && typeof detail === 'object' && 'forceRefresh' in detail
                 ? detail.forceRefresh === true
-                : true;
+                : false;
             scheduleSessionsRefresh(90, {
                 forceRefresh,
             });
         });
-        document.addEventListener('agent-teams-session-selected', () => void loadProjects());
-        document.addEventListener('agent-teams-subagent-session-selected', () => void loadProjects());
+        document.addEventListener('agent-teams-session-activated', syncActivatedSessionFromEvent);
+        document.addEventListener('agent-teams-session-selected', syncActivatedSessionFromEvent);
+        document.addEventListener('agent-teams-subagent-session-selected', syncSubagentSessionFromEvent);
         document.addEventListener('agent-teams-new-session-draft-created', () => void loadProjects());
         document.addEventListener('agent-teams-draft-workspace-added', () => void loadProjects());
         languageRefreshBound = true;
@@ -1174,7 +1801,7 @@ export async function loadProjects() {
         ensureProjectMenuDismissBinding();
         const [workspaces, sessions, automationProjects] = await Promise.all([
             fetchWorkspaces(),
-            fetchSessions(),
+            fetchSessions({ forceRefresh: forceRefresh === true }),
             fetchAutomationProjects(),
         ]);
         if (requestId !== loadProjectsRequestId) {
@@ -1195,10 +1822,17 @@ export async function loadProjects() {
             Array.isArray(workspaces) ? workspaces : [],
             Array.isArray(sessions) ? sessions : [],
         );
-        const nextNodes = [renderFeatureNav(), renderProjectsToolbar()];
+        setSessionSearchEntries(buildSessionSearchEntries(groups));
+        const featureNode = renderFeatureNav();
+        const toolbarNode = renderProjectsToolbar();
+        const workspaceContentNodes = [];
         if (groups.length === 0) {
             openProjectMenuId = null;
-            nextNodes.push(renderEmptyProjectsState());
+            workspaceContentNodes.push(renderEmptyProjectsState());
+            const nextNodes = [
+                featureNode,
+                renderProjectsWorkspaceShell(toolbarNode, workspaceContentNodes),
+            ];
             const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
             if (nextSignature === lastProjectsRenderSignature) {
                 return;
@@ -1211,7 +1845,11 @@ export async function loadProjects() {
         if (!groups.some(group => group.key === openProjectMenuId)) {
             openProjectMenuId = null;
         }
-        groups.forEach(group => nextNodes.push(renderProjectCard(group)));
+        groups.forEach(group => workspaceContentNodes.push(renderProjectCard(group)));
+        const nextNodes = [
+            featureNode,
+            renderProjectsWorkspaceShell(toolbarNode, workspaceContentNodes),
+        ];
         const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
         if (nextSignature === lastProjectsRenderSignature) {
             return;
@@ -1231,16 +1869,18 @@ export async function loadProjects() {
 }
 
 export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } = {}) {
+    pendingSessionsRefreshForce = pendingSessionsRefreshForce || forceRefresh === true;
     if (refreshTimer) clearTimeout(refreshTimer);
     const safeDelayMs = Math.max(0, Number(delayMs) || 0);
-    const forceNow = forceRefresh === true;
     refreshTimer = setTimeout(() => {
         refreshTimer = null;
+        const forceNow = pendingSessionsRefreshForce === true;
         if (!forceNow && isProjectsListInteracting()) {
             scheduleSessionsRefresh(Math.max(safeDelayMs, SIDEBAR_INTERACTION_REFRESH_DELAY_MS));
             return;
         }
-        void loadProjects();
+        pendingSessionsRefreshForce = false;
+        void loadProjects({ forceRefresh: forceNow });
     }, safeDelayMs);
 }
 
@@ -1251,13 +1891,13 @@ export function toggleProjectSortMode() {
 }
 
 export function setSessionMode() {
-    if (els.projectsList) els.projectsList.style.display = 'block';
+    if (els.projectsList) els.projectsList.style.display = 'flex';
     els.roundsList.style.display = 'none';
     els.backBtn.style.display = 'none';
 }
 
 export function setRoundsMode() {
-    if (els.projectsList) els.projectsList.style.display = 'block';
+    if (els.projectsList) els.projectsList.style.display = 'flex';
     els.roundsList.style.display = 'none';
     els.backBtn.style.display = 'none';
 }

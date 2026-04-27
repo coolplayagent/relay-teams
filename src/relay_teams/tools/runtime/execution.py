@@ -5,18 +5,24 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_ai.messages import ToolReturn
 
 import asyncio
+import contextvars
 import inspect
 import json
 import logging
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from collections.abc import Awaitable, Callable, Mapping
 from enum import Enum
 from json import dumps
 from typing import (
     Literal,
     Optional,
+    ParamSpec,
     Protocol,
+    TypeVar,
     cast,
     get_args,
     get_origin,
@@ -87,6 +93,60 @@ from relay_teams.hooks import (
 )
 
 LOGGER = get_logger(__name__)
+ParamT = ParamSpec("ParamT")
+ResultT = TypeVar("ResultT")
+TOOL_ACTION_WORKER_COUNT = 16
+TOOL_STATE_WORKER_COUNT = 4
+TOOL_APPROVAL_WORKER_COUNT = 4
+PER_RUN_TOOL_ACTION_CONCURRENCY = 8
+GLOBAL_TOOL_ACTION_CONCURRENCY = 16
+_TOOL_ACTION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=TOOL_ACTION_WORKER_COUNT,
+    thread_name_prefix="tool-action",
+)
+_TOOL_STATE_EXECUTOR = ThreadPoolExecutor(
+    max_workers=TOOL_STATE_WORKER_COUNT,
+    thread_name_prefix="tool-state",
+)
+_TOOL_APPROVAL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=TOOL_APPROVAL_WORKER_COUNT,
+    thread_name_prefix="tool-approval",
+)
+_GLOBAL_TOOL_ACTION_SEMAPHORE = asyncio.Semaphore(GLOBAL_TOOL_ACTION_CONCURRENCY)
+_RUN_TOOL_ACTION_GATES_LOCK = threading.Lock()
+_RUN_TOOL_ACTION_GATES: dict[str, _RunToolActionGate] = {}
+
+
+class _RunToolActionGate:
+    def __init__(self) -> None:
+        self.semaphore = asyncio.Semaphore(PER_RUN_TOOL_ACTION_CONCURRENCY)
+        self.ref_count = 0
+
+
+async def _run_tool_state_work(
+    function: Callable[ParamT, ResultT],
+    /,
+    *args: ParamT.args,
+    **kwargs: ParamT.kwargs,
+) -> ResultT:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _TOOL_STATE_EXECUTOR,
+        partial(function, *args, **kwargs),
+    )
+
+
+async def _run_tool_approval_work(
+    function: Callable[ParamT, ResultT],
+    /,
+    *args: ParamT.args,
+    **kwargs: ParamT.kwargs,
+) -> ResultT:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _TOOL_APPROVAL_EXECUTOR,
+        partial(function, *args, **kwargs),
+    )
 
 
 @runtime_checkable
@@ -344,12 +404,11 @@ async def execute_tool(
             _raise_if_stopped(ctx)
             hook_env_token = set_tool_hook_runtime_env(ctx.deps.hook_runtime_env)
             try:
-                result = _invoke_tool_action(
+                result = await _invoke_tool_action_with_limits(
+                    ctx=ctx,
                     action=action,
                     tool_input=effective_tool_input,
                 )
-                if inspect.isawaitable(result):
-                    result = await result
             finally:
                 reset_tool_hook_runtime_env(hook_env_token)
             _raise_if_stopped(ctx)
@@ -736,7 +795,7 @@ async def _ensure_run_runtime_async(
         ensure_kwargs["status"] = status
     if phase != RunRuntimePhase.IDLE:
         ensure_kwargs["phase"] = phase
-    _ = await asyncio.to_thread(repository.ensure, **ensure_kwargs)
+    _ = await _run_tool_state_work(repository.ensure, **ensure_kwargs)
 
 
 async def _update_run_runtime_async(
@@ -748,7 +807,7 @@ async def _update_run_runtime_async(
     if isinstance(repository, _AsyncRunRuntimeRepository):
         _ = await repository.update_async(ctx.deps.run_id, **changes)
         return
-    _ = await asyncio.to_thread(repository.update, ctx.deps.run_id, **changes)
+    _ = await _run_tool_state_work(repository.update, ctx.deps.run_id, **changes)
 
 
 async def _publish_tool_result_event_async(
@@ -898,6 +957,85 @@ def _normalize_json_value(value: object) -> JsonValue:
     if isinstance(value, dict):
         return _normalize_json_object(value)
     return str(value)
+
+
+async def _invoke_tool_action_with_limits(
+    *,
+    ctx: ToolContext,
+    action: Callable[..., object | Awaitable[object]] | object,
+    tool_input: dict[str, JsonValue],
+) -> object:
+    run_gate = _retain_run_tool_action_gate(ctx.deps.run_id)
+    queued_at = time.perf_counter()
+    try:
+        async with run_gate.semaphore:
+            async with _GLOBAL_TOOL_ACTION_SEMAPHORE:
+                wait_ms = int((time.perf_counter() - queued_at) * 1000)
+                if wait_ms >= 250:
+                    log_event(
+                        LOGGER,
+                        logging.DEBUG,
+                        event="tool.action.queue_wait",
+                        message="Tool action waited for execution capacity",
+                        duration_ms=wait_ms,
+                        payload={
+                            "run_id": ctx.deps.run_id,
+                            "session_id": ctx.deps.session_id,
+                            "tool_call_id": ctx.tool_call_id,
+                        },
+                    )
+                return await _invoke_tool_action_async(
+                    action=action,
+                    tool_input=tool_input,
+                )
+    finally:
+        _release_run_tool_action_gate(ctx.deps.run_id, run_gate)
+
+
+def _retain_run_tool_action_gate(run_id: str) -> _RunToolActionGate:
+    with _RUN_TOOL_ACTION_GATES_LOCK:
+        gate = _RUN_TOOL_ACTION_GATES.get(run_id)
+        if gate is None:
+            gate = _RunToolActionGate()
+            _RUN_TOOL_ACTION_GATES[run_id] = gate
+        gate.ref_count += 1
+        return gate
+
+
+def _release_run_tool_action_gate(run_id: str, gate: _RunToolActionGate) -> None:
+    with _RUN_TOOL_ACTION_GATES_LOCK:
+        current = _RUN_TOOL_ACTION_GATES.get(run_id)
+        if current is not gate:
+            return
+        gate.ref_count = max(0, gate.ref_count - 1)
+        if gate.ref_count == 0:
+            del _RUN_TOOL_ACTION_GATES[run_id]
+
+
+async def _invoke_tool_action_async(
+    *,
+    action: Callable[..., object | Awaitable[object]] | object,
+    tool_input: dict[str, JsonValue],
+) -> object:
+    if not callable(action):
+        return action
+    if inspect.iscoroutinefunction(action):
+        result = _invoke_tool_action(action=action, tool_input=tool_input)
+    else:
+        loop = asyncio.get_running_loop()
+        context = contextvars.copy_context()
+
+        def _invoke_in_context() -> object | Awaitable[object]:
+            return context.run(
+                _invoke_tool_action,
+                action=action,
+                tool_input=tool_input,
+            )
+
+        result = await loop.run_in_executor(_TOOL_ACTION_EXECUTOR, _invoke_in_context)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def _invoke_tool_action(
@@ -1599,7 +1737,7 @@ async def _observe_tool_result_reminders_async(
     if isinstance(reminder_service, _AsyncToolResultReminderService):
         _ = await reminder_service.observe_tool_result_async(observation)
         return
-    _ = await asyncio.to_thread(reminder_service.observe_tool_result, observation)
+    _ = await _run_tool_state_work(reminder_service.observe_tool_result, observation)
 
 
 def _reported_failure_from_success_envelope(
@@ -1889,7 +2027,7 @@ async def _wait_for_ticket_resolution(
         )
 
     try:
-        action, feedback = await asyncio.to_thread(
+        action, feedback = await _run_tool_approval_work(
             ctx.deps.tool_approval_manager.wait_for_approval,
             run_id=ctx.deps.run_id,
             tool_call_id=ticket_id,

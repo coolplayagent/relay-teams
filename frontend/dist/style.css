@@ -2,6 +2,7 @@
 @import url("./css/layout.css");
 @import url("./css/components/base.css");
 @import url("./css/components/features.css");
+@import url("./css/components/session-search.css");
 @import url("./css/components/projects.css");
 @import url("./css/components/automation.css");
 @import url("./css/components/gateway.css");
