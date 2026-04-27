@@ -980,27 +980,14 @@ def test_runtime_system_prompt_for_normal_mode_root_includes_available_subagents
     assert "## Available Subagents" not in prompt
 
 
-def test_runtime_system_prompt_loads_all_project_agents_files_before_fallback(
+def test_runtime_system_prompt_loads_all_project_agents_files(
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
-    import relay_teams.agents.execution.prompt_instructions as prompt_instructions
-
     project_root = tmp_path / "project"
     nested_dir = project_root / "src" / "feature"
     config_dir = tmp_path / "config"
     nested_dir.mkdir(parents=True)
     config_dir.mkdir()
-    monkeypatch.setattr(
-        prompt_instructions,
-        "GLOBAL_CLAUDE_FILE",
-        tmp_path / "missing" / "CLAUDE.md",
-    )
-    monkeypatch.setattr(
-        prompt_instructions,
-        "GLOBAL_GEMINI_FILE",
-        tmp_path / "missing" / "GEMINI.md",
-    )
     (project_root / "AGENTS.md").write_text(
         "Root project instructions.", encoding="utf-8"
     )
@@ -1032,23 +1019,45 @@ def test_runtime_system_prompt_loads_all_project_agents_files_before_fallback(
     )
 
 
-def test_runtime_system_prompt_falls_back_to_global_claude_before_gemini(
+def test_runtime_system_prompt_loads_global_agents_with_project_agents(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    nested_dir = project_root / "src"
+    config_dir = tmp_path / "config"
+    nested_dir.mkdir(parents=True)
+    config_dir.mkdir()
+    (project_root / "AGENTS.md").write_text("Project instructions.", encoding="utf-8")
+    (config_dir / "AGENTS.md").write_text("Global instructions.", encoding="utf-8")
+
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                shared_state_snapshot=(),
+                working_directory=nested_dir,
+                worktree_root=project_root,
+            ),
+            instruction_resolver=PromptInstructionResolver(app_config_dir=config_dir),
+        )
+    )
+
+    assert "Project instructions." in result.prompt
+    assert "Global instructions." in result.prompt
+    assert result.local_instruction_paths == (
+        (project_root / "AGENTS.md").resolve(),
+        (config_dir / "AGENTS.md").resolve(),
+    )
+
+
+def test_runtime_system_prompt_uses_env_config_dir_for_global_agents(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    import relay_teams.agents.execution.prompt_instructions as prompt_instructions
-
     config_dir = tmp_path / "config"
-    home_dir = tmp_path / "home"
-    claude_file = home_dir / ".claude" / "CLAUDE.md"
-    gemini_file = home_dir / ".gemini" / "GEMINI.md"
     config_dir.mkdir()
-    claude_file.parent.mkdir(parents=True)
-    gemini_file.parent.mkdir(parents=True)
-    claude_file.write_text("Global Claude instructions.", encoding="utf-8")
-    gemini_file.write_text("Global Gemini instructions.", encoding="utf-8")
-    monkeypatch.setattr(prompt_instructions, "GLOBAL_CLAUDE_FILE", claude_file)
-    monkeypatch.setattr(prompt_instructions, "GLOBAL_GEMINI_FILE", gemini_file)
+    (config_dir / "AGENTS.md").write_text("Env global instructions.", encoding="utf-8")
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(config_dir))
 
     result = asyncio.run(
         build_runtime_system_prompt_result(
@@ -1058,13 +1067,44 @@ def test_runtime_system_prompt_falls_back_to_global_claude_before_gemini(
                 working_directory=tmp_path,
                 worktree_root=tmp_path,
             ),
-            instruction_resolver=PromptInstructionResolver(app_config_dir=config_dir),
+            instruction_resolver=PromptInstructionResolver(),
         )
     )
 
-    assert "Global Claude instructions." in result.prompt
+    assert "Env global instructions." in result.prompt
+    assert result.local_instruction_paths == ((config_dir / "AGENTS.md").resolve(),)
+
+
+def test_runtime_system_prompt_does_not_load_global_claude_or_gemini(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home_dir = tmp_path / "home"
+    claude_file = home_dir / ".claude" / "CLAUDE.md"
+    gemini_file = home_dir / ".gemini" / "GEMINI.md"
+    config_dir = home_dir / ".relay-teams"
+    claude_file.parent.mkdir(parents=True)
+    gemini_file.parent.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    claude_file.write_text("Global Claude instructions.", encoding="utf-8")
+    gemini_file.write_text("Global Gemini instructions.", encoding="utf-8")
+    monkeypatch.setenv("RELAY_TEAMS_CONFIG_DIR", str(config_dir))
+
+    result = asyncio.run(
+        build_runtime_system_prompt_result(
+            RuntimePromptBuildInput(
+                role=_role("writer_agent"),
+                shared_state_snapshot=(),
+                working_directory=tmp_path,
+                worktree_root=tmp_path,
+            ),
+            instruction_resolver=PromptInstructionResolver(),
+        )
+    )
+
+    assert "Global Claude instructions." not in result.prompt
     assert "Global Gemini instructions." not in result.prompt
-    assert result.local_instruction_paths == (claude_file.resolve(),)
+    assert result.local_instruction_paths == ()
 
 
 def test_runtime_system_prompt_loads_configured_instruction_sources(

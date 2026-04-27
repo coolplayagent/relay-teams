@@ -210,15 +210,10 @@ class CommandManagementService:
         target_path: Path,
         workspace_root: Optional[Path],
     ) -> Optional[CommandDefinition]:
-        commands = (
-            self.registry.list_app_commands()
-            if workspace_root is None
-            else self.registry.list_project_commands(workspace_root=workspace_root)
+        return self.registry.get_discovered_command_by_source_path(
+            source_path=target_path,
+            workspace_root=workspace_root,
         )
-        for command in commands:
-            if command.source_path.resolve() == target_path:
-                return command
-        return None
 
 
 class _CommandUpdateTarget(BaseModel):

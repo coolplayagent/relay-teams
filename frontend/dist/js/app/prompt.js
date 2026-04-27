@@ -76,6 +76,7 @@ let promptMentionSessionKey = "";
 let promptMentionPlacementSide = null;
 let promptMentionPreviewSnapshot = null;
 let promptMentionPreviewValue = "";
+let promptSelectedSlashOption = null;
 let promptCommandOptions = [];
 let promptCommandWorkspaceId = "";
 let promptCommandLoadingWorkspaceId = "";
@@ -348,7 +349,7 @@ export async function handleSend() {
     return;
   }
   clearPromptComposerStatus();
-  const resolvedPrompt = await resolvePromptCommandText(text);
+  const resolvedPrompt = await resolvePromptSlashText(text);
   if (resolvedPrompt === null) {
     restorePromptComposerAfterSendAbort();
     return;
@@ -427,8 +428,9 @@ export function initializePromptMentionAutocomplete() {
     });
   }
 
-  if (typeof document.addEventListener === "function") {
-    document.addEventListener("click", (event) => {
+  const rootDocument = globalThis.document;
+  if (rootDocument && typeof rootDocument.addEventListener === "function") {
+    rootDocument.addEventListener("click", (event) => {
       if (
         containsNode(els.promptInput, event?.target) ||
         containsNode(els.promptMentionMenu, event?.target)
@@ -460,6 +462,7 @@ export function initializePromptMentionAutocomplete() {
 
 export function handlePromptComposerInput() {
   acceptPromptMentionPreviewIfUserEdited();
+  syncPromptSelectedSlashOptionWithInput();
   renderPromptAttachments();
   renderPromptTokenPreview();
   refreshPromptMentionAutocomplete();
@@ -559,6 +562,7 @@ function resetPromptComposer() {
     els.promptInput.value = "";
     els.promptInput.style.height = "auto";
   }
+  promptSelectedSlashOption = null;
   promptAttachments = [];
   clearPromptComposerStatus();
   renderPromptAttachments();
@@ -1133,16 +1137,16 @@ function getPromptMentionSessionKey(kind, context) {
 function refreshPromptMentionAutocomplete() {
   const commandContext = getPromptCommandContext();
   if (commandContext) {
-    ensurePromptMentionSession("action", commandContext);
+    ensurePromptMentionSession("slash", commandContext);
     void ensurePromptCommandsLoaded();
     const workspaceId = String(state.currentWorkspaceId || "").trim();
-    const nextOptions = findPromptActionOptions(commandContext.query);
+    const nextOptions = findPromptSlashOptions(commandContext.query);
     const previousKey =
       getPromptOptionKey(promptMentionOptions[activePromptMentionIndex]) || "";
     promptMentionOptions = nextOptions;
     promptMentionQuery = commandContext.query;
     promptMentionTrigger = "/";
-    promptMentionKind = "action";
+    promptMentionKind = "slash";
     promptMentionRange = {
       start: commandContext.start,
       end: commandContext.end,
@@ -1449,22 +1453,26 @@ function getSlashSafeSkillInsertTerm(name, ref) {
   return safeName.replace(/\s+/g, "-").toLowerCase();
 }
 
-function findPromptActionOptions(query) {
+function findPromptSlashOptions(query) {
+  return [
+    ...findPromptCommandOptions(query),
+    ...findPromptSkillOptions(query),
+  ];
+}
+
+function findPromptCommandOptions(query) {
+  return findPromptSlashDomainOptions(listPromptCommandOptions(), query);
+}
+
+function findPromptSkillOptions(query) {
+  return findPromptSlashDomainOptions(promptSkillOptions, query);
+}
+
+function findPromptSlashDomainOptions(options, query) {
   const safeQuery = String(query || "")
     .trim()
     .toLowerCase();
-  const commandOptions = listPromptCommandOptions();
-  const commandTerms = new Set(
-    commandOptions.flatMap((option) => option.aliases || [])
-      .map((term) => String(term || "").trim().toLowerCase())
-      .filter(Boolean),
-  );
-  const skillOptions = promptSkillOptions.filter((option) =>
-    !option.aliases.some((alias) =>
-      commandTerms.has(String(alias || "").trim().toLowerCase())
-    )
-  );
-  return [...commandOptions, ...skillOptions]
+  return (Array.isArray(options) ? options : [])
     .map((option, index) => ({
       option,
       index,
@@ -1609,27 +1617,32 @@ function renderPromptMentionAutocomplete() {
     hidePromptMentionMenu(menu);
     return;
   }
-  const shouldShowCommandStatus =
-    promptMentionKind === "action" &&
-    promptCommandAutocompleteStatus !== PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE;
+  const shouldShowSlashOptions =
+    promptMentionKind === "slash" &&
+    promptMentionOptions.length > 0 &&
+    activePromptMentionIndex >= 0;
   const shouldShowResourceOptions =
     promptMentionKind === "resource" &&
     promptMentionOptions.length > 0 &&
     activePromptMentionIndex >= 0;
+  if (promptMentionKind === "slash" && !shouldShowSlashOptions) {
+    hidePromptMentionMenu(menu);
+    return;
+  }
   if (promptMentionKind === "resource" && !shouldShowResourceOptions) {
     hidePromptMentionMenu(menu);
     return;
   }
   if (
     (promptMentionOptions.length === 0 || activePromptMentionIndex < 0) &&
-    !shouldShowCommandStatus
+    !shouldShowSlashOptions
   ) {
     hidePromptMentionMenu(menu);
     return;
   }
   menu.hidden = false;
   menu.style.display = "flex";
-  if (promptMentionKind === "action") {
+  if (promptMentionKind === "slash") {
     renderPromptCommandAutocomplete(menu);
     applyPromptMentionMenuPlacement(menu);
     return;
@@ -1920,7 +1933,7 @@ function applyPromptMentionOptionToInput(option, { commit }) {
   const spacer = after.length === 0 || /^\s/.test(after) ? "" : " ";
   const appendTrailingSpace = commit &&
     !(promptMentionKind === "resource" && option.kind === "directory");
-  const mentionTrigger = promptMentionKind === "action"
+  const mentionTrigger = promptMentionKind === "slash"
     ? "/"
     : getPromptMentionTrigger(source.slice(promptMentionRange.start))
       || promptMentionTrigger;
@@ -1947,8 +1960,58 @@ function applyPromptMentionOptionToInput(option, { commit }) {
   if (Number.isFinite(els.promptInput.scrollHeight)) {
     els.promptInput.style.height = `${els.promptInput.scrollHeight}px`;
   }
+  if (commit) {
+    setPromptSelectedSlashOption(option);
+  }
   els.promptInput.focus?.();
   renderPromptTokenPreview();
+}
+
+function setPromptSelectedSlashOption(option) {
+  if (promptMentionKind !== "slash") {
+    return;
+  }
+  if (option.kind !== "command" && option.kind !== "skill") {
+    promptSelectedSlashOption = null;
+    return;
+  }
+  const slashName = option.kind === "skill"
+    ? String(option.skillName || "").trim()
+    : String(option.commandName || "").trim();
+  const token = String(option.insertTerm || slashName).trim();
+  if (!slashName || !token) {
+    promptSelectedSlashOption = null;
+    return;
+  }
+  promptSelectedSlashOption = {
+    kind: option.kind,
+    name: slashName,
+    token,
+  };
+}
+
+function syncPromptSelectedSlashOptionWithInput() {
+  if (!promptSelectedSlashOption || !els.promptInput) {
+    return;
+  }
+  const invocation = extractPromptSlashInvocation(els.promptInput.value);
+  if (!invocation || !promptSelectedSlashOptionMatchesInvocation(invocation)) {
+    promptSelectedSlashOption = null;
+  }
+}
+
+function promptSelectedSlashOptionMatchesInvocation(invocation) {
+  if (!promptSelectedSlashOption || !invocation) {
+    return false;
+  }
+  const token = String(invocation.name || "").trim().toLowerCase();
+  const selectedToken = String(promptSelectedSlashOption.token || "")
+    .trim()
+    .toLowerCase();
+  const selectedName = String(promptSelectedSlashOption.name || "")
+    .trim()
+    .toLowerCase();
+  return token && (token === selectedToken || token === selectedName);
 }
 
 function dismissPromptMentionAutocomplete() {
@@ -2081,7 +2144,7 @@ export function invalidatePromptCommandsCache() {
   promptCommandLoadErrorMessage = "";
   promptCommandAutocompleteStatus = PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE;
   promptCommandActiveRequestToken = ++promptCommandRequestSequence;
-  if (promptMentionKind === "action") {
+  if (promptMentionKind === "slash") {
     refreshPromptMentionAutocomplete();
   }
 }
@@ -2357,57 +2420,118 @@ function mergePromptResourceOptions(existingOptions, nextOptions) {
   return Array.from(byKey.values());
 }
 
-async function resolvePromptCommandText(text) {
+async function resolvePromptSlashText(text) {
   const promptText = String(text || "").trim();
-  const invocation = extractPromptActionInvocation(promptText);
+  const invocation = extractPromptSlashInvocation(promptText);
   if (!invocation) {
     return { text: promptText, skills: [] };
   }
   const workspaceId = String(state.currentWorkspaceId || "").trim();
-  if (workspaceId) {
-    try {
-      const result = await resolveCommandPrompt({
-        workspace_id: workspaceId,
-        raw_text: `/${invocation.name}${invocation.args ? ` ${invocation.args}` : ""}`,
-        mode: state.currentSessionMode || "normal",
-      });
-      if (result?.matched) {
-        const expandedPrompt = String(result.expanded_prompt || "").trim();
-        return {
-          text: combinePromptActionText(invocation.prefix, expandedPrompt || promptText),
-          skills: [],
-        };
+  const selectedSlashOption = promptSelectedSlashOptionMatchesInvocation(invocation)
+    ? promptSelectedSlashOption
+    : null;
+
+  if (selectedSlashOption?.kind === "skill") {
+    const resolvedSkill = resolvePromptSkillInvocation(invocation, promptText);
+    if (resolvedSkill) {
+      return resolvedSkill;
+    }
+    promptSelectedSlashOption = null;
+  }
+  if (selectedSlashOption?.kind === "command") {
+    if (!workspaceId) {
+      promptSelectedSlashOption = null;
+      const resolvedSkill = resolvePromptSkillInvocation(invocation, promptText);
+      if (resolvedSkill) {
+        return resolvedSkill;
       }
-    } catch (error) {
-      const message = error.message || "Failed to resolve command.";
-      setPromptComposerStatus(message, { tone: "danger" });
-      showToast({
-        title: "Command blocked",
-        message,
-        tone: "warning",
-      });
-      sysLog(message, "log-error");
-      return null;
+      return abortPromptCommandWithoutWorkspace();
+    }
+    const resolvedCommand = await resolvePromptCommandInvocation(
+      invocation,
+      promptText,
+      workspaceId,
+    );
+    if (resolvedCommand === null || resolvedCommand.matched) {
+      return resolvedCommand;
+    }
+    promptSelectedSlashOption = null;
+    const resolvedSkill = resolvePromptSkillInvocation(invocation, promptText);
+    if (resolvedSkill) {
+      return resolvedSkill;
+    }
+    return { text: promptText, skills: [] };
+  }
+
+  if (workspaceId) {
+    const resolvedCommand = await resolvePromptCommandInvocation(
+      invocation,
+      promptText,
+      workspaceId,
+    );
+    if (resolvedCommand === null || resolvedCommand.matched) {
+      return resolvedCommand;
     }
   }
-  const skillMatch = matchPromptSkillInvocation(invocation.name);
-  if (skillMatch) {
-    const skillPromptText = invocation.args || `Use the ${skillMatch.skillName} skill.`;
-    return {
-      text: combinePromptActionText(invocation.prefix, skillPromptText),
-      skills: [skillMatch.skillName],
-    };
+  const resolvedSkill = resolvePromptSkillInvocation(invocation, promptText);
+  if (resolvedSkill) {
+    return resolvedSkill;
   }
   if (!workspaceId) {
-    const message = "Cannot resolve command without an active workspace.";
-    setPromptComposerStatus(message, { tone: "danger" });
-    sysLog(message, "log-error");
-    return null;
+    return abortPromptCommandWithoutWorkspace();
   }
   return { text: promptText, skills: [] };
 }
 
-function extractPromptActionInvocation(promptText) {
+async function resolvePromptCommandInvocation(invocation, promptText, workspaceId) {
+  try {
+    const result = await resolveCommandPrompt({
+      workspace_id: workspaceId,
+      raw_text: `/${invocation.name}${invocation.args ? ` ${invocation.args}` : ""}`,
+      mode: state.currentSessionMode || "normal",
+    });
+    if (result?.matched) {
+      const expandedPrompt = String(result.expanded_prompt || "").trim();
+      return {
+        text: combinePromptSlashText(invocation.prefix, expandedPrompt || promptText),
+        skills: [],
+        matched: true,
+      };
+    }
+  } catch (error) {
+    const message = error.message || "Failed to resolve command.";
+    setPromptComposerStatus(message, { tone: "danger" });
+    showToast({
+      title: "Command blocked",
+      message,
+      tone: "warning",
+    });
+    sysLog(message, "log-error");
+    return null;
+  }
+  return { text: promptText, skills: [], matched: false };
+}
+
+function resolvePromptSkillInvocation(invocation, promptText) {
+  const skillMatch = matchPromptSkillInvocation(invocation.name);
+  if (!skillMatch) {
+    return null;
+  }
+  const skillPromptText = invocation.args || `Use the ${skillMatch.skillName} skill.`;
+  return {
+    text: combinePromptSlashText(invocation.prefix, skillPromptText),
+    skills: [skillMatch.skillName],
+  };
+}
+
+function abortPromptCommandWithoutWorkspace() {
+  const message = "Cannot resolve command without an active workspace.";
+  setPromptComposerStatus(message, { tone: "danger" });
+  sysLog(message, "log-error");
+  return null;
+}
+
+function extractPromptSlashInvocation(promptText) {
   const source = String(promptText || "").trim();
   const match = source.match(/^(\/(\S+)|([@＠]\S+(?:\s+[A-Z][A-Za-z0-9_-]*)?)\s+\/(\S+))/);
   if (!match) {
@@ -2426,7 +2550,7 @@ function extractPromptActionInvocation(promptText) {
   };
 }
 
-function combinePromptActionText(prefix, resolvedText) {
+function combinePromptSlashText(prefix, resolvedText) {
   const safePrefix = String(prefix || "").trim();
   const safeText = String(resolvedText || "").trim();
   if (!safePrefix) {
@@ -2457,11 +2581,6 @@ function isPromptMentionAutocompleteOpen() {
     els.promptMentionMenu.hidden !== true &&
     (
       promptMentionOptions.length > 0 ||
-      (
-        !!promptMentionKind &&
-        promptMentionKind === "action" &&
-        promptCommandAutocompleteStatus !== PROMPT_COMMAND_AUTOCOMPLETE_STATUS.IDLE
-      ) ||
       (
         !!promptMentionKind &&
         promptMentionKind === "resource" &&

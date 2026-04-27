@@ -4,6 +4,9 @@ from __future__ import annotations
 from relay_teams.skills.discovery import (
     SkillsDirectory,
     get_agents_skills_dir,
+    get_claude_skills_dir,
+    get_codex_skills_dir,
+    get_opencode_skills_dir,
     get_project_skills_dir,
     get_user_skills_dir,
 )
@@ -77,6 +80,9 @@ __all__ = [
     "ClawHubSkillSummary",
     "ClawHubSkillWriteRequest",
     "get_agents_skills_dir",
+    "get_claude_skills_dir",
+    "get_codex_skills_dir",
+    "get_opencode_skills_dir",
     "get_project_skills_dir",
     "get_user_skills_dir",
 ]

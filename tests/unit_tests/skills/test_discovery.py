@@ -48,6 +48,25 @@ def test_get_agents_skills_dir_uses_sibling_agents_directory(monkeypatch) -> Non
     assert skills_dir == app_config_dir.parent / ".agents" / "skills"
 
 
+def test_get_compatible_user_skills_dirs_use_user_config_siblings(monkeypatch) -> None:
+    app_config_dir = Path("D:/home/.relay-teams").resolve()
+    monkeypatch.setattr(
+        discovery, "get_app_config_dir", lambda **kwargs: app_config_dir
+    )
+
+    assert (
+        discovery.get_codex_skills_dir() == app_config_dir.parent / ".codex" / "skills"
+    )
+    assert (
+        discovery.get_claude_skills_dir()
+        == app_config_dir.parent / ".claude" / "skills"
+    )
+    assert (
+        discovery.get_opencode_skills_dir()
+        == app_config_dir.parent / ".config" / "opencode" / "skills"
+    )
+
+
 def test_get_project_skills_dir_uses_project_root_when_provided() -> None:
     project_root = Path("D:/repo-root").resolve()
 
@@ -100,6 +119,18 @@ def test_skills_directory_from_config_dirs_uses_builtin_user_and_agents_sources(
 
     assert directory.sources == (
         (SkillSource.BUILTIN, builtin_skills_dir.resolve()),
+        (
+            SkillSource.USER_CODEX,
+            (app_config_dir.parent / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.USER_CLAUDE,
+            (app_config_dir.parent / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.USER_OPENCODE,
+            (app_config_dir.parent / ".config" / "opencode" / "skills").resolve(),
+        ),
         (SkillSource.USER_RELAY_TEAMS, (app_config_dir / "skills").resolve()),
         (
             SkillSource.USER_AGENTS,
@@ -113,6 +144,9 @@ def test_skills_directory_from_default_scopes_builds_ordered_sources(
     monkeypatch,
 ) -> None:
     builtin_skills_dir = tmp_path / "builtin" / "skills"
+    user_codex_skills_dir = tmp_path / "home" / ".codex" / "skills"
+    user_claude_skills_dir = tmp_path / "home" / ".claude" / "skills"
+    user_opencode_skills_dir = tmp_path / "home" / ".config" / "opencode" / "skills"
     user_relay_teams_skills_dir = tmp_path / "home" / ".relay-teams" / "skills"
     user_agents_skills_dir = tmp_path / "home" / ".agents" / "skills"
     project_root = tmp_path / "repo"
@@ -120,6 +154,17 @@ def test_skills_directory_from_default_scopes_builds_ordered_sources(
     start_dir.mkdir(parents=True)
     monkeypatch.setattr(
         discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_codex_skills_dir", lambda **kwargs: user_codex_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_claude_skills_dir", lambda **kwargs: user_claude_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_opencode_skills_dir",
+        lambda **kwargs: user_opencode_skills_dir,
     )
     monkeypatch.setattr(
         discovery, "get_app_skills_dir", lambda **kwargs: user_relay_teams_skills_dir
@@ -137,8 +182,47 @@ def test_skills_directory_from_default_scopes_builds_ordered_sources(
 
     assert directory.sources == (
         (SkillSource.BUILTIN, builtin_skills_dir.resolve()),
+        (SkillSource.USER_CODEX, user_codex_skills_dir.resolve()),
+        (SkillSource.USER_CLAUDE, user_claude_skills_dir.resolve()),
+        (SkillSource.USER_OPENCODE, user_opencode_skills_dir.resolve()),
         (SkillSource.USER_RELAY_TEAMS, user_relay_teams_skills_dir.resolve()),
         (SkillSource.USER_AGENTS, user_agents_skills_dir.resolve()),
+        (
+            SkillSource.PROJECT_CODEX,
+            (start_dir / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CODEX,
+            (start_dir.parent / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CODEX,
+            (project_root / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CLAUDE,
+            (start_dir / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CLAUDE,
+            (start_dir.parent / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CLAUDE,
+            (project_root / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_OPENCODE,
+            (start_dir / ".opencode" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_OPENCODE,
+            (start_dir.parent / ".opencode" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_OPENCODE,
+            (project_root / ".opencode" / "skills").resolve(),
+        ),
         (
             SkillSource.PROJECT_RELAY_TEAMS,
             (start_dir / ".relay-teams" / "skills").resolve(),
@@ -171,10 +255,24 @@ def test_skills_directory_from_default_scopes_omits_project_sources_without_star
     monkeypatch,
 ) -> None:
     builtin_skills_dir = tmp_path / "builtin" / "skills"
+    user_codex_skills_dir = tmp_path / "home" / ".codex" / "skills"
+    user_claude_skills_dir = tmp_path / "home" / ".claude" / "skills"
+    user_opencode_skills_dir = tmp_path / "home" / ".config" / "opencode" / "skills"
     user_relay_teams_skills_dir = tmp_path / "home" / ".relay-teams" / "skills"
     user_agents_skills_dir = tmp_path / "home" / ".agents" / "skills"
     monkeypatch.setattr(
         discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_codex_skills_dir", lambda **kwargs: user_codex_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_claude_skills_dir", lambda **kwargs: user_claude_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_opencode_skills_dir",
+        lambda **kwargs: user_opencode_skills_dir,
     )
     monkeypatch.setattr(
         discovery, "get_app_skills_dir", lambda **kwargs: user_relay_teams_skills_dir
@@ -187,6 +285,9 @@ def test_skills_directory_from_default_scopes_omits_project_sources_without_star
 
     assert directory.sources == (
         (SkillSource.BUILTIN, builtin_skills_dir.resolve()),
+        (SkillSource.USER_CODEX, user_codex_skills_dir.resolve()),
+        (SkillSource.USER_CLAUDE, user_claude_skills_dir.resolve()),
+        (SkillSource.USER_OPENCODE, user_opencode_skills_dir.resolve()),
         (SkillSource.USER_RELAY_TEAMS, user_relay_teams_skills_dir.resolve()),
         (SkillSource.USER_AGENTS, user_agents_skills_dir.resolve()),
     )
@@ -207,6 +308,18 @@ def test_project_skill_sources_stop_at_start_dir_when_project_root_missing(
     sources = discovery._project_skill_sources(start_dir=start_dir)
 
     assert sources == (
+        (
+            SkillSource.PROJECT_CODEX,
+            (start_dir / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CLAUDE,
+            (start_dir / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_OPENCODE,
+            (start_dir / ".opencode" / "skills").resolve(),
+        ),
         (
             SkillSource.PROJECT_RELAY_TEAMS,
             (start_dir / ".relay-teams" / "skills").resolve(),
@@ -235,6 +348,30 @@ def test_project_skill_sources_use_file_parent_and_include_project_root(
     sources = discovery._project_skill_sources(start_dir=manifest_path)
 
     assert sources == (
+        (
+            SkillSource.PROJECT_CODEX,
+            (manifest_path.parent / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CODEX,
+            (project_root / ".codex" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CLAUDE,
+            (manifest_path.parent / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_CLAUDE,
+            (project_root / ".claude" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_OPENCODE,
+            (manifest_path.parent / ".opencode" / "skills").resolve(),
+        ),
+        (
+            SkillSource.PROJECT_OPENCODE,
+            (project_root / ".opencode" / "skills").resolve(),
+        ),
         (
             SkillSource.PROJECT_RELAY_TEAMS,
             (manifest_path.parent / ".relay-teams" / "skills").resolve(),
@@ -310,11 +447,128 @@ def test_discover_uses_later_sources_to_override_duplicate_names(
     }
 
 
+def test_default_scope_discovery_prefers_project_and_native_skill_sources(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
+    user_codex_skills_dir = tmp_path / "home" / ".codex" / "skills"
+    user_claude_skills_dir = tmp_path / "home" / ".claude" / "skills"
+    user_opencode_skills_dir = tmp_path / "home" / ".config" / "opencode" / "skills"
+    user_relay_teams_skills_dir = tmp_path / "home" / ".relay-teams" / "skills"
+    user_agents_skills_dir = tmp_path / "home" / ".agents" / "skills"
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    monkeypatch.setattr(
+        discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_codex_skills_dir", lambda **kwargs: user_codex_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_claude_skills_dir", lambda **kwargs: user_claude_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_opencode_skills_dir",
+        lambda **kwargs: user_opencode_skills_dir,
+    )
+    monkeypatch.setattr(
+        discovery, "get_app_skills_dir", lambda **kwargs: user_relay_teams_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_agents_skills_dir", lambda **kwargs: user_agents_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_project_root_or_none",
+        lambda start_dir=None: project_root.resolve(),
+    )
+    _write_skill(
+        builtin_skills_dir / "shared",
+        name="shared",
+        description="builtin shared skill",
+        instructions="Use the builtin shared skill.",
+    )
+    _write_skill(
+        user_codex_skills_dir / "shared",
+        name="shared",
+        description="user codex shared skill",
+        instructions="Use the user codex shared skill.",
+    )
+    _write_skill(
+        user_claude_skills_dir / "shared",
+        name="shared",
+        description="user claude shared skill",
+        instructions="Use the user claude shared skill.",
+    )
+    _write_skill(
+        user_opencode_skills_dir / "shared",
+        name="shared",
+        description="user opencode shared skill",
+        instructions="Use the user opencode shared skill.",
+    )
+    _write_skill(
+        user_relay_teams_skills_dir / "shared",
+        name="shared",
+        description="user relay-teams shared skill",
+        instructions="Use the user relay-teams shared skill.",
+    )
+    _write_skill(
+        user_agents_skills_dir / "shared",
+        name="shared",
+        description="user agents shared skill",
+        instructions="Use the user agents shared skill.",
+    )
+    _write_skill(
+        project_root / ".codex" / "skills" / "shared",
+        name="shared",
+        description="project codex shared skill",
+        instructions="Use the project codex shared skill.",
+    )
+    _write_skill(
+        project_root / ".claude" / "skills" / "shared",
+        name="shared",
+        description="project claude shared skill",
+        instructions="Use the project claude shared skill.",
+    )
+    _write_skill(
+        project_root / ".opencode" / "skills" / "shared",
+        name="shared",
+        description="project opencode shared skill",
+        instructions="Use the project opencode shared skill.",
+    )
+    _write_skill(
+        project_root / ".relay-teams" / "skills" / "shared",
+        name="shared",
+        description="project relay-teams shared skill",
+        instructions="Use the project relay-teams shared skill.",
+    )
+    _write_skill(
+        project_root / ".agents" / "skills" / "shared",
+        name="shared",
+        description="project agents shared skill",
+        instructions="Use the project agents shared skill.",
+    )
+
+    directory = SkillsDirectory.from_default_scopes(start_dir=project_root)
+    directory.discover()
+
+    shared = directory.get_skill("shared")
+
+    assert shared is not None
+    assert shared.source == SkillSource.PROJECT_AGENTS
+    assert shared.metadata.description == "project agents shared skill"
+
+
 def test_default_scope_discovery_preserves_source_precedence_across_project_levels(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     builtin_skills_dir = tmp_path / "builtin" / "skills"
+    user_codex_skills_dir = tmp_path / "home" / ".codex" / "skills"
+    user_claude_skills_dir = tmp_path / "home" / ".claude" / "skills"
+    user_opencode_skills_dir = tmp_path / "home" / ".config" / "opencode" / "skills"
     user_relay_teams_skills_dir = tmp_path / "home" / ".relay-teams" / "skills"
     user_agents_skills_dir = tmp_path / "home" / ".agents" / "skills"
     project_root = tmp_path / "repo"
@@ -322,6 +576,17 @@ def test_default_scope_discovery_preserves_source_precedence_across_project_leve
     start_dir.mkdir(parents=True)
     monkeypatch.setattr(
         discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_codex_skills_dir", lambda **kwargs: user_codex_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_claude_skills_dir", lambda **kwargs: user_claude_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_opencode_skills_dir",
+        lambda **kwargs: user_opencode_skills_dir,
     )
     monkeypatch.setattr(
         discovery, "get_app_skills_dir", lambda **kwargs: user_relay_teams_skills_dir
@@ -355,6 +620,77 @@ def test_default_scope_discovery_preserves_source_precedence_across_project_leve
     assert shared is not None
     assert shared.source == SkillSource.PROJECT_AGENTS
     assert shared.metadata.description == "nested agents shared skill"
+
+
+def test_default_scope_discovery_loads_project_tool_compatible_skills(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    builtin_skills_dir = tmp_path / "builtin" / "skills"
+    user_codex_skills_dir = tmp_path / "home" / ".codex" / "skills"
+    user_claude_skills_dir = tmp_path / "home" / ".claude" / "skills"
+    user_opencode_skills_dir = tmp_path / "home" / ".config" / "opencode" / "skills"
+    user_relay_teams_skills_dir = tmp_path / "home" / ".relay-teams" / "skills"
+    user_agents_skills_dir = tmp_path / "home" / ".agents" / "skills"
+    project_root = tmp_path / "repo"
+    project_root.mkdir()
+    monkeypatch.setattr(
+        discovery, "get_builtin_skills_dir_path", lambda: builtin_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_codex_skills_dir", lambda **kwargs: user_codex_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_claude_skills_dir", lambda **kwargs: user_claude_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_opencode_skills_dir",
+        lambda **kwargs: user_opencode_skills_dir,
+    )
+    monkeypatch.setattr(
+        discovery, "get_app_skills_dir", lambda **kwargs: user_relay_teams_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery, "get_agents_skills_dir", lambda **kwargs: user_agents_skills_dir
+    )
+    monkeypatch.setattr(
+        discovery,
+        "get_project_root_or_none",
+        lambda start_dir=None: project_root.resolve(),
+    )
+    _write_skill(
+        project_root / ".claude" / "skills" / "claude-plan",
+        name="claude-plan",
+        description="Claude-compatible plan skill",
+        instructions="Use Claude-compatible planning.",
+    )
+    _write_skill(
+        project_root / ".codex" / "skills" / "codex-plan",
+        name="codex-plan",
+        description="Codex-compatible plan skill",
+        instructions="Use Codex-compatible planning.",
+    )
+    _write_skill(
+        project_root / ".opencode" / "skills" / "opencode-plan",
+        name="opencode-plan",
+        description="OpenCode-compatible plan skill",
+        instructions="Use OpenCode-compatible planning.",
+    )
+
+    directory = SkillsDirectory.from_default_scopes(start_dir=project_root)
+    directory.discover()
+
+    claude_skill = directory.get_skill("claude-plan")
+    codex_skill = directory.get_skill("codex-plan")
+    opencode_skill = directory.get_skill("opencode-plan")
+
+    assert claude_skill is not None
+    assert codex_skill is not None
+    assert opencode_skill is not None
+    assert claude_skill.source == SkillSource.PROJECT_CLAUDE
+    assert codex_skill.source == SkillSource.PROJECT_CODEX
+    assert opencode_skill.source == SkillSource.PROJECT_OPENCODE
 
 
 def test_discover_skips_invalid_and_excessively_nested_skills(tmp_path: Path) -> None:

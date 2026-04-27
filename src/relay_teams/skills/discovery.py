@@ -40,6 +40,21 @@ def get_user_skills_dir(user_home_dir: Path | None = None) -> Path:
     return get_app_skills_dir(user_home_dir=user_home_dir)
 
 
+def get_codex_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".codex" / "skills"
+
+
+def get_claude_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".claude" / "skills"
+
+
+def get_opencode_skills_dir(user_home_dir: Path | None = None) -> Path:
+    app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
+    return app_config_dir.parent / ".config" / "opencode" / "skills"
+
+
 def get_agents_skills_dir(user_home_dir: Path | None = None) -> Path:
     app_config_dir = get_app_config_dir(user_home_dir=user_home_dir)
     return app_config_dir.parent / ".agents" / "skills"
@@ -90,6 +105,12 @@ class SkillsDirectory:
         return cls(
             sources=_build_default_sources(
                 builtin_skills_dir=get_builtin_skills_dir_path(),
+                codex_skills_dir=resolved_app_config_dir.parent / ".codex" / "skills",
+                claude_skills_dir=resolved_app_config_dir.parent / ".claude" / "skills",
+                opencode_skills_dir=resolved_app_config_dir.parent
+                / ".config"
+                / "opencode"
+                / "skills",
                 relay_teams_skills_dir=resolved_app_config_dir / "skills",
                 agents_skills_dir=resolved_app_config_dir.parent / ".agents" / "skills",
                 project_start_dir=project_start_dir,
@@ -108,6 +129,11 @@ class SkillsDirectory:
         return cls(
             sources=_build_default_sources(
                 builtin_skills_dir=get_builtin_skills_dir_path(),
+                codex_skills_dir=get_codex_skills_dir(user_home_dir=user_home_dir),
+                claude_skills_dir=get_claude_skills_dir(user_home_dir=user_home_dir),
+                opencode_skills_dir=get_opencode_skills_dir(
+                    user_home_dir=user_home_dir
+                ),
                 relay_teams_skills_dir=get_app_skills_dir(user_home_dir=user_home_dir),
                 agents_skills_dir=get_agents_skills_dir(user_home_dir=user_home_dir),
                 project_start_dir=start_dir,
@@ -283,12 +309,18 @@ class SkillsDirectory:
 def _build_default_sources(
     *,
     builtin_skills_dir: Path,
+    codex_skills_dir: Path,
+    claude_skills_dir: Path,
+    opencode_skills_dir: Path,
     relay_teams_skills_dir: Path,
     agents_skills_dir: Path,
     project_start_dir: Path | None,
 ) -> tuple[tuple[SkillSource, Path], ...]:
     sources: list[tuple[SkillSource, Path]] = [
         (SkillSource.BUILTIN, _resolve_dir(builtin_skills_dir)),
+        (SkillSource.USER_CODEX, _resolve_dir(codex_skills_dir)),
+        (SkillSource.USER_CLAUDE, _resolve_dir(claude_skills_dir)),
+        (SkillSource.USER_OPENCODE, _resolve_dir(opencode_skills_dir)),
         (SkillSource.USER_RELAY_TEAMS, _resolve_dir(relay_teams_skills_dir)),
         (SkillSource.USER_AGENTS, _resolve_dir(agents_skills_dir)),
     ]
@@ -302,21 +334,18 @@ def _project_skill_sources(*, start_dir: Path) -> tuple[tuple[SkillSource, Path]
     project_root = get_project_root_or_none(start_dir=resolved_start_dir)
     stop_dir = resolved_start_dir if project_root is None else project_root
     parent_dirs = _iter_parent_dirs(resolved_start_dir, stop_dir)
-    relay_teams_sources = [
-        (
-            SkillSource.PROJECT_RELAY_TEAMS,
-            current_dir / ".relay-teams" / "skills",
-        )
+    source_specs = (
+        (SkillSource.PROJECT_CODEX, ".codex"),
+        (SkillSource.PROJECT_CLAUDE, ".claude"),
+        (SkillSource.PROJECT_OPENCODE, ".opencode"),
+        (SkillSource.PROJECT_RELAY_TEAMS, ".relay-teams"),
+        (SkillSource.PROJECT_AGENTS, ".agents"),
+    )
+    sources = [
+        (source, current_dir / directory_name / "skills")
+        for source, directory_name in source_specs
         for current_dir in parent_dirs
     ]
-    agents_sources = [
-        (
-            SkillSource.PROJECT_AGENTS,
-            current_dir / ".agents" / "skills",
-        )
-        for current_dir in parent_dirs
-    ]
-    sources = relay_teams_sources + agents_sources
     return tuple((_source, _resolve_dir(path)) for _source, path in sources)
 
 

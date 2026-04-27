@@ -163,6 +163,49 @@ def test_commands_api_catalog_lists_global_and_workspace_commands(
     assert workspaces["workspace-2"]["commands"] == []
 
 
+def test_commands_api_catalog_lists_only_effective_duplicate_commands(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    workspace_root = tmp_path / "workspace"
+    app_command_dir = app_config_dir / "commands"
+    app_command_dir.mkdir(parents=True)
+    (app_command_dir / "first.md").write_text(
+        "---\nname: global\n---\nFirst global",
+        encoding="utf-8",
+    )
+    (app_command_dir / "second.md").write_text(
+        "---\nname: global\n---\nSecond global",
+        encoding="utf-8",
+    )
+    codex_command_dir = workspace_root / ".codex" / "commands"
+    relay_command_dir = workspace_root / ".relay-teams" / "commands"
+    codex_command_dir.mkdir(parents=True)
+    relay_command_dir.mkdir(parents=True)
+    (codex_command_dir / "shared.md").write_text(
+        "Codex shared",
+        encoding="utf-8",
+    )
+    (relay_command_dir / "shared.md").write_text(
+        "Relay Teams shared",
+        encoding="utf-8",
+    )
+    client = _client(app_config_dir=app_config_dir, workspace_root=workspace_root)
+
+    response = client.get("/api/system/commands:catalog")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [
+        (command["name"], command["template"]) for command in payload["app_commands"]
+    ] == [("global", "Second global")]
+    workspaces = {item["workspace_id"]: item for item in payload["workspaces"]}
+    assert [
+        (command["name"], command["template"])
+        for command in workspaces["workspace-1"]["commands"]
+    ] == [("shared", "Relay Teams shared")]
+
+
 def test_commands_api_create_global_and_project_commands(tmp_path: Path) -> None:
     app_config_dir = tmp_path / "app"
     workspace_root = tmp_path / "workspace"
