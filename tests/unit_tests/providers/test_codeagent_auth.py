@@ -1162,6 +1162,26 @@ def test_build_token_result_uses_response_text_for_http_errors() -> None:
         )
 
 
+def test_build_token_result_extracts_codeagent_auth_invalid_error_details() -> None:
+    response = httpx.Response(
+        401,
+        json={
+            "error_code": "DEV.00000001",
+            "error_msg": "未识别到用户认证信息",
+        },
+    )
+
+    with pytest.raises(CodeAgentOAuthError) as exc_info:
+        codeagent_auth_module._build_token_result(
+            response,
+            fallback_refresh_token=None,
+        )
+
+    assert str(exc_info.value) == "未识别到用户认证信息"
+    assert exc_info.value.error_code == "DEV.00000001"
+    assert exc_info.value.auth_invalid is True
+
+
 def test_build_polled_token_result_returns_none_for_non_200_response() -> None:
     response = httpx.Response(202, json={"message": "pending"})
 

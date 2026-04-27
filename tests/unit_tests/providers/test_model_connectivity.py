@@ -1293,6 +1293,57 @@ def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_s
     assert result.retryable is False
 
 
+def test_probe_codeagent_maps_codeagent_auth_invalid_error_without_http_status(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+
+    class _FailingCodeAgentTokenService:
+        def get_token_sync(
+            self,
+            *,
+            base_url: str,
+            auth_config: CodeAgentAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            _ = (
+                base_url,
+                auth_config,
+                ssl_verify,
+                connect_timeout_seconds,
+                force_refresh,
+            )
+            raise CodeAgentOAuthError(
+                "未识别到用户认证信息",
+                status_code=None,
+                error_code="DEV.00000001",
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FailingCodeAgentTokenService(),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="refresh-token",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "auth_invalid"
+    assert result.diagnostics.auth_valid is False
+    assert result.retryable is False
+
+
 def test_discover_models_codeagent_returns_timeout_for_request_exception(
     monkeypatch,
 ) -> None:
@@ -1378,6 +1429,106 @@ def test_discover_models_codeagent_returns_invalid_response_for_oauth_error(
     assert result.ok is False
     assert result.error_code == "invalid_response"
     assert result.retryable is False
+
+
+def test_verify_codeagent_auth_returns_reauth_required_for_auth_invalid(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="refresh-token"),
+        )
+    )
+
+    class _FailingCodeAgentTokenService:
+        def get_token_result_sync(
+            self,
+            *,
+            base_url: str,
+            auth_config: CodeAgentAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> CodeAgentOAuthTokenResult:
+            _ = (
+                base_url,
+                auth_config,
+                ssl_verify,
+                connect_timeout_seconds,
+                force_refresh,
+            )
+            raise CodeAgentOAuthError(
+                "未识别到用户认证信息",
+                status_code=401,
+                error_code="DEV.00000001",
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FailingCodeAgentTokenService(),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "reauth_required"
+    assert result.detail == "未识别到用户认证信息"
+
+
+def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            api_key=None,
+            codeagent_auth=CodeAgentAuthConfig(refresh_token="refresh-token"),
+        )
+    )
+
+    class _SuccessfulCodeAgentTokenService:
+        def get_token_result_sync(
+            self,
+            *,
+            base_url: str,
+            auth_config: CodeAgentAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> CodeAgentOAuthTokenResult:
+            captured["base_url"] = base_url
+            captured["refresh_token"] = auth_config.refresh_token
+            captured["ssl_verify"] = ssl_verify
+            captured["connect_timeout_seconds"] = connect_timeout_seconds
+            captured["force_refresh"] = force_refresh
+            return CodeAgentOAuthTokenResult(
+                access_token="fresh-access-token",
+                refresh_token="fresh-refresh-token",
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _SuccessfulCodeAgentTokenService(),
+    )
+
+    result = service.verify_codeagent_auth(profile_name="default")
+
+    assert result.status == "valid"
+    assert result.detail is None
+    assert captured == {
+        "base_url": DEFAULT_CODEAGENT_BASE_URL,
+        "refresh_token": "refresh-token",
+        "ssl_verify": True,
+        "connect_timeout_seconds": 17.5,
+        "force_refresh": True,
+    }
 
 
 def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_errors(

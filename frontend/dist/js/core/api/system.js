@@ -410,6 +410,18 @@ export async function fetchCodeAgentOAuthSession(authSessionId) {
     );
 }
 
+export async function verifyCodeAgentAuth(profileName) {
+    return requestJson(
+        '/api/system/configs/model/codeagent/auth:verify',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile_name: profileName }),
+        },
+        'Failed to verify CodeAgent SSO status',
+    );
+}
+
 export async function saveModelProfile(name, profile) {
     return requestJson(
         `/api/system/configs/model/profiles/${name}`,

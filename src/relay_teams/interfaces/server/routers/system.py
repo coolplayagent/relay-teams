@@ -125,6 +125,7 @@ from relay_teams.providers.codeagent_auth import (
 )
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.providers.model_connectivity import (
+    CodeAgentAuthVerifyResult,
     ModelDiscoveryRequest,
     ModelDiscoveryResult,
     ModelConnectivityProbeRequest,
@@ -403,6 +404,16 @@ class CodeAgentOAuthSessionResponse(BaseModel):
     codeagent_auth: CodeAgentAuthConfig | None = None
 
 
+class CodeAgentAuthVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_name: str
+
+
+class CodeAgentAuthVerifyResponse(CodeAgentAuthVerifyResult):
+    model_config = ConfigDict(extra="forbid")
+
+
 @router.put("/configs/model/profiles/{name}")
 async def save_model_profile(
     name: str,
@@ -555,6 +566,23 @@ def get_codeagent_oauth_session_status(
         error_message=session.error_message,
         codeagent_auth=codeagent_auth,
     )
+
+
+@router.post("/configs/model/codeagent/auth:verify")
+async def verify_codeagent_auth(
+    req: CodeAgentAuthVerifyRequest,
+    service: ModelConfigService = Depends(get_model_config_service),
+) -> CodeAgentAuthVerifyResponse:
+    try:
+        result = await call_maybe_async(
+            service.verify_codeagent_auth,
+            profile_name=req.profile_name,
+        )
+        return CodeAgentAuthVerifyResponse.model_validate(
+            result.model_dump(mode="json")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/configs/model/providers/models")

@@ -14,6 +14,7 @@ import {
     reloadModelConfig,
     saveModelProfile,
     startCodeAgentOAuth,
+    verifyCodeAgentAuth,
 } from '../../core/api.js';
 import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
@@ -980,10 +981,18 @@ function handleEditProfile(name) {
     const codeagentAuth = profile.codeagent_auth || {};
     draftCodeAgentAuthState = {
         authSessionId: '',
-        completed: Boolean(codeagentAuth.has_refresh_token),
+        completed: false,
+        verified: false,
+        verifying: false,
+        reauthRequired: false,
         hasPersistedAccessToken: Boolean(codeagentAuth.has_access_token),
         hasPersistedRefreshToken: Boolean(codeagentAuth.has_refresh_token),
-        statusMessage: Boolean(codeagentAuth.has_refresh_token) ? 'Signed in' : 'Not signed in',
+        loginInProgress: false,
+        pendingAuthorizationUrl: '',
+        verificationRequestId: 0,
+        statusMessage: Boolean(codeagentAuth.has_refresh_token)
+            ? 'Saved sign-in requires verification'
+            : 'Not signed in',
     };
     document.getElementById('profile-is-default').checked = profile.is_default === true;
     document.getElementById('profile-temperature').value = profile.temperature || 0.7;
@@ -1022,6 +1031,9 @@ function handleEditProfile(name) {
     setModelMenuOpen(false);
     if (draftProviderMode === PROVIDER_MODES.EXTERNAL) {
         void loadModelCatalogForNewProfile();
+    }
+    if (isCodeAgentProvider(profile.provider) && Boolean(codeagentAuth.has_refresh_token)) {
+        void verifyPersistedCodeAgentAuth(name);
     }
 }
 
@@ -1271,6 +1283,9 @@ async function handleTestDraftProfile() {
 
     try {
         const result = await probeModelConnection(payload);
+        if (isCodeAgentAuthInvalidResult(result)) {
+            markCodeAgentAuthReauthRequired();
+        }
         draftProbeState = buildProbeState(result);
     } catch (e) {
         draftProbeState = {
@@ -1321,6 +1336,9 @@ async function handleDiscoverDraftModels() {
     try {
         const result = await discoverModelCatalog(payload);
         if (!result.ok) {
+            if (isCodeAgentAuthInvalidResult(result)) {
+                markCodeAgentAuthReauthRequired();
+            }
             draftDiscoveredModels = [];
             draftModelDiscoveryState = {
                 status: 'failed',
@@ -1363,6 +1381,8 @@ async function handleCodeAgentLogin() {
     }
     const authPopup = openCodeAgentAuthorizationPopup();
     draftCodeAgentAuthState.loginInProgress = true;
+    draftCodeAgentAuthState.verifying = false;
+    draftCodeAgentAuthState.reauthRequired = false;
     draftCodeAgentAuthState.statusMessage = 'Starting SSO login';
     renderDraftCodeAgentAuthState();
     try {
@@ -1414,6 +1434,8 @@ async function continueCodeAgentLogin() {
     }
     draftCodeAgentAuthState.pendingAuthorizationUrl = '';
     draftCodeAgentAuthState.loginInProgress = true;
+    draftCodeAgentAuthState.verifying = false;
+    draftCodeAgentAuthState.reauthRequired = false;
     draftCodeAgentAuthState.statusMessage = 'Waiting for SSO callback';
     renderDraftCodeAgentAuthState();
     try {
@@ -1476,6 +1498,9 @@ async function pollCodeAgentOAuthSession(authSessionId) {
             return;
         }
         draftCodeAgentAuthState.completed = true;
+        draftCodeAgentAuthState.verified = true;
+        draftCodeAgentAuthState.verifying = false;
+        draftCodeAgentAuthState.reauthRequired = false;
         draftCodeAgentAuthState.hasPersistedAccessToken = true;
         draftCodeAgentAuthState.hasPersistedRefreshToken = true;
         draftCodeAgentAuthState.statusMessage = 'Signed in';
@@ -1487,6 +1512,71 @@ async function pollCodeAgentOAuthSession(authSessionId) {
     }
     draftCodeAgentAuthState.statusMessage = 'SSO login timed out';
     renderDraftCodeAgentAuthState();
+}
+
+async function verifyPersistedCodeAgentAuth(profileName) {
+    const normalizedProfileName = String(profileName || '').trim();
+    if (!normalizedProfileName || !isCodeAgentProvider(getDraftProvider())) {
+        return;
+    }
+    if (editingProfile !== normalizedProfileName || !draftCodeAgentAuthState.hasPersistedRefreshToken) {
+        return;
+    }
+    const verificationRequestId = Number(draftCodeAgentAuthState.verificationRequestId || 0) + 1;
+    draftCodeAgentAuthState.verificationRequestId = verificationRequestId;
+    draftCodeAgentAuthState.verified = false;
+    draftCodeAgentAuthState.verifying = true;
+    draftCodeAgentAuthState.reauthRequired = false;
+    draftCodeAgentAuthState.statusMessage = 'Verifying saved sign-in';
+    renderDraftCodeAgentAuthState();
+
+    try {
+        const result = await verifyCodeAgentAuth(normalizedProfileName);
+        if (!isActiveCodeAgentVerification(normalizedProfileName, verificationRequestId)) {
+            return;
+        }
+        draftCodeAgentAuthState.verifying = false;
+        if (result.status === 'valid') {
+            draftCodeAgentAuthState.verified = true;
+            draftCodeAgentAuthState.reauthRequired = false;
+            draftCodeAgentAuthState.statusMessage = 'Signed in';
+            renderDraftCodeAgentAuthState();
+            return;
+        }
+        if (result.status === 'reauth_required') {
+            markCodeAgentAuthReauthRequired();
+            return;
+        }
+        draftCodeAgentAuthState.statusMessage = result.detail || 'Saved sign-in could not be verified';
+    } catch (e) {
+        if (!isActiveCodeAgentVerification(normalizedProfileName, verificationRequestId)) {
+            return;
+        }
+        draftCodeAgentAuthState.verifying = false;
+        draftCodeAgentAuthState.statusMessage = `SSO failed: ${e.message}`;
+    }
+    renderDraftCodeAgentAuthState();
+}
+
+function isActiveCodeAgentVerification(profileName, verificationRequestId) {
+    return (
+        isCodeAgentProvider(getDraftProvider())
+        && editingProfile === profileName
+        && Number(draftCodeAgentAuthState.verificationRequestId || 0) === verificationRequestId
+    );
+}
+
+function markCodeAgentAuthReauthRequired() {
+    draftCodeAgentAuthState.completed = false;
+    draftCodeAgentAuthState.verified = false;
+    draftCodeAgentAuthState.verifying = false;
+    draftCodeAgentAuthState.reauthRequired = true;
+    draftCodeAgentAuthState.statusMessage = 'Saved sign-in expired. Sign in with SSO again';
+    renderDraftCodeAgentAuthState();
+}
+
+function isCodeAgentAuthInvalidResult(result) {
+    return result && result.error_code === 'auth_invalid';
 }
 
 function buildDraftProbePayload() {
@@ -1522,6 +1612,14 @@ function buildDraftProbePayload() {
             return null;
         }
     } else if (isCodeAgentProvider(provider)) {
+        if (draftCodeAgentAuthState.reauthRequired) {
+            draftProbeState = {
+                status: 'failed',
+                message: 'SSO login expired. Sign in with SSO again before testing a CodeAgent profile.',
+            };
+            renderDraftProbeState();
+            return null;
+        }
         if (!hasDraftCodeAgentAuth()) {
             draftProbeState = {
                 status: 'failed',
@@ -1601,6 +1699,16 @@ function buildDraftModelDiscoveryPayload() {
             return null;
         }
     } else if (isCodeAgentProvider(provider)) {
+        if (draftCodeAgentAuthState.reauthRequired) {
+            draftDiscoveredModels = [];
+            draftModelDiscoveryState = {
+                status: 'failed',
+                message: 'SSO login expired. Sign in with SSO again before fetching CodeAgent models.',
+            };
+            renderDiscoveredModels();
+            renderDraftModelDiscoveryState();
+            return null;
+        }
         if (!hasDraftCodeAgentAuth()) {
             draftDiscoveredModels = [];
             draftModelDiscoveryState = {
@@ -2572,17 +2680,24 @@ function renderDraftCodeAgentAuthState() {
     const provider = getDraftProvider();
     const isCodeAgent = isCodeAgentProvider(provider);
     const hasAuth = hasDraftCodeAgentAuth();
+    const authVerified = Boolean(draftCodeAgentAuthState.verified || draftCodeAgentAuthState.completed);
     const statusMessage = draftCodeAgentAuthState.statusMessage
-        || (hasAuth ? 'Signed in' : 'Not signed in');
+        || (
+            draftCodeAgentAuthState.hasPersistedRefreshToken
+                ? 'Saved sign-in requires verification'
+                : hasAuth
+                    ? 'Signed in'
+                    : 'Not signed in'
+        );
     const loginLabel = t('settings.model.codeagent_sign_in_sso');
     const showStatus = isCodeAgent && statusMessage && statusMessage !== 'Not signed in';
-    const statusTone = getCodeAgentAuthStatusTone(statusMessage, hasAuth);
+    const statusTone = getCodeAgentAuthStatusTone(statusMessage, authVerified);
 
     if (loginBtn) {
         loginBtn.textContent = loginLabel;
         loginBtn.title = loginLabel;
         loginBtn.setAttribute('aria-label', loginLabel);
-        loginBtn.disabled = !isCodeAgent || draftCodeAgentAuthState.loginInProgress;
+        loginBtn.disabled = !isCodeAgent || draftCodeAgentAuthState.loginInProgress || draftCodeAgentAuthState.verifying;
     }
     if (statusMessageEl) {
         statusMessageEl.textContent = showStatus ? localizeCodeAgentAuthStatusMessage(statusMessage) : '';
@@ -2598,11 +2713,20 @@ function localizeCodeAgentAuthStatusMessage(statusMessage) {
     if (message === 'Starting SSO login') {
         return t('settings.model.codeagent_sso_starting');
     }
+    if (message === 'Saved sign-in requires verification') {
+        return t('settings.model.codeagent_sso_saved');
+    }
+    if (message === 'Verifying saved sign-in') {
+        return t('settings.model.codeagent_sso_verifying');
+    }
     if (message === 'Waiting for SSO callback') {
         return t('settings.model.codeagent_sso_waiting');
     }
     if (message === 'Signed in') {
         return t('settings.model.codeagent_sso_signed_in');
+    }
+    if (message === 'Saved sign-in expired. Sign in with SSO again') {
+        return t('settings.model.codeagent_sso_reauth_required');
     }
     if (message === 'SSO popup blocked') {
         return t('settings.model.codeagent_sso_popup_blocked');
@@ -2620,7 +2744,11 @@ function localizeCodeAgentAuthStatusMessage(statusMessage) {
 
 function getCodeAgentAuthStatusTone(statusMessage, hasAuth) {
     const normalizedMessage = String(statusMessage || '').toLowerCase();
-    if (normalizedMessage.includes('failed') || normalizedMessage.includes('timed out')) {
+    if (
+        normalizedMessage.includes('failed')
+        || normalizedMessage.includes('timed out')
+        || normalizedMessage.includes('expired')
+    ) {
         return 'failed';
     }
     if (hasAuth || normalizedMessage.includes('signed in')) {
@@ -2776,10 +2904,14 @@ function createDraftCodeAgentAuthState() {
     return {
         authSessionId: '',
         completed: false,
+        verified: false,
+        verifying: false,
+        reauthRequired: false,
         hasPersistedAccessToken: false,
         hasPersistedRefreshToken: false,
         loginInProgress: false,
         pendingAuthorizationUrl: '',
+        verificationRequestId: 0,
         statusMessage: 'Not signed in',
     };
 }

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 from time import perf_counter
-from typing import cast
+from typing import Literal, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -213,6 +213,14 @@ class ModelDiscoveryResolvedConfig(BaseModel):
     connect_timeout_seconds: float = Field(gt=0.0, le=300.0)
 
 
+class CodeAgentAuthVerifyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["valid", "reauth_required", "error"]
+    checked_at: datetime
+    detail: str | None = None
+
+
 class ModelConnectivityProbeService:
     def __init__(
         self,
@@ -288,6 +296,72 @@ class ModelConnectivityProbeService:
             )
         raise ValueError(
             f"Model discovery is not supported for provider '{resolved_config.provider.value}'."
+        )
+
+    def verify_codeagent_auth(
+        self,
+        *,
+        profile_name: str,
+    ) -> CodeAgentAuthVerifyResult:
+        runtime = self._get_runtime()
+        resolved_profile_name = _resolve_runtime_profile_name(
+            runtime=runtime,
+            requested_profile_name=profile_name,
+        )
+        if resolved_profile_name is None:
+            raise ValueError(
+                f"Model profile '{profile_name}' was not found in runtime config."
+            )
+        config = runtime.llm_profiles.get(resolved_profile_name)
+        if config is None:
+            raise ValueError(
+                f"Model profile '{profile_name}' was not found in runtime config."
+            )
+        if config.provider != ProviderType.CODEAGENT:
+            raise ValueError(
+                f"Model profile '{profile_name}' is not a CodeAgent profile."
+            )
+        if config.codeagent_auth is None:
+            raise ValueError(
+                f"Model profile '{profile_name}' does not have CodeAgent auth configured."
+            )
+        checked_at = datetime.now(timezone.utc)
+        try:
+            auth_config = self._resolve_codeagent_auth_for_request(
+                config.codeagent_auth
+            )
+            get_codeagent_token_service().get_token_result_sync(
+                base_url=config.base_url,
+                auth_config=auth_config,
+                ssl_verify=config.ssl_verify,
+                connect_timeout_seconds=config.connect_timeout_seconds,
+                force_refresh=True,
+            )
+        except httpx.TimeoutException as exc:
+            return CodeAgentAuthVerifyResult(
+                status="error",
+                checked_at=checked_at,
+                detail=str(exc) or "Connection timed out.",
+            )
+        except httpx.RequestError as exc:
+            return CodeAgentAuthVerifyResult(
+                status="error",
+                checked_at=checked_at,
+                detail=str(exc) or "Failed to reach CodeAgent endpoint.",
+            )
+        except CodeAgentOAuthError as exc:
+            return CodeAgentAuthVerifyResult(
+                status=(
+                    "reauth_required"
+                    if self._is_codeagent_auth_invalid_error(exc)
+                    else "error"
+                ),
+                checked_at=checked_at,
+                detail=str(exc) or "CodeAgent OAuth request failed.",
+            )
+        return CodeAgentAuthVerifyResult(
+            status="valid",
+            checked_at=checked_at,
         )
 
     def _resolve_endpoint_config(
@@ -1675,6 +1749,22 @@ class ModelConnectivityProbeService:
         status_code = error.status_code
         error_message = str(error) or "CodeAgent OAuth request failed."
         if status_code is None or status_code < 400:
+            if self._is_codeagent_auth_invalid_error(error):
+                return ModelConnectivityProbeResult(
+                    ok=False,
+                    provider=config.provider,
+                    model=config.model,
+                    latency_ms=self._latency_ms(started),
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=False,
+                        rate_limited=False,
+                    ),
+                    error_code="auth_invalid",
+                    error_message=error_message,
+                    retryable=False,
+                )
             return ModelConnectivityProbeResult(
                 ok=False,
                 provider=config.provider,
@@ -1687,6 +1777,22 @@ class ModelConnectivityProbeService:
                     rate_limited=False,
                 ),
                 error_code="invalid_response",
+                error_message=error_message,
+                retryable=False,
+            )
+        if self._is_codeagent_auth_invalid_error(error):
+            return ModelConnectivityProbeResult(
+                ok=False,
+                provider=config.provider,
+                model=config.model,
+                latency_ms=self._latency_ms(started),
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=False,
+                    rate_limited=False,
+                ),
+                error_code="auth_invalid",
                 error_message=error_message,
                 retryable=False,
             )
@@ -1709,6 +1815,22 @@ class ModelConnectivityProbeService:
         status_code = error.status_code
         error_message = str(error) or "CodeAgent OAuth request failed."
         if status_code is None or status_code < 400:
+            if self._is_codeagent_auth_invalid_error(error):
+                return ModelDiscoveryResult(
+                    ok=False,
+                    provider=config.provider,
+                    base_url=config.base_url,
+                    latency_ms=self._latency_ms(started),
+                    checked_at=checked_at,
+                    diagnostics=ModelConnectivityDiagnostics(
+                        endpoint_reachable=True,
+                        auth_valid=False,
+                        rate_limited=False,
+                    ),
+                    error_code="auth_invalid",
+                    error_message=error_message,
+                    retryable=False,
+                )
             return ModelDiscoveryResult(
                 ok=False,
                 provider=config.provider,
@@ -1721,6 +1843,22 @@ class ModelConnectivityProbeService:
                     rate_limited=False,
                 ),
                 error_code="invalid_response",
+                error_message=error_message,
+                retryable=False,
+            )
+        if self._is_codeagent_auth_invalid_error(error):
+            return ModelDiscoveryResult(
+                ok=False,
+                provider=config.provider,
+                base_url=config.base_url,
+                latency_ms=self._latency_ms(started),
+                checked_at=checked_at,
+                diagnostics=ModelConnectivityDiagnostics(
+                    endpoint_reachable=True,
+                    auth_valid=False,
+                    rate_limited=False,
+                ),
+                error_code="auth_invalid",
                 error_message=error_message,
                 retryable=False,
             )
@@ -2361,6 +2499,9 @@ class ModelConnectivityProbeService:
         if status_code >= 500:
             return "provider_error"
         return "request_invalid"
+
+    def _is_codeagent_auth_invalid_error(self, error: CodeAgentOAuthError) -> bool:
+        return error.auth_invalid
 
     def _latency_ms(self, started: float) -> int:
         return max(0, int((perf_counter() - started) * 1000))

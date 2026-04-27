@@ -167,3 +167,19 @@ CodeAgent OAuth 和 API 参数均由后端硬编码值决定。
 
 外部 CodeAgent 网络连通性依赖运行环境，因此浏览器验证只要求前端流程和本地 API
 请求/响应结构正确。
+
+## 持久化登录态与校验
+
+保存后的 `codeagent_auth.has_refresh_token` 仅表示本地已保存过 CodeAgent SSO 凭据，不表示当前登录态已经过实时校验。
+
+设置页编辑已保存的 CodeAgent profile 时，前端会调用：
+
+- `POST /api/system/configs/model/codeagent/auth:verify`
+
+该接口只接受已保存的 CodeAgent profile 名称，并强制执行一次 refresh 校验：
+
+- `status = "valid"`：refresh 仍可用，可显示为已登录
+- `status = "reauth_required"`：refresh 已被上游拒绝，需要重新 SSO 登录
+- `status = "error"`：网络或上游异常，无法确认当前登录状态
+
+运行时 chat / model discovery 仍保持原有的按需 refresh 机制；新增接口只用于设置页区分“保存过凭据”和“当前鉴权已验证”这两个状态。
