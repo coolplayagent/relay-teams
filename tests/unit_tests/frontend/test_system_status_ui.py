@@ -93,6 +93,34 @@ export async function reloadSkillsConfig() {
 }
 """.strip()
 
+OPTIONAL_MCP_API_SOURCE = """
+export async function fetchMcpServers() {
+    const status = await fetchConfigStatus();
+    const names = Array.isArray(status?.mcp?.servers) ? status.mcp.servers : [];
+    return names.map(name => ({
+        name,
+        source: name === 'empty-mcp' ? 'user' : 'project',
+        transport: name === 'empty-mcp' ? 'http' : 'stdio',
+        enabled: name !== 'disabled-mcp',
+    }));
+}
+
+export async function addMcpServer(payload) {
+    globalThis.__addMcpServerCalls.push(payload);
+    return { status: 'ok' };
+}
+
+export async function setMcpServerEnabled(serverName, enabled) {
+    globalThis.__setMcpServerEnabledCalls.push({ serverName, enabled });
+    return { name: serverName, enabled };
+}
+
+export async function testMcpServerConnection(serverName) {
+    globalThis.__testMcpServerCalls.push(serverName);
+    return { server: serverName, ok: true, tool_count: 2, tools: [] };
+}
+""".strip()
+
 
 def test_mcp_status_panel_lists_loaded_tools_and_server_level_fallbacks(
     tmp_path: Path,
@@ -199,6 +227,7 @@ const { bindSystemStatusHandlers, loadMcpStatusPanel } = await import('./systemS
 installGlobals(createElements());
 bindSystemStatusHandlers();
 const loadPromise = loadMcpStatusPanel();
+await Promise.resolve();
 await Promise.resolve();
 const loadingHtml = document.getElementById('mcp-status').innerHTML;
 
@@ -393,6 +422,103 @@ console.log(JSON.stringify({
     assert "APP" in html
 
 
+def test_mcp_editor_preserves_hidden_config_fields_on_update(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: ['filesystem'],
+    },
+    skills: {
+        skills: [],
+    },
+};
+
+export async function fetchConfigStatus() {
+    return status;
+}
+
+export async function fetchMcpServer(serverName) {
+    return {
+        server: { name: serverName, source: 'app', transport: 'stdio', enabled: true },
+        config: {
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', 'server-filesystem'],
+            env: { TOKEN: 'old' },
+            cwd: 'C:/workspace',
+            read_timeout: 300,
+        },
+    };
+}
+
+export async function updateMcpServer(serverName, payload) {
+    globalThis.__updateMcpServerCalls.push({ serverName, payload });
+    return { status: 'ok' };
+}
+
+export async function fetchMcpServerTools(serverName) {
+    return { server: serverName, source: 'app', transport: 'stdio', tools: [] };
+}
+
+export async function reloadMcpConfig() {
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+globalThis.__updateMcpServerCalls = [];
+
+bindSystemStatusHandlers();
+await globalThis.__agentTeamsEditMcpServer('filesystem');
+
+document.getElementById('mcp-server-name-input').value = 'filesystem';
+document.getElementById('mcp-server-transport-input').value = 'stdio';
+document.getElementById('mcp-server-command-input').value = 'uvx';
+document.getElementById('mcp-server-args-input').value = 'server-filesystem';
+document.getElementById('mcp-server-extra-input').value = 'TOKEN=new';
+await document.getElementById('save-mcp-server-btn').onclick();
+
+console.log(JSON.stringify({
+    updateCalls: globalThis.__updateMcpServerCalls,
+}));
+""".strip(),
+    )
+
+    update_calls = cast(list[dict[str, JsonValue]], payload["updateCalls"])
+    assert len(update_calls) == 1
+    update_payload = cast(dict[str, JsonValue], update_calls[0]["payload"])
+    config = cast(dict[str, JsonValue], update_payload["config"])
+    assert config["transport"] == "stdio"
+    assert config["command"] == "uvx"
+    assert config["args"] == ["server-filesystem"]
+    assert config["env"] == {"TOKEN": "new"}
+    assert config["cwd"] == "C:/workspace"
+    assert config["read_timeout"] == 300
+
+
 def test_skills_status_panel_accepts_new_source_field_and_bare_refs(
     tmp_path: Path,
 ) -> None:
@@ -495,7 +621,7 @@ def _run_system_status_script(
     runner_path = tmp_path / "runner.mjs"
 
     mock_api_path.write_text(
-        mock_api_source,
+        f"{mock_api_source}\n\n{OPTIONAL_MCP_API_SOURCE}",
         encoding="utf-8",
     )
     mock_feedback_path.write_text(
@@ -517,6 +643,7 @@ const translations = {
     "settings.system.loaded_state": "Loaded",
     "settings.system.loading_state": "Loading..",
     "settings.system.unavailable_state": "Unavailable",
+    "settings.system.disabled_state": "Disabled",
     "settings.system.mcp_reloaded": "MCP Reloaded",
     "settings.system.skills_reloaded": "Skills Reloaded",
     "settings.system.reload_failed": "Reload Failed",
@@ -533,6 +660,19 @@ const translations = {
     "settings.system.load_tools_failed_detail": "Failed to load tools.",
     "settings.system.server_count_loading": "{count} servers, {loading} loading.",
     "settings.system.server_count_loaded": "{count} servers loaded.",
+    "settings.mcp.testing": "Testing...",
+    "settings.mcp.test_ok": "Connection succeeded. {count} tools loaded.",
+    "settings.mcp.test_failed_message": "Connection test failed.",
+    "settings.mcp.disabled_state": "This MCP server is disabled.",
+    "settings.mcp.enabled": "MCP Server Enabled",
+    "settings.mcp.enabled_message": "{name} is enabled.",
+    "settings.mcp.disabled": "MCP Server Disabled",
+    "settings.mcp.disabled_message": "{name} is disabled.",
+    "settings.mcp.toggle_failed": "Update Failed",
+    "settings.mcp.toggle_failed_message": "Failed to update MCP server.",
+    "settings.action.test": "Test",
+    "settings.action.enable": "Enable",
+    "settings.action.disable": "Disable",
 };
 
 export function t(key) {
@@ -608,6 +748,9 @@ function installGlobals(elements) {{
     globalThis.__reloadMcpCalls = 0;
     globalThis.__reloadSkillsCalls = 0;
     globalThis.__toolFetchCalls = [];
+    globalThis.__addMcpServerCalls = [];
+    globalThis.__setMcpServerEnabledCalls = [];
+    globalThis.__testMcpServerCalls = [];
     globalThis.__toasts = [];
     globalThis.__logEntries = [];
 }};

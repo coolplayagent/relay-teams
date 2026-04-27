@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import logging
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -15,11 +16,14 @@ from relay_teams.agents.instances.models import (
     RuntimeToolsSnapshot,
 )
 from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry.registry import ToolRegistry, ToolResolutionContext
+
+LOGGER = get_logger(__name__)
 
 
 class TaskToolHarness(BaseModel):
@@ -105,7 +109,24 @@ class TaskToolHarness(BaseModel):
                 ".build_runtime_tools_snapshot"
             ),
         ):
-            for tool in await self.mcp_registry.list_tool_schemas(server_name):
+            try:
+                server_tool_schemas = await self.mcp_registry.list_tool_schemas(
+                    server_name
+                )
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="orchestration.runtime_tools.mcp_load_failed",
+                    message=(
+                        "Failed to inspect MCP tools for runtime snapshot; "
+                        "continuing without this MCP server"
+                    ),
+                    payload={"server_name": server_name},
+                    exc_info=exc,
+                )
+                continue
+            for tool in server_tool_schemas:
                 mcp_tools.append(
                     self.tool_entry_from_definition(
                         source="mcp",

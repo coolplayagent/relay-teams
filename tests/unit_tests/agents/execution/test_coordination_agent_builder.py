@@ -102,6 +102,33 @@ class _FakeMcpRegistry:
         return tuple(object() for _ in server_names)
 
 
+class _PartiallyFailingMcpRegistry(_FakeMcpRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.toolset_calls: list[tuple[str, ...]] = []
+
+    def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
+        self.toolset_calls.append(server_names)
+        if server_names == ("broken",):
+            raise RuntimeError("MCP startup failed")
+        return tuple(f"toolset:{name}" for name in server_names)
+
+
+class _MarkedFailedMcpRegistry(_FakeMcpRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.toolset_calls: list[tuple[str, ...]] = []
+
+    def is_server_runtime_failed(self, name: str) -> bool:
+        return name == "broken"
+
+    def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
+        self.toolset_calls.append(server_names)
+        if server_names == ("broken",):
+            raise AssertionError("failed MCP server should have been skipped")
+        return tuple(f"toolset:{name}" for name in server_names)
+
+
 def test_build_coordination_agent_passes_proxy_http_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -212,7 +239,7 @@ def test_build_coordination_agent_ignores_unknown_skills(
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,
@@ -264,7 +291,7 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,
@@ -304,6 +331,102 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
     ]
 
 
+def test_build_coordination_agent_skips_mcp_toolsets_that_fail_to_initialize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_tool_registry = _FakeToolRegistry()
+    fake_mcp_registry = _PartiallyFailingMcpRegistry()
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_llm_http_client",
+        lambda **_: object(),
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_openai_provider_for_endpoint",
+        _FakeOpenAIProvider,
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "OpenAIChatModel",
+        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
+            model_name, provider
+        ),
+    )
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=("docs", "broken"),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        mcp_registry=cast(McpRegistry, fake_mcp_registry),
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert built_agent.kwargs["toolsets"] == ["toolset:docs"]
+    assert fake_mcp_registry.toolset_calls == [("docs",), ("broken",)]
+
+
+def test_build_coordination_agent_skips_mcp_servers_marked_runtime_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_tool_registry = _FakeToolRegistry()
+    fake_mcp_registry = _MarkedFailedMcpRegistry()
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_llm_http_client",
+        lambda **_: object(),
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_openai_provider_for_endpoint",
+        _FakeOpenAIProvider,
+    )
+    monkeypatch.setattr(
+        coordination_agent,
+        "OpenAIChatModel",
+        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
+            model_name, provider
+        ),
+    )
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=("docs", "broken"),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        mcp_registry=cast(McpRegistry, fake_mcp_registry),
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert built_agent.kwargs["toolsets"] == ["toolset:docs"]
+    assert fake_mcp_registry.toolset_calls == [("docs",)]
+
+
 def test_build_coordination_agent_injects_subagent_capabilities_into_spawn_subagent_description(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -331,7 +454,7 @@ def test_build_coordination_agent_injects_subagent_capabilities_into_spawn_subag
     monkeypatch.setattr(
         coordination_agent,
         "build_openai_provider_for_endpoint",
-        lambda **kwargs: _FakeOpenAIProvider(**kwargs),
+        _FakeOpenAIProvider,
     )
     monkeypatch.setattr(
         coordination_agent,

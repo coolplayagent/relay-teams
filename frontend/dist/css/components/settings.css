@@ -1472,7 +1472,7 @@
 .mcp-status-toolbar-btn,
 .mcp-status-toggle {
     border: 1px solid var(--settings-divider);
-    border-radius: 999px;
+    border-radius: 6px;
     background: color-mix(in srgb, var(--settings-row-bg) 92%, transparent);
     color: var(--text-secondary);
     cursor: pointer;
@@ -1488,6 +1488,33 @@
     background: var(--bg-hover);
     border-color: var(--primary);
     color: var(--text-primary);
+}
+
+.mcp-status-toggle:disabled {
+    cursor: default;
+    opacity: 0.62;
+}
+
+.mcp-editor-panel {
+    padding: 1rem;
+    border: 1px solid var(--settings-divider);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--settings-row-bg) 82%, transparent);
+}
+
+.mcp-editor-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.9rem 1rem;
+    align-items: start;
+}
+
+.mcp-editor-textarea {
+    min-height: 92px;
+}
+
+.mcp-overwrite-toggle {
+    grid-column: 1 / -1;
 }
 
 .mcp-status-list {
@@ -1537,6 +1564,27 @@
     justify-content: flex-end;
     gap: 0.55rem;
     flex-wrap: wrap;
+}
+
+.mcp-test-result {
+    margin: 0 1rem 0.85rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--settings-divider);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    line-height: 1.45;
+    background: var(--settings-surface-muted-bg);
+}
+
+.mcp-test-result-success {
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--success) 35%, var(--settings-divider));
+}
+
+.mcp-test-result-danger {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 35%, var(--settings-divider));
 }
 
 .hooks-runtime-list {

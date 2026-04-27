@@ -847,6 +847,9 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-web-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-proxy-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="delete-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.delete">Delete</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-mcp-server-btn" type="button" style="display:none;" data-i18n="settings.mcp.add_server">Add Server</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-mcp-server-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="cancel-mcp-server-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reset-appearance-btn" type="button" style="display:none;" data-i18n="settings.action.reset">Reset</button>
                         </div>
@@ -1023,6 +1026,7 @@ function renderPanelActions(tab) {
         return;
     }
     if (tab === 'mcp') {
+        document.getElementById('add-mcp-server-btn').style.display = 'inline-flex';
         document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
         return;
     }

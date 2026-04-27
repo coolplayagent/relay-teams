@@ -2420,11 +2420,52 @@ Response:
 
 ### `GET /mcp/servers`
 
-Lists effective MCP servers from app scope.
+Lists effective MCP servers from app scope, including disabled servers for
+management views.
+
+### `POST /mcp/servers`
+
+Adds an app-scoped MCP server and reloads the runtime registry.
+
+Request:
+```json
+{
+  "name": "filesystem",
+  "config": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+  },
+  "overwrite": false
+}
+```
+
+The backend also accepts opencode-style local/remote config shapes, including
+`{"type": "local", "command": ["npx", "-y", "package"]}` and
+`{"type": "remote", "url": "https://example.com/mcp"}`.
+
+### `PUT /mcp/servers/{server_name}/enabled`
+
+Enables or disables an app-scoped MCP server without deleting its config, then
+reloads the runtime registry. Disabled servers remain visible in management APIs
+but are not expanded by `*` role bindings or injected as runtime MCP tools.
+
+Request:
+```json
+{
+  "enabled": false
+}
+```
 
 ### `GET /mcp/servers/{server_name}/tools`
 
 Lists tools exposed by one MCP server. Returned tool names are the effective callable names registered at runtime in the form `<server_name>_<tool_name>` so tools from different MCP servers cannot collide.
+
+### `POST /mcp/servers/{server_name}/test`
+
+Connects to one MCP server, lists its tools, and returns `{ "ok": true }` with
+tool metadata on success or `{ "ok": false, "error": "..." }` on connection
+failure.
 
 ## Gateway APIs
 

@@ -514,6 +514,62 @@ export async function reloadMcpConfig() {
     );
 }
 
+export async function fetchMcpServers() {
+    return requestJson('/api/mcp/servers', undefined, 'Failed to fetch MCP servers');
+}
+
+export async function addMcpServer(payload) {
+    return requestJson(
+        '/api/mcp/servers',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to add MCP server',
+    );
+}
+
+export async function fetchMcpServer(serverName) {
+    return requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}`,
+        undefined,
+        `Failed to fetch MCP server ${serverName}`,
+    );
+}
+
+export async function updateMcpServer(serverName, payload) {
+    return requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        `Failed to update MCP server ${serverName}`,
+    );
+}
+
+export async function testMcpServerConnection(serverName) {
+    return requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/test`,
+        { method: 'POST' },
+        `Failed to test MCP server ${serverName}`,
+    );
+}
+
+export async function setMcpServerEnabled(serverName, enabled) {
+    return requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/enabled`,
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled }),
+        },
+        `Failed to update MCP server ${serverName}`,
+    );
+}
+
 export async function fetchMcpServerTools(serverName) {
     return requestJson(
         `/api/mcp/servers/${encodeURIComponent(serverName)}/tools`,

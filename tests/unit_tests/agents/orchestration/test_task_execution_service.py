@@ -29,6 +29,7 @@ from relay_teams.media import (
     MediaAssetService,
     content_parts_from_text,
 )
+from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
@@ -232,6 +233,30 @@ class _StaticSkillRuntimeService:
                     authorized_count=len(visible_skills),
                     visible_skills=tuple(visible_skills),
                 ),
+            ),
+        )
+
+
+class _PartiallyFailingToolSchemaMcpRegistry(McpRegistry):
+    def resolve_server_names(
+        self,
+        names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+        expand_wildcards: bool = True,
+    ) -> tuple[str, ...]:
+        _ = strict, consumer, expand_wildcards
+        return tuple(name for name in names if name != "missing")
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        if name == "broken":
+            raise RuntimeError("MCP startup failed")
+        return (
+            McpToolSchema(
+                name=f"{name}_search",
+                description="Search docs",
+                input_schema={"type": "object"},
             ),
         )
 
@@ -1519,6 +1544,56 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
     assert writer_tools["write"].startswith(
         "Write full file contents to the workspace."
     )
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_tools_snapshot_skips_mcp_servers_that_fail_to_load(
+    tmp_path: Path,
+) -> None:
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="docs_agent",
+            name="Docs Agent",
+            description="Uses documentation.",
+            version="1",
+            tools=("read",),
+            mcp_servers=("docs", "broken"),
+            system_prompt="Read docs.",
+        )
+    )
+    db_path = tmp_path / "task_execution_service_mcp_snapshot.db"
+    shared_store = SharedStateRepository(db_path)
+    mcp_registry = _PartiallyFailingToolSchemaMcpRegistry()
+    service = TaskExecutionService(
+        role_registry=role_registry,
+        task_repo=TaskRepository(db_path),
+        shared_store=shared_store,
+        event_bus=EventLog(db_path),
+        agent_repo=AgentInstanceRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        approval_ticket_repo=ApprovalTicketRepository(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        workspace_manager=WorkspaceManager(
+            project_root=Path("."), shared_store=shared_store
+        ),
+        prompt_builder=RuntimePromptBuilder(
+            role_registry=role_registry,
+            mcp_registry=mcp_registry,
+        ),
+        provider_factory=lambda _, __=None: _CapturingProvider(),
+        tool_registry=build_default_registry(),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
+        mcp_registry=mcp_registry,
+    )
+
+    snapshot = await service._build_runtime_tools_snapshot(
+        role_registry.get("docs_agent")
+    )
+
+    assert [entry.name for entry in snapshot.mcp_tools] == ["docs_search"]
+    assert [entry.server_name for entry in snapshot.mcp_tools] == ["docs"]
+    assert "read" in {entry.name for entry in snapshot.local_tools}
 
 
 @pytest.mark.asyncio

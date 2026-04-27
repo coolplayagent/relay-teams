@@ -44,6 +44,7 @@ class McpRegistry:
     def __init__(self, specs: tuple[McpServerSpec, ...] = ()) -> None:
         self._specs = {spec.name: spec for spec in specs}
         self._toolsets: dict[str, MCPServer] = {}
+        self._runtime_failed_names: set[str] = set()
 
     def get_toolsets(self, names: tuple[str, ...]) -> tuple[MCPServer, ...]:
         with trace_span(
@@ -55,6 +56,8 @@ class McpRegistry:
             resolved_names = self.resolve_server_names(names)
             toolsets: list[MCPServer] = []
             for name in resolved_names:
+                if self.is_server_runtime_failed(name):
+                    continue
                 toolsets.append(self._get_or_create_toolset(name))
             return tuple(toolsets)
 
@@ -108,12 +111,12 @@ class McpRegistry:
                     if _CAPABILITY_WILDCARD not in resolved_names:
                         resolved_names.append(_CAPABILITY_WILDCARD)
                     continue
-                for server_name in self.list_names():
+                for server_name in self.list_enabled_names():
                     if server_name not in resolved_names:
                         resolved_names.append(server_name)
                     wildcard_names.add(server_name)
                 continue
-            if name in self._specs:
+            if name in self._specs and self._specs[name].enabled:
                 if name not in wildcard_names:
                     resolved_names.append(name)
                 continue
@@ -122,6 +125,20 @@ class McpRegistry:
 
     def list_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._specs.keys()))
+
+    def list_enabled_names(self) -> tuple[str, ...]:
+        return tuple(name for name in self.list_names() if self._specs[name].enabled)
+
+    def is_server_runtime_failed(self, name: str) -> bool:
+        return name.strip() in self._runtime_failed_names
+
+    def mark_server_runtime_failed(self, name: str) -> None:
+        normalized_name = name.strip()
+        if normalized_name:
+            self._runtime_failed_names.add(normalized_name)
+
+    def mark_server_runtime_available(self, name: str) -> None:
+        self._runtime_failed_names.discard(name.strip())
 
     def list_specs(self) -> tuple[McpServerSpec, ...]:
         return tuple(self._specs[name] for name in self.list_names())
@@ -174,9 +191,14 @@ class McpRegistry:
             )
 
     async def _list_tool_objects(self, name: str) -> tuple[_ListedMcpTool, ...]:
-        toolset = self._get_or_create_toolset(name)
-        async with toolset:
-            mcp_tools = await toolset.list_tools()
+        try:
+            toolset = self._get_or_create_toolset(name)
+            async with toolset:
+                mcp_tools = await toolset.list_tools()
+        except Exception:
+            self.mark_server_runtime_failed(name)
+            raise
+        self.mark_server_runtime_available(name)
         return cast("tuple[_ListedMcpTool, ...]", tuple(mcp_tools))
 
     def _get_or_create_toolset(self, name: str) -> MCPServer:
@@ -191,6 +213,8 @@ class McpRegistry:
                 return existing
 
             spec = self.get_spec(name)
+            if not spec.enabled:
+                raise ValueError(f"MCP server is disabled: {name}")
             toolset = build_mcp_server(spec)
             self._toolsets[name] = toolset
             return toolset
@@ -224,7 +248,7 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
             id=spec.name,
             tool_prefix=get_mcp_tool_prefix(spec.name),
         )
-    if transport == "http":
+    if transport in ("http", "streamable-http"):
         url = _required_string(server_config, "url")
         return MCPServerStreamableHTTP(
             url=url,
@@ -241,7 +265,13 @@ def _detect_transport(server_config: Mapping[str, JsonValue]) -> str:
         return raw_transport.strip()
     raw_type = server_config.get("type")
     if isinstance(raw_type, str) and raw_type.strip():
-        return raw_type.strip()
+        normalized_type = raw_type.strip()
+        if normalized_type == "local":
+            return "stdio"
+        if normalized_type == "remote":
+            raw_url = server_config.get("url")
+            return "sse" if isinstance(raw_url, str) and "/sse" in raw_url else "http"
+        return normalized_type
     if isinstance(server_config.get("command"), str):
         return "stdio"
     raw_url = server_config.get("url")

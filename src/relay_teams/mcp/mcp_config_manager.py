@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
-from json import loads
+from json import dumps, loads
 from pathlib import Path
 from typing import cast
 
@@ -67,6 +67,137 @@ class McpConfigManager:
                 merged_specs[spec.name] = spec
             return McpRegistry(tuple(merged_specs.values()))
 
+    def add_server(
+        self,
+        *,
+        name: str,
+        server_config: dict[str, JsonValue],
+        overwrite: bool = False,
+    ) -> Path:
+        ensure_app_config_bootstrap(self._app_config_dir)
+        with trace_span(
+            logger,
+            component="mcp.config",
+            operation="add_server",
+            attributes={"app_config_dir": str(self._app_config_dir), "name": name},
+        ):
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise ValueError("MCP server name must be a non-empty string")
+
+            config_path = self._app_config_dir / _MCP_FILE_NAME
+            payload = _load_json_object(config_path) if config_path.exists() else {}
+            payload, servers = _writable_mcp_servers_payload(payload)
+
+            if normalized_name in servers and not overwrite:
+                raise ValueError(f"MCP server already exists: {normalized_name}")
+
+            servers[normalized_name] = _normalize_mcp_server_config(
+                normalized_name,
+                server_config,
+            )
+            config_path.write_text(
+                json_dumps(payload),
+                encoding="utf-8",
+            )
+            return config_path
+
+    def get_server_config(self, name: str) -> dict[str, JsonValue]:
+        ensure_app_config_bootstrap(self._app_config_dir)
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("MCP server name must be a non-empty string")
+        config_path = self._app_config_dir / _MCP_FILE_NAME
+        payload = _load_json_object(config_path) if config_path.exists() else {}
+        existing_servers = _extract_mcp_servers(payload)
+        if not isinstance(existing_servers, dict):
+            raise ValueError(f"Unknown MCP server: {normalized_name}")
+        existing_config = existing_servers.get(normalized_name)
+        if existing_config is None:
+            raise ValueError(f"Unknown MCP server: {normalized_name}")
+        return _normalize_mcp_server_config(
+            normalized_name,
+            _normalize_to_json_object(existing_config),
+        )
+
+    def update_server(
+        self,
+        *,
+        name: str,
+        server_config: dict[str, JsonValue],
+    ) -> Path:
+        ensure_app_config_bootstrap(self._app_config_dir)
+        with trace_span(
+            logger,
+            component="mcp.config",
+            operation="update_server",
+            attributes={"app_config_dir": str(self._app_config_dir), "name": name},
+        ):
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise ValueError("MCP server name must be a non-empty string")
+
+            config_path = self._app_config_dir / _MCP_FILE_NAME
+            raw_payload = _load_json_object(config_path) if config_path.exists() else {}
+            payload, existing_servers = _writable_mcp_servers_payload(raw_payload)
+            if not existing_servers:
+                raise ValueError(f"Unknown MCP server: {normalized_name}")
+            existing_config = existing_servers.get(normalized_name)
+            if existing_config is None:
+                raise ValueError(f"Unknown MCP server: {normalized_name}")
+
+            existing_enabled = _is_mcp_server_enabled(
+                _normalize_to_json_object(existing_config)
+            )
+            normalized_config = _normalize_mcp_server_config(
+                normalized_name,
+                server_config,
+            )
+            if (
+                "enabled" not in normalized_config
+                and "disabled" not in normalized_config
+            ):
+                normalized_config["enabled"] = existing_enabled
+            else:
+                normalized_config["enabled"] = _is_mcp_server_enabled(normalized_config)
+                normalized_config.pop("disabled", None)
+            existing_servers[normalized_name] = normalized_config
+            config_path.write_text(json_dumps(payload), encoding="utf-8")
+            return config_path
+
+    def set_server_enabled(self, *, name: str, enabled: bool) -> Path:
+        ensure_app_config_bootstrap(self._app_config_dir)
+        with trace_span(
+            logger,
+            component="mcp.config",
+            operation="set_server_enabled",
+            attributes={
+                "app_config_dir": str(self._app_config_dir),
+                "name": name,
+                "enabled": enabled,
+            },
+        ):
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise ValueError("MCP server name must be a non-empty string")
+
+            config_path = self._app_config_dir / _MCP_FILE_NAME
+            raw_payload = _load_json_object(config_path) if config_path.exists() else {}
+            payload, existing_servers = _writable_mcp_servers_payload(raw_payload)
+            if not existing_servers:
+                raise ValueError(f"Unknown MCP server: {normalized_name}")
+
+            existing_config = existing_servers.get(normalized_name)
+            if existing_config is None:
+                raise ValueError(f"Unknown MCP server: {normalized_name}")
+
+            server_config = _normalize_to_json_object(existing_config)
+            server_config["enabled"] = enabled
+            server_config.pop("disabled", None)
+            existing_servers[normalized_name] = server_config
+            config_path.write_text(json_dumps(payload), encoding="utf-8")
+            return config_path
+
 
 def _load_specs_from_file(
     *, file_path: Path, source: McpConfigScope, proxy_env: dict[str, str]
@@ -93,7 +224,10 @@ def _load_specs_from_file(
         specs: list[McpServerSpec] = []
         for raw_name, raw_config in maybe_servers.items():
             name = str(raw_name)
-            normalized_server_config = _normalize_to_json_object(raw_config)
+            normalized_server_config = _normalize_mcp_server_config(
+                name,
+                _normalize_to_json_object(raw_config),
+            )
             effective_server_config = _apply_proxy_env_to_mcp_server_config(
                 normalized_server_config,
                 proxy_env,
@@ -107,6 +241,7 @@ def _load_specs_from_file(
                     config=wrapped_config,
                     server_config=effective_server_config,
                     source=source,
+                    enabled=_is_mcp_server_enabled(normalized_server_config),
                 )
             )
         return tuple(specs)
@@ -119,11 +254,85 @@ def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     return {}
 
 
+def _extract_mcp_servers(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    maybe_servers = payload.get("mcpServers", payload)
+    if isinstance(maybe_servers, dict):
+        return maybe_servers
+    return {}
+
+
+def _writable_mcp_servers_payload(
+    payload: dict[str, JsonValue],
+) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+    existing_servers = payload.get("mcpServers")
+    if isinstance(existing_servers, dict):
+        return payload, existing_servers
+    if "mcpServers" in payload:
+        servers: dict[str, JsonValue] = {}
+        empty_wrapped_payload: dict[str, JsonValue] = {"mcpServers": servers}
+        return empty_wrapped_payload, servers
+    servers = dict(payload)
+    migrated_payload: dict[str, JsonValue] = {"mcpServers": servers}
+    return migrated_payload, servers
+
+
 def _normalize_to_json_object(value: object) -> dict[str, JsonValue]:
     normalized = _normalize_json_value(value)
     if isinstance(normalized, dict):
         return normalized
     return {}
+
+
+def _normalize_mcp_server_config(
+    name: str,
+    raw_config: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    config = _extract_named_mcp_server_config(name, raw_config)
+    normalized = _normalize_to_json_object(config)
+
+    raw_type = normalized.get("type")
+    if raw_type == "local" and "transport" not in normalized:
+        normalized["transport"] = "stdio"
+    if raw_type == "remote" and "transport" not in normalized:
+        normalized["transport"] = _detect_url_transport(normalized.get("url"))
+
+    raw_command = normalized.get("command")
+    if isinstance(raw_command, list):
+        command_parts = [str(item).strip() for item in raw_command if str(item).strip()]
+        if command_parts:
+            normalized["command"] = command_parts[0]
+            existing_args = normalized.get("args")
+            if not isinstance(existing_args, list):
+                normalized["args"] = [item for item in command_parts[1:]]
+    return normalized
+
+
+def _extract_named_mcp_server_config(
+    name: str,
+    raw_config: dict[str, JsonValue],
+) -> object:
+    maybe_servers = raw_config.get("mcpServers")
+    if isinstance(maybe_servers, dict):
+        named_config = maybe_servers.get(name)
+        if named_config is not None:
+            return named_config
+    return raw_config
+
+
+def _detect_url_transport(value: object) -> str:
+    if isinstance(value, str) and "/sse" in value:
+        return "sse"
+    return "http"
+
+
+def _is_mcp_server_enabled(server_config: dict[str, JsonValue]) -> bool:
+    raw_enabled = server_config.get("enabled")
+    if isinstance(raw_enabled, bool):
+        return raw_enabled
+    raw_disabled = server_config.get("disabled")
+    if isinstance(raw_disabled, bool):
+        return not raw_disabled
+    return True
 
 
 def _normalize_json_value(value: object) -> JsonValue:
@@ -139,6 +348,10 @@ def _normalize_json_value(value: object) -> JsonValue:
             normalized[str(key)] = _normalize_json_value(item)
         return normalized
     return str(value)
+
+
+def json_dumps(payload: dict[str, JsonValue]) -> str:
+    return dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
 def _apply_proxy_env_to_mcp_server_config(

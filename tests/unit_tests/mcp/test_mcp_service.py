@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
-from pydantic_ai.mcp import MCPServerStdio
+from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP
 
 from relay_teams.mcp.mcp_models import (
     McpConfigScope,
+    McpServerEnabledUpdateRequest,
+    McpServerUpdateRequest,
     McpServerSpec,
     McpToolInfo,
 )
@@ -38,6 +42,76 @@ def test_list_servers_reports_effective_transport() -> None:
 
     assert [server.name for server in servers] == ["filesystem", "remote"]
     assert [server.transport for server in servers] == ["stdio", "sse"]
+
+
+def test_list_enabled_servers_filters_disabled_servers() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="disabled-docs",
+                config={
+                    "mcpServers": {"disabled-docs": {"url": "https://example.com/mcp"}}
+                },
+                server_config={"url": "https://example.com/mcp"},
+                source=McpConfigScope.APP,
+                enabled=False,
+            ),
+        )
+    )
+
+    servers = McpService(registry=registry).list_enabled_servers()
+
+    assert [server.name for server in servers] == ["filesystem"]
+
+
+def test_list_servers_detects_type_aliases_and_unknown_transport() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="local",
+                config={"mcpServers": {"local": {"type": "local"}}},
+                server_config={"type": "local"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="remote",
+                config={
+                    "mcpServers": {
+                        "remote": {"type": "remote", "url": "https://example.com/sse"}
+                    }
+                },
+                server_config={"type": "remote", "url": "https://example.com/sse"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="custom",
+                config={"mcpServers": {"custom": {"type": "custom"}}},
+                server_config={"type": "custom"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="unknown",
+                config={"mcpServers": {"unknown": {}}},
+                server_config={},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    servers = McpService(registry=registry).list_servers()
+
+    assert [server.transport for server in servers] == [
+        "custom",
+        "stdio",
+        "sse",
+        "unknown",
+    ]
 
 
 def test_list_servers_binds_trace_context(monkeypatch) -> None:
@@ -105,6 +179,58 @@ async def test_list_server_tools_uses_registry_result(monkeypatch) -> None:
     assert get_trace_context().trace_id is None
 
 
+@pytest.mark.asyncio
+async def test_test_server_connection_returns_success(monkeypatch) -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    async def fake_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        assert name == "filesystem"
+        return (McpToolInfo(name="filesystem_read_file", description="Read"),)
+
+    monkeypatch.setattr(registry, "list_tools", fake_list_tools)
+    service = McpService(registry=registry)
+
+    result = await service.test_server_connection("filesystem")
+
+    assert result.ok is True
+    assert result.tool_count == 1
+    assert [tool.name for tool in result.tools] == ["filesystem_read_file"]
+
+
+@pytest.mark.asyncio
+async def test_test_server_connection_captures_connection_error(monkeypatch) -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    async def fake_list_tools(_name: str) -> tuple[McpToolInfo, ...]:
+        raise RuntimeError("connection failed")
+
+    monkeypatch.setattr(registry, "list_tools", fake_list_tools)
+    service = McpService(registry=registry)
+
+    result = await service.test_server_connection("filesystem")
+
+    assert result.ok is False
+    assert result.error == "connection failed"
+
+
 class _FakeListedTool:
     def __init__(
         self,
@@ -116,6 +242,22 @@ class _FakeListedTool:
         self.name = name
         self.description = description
         self.inputSchema = input_schema
+
+
+class _FailingAsyncToolset:
+    async def __aenter__(self) -> "_FailingAsyncToolset":
+        raise RuntimeError("MCP startup failed")
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> None:
+        _ = exc_type, exc, tb
+
+    async def list_tools(self) -> tuple[_FakeListedTool, ...]:
+        return ()
 
 
 @pytest.mark.asyncio
@@ -160,6 +302,33 @@ async def test_registry_list_tools_prefixes_server_name(monkeypatch) -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_registry_marks_mcp_server_failed_after_background_load_error(
+    monkeypatch,
+) -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="broken",
+                config={"mcpServers": {"broken": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.mcp.mcp_registry.build_mcp_server",
+        lambda _spec: _FailingAsyncToolset(),
+    )
+
+    with pytest.raises(RuntimeError, match="MCP startup failed"):
+        await registry.list_tool_schemas("broken")
+
+    assert registry.is_server_runtime_failed("broken") is True
+    assert registry.get_toolsets(("broken",)) == ()
+
+
 def test_build_mcp_server_uses_longer_default_stdio_timeout() -> None:
     server = build_mcp_server(
         McpServerSpec(
@@ -195,6 +364,55 @@ def test_build_mcp_server_allows_stdio_timeout_override() -> None:
     assert server.tool_prefix == "context7"
     assert server.timeout == 42.0
     assert server.read_timeout == 123.0
+
+
+def test_build_mcp_server_accepts_streamable_http_transport_alias() -> None:
+    server = build_mcp_server(
+        McpServerSpec(
+            name="docs",
+            config={"mcpServers": {"docs": {"url": "https://example.com/mcp"}}},
+            server_config={
+                "transport": "streamable-http",
+                "url": "https://example.com/mcp",
+            },
+            source=McpConfigScope.APP,
+        )
+    )
+
+    assert isinstance(server, MCPServerStreamableHTTP)
+    assert server.tool_prefix == "docs"
+
+
+def test_registry_rejects_disabled_server_toolset() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="disabled-docs",
+                config={
+                    "mcpServers": {"disabled-docs": {"url": "https://example.com/mcp"}}
+                },
+                server_config={"url": "https://example.com/mcp"},
+                source=McpConfigScope.APP,
+                enabled=False,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="MCP server is disabled: disabled-docs"):
+        registry._get_or_create_toolset("disabled-docs")
+
+
+def test_build_mcp_server_detects_remote_type_alias() -> None:
+    server = build_mcp_server(
+        McpServerSpec(
+            name="docs",
+            config={"mcpServers": {"docs": {"type": "remote"}}},
+            server_config={"type": "remote", "url": "https://example.com/mcp"},
+            source=McpConfigScope.APP,
+        )
+    )
+
+    assert isinstance(server, MCPServerStreamableHTTP)
 
 
 def test_build_mcp_server_stdio_inherits_process_env_and_prefers_explicit_env(
@@ -270,6 +488,99 @@ def test_registry_resolve_server_names_expands_wildcard() -> None:
     resolved = registry.resolve_server_names(("*", "docs"), strict=True)
 
     assert resolved == ("docs", "filesystem")
+
+
+def test_registry_wildcard_skips_disabled_servers() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="disabled-docs",
+                config={
+                    "mcpServers": {"disabled-docs": {"url": "https://example.com/mcp"}}
+                },
+                server_config={"url": "https://example.com/mcp"},
+                source=McpConfigScope.APP,
+                enabled=False,
+            ),
+        )
+    )
+
+    resolved = registry.resolve_server_names(("*",), strict=True)
+
+    assert resolved == ("filesystem",)
+    with pytest.raises(ValueError, match="Unknown MCP servers: \\['disabled-docs'\\]"):
+        registry.resolve_server_names(("disabled-docs",), strict=True)
+
+
+def test_list_servers_reports_enabled_state() -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="disabled-docs",
+                config={
+                    "mcpServers": {"disabled-docs": {"url": "https://example.com/mcp"}}
+                },
+                server_config={"url": "https://example.com/mcp"},
+                source=McpConfigScope.APP,
+                enabled=False,
+            ),
+        )
+    )
+
+    servers = McpService(registry=registry).list_servers()
+
+    assert servers[0].enabled is False
+
+
+def test_add_server_publishes_registry_updates_to_runtime_callback(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    published_registries: list[McpRegistry] = []
+    service = McpService(
+        registry=McpRegistry(()),
+        config_manager=manager,
+        on_registry_changed=published_registries.append,
+    )
+
+    service.add_server(
+        name="filesystem",
+        server_config={"transport": "stdio", "command": "npx"},
+    )
+
+    assert len(published_registries) == 1
+    assert published_registries[0].get_spec("filesystem").server_config["command"] == (
+        "npx"
+    )
+
+
+def test_service_raises_when_config_manager_is_unavailable() -> None:
+    service = McpService(registry=McpRegistry(()))
+
+    with pytest.raises(RuntimeError, match="MCP config manager is not available"):
+        service.add_server(name="filesystem", server_config={"command": "npx"})
+    with pytest.raises(RuntimeError, match="MCP config manager is not available"):
+        service.get_server_config("filesystem")
+    with pytest.raises(RuntimeError, match="MCP config manager is not available"):
+        service.update_server(
+            "filesystem",
+            McpServerUpdateRequest(config={"command": "uvx"}),
+        )
+    with pytest.raises(RuntimeError, match="MCP config manager is not available"):
+        service.set_server_enabled(
+            "filesystem",
+            McpServerEnabledUpdateRequest(enabled=False),
+        )
 
 
 def test_registry_resolve_server_names_can_preserve_wildcard() -> None:

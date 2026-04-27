@@ -63,6 +63,8 @@ export {
     fetchEnvironmentVariables,
     fetchHooksConfig,
     fetchHookRuntimeView,
+    fetchMcpServers,
+    fetchMcpServer,
     fetchMcpServerTools,
     fetchModelConfig,
     fetchModelCatalog,
@@ -91,6 +93,7 @@ export {
     fetchClawHubConfig,
     fetchClawHubSkill,
     fetchClawHubSkills,
+    addMcpServer,
     reloadMcpConfig,
     reloadModelConfig,
     refreshModelCatalog,
@@ -111,12 +114,15 @@ export {
     saveHooksConfig,
     saveWebConfig,
     saveUiLanguageSettings,
+    setMcpServerEnabled,
     startGitHubWebhookTunnel,
     stopGitHubWebhookTunnel,
     testExternalAgent,
+    testMcpServerConnection,
     validateHooksConfig,
     deleteSshProfile,
     updateCommand,
+    updateMcpServer,
 } from './system.js';
 
 export {
