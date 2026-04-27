@@ -34,6 +34,7 @@ from relay_teams.sessions.session_history_marker_models import SessionHistoryMar
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
+from relay_teams.system_reminder_text import is_rendered_system_reminder_text
 
 
 class MessageRepository(SharedSqliteRepository):
@@ -237,6 +238,8 @@ class MessageRepository(SharedSqliteRepository):
         for row in rows:
             msg_list = _load_message_list(str(row["message_json"]))
             msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
+            if _is_system_reminder_projection_message(msg):
+                continue
             results.append(
                 {
                     "conversation_id": str(row["conversation_id"] or ""),
@@ -280,6 +283,8 @@ class MessageRepository(SharedSqliteRepository):
         for row in rows:
             msg_list = _load_message_list(str(row["message_json"]))
             msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
+            if _is_system_reminder_projection_message(msg):
+                continue
             results.append(
                 {
                     "conversation_id": str(row["conversation_id"] or ""),
@@ -352,6 +357,8 @@ class MessageRepository(SharedSqliteRepository):
         for row in rows:
             msg_list = _load_message_list(str(row["message_json"]))
             msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
+            if _is_system_reminder_projection_message(msg):
+                continue
             results.append(
                 {
                     "conversation_id": str(row["conversation_id"] or ""),
@@ -1133,6 +1140,27 @@ def _extract_repeatable_user_prompt(message: object) -> str | None:
     return user_prompt_content_key(
         prompt_chunks[0] if len(prompt_chunks) == 1 else prompt_chunks
     )
+
+
+def _is_system_reminder_projection_message(message: object) -> bool:
+    if not isinstance(message, dict):
+        return False
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return False
+    for part in parts:
+        if not isinstance(part, dict):
+            return False
+        if str(part.get("part_kind") or "") != "user-prompt":
+            return False
+        content = user_prompt_content_to_text(part.get("content"))
+        if not _is_system_reminder_text(content):
+            return False
+    return True
+
+
+def _is_system_reminder_text(content: object) -> bool:
+    return is_rendered_system_reminder_text(str(content or ""))
 
 
 def _truncate_message_rows_to_safe_boundary(

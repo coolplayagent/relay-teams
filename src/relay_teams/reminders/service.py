@@ -120,8 +120,9 @@ class SystemReminderService:
             next_state = mark_issued(state=next_state, issue_key=decision.issue_key)
             content = render_system_reminder(decision.content)
             if content:
-                _ = self._injection_sink.append_only(
+                _ = self._injection_sink.append_and_enqueue(
                     session_id=observation.session_id,
+                    run_id=observation.run_id,
                     trace_id=observation.trace_id,
                     task_id=observation.task_id,
                     instance_id=observation.instance_id,
@@ -153,8 +154,9 @@ class SystemReminderService:
             next_state = mark_issued(state=next_state, issue_key=decision.issue_key)
             content = render_system_reminder(decision.content)
             if content:
-                _ = await self._injection_sink.append_only_async(
+                _ = await self._injection_sink.append_and_enqueue_async(
                     session_id=observation.session_id,
+                    run_id=observation.run_id,
                     trace_id=observation.trace_id,
                     task_id=observation.task_id,
                     instance_id=observation.instance_id,
