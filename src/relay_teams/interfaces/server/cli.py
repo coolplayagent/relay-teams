@@ -202,23 +202,20 @@ def start(
     fastapi_app = getattr(server_module, "app")
     uvicorn_run = cast(Callable[..., None], getattr(uvicorn_module, "run"))
     current_pid = os.getpid()
-    control_plane = _start_control_plane(host=host, port=port)
-
-    _register_managed_server(
-        _build_managed_server_process(
-            pid=current_pid,
-            host=host,
-            port=port,
-            control_plane=control_plane,
-        )
-    )
+    control_plane: ControlPlaneServerHandle | None = None
 
     try:
-        typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
-        typer.echo(
-            "Control-plane liveness on "
-            f"http://{control_plane.config.host}:{control_plane.config.port}/live"
+        control_plane = _start_control_plane(host=host, port=port)
+        _register_managed_server(
+            _build_managed_server_process(
+                pid=current_pid,
+                host=host,
+                port=port,
+                control_plane=control_plane,
+            )
         )
+        typer.echo(f"Starting Agent Teams server on http://{host}:{port}")
+        typer.echo(f"Control-plane liveness on {control_plane.config.live_url}")
         uvicorn_run(
             fastapi_app,
             host=host,
@@ -227,7 +224,8 @@ def start(
             timeout_graceful_shutdown=_GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
         )
     finally:
-        control_plane.stop()
+        if control_plane is not None:
+            control_plane.stop()
         clear_control_plane_env()
         _clear_managed_server(expected_pid=current_pid)
 

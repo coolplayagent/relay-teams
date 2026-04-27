@@ -9,6 +9,7 @@ const HEALTH_POLL_MS = 15000;
 const DISCOVERY_TIMEOUT_MS = 1500;
 const CONTROL_PLANE_TIMEOUT_MS = 1500;
 const MAIN_LIVE_TIMEOUT_MS = 1500;
+const CONTROL_PLANE_FALLBACK_PORT_RANGE = 50;
 const CONTROL_PLANE_CACHE_KEY = 'relayTeams.controlPlaneLiveUrl';
 
 let healthPollTimer = null;
@@ -64,8 +65,10 @@ async function probeBackendHealth() {
         forgetControlPlaneLiveUrl(controlUrl);
     }
 
-    const fallbackUrl = inferControlPlaneLiveUrl();
-    if (fallbackUrl && fallbackUrl !== controlUrl) {
+    for (const fallbackUrl of inferControlPlaneLiveUrls()) {
+        if (fallbackUrl === controlUrl) {
+            continue;
+        }
         const fallbackProbe = await probeJson(fallbackUrl, CONTROL_PLANE_TIMEOUT_MS);
         if (fallbackProbe.ok && isControlPlaneLivePayload(fallbackProbe.payload)) {
             rememberControlPlaneLiveUrl(fallbackUrl);
@@ -181,7 +184,9 @@ function isControlPlaneLivePayload(payload) {
         return false;
     }
     const mainBaseUrl = String(payload?.main_base_url || '').trim();
-    return !mainBaseUrl || baseUrlMatchesCurrentOrigin(mainBaseUrl);
+    return !mainBaseUrl
+        || baseUrlMatchesCurrentOrigin(mainBaseUrl)
+        || isInternalBaseUrl(mainBaseUrl);
 }
 
 function normalizeControlPlaneLiveUrl(rawUrl) {
@@ -203,21 +208,36 @@ function normalizeControlPlaneLiveUrl(rawUrl) {
     }
 }
 
-function inferControlPlaneLiveUrl() {
+function inferControlPlaneLiveUrls() {
     try {
-        const url = new URL(window.location.origin);
+        const currentOrigin = window.location.origin;
+        const url = new URL(currentOrigin);
         const currentPort = Number(effectivePort(url));
-        if (!Number.isInteger(currentPort) || currentPort < 1 || currentPort >= 65535) {
-            return null;
+        if (!Number.isInteger(currentPort) || currentPort < 1 || currentPort > 65535) {
+            return [];
         }
-        url.port = String(currentPort + 1);
-        url.pathname = '/live';
-        url.search = '';
-        url.hash = '';
-        return url.href;
+        const urls = [];
+        const maxPort = Math.min(65535, currentPort + CONTROL_PLANE_FALLBACK_PORT_RANGE);
+        for (let port = currentPort + 1; port <= maxPort; port += 1) {
+            urls.push(buildControlPlaneLiveUrl(currentOrigin, port));
+        }
+        const minPort = Math.max(1, currentPort - CONTROL_PLANE_FALLBACK_PORT_RANGE);
+        for (let port = currentPort - 1; port >= minPort; port -= 1) {
+            urls.push(buildControlPlaneLiveUrl(currentOrigin, port));
+        }
+        return urls;
     } catch (_) {
-        return null;
+        return [];
     }
+}
+
+function buildControlPlaneLiveUrl(origin, port) {
+    const url = new URL(origin);
+    url.port = String(port);
+    url.pathname = '/live';
+    url.search = '';
+    url.hash = '';
+    return url.href;
 }
 
 function shouldUseCurrentHostForControlPlane(hostname) {
@@ -242,6 +262,17 @@ function baseUrlMatchesCurrentOrigin(rawUrl) {
     }
 }
 
+function isInternalBaseUrl(rawUrl) {
+    try {
+        const url = new URL(rawUrl);
+        return isWildcardHost(url.hostname)
+            || isLoopbackHost(url.hostname)
+            || isPrivateNetworkHost(url.hostname);
+    } catch (_) {
+        return false;
+    }
+}
+
 function isWildcardHost(hostname) {
     const normalized = String(hostname || '').toLowerCase();
     return normalized === '0.0.0.0' || normalized === '::' || normalized === '[::]';
@@ -257,6 +288,19 @@ function isLoopbackHost(hostname) {
         || normalized === '127.0.0.1'
         || normalized === '::1'
         || normalized === '[::1]';
+}
+
+function isPrivateNetworkHost(hostname) {
+    const normalized = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (normalized.startsWith('10.') || normalized.startsWith('192.168.')) {
+        return true;
+    }
+    const match = normalized.match(/^172\.(\d{1,2})\./);
+    if (match) {
+        const secondOctet = Number(match[1]);
+        return secondOctet >= 16 && secondOctet <= 31;
+    }
+    return normalized.startsWith('fc') || normalized.startsWith('fd');
 }
 
 function effectivePort(url) {
