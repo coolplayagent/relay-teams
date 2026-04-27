@@ -410,6 +410,11 @@ class _FailingStartRunEventHub(_LoopGuardRunEventHub):
             raise RuntimeError("start publish failed")
         super().publish(event)
 
+    async def publish_async(self, event: RunEvent) -> None:
+        if event.event_type == RunEventType.BACKGROUND_TASK_STARTED:
+            raise RuntimeError("start publish failed")
+        await super().publish_async(event)
+
 
 class _LoopGuardRunRuntimeRepository:
     def __init__(self, wrapped: RunRuntimeRepository) -> None:

@@ -1351,6 +1351,7 @@ async def test_background_task_manager_windows_tty_transport_supports_write_resi
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(5)
 async def test_background_task_manager_windows_tty_uses_dedicated_blocking_executor(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1597,11 +1598,12 @@ async def test_start_session_rolls_back_runtime_when_persistence_fails(
         )
 
     monkeypatch.setattr(manager, "_spawn_runtime", _fake_spawn_runtime)
-    monkeypatch.setattr(
-        repo,
-        "upsert",
-        lambda record: (_ for _ in ()).throw(RuntimeError("db write failed")),
-    )
+
+    async def _fail_upsert_async(record: BackgroundTaskRecord) -> BackgroundTaskRecord:
+        _ = record
+        raise RuntimeError("db write failed")
+
+    monkeypatch.setattr(repo, "upsert_async", _fail_upsert_async)
 
     with pytest.raises(RuntimeError, match="db write failed"):
         await manager.start_session(

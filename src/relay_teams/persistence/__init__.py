@@ -23,6 +23,7 @@ from relay_teams.persistence.sqlite_repository import (
     SharedSqliteRepository,
     async_fetchall,
     async_fetchone,
+    close_live_sqlite_repositories_async,
 )
 from relay_teams.persistence.shared_state_repo import (
     SharedStateRepository,
@@ -46,6 +47,7 @@ __all__ = [
     "async_sqlite_compile_options",
     "async_sqlite_supports_fts5",
     "build_global_scope_ref",
+    "close_live_sqlite_repositories_async",
     "is_retryable_sqlite_error",
     "open_async_sqlite",
     "run_async_blocking",

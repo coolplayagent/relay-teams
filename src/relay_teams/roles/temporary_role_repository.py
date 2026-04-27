@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from relay_teams.computer import ExecutionSurface
+from relay_teams.persistence import async_fetchall, async_fetchone
 from relay_teams.persistence.db import run_sqlite_write_with_retry
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.roles.memory_models import MemoryProfile
@@ -133,7 +135,65 @@ class TemporaryRoleRepository(SharedSqliteRepository):
         return self.get(run_id=record.run_id, role_id=record.role.role_id)
 
     async def upsert_async(self, record: TemporaryRoleRecord) -> TemporaryRoleRecord:
-        return await self._call_sync_async(self.upsert, record)
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO temporary_roles(
+                    run_id, session_id, role_id, source, name, description, version,
+                    tools_json, mcp_servers_json, skills_json, model_profile,
+                    bound_agent_id, execution_surface, memory_profile_json, system_prompt, template_role_id,
+                    created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, role_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    source=excluded.source,
+                    name=excluded.name,
+                    description=excluded.description,
+                    version=excluded.version,
+                    tools_json=excluded.tools_json,
+                    mcp_servers_json=excluded.mcp_servers_json,
+                    skills_json=excluded.skills_json,
+                    model_profile=excluded.model_profile,
+                    bound_agent_id=excluded.bound_agent_id,
+                    execution_surface=excluded.execution_surface,
+                    memory_profile_json=excluded.memory_profile_json,
+                    system_prompt=excluded.system_prompt,
+                    template_role_id=excluded.template_role_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    record.run_id,
+                    record.session_id,
+                    record.role.role_id,
+                    record.source,
+                    record.role.name,
+                    record.role.description,
+                    record.role.version,
+                    _json_tuple(record.role.tools),
+                    _json_tuple(record.role.mcp_servers),
+                    _json_tuple(record.role.skills),
+                    record.role.model_profile,
+                    record.role.bound_agent_id,
+                    record.role.execution_surface.value,
+                    record.role.memory_profile.model_dump_json(),
+                    record.role.system_prompt,
+                    record.role.template_role_id,
+                    record.created_at.isoformat(),
+                    now,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_async",
+            operation=lambda _conn: operation(),
+        )
+        return await self.get_async(run_id=record.run_id, role_id=record.role.role_id)
 
     def get(self, *, run_id: str, role_id: str) -> TemporaryRoleRecord:
         with self._lock:
@@ -148,7 +208,18 @@ class TemporaryRoleRepository(SharedSqliteRepository):
         return self._to_record(row)
 
     async def get_async(self, *, run_id: str, role_id: str) -> TemporaryRoleRecord:
-        return await self._call_sync_async(self.get, run_id=run_id, role_id=role_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM temporary_roles WHERE run_id=? AND role_id=?",
+                (run_id, role_id),
+            )
+        )
+        if row is None:
+            raise KeyError(
+                f"Unknown temporary role: run_id={run_id}, role_id={role_id}"
+            )
+        return self._to_record(row)
 
     def list_by_run(self, run_id: str) -> tuple[TemporaryRoleRecord, ...]:
         with self._lock:
@@ -159,7 +230,14 @@ class TemporaryRoleRepository(SharedSqliteRepository):
         return tuple(self._to_record(row) for row in rows)
 
     async def list_by_run_async(self, run_id: str) -> tuple[TemporaryRoleRecord, ...]:
-        return await self._call_sync_async(self.list_by_run, run_id)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT * FROM temporary_roles WHERE run_id=? ORDER BY created_at ASC",
+                (run_id,),
+            )
+        )
+        return tuple(self._to_record(row) for row in rows)
 
     def delete_by_run(self, run_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -174,7 +252,18 @@ class TemporaryRoleRepository(SharedSqliteRepository):
         )
 
     async def delete_by_run_async(self, run_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_run, run_id)
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM temporary_roles WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_run_async",
+            operation=lambda _conn: operation(),
+        )
 
     def _to_record(self, row: sqlite3.Row) -> TemporaryRoleRecord:
         return TemporaryRoleRecord(
@@ -214,14 +303,10 @@ class TemporaryRoleRepository(SharedSqliteRepository):
 
 
 def _json_tuple(values: tuple[str, ...]) -> str:
-    import json
-
     return json.dumps(list(values), ensure_ascii=False)
 
 
 def _json_load_tuple(raw: str) -> tuple[str, ...]:
-    import json
-
     loaded = json.loads(raw)
     if not isinstance(loaded, list):
         return ()
@@ -229,7 +314,5 @@ def _json_load_tuple(raw: str) -> tuple[str, ...]:
 
 
 def _memory_profile_from_json(raw: str) -> "MemoryProfile":
-    import json
-
     payload = json.loads(raw)
     return MemoryProfile.model_validate(payload)

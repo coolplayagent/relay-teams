@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from os import environ
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
+from relay_teams.persistence import close_live_sqlite_repositories_async
 from relay_teams.secrets import AppSecretStore
 
 _UNIT_TESTS_ROOT = Path(__file__).resolve().parent
@@ -22,6 +25,12 @@ def _disable_system_keyring_for_unit_tests(monkeypatch: pytest.MonkeyPatch) -> N
     import relay_teams.secrets.secret_store as secret_store
 
     monkeypatch.setattr(secret_store, "_SECRET_STORE", _UnitTestSecretStore())
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _close_sqlite_repositories_after_unit_test() -> AsyncIterator[None]:
+    yield
+    await close_live_sqlite_repositories_async()
 
 
 def pytest_collection_modifyitems(

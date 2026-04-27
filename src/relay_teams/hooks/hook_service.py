@@ -46,7 +46,7 @@ from relay_teams.hooks.hook_models import (
 from relay_teams.hooks.hook_runtime_state import HookRuntimeState
 from relay_teams.logger import get_logger, log_event
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
-from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 
 LOGGER = get_logger(__name__)
@@ -197,7 +197,7 @@ class HookService:
         for resolved in snapshot.hooks.get(event_input.event_name, ()):
             if hook_matches_event(resolved.group, event_input, tool_name=tool_name):
                 matches.append(resolved)
-                _publish_hook_event(
+                await _publish_hook_event_async(
                     run_event_hub=run_event_hub,
                     event_input=event_input,
                     event_type=RunEventType.HOOK_MATCHED,
@@ -272,7 +272,7 @@ class HookService:
         if bundle.executions:
             conflicts = _decision_conflicts(bundle.executions)
             if conflicts:
-                _publish_hook_event(
+                await _publish_hook_event_async(
                     run_event_hub=run_event_hub,
                     event_input=event_input,
                     event_type=RunEventType.HOOK_CONFLICT,
@@ -282,7 +282,7 @@ class HookService:
                         "conflicts": list(conflicts),
                     },
                 )
-            _publish_hook_event(
+            await _publish_hook_event_async(
                 run_event_hub=run_event_hub,
                 event_input=event_input,
                 event_type=RunEventType.HOOK_DECISION_APPLIED,
@@ -311,7 +311,7 @@ class HookService:
                     source=source,
                     run_event_hub=run_event_hub,
                 )
-                self._apply_async_rewake(
+                await self._apply_async_rewake(
                     event_input=event_input,
                     handler=handler,
                     result=result,
@@ -334,7 +334,7 @@ class HookService:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
-    def _apply_async_rewake(
+    async def _apply_async_rewake(
         self,
         *,
         event_input: HookEventInput,
@@ -359,7 +359,7 @@ class HookService:
             source=InjectionSource.SYSTEM,
             content=content,
         )
-        _publish_hook_event(
+        await _publish_hook_event_async(
             run_event_hub=run_event_hub,
             event_input=event_input,
             event_type=RunEventType.HOOK_DEFERRED,
@@ -396,7 +396,7 @@ class HookService:
             )
             or handler.type.value
         )
-        _publish_hook_event(
+        await _publish_hook_event_async(
             run_event_hub=run_event_hub,
             event_input=event_input,
             event_type=RunEventType.HOOK_STARTED,
@@ -445,7 +445,7 @@ class HookService:
                 decision=decision,
                 duration_ms=int((time.perf_counter() - started) * 1000),
             )
-            _publish_hook_event(
+            await _publish_hook_event_async(
                 run_event_hub=run_event_hub,
                 event_input=event_input,
                 event_type=RunEventType.HOOK_COMPLETED,
@@ -462,7 +462,7 @@ class HookService:
             return result
         except NonBlockingHttpHookError as exc:
             duration_ms = int((time.perf_counter() - started) * 1000)
-            _publish_hook_event(
+            await _publish_hook_event_async(
                 run_event_hub=run_event_hub,
                 event_input=event_input,
                 event_type=RunEventType.HOOK_FAILED,
@@ -499,7 +499,7 @@ class HookService:
                 },
                 exc_info=exc,
             )
-            _publish_hook_event(
+            await _publish_hook_event_async(
                 run_event_hub=run_event_hub,
                 event_input=event_input,
                 event_type=RunEventType.HOOK_FAILED,
@@ -703,7 +703,7 @@ def _default_decision(event_name: HookEventName) -> HookDecisionType:
     return HookDecisionType.ALLOW
 
 
-def _publish_hook_event(
+async def _publish_hook_event_async(
     *,
     run_event_hub: RunEventHub | None,
     event_input: HookEventInput,
@@ -712,7 +712,8 @@ def _publish_hook_event(
 ) -> None:
     if run_event_hub is None:
         return
-    run_event_hub.publish(
+    await publish_run_event_async(
+        run_event_hub,
         RunEvent(
             session_id=event_input.session_id,
             run_id=event_input.run_id,
@@ -722,5 +723,5 @@ def _publish_hook_event(
             role_id=event_input.role_id,
             event_type=event_type,
             payload_json=dumps(payload, ensure_ascii=False),
-        )
+        ),
     )

@@ -7,7 +7,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from threading import RLock
 from typing import Awaitable, Callable, Optional, ParamSpec, TypeVar
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, WeakSet
 
 import aiosqlite
 
@@ -181,6 +181,24 @@ class SharedSqliteRepository:
             asyncio.AbstractEventLoop, asyncio.Lock
         ] = WeakKeyDictionary()
         self._repository_name = repository_name or type(self).__name__
+        _LIVE_REPOSITORIES.add(self)
+
+    def close(self) -> None:
+        try:
+            _ = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "Cannot synchronously close SQLite repository from a running event "
+                "loop; use close_async instead."
+            )
+        close_task = self.close_async()
+        try:
+            run_async_blocking(close_task)
+        except Exception:
+            close_task.close()
+            raise
 
     # noinspection PyTypeHints
     def _run_read(self, operation: Callable[[], ResultT]) -> ResultT:
@@ -283,3 +301,11 @@ class SharedSqliteRepository:
         **kwargs: ParamT.kwargs,
     ) -> ResultT:
         return await asyncio.to_thread(function, *args, **kwargs)
+
+
+_LIVE_REPOSITORIES: WeakSet[SharedSqliteRepository] = WeakSet()
+
+
+async def close_live_sqlite_repositories_async() -> None:
+    for repository in tuple(_LIVE_REPOSITORIES):
+        await repository.close_async()

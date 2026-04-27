@@ -163,8 +163,14 @@ class FakeRunService:
         run_id = f"run-{self._counter}"
         return run_id, run_id
 
+    async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_run(intent)
+
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]:
         return self.create_run(intent)
+
+    async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_detached_run(intent)
 
     async def stream_run_events(
         self,
@@ -184,12 +190,21 @@ class FakeRunService:
     def ensure_run_started(self, run_id: str) -> None:
         self.ensure_started_calls.append(run_id)
 
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
+
     def resume_run(self, run_id: str) -> str:
         self.resume_calls.append(run_id)
         return "session-1"
 
+    async def resume_run_async(self, run_id: str) -> str:
+        return self.resume_run(run_id)
+
     def stop_run(self, run_id: str) -> None:
         self.stop_calls.append(run_id)
+
+    async def stop_run_async(self, run_id: str) -> None:
+        self.stop_run(run_id)
 
 
 class FakeWorkspaceService:

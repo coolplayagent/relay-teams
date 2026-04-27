@@ -583,7 +583,7 @@ class BackgroundTaskManager:
             runtime.record = record
             persisted = False
             try:
-                runtime.record = self._repository.upsert(record)
+                runtime.record = await self._repository.upsert_async(record)
                 persisted = True
                 await self._publish_background_task_event_async(
                     event_type=RunEventType.BACKGROUND_TASK_STARTED,
@@ -596,7 +596,7 @@ class BackgroundTaskManager:
             except Exception:
                 self._runtimes.pop(background_task_id, None)
                 if persisted:
-                    self._repository.delete(background_task_id)
+                    await self._repository.delete_async(background_task_id)
                 await self._rollback_runtime(runtime)
                 raise
             runtime.supervisor_task = asyncio.create_task(self._supervise(runtime))
@@ -685,11 +685,14 @@ class BackgroundTaskManager:
         run_id: str,
         background_task_id: str,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        record = await self.get_for_run_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
         runtime = self._runtimes.get(background_task_id)
         if runtime is not None:
             await runtime.completed.wait()
-            return self._get_record(background_task_id), True
+            return await self._get_record_async(background_task_id), True
         if not record.is_active:
             return record, True
         return record, False
@@ -703,7 +706,10 @@ class BackgroundTaskManager:
         yield_time_ms: int | None,
         is_initial_poll: bool = False,
     ) -> tuple[BackgroundTaskRecord, bool]:
-        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        record = await self.get_for_run_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
         runtime = self._runtimes.get(background_task_id)
         if not record.is_active:
             return record, True
@@ -722,7 +728,7 @@ class BackgroundTaskManager:
             before_version=before_version,
             timeout_ms=timeout_ms,
         )
-        updated = self._get_record(background_task_id)
+        updated = await self._get_record_async(background_task_id)
         return updated, not updated.is_active
 
     async def resize_for_run(
@@ -735,7 +741,10 @@ class BackgroundTaskManager:
     ) -> BackgroundTaskRecord:
         if columns < 1 or rows < 1:
             raise ValueError("columns and rows must both be >= 1")
-        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        record = await self.get_for_run_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
         runtime = self._runtimes.get(background_task_id)
         if runtime is None or not record.is_active:
             return record
@@ -752,7 +761,10 @@ class BackgroundTaskManager:
         reason: str = "stopped_by_user",
     ) -> BackgroundTaskRecord:
         _ = reason
-        record = self.get_for_run(run_id=run_id, background_task_id=background_task_id)
+        record = await self.get_for_run_async(
+            run_id=run_id,
+            background_task_id=background_task_id,
+        )
         runtime = self._runtimes.get(background_task_id)
         if not record.is_active:
             return record
@@ -788,7 +800,7 @@ class BackgroundTaskManager:
                 timed_out=False,
                 wait_for_exit=False,
             )
-        return self._get_record(background_task_id)
+        return await self._get_record_async(background_task_id)
 
     async def _stop_persisted_record_without_runtime(
         self,
@@ -809,9 +821,9 @@ class BackgroundTaskManager:
                     "pid": record.pid,
                 },
             )
-            return self._get_record(record.background_task_id)
+            return await self._get_record_async(record.background_task_id)
         completed_at = datetime.now(tz=timezone.utc)
-        updated = self._repository.upsert(
+        updated = await self._repository.upsert_async(
             record.model_copy(
                 update={
                     "status": BackgroundTaskStatus.STOPPED,
@@ -840,7 +852,7 @@ class BackgroundTaskManager:
     ) -> None:
         active_ids = [
             record.background_task_id
-            for record in self._repository.list_by_run(run_id)
+            for record in await self._repository.list_by_run_async(run_id)
             if record.is_active
             and (execution_mode is None or record.execution_mode == execution_mode)
         ]
@@ -855,7 +867,7 @@ class BackgroundTaskManager:
     async def close(self) -> None:
         active_ids = list(self._runtimes.keys())
         for background_task_id in active_ids:
-            record = self._repository.get(background_task_id)
+            record = await self._repository.get_async(background_task_id)
             if record is None:
                 continue
             with contextlib.suppress(KeyError):
@@ -1332,15 +1344,14 @@ class BackgroundTaskManager:
         )
         runtime.recent_output.feed(chunk)
         runtime.output_buffer.append(chunk)
-        runtime.record = await self._run_blocking(
-            self._repository.upsert,
+        runtime.record = await self._repository.upsert_async(
             runtime.record.model_copy(
                 update={
                     "recent_output": runtime.recent_output.snapshot(),
                     "output_excerpt": runtime.output_buffer.render(),
                     "updated_at": datetime.now(tz=timezone.utc),
                 }
-            ),
+            )
         )
         await self._emit_monitor_lines_async(
             runtime,
@@ -1381,8 +1392,7 @@ class BackgroundTaskManager:
                 timed_out=timed_out,
             )
             completed_at = datetime.now(tz=timezone.utc)
-            runtime.record = await self._run_blocking(
-                self._repository.upsert,
+            runtime.record = await self._repository.upsert_async(
                 runtime.record.model_copy(
                     update={
                         "status": status,
@@ -1393,7 +1403,7 @@ class BackgroundTaskManager:
                         "updated_at": completed_at,
                         "completed_at": completed_at,
                     }
-                ),
+                )
             )
             runtime_id = runtime.record.background_task_id
             self._runtimes.pop(runtime_id, None)
@@ -1494,7 +1504,7 @@ class BackgroundTaskManager:
             runtime.change_condition.notify_all()
 
     async def _prune_sessions_if_needed(self) -> None:
-        records = list(self._repository.list_all())
+        records = list(await self._repository.list_all_async())
         if len(records) < MAX_BACKGROUND_TASKS:
             return
         required_slots = len(records) - MAX_BACKGROUND_TASKS + 1
@@ -1510,7 +1520,7 @@ class BackgroundTaskManager:
             if record.background_task_id not in protected and not record.is_active
         ]
         for record in reclaimable[:required_slots]:
-            self._repository.delete(record.background_task_id)
+            await self._repository.delete_async(record.background_task_id)
         required_slots -= min(required_slots, len(reclaimable))
         if required_slots <= 0:
             return
@@ -1529,7 +1539,7 @@ class BackgroundTaskManager:
                 )
             if stopped_record is None or stopped_record.is_active:
                 continue
-            self._repository.delete(record.background_task_id)
+            await self._repository.delete_async(record.background_task_id)
 
     async def _publish_background_task_event_async(
         self,

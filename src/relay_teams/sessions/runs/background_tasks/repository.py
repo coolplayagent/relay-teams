@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
+import aiosqlite
+
+from relay_teams.persistence import async_fetchall, async_fetchone
 from relay_teams.persistence.db import run_sqlite_write_with_retry
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.sessions.runs.background_tasks.models import (
@@ -203,7 +206,82 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         return persisted
 
     async def upsert_async(self, record: BackgroundTaskRecord) -> BackgroundTaskRecord:
-        return await self._call_sync_async(self.upsert, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO background_tasks(
+                    background_task_id,
+                    run_id,
+                    session_id,
+                    kind,
+                    instance_id,
+                    role_id,
+                    tool_call_id,
+                    title,
+                    command,
+                    cwd,
+                    execution_mode,
+                    status,
+                    tty,
+                    timeout_ms,
+                    pid,
+                    exit_code,
+                    recent_output_json,
+                    output_excerpt,
+                    log_path,
+                    subagent_role_id,
+                    subagent_run_id,
+                    subagent_task_id,
+                    subagent_instance_id,
+                    created_at,
+                    updated_at,
+                    completed_at,
+                    completion_notified_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(background_task_id)
+                DO UPDATE SET
+                    run_id=excluded.run_id,
+                    session_id=excluded.session_id,
+                    kind=excluded.kind,
+                    instance_id=excluded.instance_id,
+                    role_id=excluded.role_id,
+                    tool_call_id=excluded.tool_call_id,
+                    title=excluded.title,
+                    command=excluded.command,
+                    cwd=excluded.cwd,
+                    execution_mode=excluded.execution_mode,
+                    status=excluded.status,
+                    tty=excluded.tty,
+                    timeout_ms=excluded.timeout_ms,
+                    pid=excluded.pid,
+                    exit_code=excluded.exit_code,
+                    recent_output_json=excluded.recent_output_json,
+                    output_excerpt=excluded.output_excerpt,
+                    log_path=excluded.log_path,
+                    subagent_role_id=excluded.subagent_role_id,
+                    subagent_run_id=excluded.subagent_run_id,
+                    subagent_task_id=excluded.subagent_task_id,
+                    subagent_instance_id=excluded.subagent_instance_id,
+                    created_at=excluded.created_at,
+                    updated_at=excluded.updated_at,
+                    completed_at=excluded.completed_at,
+                    completion_notified_at=excluded.completion_notified_at
+                """,
+                _record_params(record),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_async",
+            operation=operation,
+        )
+        persisted = await self.get_async(record.background_task_id)
+        if persisted is None:
+            raise RuntimeError(
+                f"Failed to persist background task {record.background_task_id}"
+            )
+        return persisted
 
     def get(self, background_task_id: str) -> BackgroundTaskRecord | None:
         with self._lock:
@@ -220,7 +298,20 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         return _row_to_record(row)
 
     async def get_async(self, background_task_id: str) -> BackgroundTaskRecord | None:
-        return await self._call_sync_async(self.get, background_task_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM background_tasks
+                WHERE background_task_id=?
+                """,
+                (background_task_id,),
+            )
+        )
+        if row is None:
+            return None
+        return _row_to_record(row)
 
     def list_by_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
@@ -236,7 +327,19 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         return tuple(_row_to_record(row) for row in rows)
 
     async def list_by_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
-        return await self._call_sync_async(self.list_by_run, run_id)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM background_tasks
+                WHERE run_id=?
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (run_id,),
+            )
+        )
+        return tuple(_row_to_record(row) for row in rows)
 
     def list_by_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
@@ -254,7 +357,19 @@ class BackgroundTaskRepository(SharedSqliteRepository):
     async def list_by_session_async(
         self, session_id: str
     ) -> tuple[BackgroundTaskRecord, ...]:
-        return await self._call_sync_async(self.list_by_session, session_id)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM background_tasks
+                WHERE session_id=?
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (session_id,),
+            )
+        )
+        return tuple(_row_to_record(row) for row in rows)
 
     def list_all(self) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
@@ -268,7 +383,17 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         return tuple(_row_to_record(row) for row in rows)
 
     async def list_all_async(self) -> tuple[BackgroundTaskRecord, ...]:
-        return await self._call_sync_async(self.list_all)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM background_tasks
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+            )
+        )
+        return tuple(_row_to_record(row) for row in rows)
 
     def list_interruptible(self) -> tuple[BackgroundTaskRecord, ...]:
         with self._lock:
@@ -287,7 +412,22 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         return tuple(_row_to_record(row) for row in rows)
 
     async def list_interruptible_async(self) -> tuple[BackgroundTaskRecord, ...]:
-        return await self._call_sync_async(self.list_interruptible)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM background_tasks
+                WHERE status IN (?, ?)
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (
+                    BackgroundTaskStatus.RUNNING.value,
+                    BackgroundTaskStatus.BLOCKED.value,
+                ),
+            )
+        )
+        return tuple(_row_to_record(row) for row in rows)
 
     def delete(self, background_task_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -303,7 +443,17 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         )
 
     async def delete_async(self, background_task_id: str) -> None:
-        return await self._call_sync_async(self.delete, background_task_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM background_tasks WHERE background_task_id=?",
+                (background_task_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_async",
+            operation=operation,
+        )
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -319,7 +469,17 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         )
 
     async def delete_by_session_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_session, session_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM background_tasks WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=operation,
+        )
 
     def mark_transient_background_tasks_interrupted(
         self,
@@ -381,9 +541,50 @@ class BackgroundTaskRepository(SharedSqliteRepository):
     async def mark_transient_background_tasks_interrupted_async(
         self, *, background_task_ids: tuple[str, ...] | None = None
     ) -> int:
-        return await self._call_sync_async(
-            self.mark_transient_background_tasks_interrupted,
-            background_task_ids=background_task_ids,
+        if background_task_ids is not None and not background_task_ids:
+            return 0
+
+        async def operation(conn: aiosqlite.Connection) -> int:
+            now = datetime.now(tz=timezone.utc).isoformat()
+            if background_task_ids is None:
+                cursor = await conn.execute(
+                    """
+                    UPDATE background_tasks
+                    SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
+                    WHERE status IN (?, ?)
+                    """,
+                    (
+                        BackgroundTaskStatus.STOPPED.value,
+                        now,
+                        now,
+                        BackgroundTaskStatus.RUNNING.value,
+                        BackgroundTaskStatus.BLOCKED.value,
+                    ),
+                )
+            else:
+                placeholders = ", ".join("?" for _ in background_task_ids)
+                cursor = await conn.execute(
+                    f"""
+                    UPDATE background_tasks
+                    SET status=?, updated_at=?, completed_at=COALESCE(completed_at, ?), pid=NULL
+                    WHERE background_task_id IN ({placeholders}) AND status IN (?, ?)
+                    """,
+                    (
+                        BackgroundTaskStatus.STOPPED.value,
+                        now,
+                        now,
+                        *background_task_ids,
+                        BackgroundTaskStatus.RUNNING.value,
+                        BackgroundTaskStatus.BLOCKED.value,
+                    ),
+                )
+            affected = int(cursor.rowcount or 0)
+            await cursor.close()
+            return affected
+
+        return await self._run_async_write(
+            operation_name="mark_transient_background_tasks_interrupted_async",
+            operation=operation,
         )
 
 

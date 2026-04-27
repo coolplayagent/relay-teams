@@ -3927,7 +3927,11 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
     manager = _build_manager(tmp_path / "run_bound_loop_helpers.db")
 
     assert manager._call_in_bound_loop(lambda: "local") == "local"
-    assert await manager._call_in_bound_loop_async(lambda: "local-async") == (
+
+    async def _local_async() -> str:
+        return "local-async"
+
+    assert await manager._call_coroutine_in_bound_loop_async(_local_async) == (
         "local-async"
     )
 
@@ -3950,30 +3954,35 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
         callback_thread_ids.append(threading.get_ident())
         return "bound"
 
+    async def _capture_thread_async() -> str:
+        callback_thread_ids.append(threading.get_ident())
+        return "bound-async"
+
     def _sync_error() -> str:
         raise RuntimeError("sync bound failure")
 
-    def _async_error() -> str:
+    async def _async_error() -> str:
         raise RuntimeError("async bound failure")
 
     lifecycle_calls: list[str] = []
 
-    def _create_run(
+    async def _create_run_local_async(
         intent: IntentInput,
         *,
+        allow_active_run_attach: bool,
         source: InjectionSource = InjectionSource.USER,
     ) -> tuple[str, str]:
-        lifecycle_calls.append(f"create:{intent.intent}:{source.value}")
-        return "run-created", "session-1"
-
-    def _create_detached_run(intent: IntentInput) -> tuple[str, str]:
+        if allow_active_run_attach:
+            lifecycle_calls.append(f"create:{intent.intent}:{source.value}")
+            return "run-created", "session-1"
         lifecycle_calls.append(f"detached:{intent.intent}")
         return "run-detached", "session-1"
 
-    def _ensure_started(run_id: str) -> None:
+    async def _ensure_started(run_id: str) -> None:
         lifecycle_calls.append(f"ensure:{run_id}")
 
-    def _inject_message(
+    async def _inject_message(
+        *,
         run_id: str,
         source: InjectionSource,
         content: str,
@@ -3981,14 +3990,15 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
         lifecycle_calls.append(f"inject:{run_id}:{source.value}:{content}")
         return run_id, source.value, content
 
-    def _stop_run(run_id: str) -> None:
+    async def _stop_run(run_id: str) -> None:
         lifecycle_calls.append(f"stop:{run_id}")
 
-    def _resume_run(run_id: str) -> str:
+    async def _resume_run(run_id: str) -> str:
         lifecycle_calls.append(f"resume:{run_id}")
         return "session-1"
 
-    def _resolve_tool_approval(
+    async def _resolve_tool_approval(
+        *,
         run_id: str,
         tool_call_id: str,
         action: str,
@@ -3996,25 +4006,32 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
     ) -> None:
         lifecycle_calls.append(f"resolve:{run_id}:{tool_call_id}:{action}:{feedback}")
 
-    monkeypatch.setattr(manager, "create_run", _create_run)
-    monkeypatch.setattr(manager, "create_detached_run", _create_detached_run)
-    monkeypatch.setattr(manager, "ensure_run_started", _ensure_started)
-    monkeypatch.setattr(manager, "inject_message", _inject_message)
-    monkeypatch.setattr(manager, "stop_run", _stop_run)
-    monkeypatch.setattr(manager, "resume_run", _resume_run)
-    monkeypatch.setattr(manager, "resolve_tool_approval", _resolve_tool_approval)
+    monkeypatch.setattr(manager, "_create_run_local_async", _create_run_local_async)
+    monkeypatch.setattr(manager, "_ensure_run_started_local_async", _ensure_started)
+    monkeypatch.setattr(
+        manager._run_control_manager,
+        "inject_to_running_agents_async",
+        _inject_message,
+    )
+    monkeypatch.setattr(manager, "_stop_run_local_async", _stop_run)
+    monkeypatch.setattr(manager, "_resume_run_local_async", _resume_run)
+    monkeypatch.setattr(
+        manager._interaction_service,
+        "resolve_tool_approval_async",
+        _resolve_tool_approval,
+    )
 
     manager._event_loop = service_loop
     try:
         assert manager._should_delegate_to_bound_loop() is True
         assert manager._call_in_bound_loop(_capture_thread) == "bound"
-        assert await manager._call_in_bound_loop_async(lambda: "bound-async") == (
-            "bound-async"
-        )
+        assert await manager._call_coroutine_in_bound_loop_async(
+            _capture_thread_async
+        ) == ("bound-async")
         with pytest.raises(RuntimeError, match="sync bound failure"):
             manager._call_in_bound_loop(_sync_error)
         with pytest.raises(RuntimeError, match="async bound failure"):
-            await manager._call_in_bound_loop_async(_async_error)
+            await manager._call_coroutine_in_bound_loop_async(_async_error)
         assert await manager.create_run_async(
             IntentInput(
                 session_id="session-1",
@@ -4048,7 +4065,7 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
         thread.join(timeout=5)
         service_loop.close()
 
-    assert callback_thread_ids == [thread_id]
+    assert callback_thread_ids == [thread_id, thread_id]
     assert lifecycle_calls == [
         "create:create through bound loop:system",
         "detached:detach through bound loop",
@@ -4068,11 +4085,11 @@ async def test_run_intent_stream_starts_run_before_streaming_events(
     manager = _build_manager(tmp_path / "run_intent_stream.db")
     calls: list[str] = []
 
-    def _create_run(intent: IntentInput) -> tuple[str, str]:
+    async def _create_run(intent: IntentInput) -> tuple[str, str]:
         calls.append(f"create:{intent.session_id}")
         return "run-stream", "session-1"
 
-    def _ensure_run_started(run_id: str) -> None:
+    async def _ensure_run_started(run_id: str) -> None:
         calls.append(f"ensure:{run_id}")
 
     async def _stream_run_events(run_id: str):
@@ -4085,8 +4102,8 @@ async def test_run_intent_stream_starts_run_before_streaming_events(
             payload_json="{}",
         )
 
-    monkeypatch.setattr(manager, "create_run", _create_run)
-    monkeypatch.setattr(manager, "ensure_run_started", _ensure_run_started)
+    monkeypatch.setattr(manager, "create_run_async", _create_run)
+    monkeypatch.setattr(manager, "ensure_run_started_async", _ensure_run_started)
     monkeypatch.setattr(manager, "stream_run_events", _stream_run_events)
 
     events = [

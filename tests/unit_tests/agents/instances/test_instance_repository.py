@@ -251,3 +251,73 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
         assert await repository.list_all_async() == ()
     finally:
         await repository.close_async()
+
+
+@pytest.mark.asyncio
+async def test_async_methods_preserve_existing_instance_fields(
+    tmp_path: Path,
+) -> None:
+    repository = AgentInstanceRepository(tmp_path / "agent_instances_async.db")
+    try:
+        await repository.upsert_instance_async(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            workspace_id="workspace-1",
+            conversation_id="conversation-1",
+            status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
+            parent_instance_id="parent-1",
+        )
+        await repository.upsert_instance_async(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            workspace_id="workspace-1",
+            conversation_id="conversation-1",
+            status=InstanceStatus.RUNNING,
+        )
+
+        record = await repository.get_instance_async("inst-1")
+        assert record.status == InstanceStatus.RUNNING
+        assert record.lifecycle == InstanceLifecycle.EPHEMERAL
+        assert record.parent_instance_id == "parent-1"
+
+        await repository.update_runtime_snapshot_async(
+            "inst-1",
+            runtime_system_prompt="system",
+            runtime_tools_json='{"tools":[]}',
+        )
+        await repository.upsert_instance_async(
+            run_id="run-2",
+            trace_id="run-2",
+            session_id="session-1",
+            instance_id="inst-2",
+            role_id="reviewer",
+            workspace_id="workspace-1",
+            conversation_id="conversation-2",
+            status=InstanceStatus.RUNNING,
+        )
+
+        assert (
+            await repository.get_session_role_instance_id_async("session-1", "reviewer")
+        ) == "inst-2"
+        assert len(await repository.list_by_run_async("run-1")) == 1
+        assert len(await repository.list_by_session_async("session-1")) == 2
+
+        failed_ids = await repository.mark_running_instances_failed_async()
+        assert failed_ids == ("inst-1", "inst-2")
+        assert (
+            await repository.get_instance_async("inst-2")
+        ).status == InstanceStatus.FAILED
+
+        await repository.delete_instance_async("inst-2")
+        assert len(await repository.list_all_async()) == 1
+        await repository.delete_by_session_async("session-1")
+        assert await repository.list_all_async() == ()
+    finally:
+        await repository.close_async()

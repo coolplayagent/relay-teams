@@ -461,7 +461,7 @@ class AcpGatewayServer:
         if method == "session/resume":
             return await self._resume_session(params, observer=observer)
         if method == "session/cancel":
-            return self._cancel_session(params, observer=observer)
+            return await self._cancel_session(params, observer=observer)
         if method == "mcp/connect":
             return await self._mcp_connect(params, observer=observer)
         if method == "mcp/message":
@@ -477,7 +477,7 @@ class AcpGatewayServer:
         observer: _AcpRequestObserver | None = None,
     ) -> None:
         if method == "session/cancel":
-            _ = self._cancel_session(params, observer=observer)
+            _ = await self._cancel_session(params, observer=observer)
             return
         if method == "initialized":
             return
@@ -635,7 +635,7 @@ class AcpGatewayServer:
         )
         with self._mcp_relay.session_scope(gateway_session_id):
             try:
-                run_id = self._start_prompt_run(
+                run_id = await self._start_prompt_run(
                     intent,
                     force_attach_recoverable=recoverable_run_id is not None,
                 )
@@ -699,7 +699,7 @@ class AcpGatewayServer:
             "recoverable": result.recoverable,
         }
 
-    def _start_prompt_run(
+    async def _start_prompt_run(
         self,
         intent: IntentInput,
         *,
@@ -708,7 +708,7 @@ class AcpGatewayServer:
         # ACP follow-up prompts should be able to resume a recoverable run even
         # when the gateway ingress layer would otherwise treat the session as busy.
         if self._session_ingress_service is not None and not force_attach_recoverable:
-            result = self._session_ingress_service.require_started(
+            result = await self._session_ingress_service.require_started_async(
                 GatewaySessionIngressRequest(
                     intent=intent,
                     busy_policy=GatewaySessionIngressBusyPolicy.REJECT_IF_BUSY,
@@ -717,8 +717,8 @@ class AcpGatewayServer:
             if result.run_id is None:
                 raise RuntimeError("acp_run_not_started")
             return result.run_id
-        run_id, _ = self._run_service.create_run(intent)
-        self._run_service.ensure_run_started(run_id)
+        run_id, _ = await self._run_service.create_run_async(intent)
+        await self._run_service.ensure_run_started_async(run_id)
         return run_id
 
     async def _resume_session(
@@ -743,8 +743,8 @@ class AcpGatewayServer:
             run_id=run_id,
         )
         with self._mcp_relay.session_scope(gateway_session_id):
-            self._run_service.resume_run(run_id)
-            self._run_service.ensure_run_started(run_id)
+            await self._run_service.resume_run_async(run_id)
+            await self._run_service.ensure_run_started_async(run_id)
             self._active_runs[gateway_session_id] = run_id
             _ = self._gateway_session_service.bind_active_run(
                 gateway_session_id, run_id
@@ -1080,7 +1080,7 @@ class AcpGatewayServer:
             )
         return None
 
-    def _cancel_session(
+    async def _cancel_session(
         self,
         params: dict[str, JsonValue],
         *,
@@ -1098,7 +1098,7 @@ class AcpGatewayServer:
         if run_id is not None:
             if observer is not None:
                 observer.bind_run_id(run_id)
-            self._run_service.stop_run(run_id)
+            await self._run_service.stop_run_async(run_id)
         return {"status": "ok"}
 
     def _finalize_active_run_binding(
