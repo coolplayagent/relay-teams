@@ -166,6 +166,58 @@ def test_add_mcp_server() -> None:
     }
 
 
+def test_add_mcp_server_returns_400_for_invalid_request() -> None:
+    class _InvalidAddService(_FakeMcpService):
+        def add_server(
+            self,
+            *,
+            name: str,
+            server_config: dict[str, object],
+            overwrite: bool = False,
+        ) -> McpServerAddResult:
+            _ = name, server_config, overwrite
+            raise ValueError("MCP server already exists: filesystem")
+
+    client = _create_test_client(_InvalidAddService())
+
+    response = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "filesystem",
+            "config": {"transport": "stdio", "command": "npx"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "MCP server already exists: filesystem"}
+
+
+def test_add_mcp_server_returns_503_when_config_manager_is_unavailable() -> None:
+    class _UnavailableAddService(_FakeMcpService):
+        def add_server(
+            self,
+            *,
+            name: str,
+            server_config: dict[str, object],
+            overwrite: bool = False,
+        ) -> McpServerAddResult:
+            _ = name, server_config, overwrite
+            raise RuntimeError("MCP config manager is not available")
+
+    client = _create_test_client(_UnavailableAddService())
+
+    response = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "filesystem",
+            "config": {"transport": "stdio", "command": "npx"},
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "MCP config manager is not available"}
+
+
 def test_set_mcp_server_enabled() -> None:
     client = _create_test_client(_FakeMcpService())
 
@@ -180,6 +232,35 @@ def test_set_mcp_server_enabled() -> None:
         "transport": "stdio",
         "enabled": False,
     }
+
+
+def test_set_mcp_server_enabled_returns_503_when_unavailable() -> None:
+    class _UnavailableEnableService(_FakeMcpService):
+        def set_server_enabled(
+            self,
+            name: str,
+            request: McpServerEnabledUpdateRequest,
+        ) -> McpServerSummary:
+            _ = name, request
+            raise RuntimeError("MCP config manager is not available")
+
+    client = _create_test_client(_UnavailableEnableService())
+
+    response = client.put(
+        "/api/mcp/servers/filesystem/enabled", json={"enabled": False}
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "MCP config manager is not available"}
+
+
+def test_set_mcp_server_enabled_returns_404_for_unknown_server() -> None:
+    client = _create_test_client(_FakeMcpService())
+
+    response = client.put("/api/mcp/servers/missing/enabled", json={"enabled": True})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown MCP server: missing"}
 
 
 def test_get_mcp_server_config() -> None:
@@ -203,6 +284,29 @@ def test_get_mcp_server_config() -> None:
     }
 
 
+def test_get_mcp_server_config_returns_404_for_unknown_server() -> None:
+    client = _create_test_client(_FakeMcpService())
+
+    response = client.get("/api/mcp/servers/missing")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown MCP server: missing"}
+
+
+def test_get_mcp_server_config_returns_503_when_unavailable() -> None:
+    class _UnavailableGetService(_FakeMcpService):
+        def get_server_config(self, name: str) -> McpServerConfigResult:
+            _ = name
+            raise RuntimeError("MCP config manager is not available")
+
+    client = _create_test_client(_UnavailableGetService())
+
+    response = client.get("/api/mcp/servers/filesystem")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "MCP config manager is not available"}
+
+
 def test_update_mcp_server_config() -> None:
     client = _create_test_client(_FakeMcpService())
 
@@ -213,6 +317,39 @@ def test_update_mcp_server_config() -> None:
 
     assert response.status_code == 200
     assert response.json()["config"] == {"transport": "stdio", "command": "uvx"}
+
+
+def test_update_mcp_server_config_returns_404_for_unknown_server() -> None:
+    client = _create_test_client(_FakeMcpService())
+
+    response = client.put(
+        "/api/mcp/servers/missing",
+        json={"config": {"transport": "stdio", "command": "uvx"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown MCP server: missing"}
+
+
+def test_update_mcp_server_config_returns_503_when_unavailable() -> None:
+    class _UnavailableUpdateService(_FakeMcpService):
+        def update_server(
+            self,
+            name: str,
+            request: McpServerUpdateRequest,
+        ) -> McpServerConfigResult:
+            _ = name, request
+            raise RuntimeError("MCP config manager is not available")
+
+    client = _create_test_client(_UnavailableUpdateService())
+
+    response = client.put(
+        "/api/mcp/servers/filesystem",
+        json={"config": {"transport": "stdio", "command": "uvx"}},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "MCP config manager is not available"}
 
 
 def test_list_mcp_server_tools() -> None:

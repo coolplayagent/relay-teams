@@ -404,11 +404,14 @@ def _build_server_config(
     header: tuple[str, ...],
 ) -> dict[str, JsonValue]:
     if command is not None:
+        resolved_transport = transport or "stdio"
+        if resolved_transport != "stdio":
+            raise typer.BadParameter("--transport must be stdio when using --command")
         command_parts = shlex.split(command, posix=False)
         if not command_parts:
             raise typer.BadParameter("--command must be non-empty")
         config: dict[str, JsonValue] = {
-            "transport": transport or "stdio",
+            "transport": resolved_transport,
             "command": command_parts[0],
             "args": [*command_parts[1:], *server_args],
         }
@@ -419,8 +422,13 @@ def _build_server_config(
 
     if url is None or not url.strip():
         raise typer.BadParameter("--url must be non-empty")
+    resolved_transport = transport or ("sse" if "/sse" in url else "http")
+    if resolved_transport == "stdio":
+        raise typer.BadParameter(
+            "--transport must be http, sse, or streamable-http when using --url"
+        )
     config = {
-        "transport": transport or ("sse" if "/sse" in url else "http"),
+        "transport": resolved_transport,
         "url": url.strip(),
     }
     parsed_headers = _parse_key_value_options(header, "--header")

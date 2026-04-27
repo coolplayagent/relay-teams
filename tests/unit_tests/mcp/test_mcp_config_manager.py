@@ -277,6 +277,46 @@ def test_add_server_preserves_legacy_top_level_mcp_servers(tmp_path: Path) -> No
     }
 
 
+def test_add_server_replaces_invalid_wrapped_mcp_servers(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(json.dumps({"mcpServers": []}), encoding="utf-8")
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.add_server(
+        name="filesystem",
+        server_config={"transport": "stdio", "command": "npx"},
+    )
+
+    assert json.loads(config_path.read_text(encoding="utf-8")) == {
+        "mcpServers": {"filesystem": {"transport": "stdio", "command": "npx"}}
+    }
+
+
+def test_add_server_accepts_nested_named_config(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.add_server(
+        name="filesystem",
+        server_config={
+            "mcpServers": {
+                "filesystem": {
+                    "type": "local",
+                    "command": ["npx", "-y", "server-filesystem"],
+                }
+            }
+        },
+    )
+
+    stored_config = manager.get_server_config("filesystem")
+    assert stored_config["transport"] == "stdio"
+    assert stored_config["command"] == "npx"
+    assert stored_config["args"] == ["-y", "server-filesystem"]
+
+
 def test_add_server_rejects_duplicate_without_overwrite(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
@@ -292,6 +332,19 @@ def test_add_server_rejects_duplicate_without_overwrite(tmp_path: Path) -> None:
         assert "already exists" in str(exc)
     else:
         raise AssertionError("Expected duplicate MCP server to be rejected")
+
+
+def test_add_server_rejects_empty_name(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.add_server(name=" ", server_config={"command": "npx"})
+    except ValueError as exc:
+        assert "MCP server name must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("Expected empty MCP server name to be rejected")
 
 
 def test_set_server_enabled_updates_app_mcp_config(tmp_path: Path) -> None:
@@ -313,6 +366,26 @@ def test_set_server_enabled_updates_app_mcp_config(tmp_path: Path) -> None:
     assert spec.enabled is False
     assert registry.list_names() == ("filesystem",)
     assert registry.list_enabled_names() == ()
+
+
+def test_set_server_enabled_rejects_empty_and_unknown_names(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.set_server_enabled(name=" ", enabled=True)
+    except ValueError as exc:
+        assert "MCP server name must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("Expected empty MCP server name to be rejected")
+
+    try:
+        manager.set_server_enabled(name="missing", enabled=True)
+    except ValueError as exc:
+        assert "Unknown MCP server: missing" in str(exc)
+    else:
+        raise AssertionError("Expected unknown MCP server to be rejected")
 
 
 def test_update_server_preserves_enabled_state(tmp_path: Path) -> None:
@@ -354,6 +427,68 @@ def test_update_server_preserves_enabled_state(tmp_path: Path) -> None:
     assert manager.get_server_config("filesystem")["command"] == "uvx"
 
 
+def test_update_server_accepts_explicit_disabled_alias(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps({"mcpServers": {"filesystem": {"command": "npx"}}}),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.update_server(
+        name="filesystem",
+        server_config={"command": "uvx", "disabled": True},
+    )
+
+    stored = json.loads(config_path.read_text(encoding="utf-8"))
+    assert stored["mcpServers"]["filesystem"] == {
+        "command": "uvx",
+        "enabled": False,
+    }
+
+
+def test_update_server_rejects_empty_and_unknown_names(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.update_server(name=" ", server_config={"command": "uvx"})
+    except ValueError as exc:
+        assert "MCP server name must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("Expected empty MCP server name to be rejected")
+
+    try:
+        manager.update_server(name="missing", server_config={"command": "uvx"})
+    except ValueError as exc:
+        assert "Unknown MCP server: missing" in str(exc)
+    else:
+        raise AssertionError("Expected unknown MCP server to be rejected")
+
+
+def test_get_server_config_rejects_empty_and_unknown_names(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.get_server_config(" ")
+    except ValueError as exc:
+        assert "MCP server name must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("Expected empty MCP server name to be rejected")
+
+    try:
+        manager.get_server_config("missing")
+    except ValueError as exc:
+        assert "Unknown MCP server: missing" in str(exc)
+    else:
+        raise AssertionError("Expected unknown MCP server to be rejected")
+
+
 def test_load_registry_accepts_disabled_alias(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
@@ -391,6 +526,43 @@ def test_load_registry_normalizes_opencode_remote_type(tmp_path: Path) -> None:
     registry = manager.load_registry()
 
     assert registry.get_spec("remote-docs").server_config["transport"] == "http"
+
+
+def test_load_registry_normalizes_opencode_remote_sse_type(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote-events": {
+                        "type": "remote",
+                        "url": "https://example.com/sse",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+
+    assert registry.get_spec("remote-events").server_config["transport"] == "sse"
+
+
+def test_load_registry_ignores_invalid_mcp_servers_value(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps({"mcpServers": []}),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+
+    assert registry.list_names() == ()
 
 
 def test_load_registry_syncs_app_environment_for_stdio_mcp(tmp_path: Path) -> None:

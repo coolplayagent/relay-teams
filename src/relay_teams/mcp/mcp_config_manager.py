@@ -257,7 +257,7 @@ def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
 def _extract_mcp_servers(payload: dict[str, JsonValue]) -> dict[str, JsonValue]:
     maybe_servers = payload.get("mcpServers", payload)
     if isinstance(maybe_servers, dict):
-        return cast(dict[str, JsonValue], maybe_servers)
+        return maybe_servers
     return {}
 
 
@@ -266,16 +266,14 @@ def _writable_mcp_servers_payload(
 ) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
     existing_servers = payload.get("mcpServers")
     if isinstance(existing_servers, dict):
-        return payload, cast(dict[str, JsonValue], existing_servers)
+        return payload, existing_servers
     if "mcpServers" in payload:
         servers: dict[str, JsonValue] = {}
-        writable_payload: dict[str, JsonValue] = {
-            "mcpServers": cast(JsonValue, servers)
-        }
-        return writable_payload, servers
+        empty_wrapped_payload: dict[str, JsonValue] = {"mcpServers": servers}
+        return empty_wrapped_payload, servers
     servers = dict(payload)
-    writable_payload = {"mcpServers": cast(JsonValue, servers)}
-    return writable_payload, servers
+    migrated_payload: dict[str, JsonValue] = {"mcpServers": servers}
+    return migrated_payload, servers
 
 
 def _normalize_to_json_object(value: object) -> dict[str, JsonValue]:
@@ -305,7 +303,7 @@ def _normalize_mcp_server_config(
             normalized["command"] = command_parts[0]
             existing_args = normalized.get("args")
             if not isinstance(existing_args, list):
-                normalized["args"] = cast(JsonValue, command_parts[1:])
+                normalized["args"] = [item for item in command_parts[1:]]
     return normalized
 
 
