@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+from pydantic_ai.messages import FunctionToolResultEvent, ToolReturnPart
 
+from relay_teams.agents.execution import session_runtime as session_runtime_module
 from .agent_llm_session_test_support import (
     AgentLlmSession,
     APIStatusError,
@@ -29,7 +31,9 @@ from .agent_llm_session_test_support import (
 
 
 @pytest.mark.asyncio
-async def test_generate_async_deduplicates_against_provider_history() -> None:
+async def test_generate_async_deduplicates_against_provider_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = object.__new__(AgentLlmSession)
 
     class _FakeInjectionManager:
@@ -70,6 +74,46 @@ async def test_generate_async_deduplicates_against_provider_history() -> None:
     )
     provider_history = [echoed_request]
     message_repo = _FakeMessageRepo(history=[])
+    streamed_tool_result = ToolReturnPart(
+        tool_name="test_tool",
+        content={"ok": True},
+        tool_call_id="call-stream",
+    )
+    captured_tool_outcome_messages: list[ModelRequest | ModelResponse] = []
+
+    class _FakeToolEventStream:
+        def __init__(self) -> None:
+            self._index = 0
+
+        def __aiter__(self) -> "_FakeToolEventStream":
+            self._index = 0
+            return self
+
+        async def __anext__(self) -> object:
+            if self._index > 0:
+                raise StopAsyncIteration
+            self._index += 1
+            return FunctionToolResultEvent(result=streamed_tool_result)
+
+    class _FakeToolEventStreamContext:
+        async def __aenter__(self) -> _FakeToolEventStream:
+            return _FakeToolEventStream()
+
+        async def __aexit__(
+            self,
+            exc_type: object,
+            exc: object,
+            tb: object,
+        ) -> bool | None:
+            _ = (exc_type, exc, tb)
+            return None
+
+    class _FakeToolNode:
+        def stream(self, ctx: object) -> _FakeToolEventStreamContext:
+            _ = ctx
+            return _FakeToolEventStreamContext()
+
+    monkeypatch.setattr(session_runtime_module, "CallToolsNode", _FakeToolNode)
 
     class _FakeResult:
         response = final_response
@@ -83,9 +127,11 @@ async def test_generate_async_deduplicates_against_provider_history() -> None:
     class _FakeAgentRun:
         def __init__(self) -> None:
             self.result = _FakeResult()
-            self._yielded = False
+            self._nodes: list[object] = []
+            self.ctx = object()
 
         async def __aenter__(self) -> "_FakeAgentRun":
+            self._nodes = [_FakeToolNode(), object()]
             return self
 
         async def __aexit__(
@@ -98,14 +144,12 @@ async def test_generate_async_deduplicates_against_provider_history() -> None:
             return None
 
         def __aiter__(self) -> "_FakeAgentRun":
-            self._yielded = False
             return self
 
         async def __anext__(self) -> object:
-            if self._yielded:
+            if not self._nodes:
                 raise StopAsyncIteration
-            self._yielded = True
-            return object()
+            return self._nodes.pop(0)
 
         def new_messages(self) -> list[ModelRequest | ModelResponse]:
             return [echoed_request, final_response]
@@ -190,6 +234,22 @@ async def test_generate_async_deduplicates_against_provider_history() -> None:
         lambda **kwargs: None
     )
 
+    async def _publish_committed_tool_outcome_events_from_messages_async(
+        *,
+        request: object,
+        messages: Sequence[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        _ = request
+        captured_tool_outcome_messages.extend(messages)
+        if published_tool_outcome_ids is not None:
+            published_tool_outcome_ids.add("call-stream")
+        return True
+
+    session.__dict__["_publish_committed_tool_outcome_events_from_messages_async"] = (
+        _publish_committed_tool_outcome_events_from_messages_async
+    )
+
     async def _build_agent_iteration_context(
         **kwargs: object,
     ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
@@ -245,6 +305,12 @@ async def test_generate_async_deduplicates_against_provider_history() -> None:
     assert all(list(history) == provider_history for history in observed_histories)
     assert len(message_repo.append_calls) == 1
     assert message_repo.append_calls[0] == [final_response]
+    streamed_tool_outcome_messages = [
+        message
+        for message in captured_tool_outcome_messages
+        if isinstance(message, ModelRequest) and message.parts == [streamed_tool_result]
+    ]
+    assert len(streamed_tool_outcome_messages) == 1
 
 
 @pytest.mark.asyncio

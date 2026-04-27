@@ -560,7 +560,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 )
                                 latest_streamed_text = streamed_node_text
                             elif isinstance(node, CallToolsNode):
-                                tool_node = cast(StreamableToolCallNode, node)
+                                tool_node = cast(
+                                    StreamableToolCallNode, cast(object, node)
+                                )
                                 async with tool_node.stream(
                                     agent_run.ctx
                                 ) as tool_stream:

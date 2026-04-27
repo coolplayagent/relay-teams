@@ -163,6 +163,51 @@ def test_allocate_control_plane_config_skips_api_port_at_upper_boundary(
     assert checked_ports == [65534]
 
 
+def test_find_available_port_raises_after_skipping_excluded_lower_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_ports: list[int] = []
+
+    def fake_can_bind(host: str, port: int) -> bool:
+        assert host == "127.0.0.1"
+        checked_ports.append(port)
+        return False
+
+    monkeypatch.setattr(control_plane_module, "_can_bind", fake_can_bind)
+
+    with pytest.raises(RuntimeError, match="No control-plane port"):
+        control_plane_module._find_available_port(
+            "127.0.0.1",
+            preferred_port=3,
+            excluded_ports=frozenset({2}),
+        )
+
+    assert 2 not in checked_ports
+    assert 1 in checked_ports
+    assert 3 in checked_ports
+
+
+def test_can_bind_returns_false_for_occupied_port() -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        occupied_port = int(sock.getsockname()[1])
+
+        assert control_plane_module._can_bind("127.0.0.1", occupied_port) is False
+
+
+def test_control_plane_helpers_normalize_bracketed_ipv6() -> None:
+    assert control_plane_module._bind_host("[::1]") == "::1"
+    assert control_plane_module._is_ipv6_host("[::1]") is True
+    config = ControlPlaneServerConfig(
+        host="::1",
+        port=8011,
+        main_base_url="http://[::1]:8010",
+        started_at=123.0,
+    )
+
+    assert config.live_url == "http://[::1]:8011/live"
+
+
 @pytest.mark.parametrize("raw_port", ["not-a-port", "0", "65536"])
 def test_allocate_control_plane_config_ignores_invalid_explicit_port(
     monkeypatch: pytest.MonkeyPatch,
@@ -191,6 +236,19 @@ def test_build_local_live_payload_tolerates_invalid_started_at(
     assert payload.status == "alive"
     assert payload.uptime_seconds >= 0
     assert payload.main_base_url == "http://127.0.0.1:8000"
+
+
+def test_build_local_live_payload_defaults_when_started_at_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(CONTROL_PLANE_STARTED_AT_ENV, raising=False)
+    monkeypatch.delenv(CONTROL_PLANE_MAIN_URL_ENV, raising=False)
+
+    payload = build_local_live_payload()
+
+    assert payload.status == "alive"
+    assert payload.uptime_seconds >= 0
+    assert payload.main_base_url == ""
 
 
 def _free_port() -> int:

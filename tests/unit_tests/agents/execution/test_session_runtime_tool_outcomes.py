@@ -233,3 +233,64 @@ async def test_non_tool_result_stream_event_is_ignored() -> None:
 
     assert emitted is False
     assert published_tool_outcome_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_function_tool_result_event_with_non_tool_result_is_ignored() -> None:
+    session = object.__new__(SessionRuntimeMixin)
+
+    async def _fake_publish_tool_outcomes(
+        *,
+        request: LLMRequest,
+        messages: Sequence[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        _ = (request, messages, published_tool_outcome_ids)
+        raise AssertionError("unexpected tool outcome publish")
+
+    session.__dict__["_publish_committed_tool_outcome_events_from_messages_async"] = (
+        _fake_publish_tool_outcomes
+    )
+    published_tool_outcome_ids: set[str] = set()
+    unexpected_result = cast(ToolReturnPart | RetryPromptPart, object())
+
+    emitted = await SessionRuntimeMixin._publish_tool_outcome_event_from_stream_async(
+        session,
+        request=_build_request(),
+        stream_event=FunctionToolResultEvent(result=unexpected_result),
+        published_tool_outcome_ids=published_tool_outcome_ids,
+    )
+
+    assert emitted is False
+    assert published_tool_outcome_ids == set()
+
+
+@pytest.mark.asyncio
+async def test_streamed_retry_prompt_without_tool_name_is_ignored() -> None:
+    session = object.__new__(SessionRuntimeMixin)
+
+    async def _fake_publish_tool_outcomes(
+        *,
+        request: LLMRequest,
+        messages: Sequence[ModelRequest | ModelResponse],
+        published_tool_outcome_ids: set[str] | None = None,
+    ) -> bool:
+        _ = (request, messages, published_tool_outcome_ids)
+        raise AssertionError("unexpected tool outcome publish")
+
+    session.__dict__["_publish_committed_tool_outcome_events_from_messages_async"] = (
+        _fake_publish_tool_outcomes
+    )
+    published_tool_outcome_ids: set[str] = set()
+
+    emitted = await SessionRuntimeMixin._publish_tool_outcome_event_from_stream_async(
+        session,
+        request=_build_request(),
+        stream_event=FunctionToolResultEvent(
+            result=RetryPromptPart(content="invalid", tool_call_id="call-missing")
+        ),
+        published_tool_outcome_ids=published_tool_outcome_ids,
+    )
+
+    assert emitted is False
+    assert published_tool_outcome_ids == set()
