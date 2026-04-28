@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     MaaSAuthConfig,
     ModelEndpointConfig,
@@ -49,4 +50,20 @@ def test_model_endpoint_config_requires_maas_password() -> None:
             model="maas-chat",
             base_url="https://maas.example/api/v2",
             maas_auth=MaaSAuthConfig(username="relay-user"),
+        )
+
+
+def test_model_endpoint_config_requires_codeagent_password_fields() -> None:
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent model endpoint config requires codeagent_auth.username and codeagent_auth.password for password auth.",
+    ):
+        ModelEndpointConfig(
+            provider=ProviderType.CODEAGENT,
+            model="codeagent-chat",
+            base_url="https://codeagent.example/codeAgentPro",
+            codeagent_auth=CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+            ),
         )

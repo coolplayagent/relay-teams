@@ -8,6 +8,7 @@ import pytest
 
 from relay_teams.providers.codeagent_auth import (
     codeagent_access_token_secret_field_name,
+    codeagent_password_secret_field_name,
     codeagent_refresh_token_secret_field_name,
 )
 from relay_teams.providers.model_header_utils import model_header_secret_field_name
@@ -599,6 +600,58 @@ def test_load_llm_configs_rejects_codeagent_profile_without_completed_auth(
         runtime_config.load_llm_configs(tmp_path, {})
 
 
+def test_load_llm_configs_rejects_codeagent_profile_without_codeagent_auth(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent profiles require codeagent_auth configuration.",
+    ):
+        runtime_config.load_llm_configs(tmp_path, {})
+
+
+def test_load_llm_configs_rejects_codeagent_password_auth_without_password(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": {
+                        "auth_method": "password",
+                        "username": "relay-user",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent password profiles require codeagent_auth.username and password.",
+    ):
+        runtime_config.load_llm_configs(tmp_path, {})
+
+
 def test_load_llm_configs_rejects_non_object_codeagent_auth(tmp_path: Path) -> None:
     model_file = tmp_path / "model.json"
     model_file.write_text(
@@ -659,6 +712,118 @@ def test_load_llm_configs_resolves_codeagent_tokens_from_env_placeholders(
     assert (
         profiles["codeagent-profile"].codeagent_auth.refresh_token
         == "env-codeagent-refresh-token"
+    )
+
+
+def test_load_llm_configs_accepts_codeagent_password_auth(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": {
+                        "auth_method": "password",
+                        "username": "relay-user",
+                        "has_password": True,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    get_secret_store().set_secret(
+        tmp_path,
+        namespace="model_profile",
+        owner_id="codeagent-profile",
+        field_name=codeagent_password_secret_field_name(),
+        value="relay-password",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["codeagent-profile"].codeagent_auth is not None
+    assert profiles["codeagent-profile"].codeagent_auth.auth_method.value == "password"
+    assert profiles["codeagent-profile"].codeagent_auth.username == "relay-user"
+    assert profiles["codeagent-profile"].codeagent_auth.password == "relay-password"
+
+
+def test_load_llm_configs_resolves_codeagent_password_env_placeholder(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": {
+                        "auth_method": "password",
+                        "username": "relay-user",
+                        "password": "${CODEAGENT_PASSWORD}",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(
+        tmp_path,
+        {"CODEAGENT_PASSWORD": "env-codeagent-password"},
+    )
+
+    assert profiles["codeagent-profile"].codeagent_auth is not None
+    assert (
+        profiles["codeagent-profile"].codeagent_auth.password
+        == "env-codeagent-password"
+    )
+
+
+def test_load_llm_configs_resolves_secret_backed_codeagent_password_env_placeholder(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": "https://codeagent.example/codeAgentPro",
+                    "codeagent_auth": {
+                        "auth_method": "password",
+                        "username": "relay-user",
+                        "has_password": True,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    get_secret_store().set_secret(
+        tmp_path,
+        namespace="model_profile",
+        owner_id="codeagent-profile",
+        field_name=codeagent_password_secret_field_name(),
+        value="${CODEAGENT_PASSWORD}",
+    )
+
+    profiles = runtime_config.load_llm_configs(
+        tmp_path,
+        {"CODEAGENT_PASSWORD": "env-codeagent-password"},
+    )
+
+    assert profiles["codeagent-profile"].codeagent_auth is not None
+    assert (
+        profiles["codeagent-profile"].codeagent_auth.password
+        == "env-codeagent-password"
     )
 
 

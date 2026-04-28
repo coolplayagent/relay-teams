@@ -21,6 +21,7 @@ from relay_teams.providers.model_config import (
 
 __all__ = [
     "MAAS_PASSWORD_SECRET_FIELD",
+    "MaaSAuthConfig",
     "build_maas_openai_client",
     "clear_maas_token_service_cache",
     "get_maas_token_service",

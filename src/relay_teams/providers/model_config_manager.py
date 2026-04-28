@@ -9,6 +9,7 @@ from typing import cast
 
 from relay_teams.providers.codeagent_auth import (
     codeagent_access_token_secret_field_name,
+    codeagent_password_secret_field_name,
     codeagent_refresh_token_secret_field_name,
     consume_codeagent_oauth_tokens,
     get_codeagent_oauth_tokens,
@@ -16,6 +17,7 @@ from relay_teams.providers.codeagent_auth import (
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_capabilities import resolve_model_capabilities
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
@@ -37,6 +39,7 @@ _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 _MODEL_PROFILE_SECRET_FIELD = "api_key"
 _MODEL_PROFILE_MAAS_PASSWORD_FIELD = maas_password_secret_field_name()
 _MODEL_PROFILE_CODEAGENT_ACCESS_TOKEN_FIELD = codeagent_access_token_secret_field_name()
+_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD = codeagent_password_secret_field_name()
 _MODEL_PROFILE_CODEAGENT_REFRESH_TOKEN_FIELD = (
     codeagent_refresh_token_secret_field_name()
 )
@@ -178,6 +181,15 @@ class ModelConfigManager:
             if codeagent_storage_relevant
             else None
         )
+        current_codeagent_password = (
+            (
+                self._get_profile_codeagent_password(source_name)
+                if source_name is not None and source_name != name
+                else self._get_profile_codeagent_password(name)
+            )
+            if codeagent_storage_relevant
+            else None
+        )
         current_codeagent_refresh_token = (
             (
                 self._get_profile_codeagent_refresh_token(source_name)
@@ -233,7 +245,9 @@ class ModelConfigManager:
             config[name],
             next_codeagent_access_token,
             next_codeagent_refresh_token,
+            next_codeagent_password,
             preserve_codeagent_tokens,
+            preserve_codeagent_password,
             _pending_oauth_session_id,
         ) = self._prepare_profile_codeagent_auth_for_storage(
             profile_name=name,
@@ -241,6 +255,7 @@ class ModelConfigManager:
             next_profile=cast(dict[str, JsonValue], config[name]),
             source_name=source_name,
             current_access_token=current_codeagent_access_token,
+            current_password=current_codeagent_password,
             current_refresh_token=current_codeagent_refresh_token,
         )
         if cast(dict[str, JsonValue], config[name]).get("max_tokens") is None:
@@ -267,6 +282,12 @@ class ModelConfigManager:
             next_access_token=next_codeagent_access_token,
             next_refresh_token=next_codeagent_refresh_token,
             preserve_tokens=preserve_codeagent_tokens,
+        )
+        self._apply_profile_codeagent_password_update(
+            name=name,
+            source_name=source_name,
+            next_password=next_codeagent_password,
+            preserve_password=preserve_codeagent_password,
         )
         self._sync_profile_header_secrets(
             profile_name=name,
@@ -300,6 +321,7 @@ class ModelConfigManager:
         next_config: dict[str, JsonValue] = {}
         secret_updates: dict[str, tuple[str | None, bool]] = {}
         maas_password_updates: dict[str, tuple[str | None, bool]] = {}
+        codeagent_password_updates: dict[str, tuple[str | None, bool]] = {}
         codeagent_token_updates: dict[str, tuple[str | None, str | None, bool]] = {}
         header_secret_sync_profiles: dict[str, dict[str, JsonValue]] = {}
         pending_codeagent_oauth_sessions: dict[str, str] = {}
@@ -312,6 +334,7 @@ class ModelConfigManager:
             current_codeagent_access_token = self._get_profile_codeagent_access_token(
                 name
             )
+            current_codeagent_password = self._get_profile_codeagent_password(name)
             current_codeagent_refresh_token = self._get_profile_codeagent_refresh_token(
                 name
             )
@@ -361,7 +384,9 @@ class ModelConfigManager:
                 next_profile,
                 next_codeagent_access_token,
                 next_codeagent_refresh_token,
+                next_codeagent_password,
                 preserve_codeagent_tokens,
+                preserve_codeagent_password,
                 pending_oauth_session_id,
             ) = self._prepare_profile_codeagent_auth_for_storage(
                 profile_name=name,
@@ -369,6 +394,7 @@ class ModelConfigManager:
                 next_profile=next_profile,
                 source_name=None,
                 current_access_token=current_codeagent_access_token,
+                current_password=current_codeagent_password,
                 current_refresh_token=current_codeagent_refresh_token,
                 consume_oauth_session=False,
             )
@@ -382,6 +408,10 @@ class ModelConfigManager:
                 next_codeagent_access_token,
                 next_codeagent_refresh_token,
                 preserve_codeagent_tokens,
+            )
+            codeagent_password_updates[name] = (
+                next_codeagent_password,
+                preserve_codeagent_password,
             )
             header_secret_sync_profiles[name] = header_secret_sync_profile
             if pending_oauth_session_id is not None:
@@ -424,12 +454,21 @@ class ModelConfigManager:
                 next_codeagent_refresh_token,
                 preserve_codeagent_tokens,
             ) = codeagent_token_updates.get(profile_name, (None, None, False))
+            next_codeagent_password, preserve_codeagent_password = (
+                codeagent_password_updates.get(profile_name, (None, False))
+            )
             self._apply_profile_codeagent_token_update(
                 name=profile_name,
                 source_name=None,
                 next_access_token=next_codeagent_access_token,
                 next_refresh_token=next_codeagent_refresh_token,
                 preserve_tokens=preserve_codeagent_tokens,
+            )
+            self._apply_profile_codeagent_password_update(
+                name=profile_name,
+                source_name=None,
+                next_password=next_codeagent_password,
+                preserve_password=preserve_codeagent_password,
             )
             next_profile = next_config.get(profile_name)
             if isinstance(next_profile, dict) and isinstance(
@@ -551,6 +590,38 @@ class ModelConfigManager:
         if not isinstance(raw_codeagent_auth, dict):
             raise ValueError("codeagent_auth must be an object")
         resolved_payload: dict[str, str | bool] = {}
+        auth_method_raw = raw_codeagent_auth.get("auth_method")
+        if isinstance(auth_method_raw, str) and auth_method_raw.strip():
+            resolved_payload["auth_method"] = auth_method_raw.strip()
+        resolved_auth_method = (
+            CodeAgentAuthMethod.PASSWORD
+            if resolved_payload.get("auth_method") == CodeAgentAuthMethod.PASSWORD.value
+            else CodeAgentAuthMethod.SSO
+        )
+        username = raw_codeagent_auth.get("username")
+        if isinstance(username, str) and username.strip():
+            resolved_payload["username"] = username.strip()
+        if resolved_auth_method == CodeAgentAuthMethod.PASSWORD:
+            password = raw_codeagent_auth.get("password")
+            if isinstance(password, str) and password.strip():
+                resolved_payload["password"] = password.strip()
+            else:
+                secret_value = self._secret_store.get_secret(
+                    self._config_dir,
+                    namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                    owner_id=profile_name,
+                    field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
+                )
+                if secret_value is not None:
+                    resolved_payload["password"] = secret_value
+            if raw_codeagent_auth.get("has_password"):
+                resolved_payload["has_password"] = True
+            return CodeAgentAuthConfig.model_validate(
+                resolved_payload
+            ).with_secret_owner(
+                config_dir=self._config_dir,
+                owner_id=profile_name,
+            )
         oauth_session_id = raw_codeagent_auth.get("oauth_session_id")
         if isinstance(oauth_session_id, str) and oauth_session_id.strip():
             resolved_payload["oauth_session_id"] = oauth_session_id.strip()
@@ -901,10 +972,24 @@ class ModelConfigManager:
         next_profile: dict[str, JsonValue],
         source_name: str | None,
         current_access_token: str | None,
+        current_password: str | None,
         current_refresh_token: str | None,
         consume_oauth_session: bool = True,
-    ) -> tuple[dict[str, JsonValue], str | None, str | None, bool, str | None]:
+    ) -> tuple[
+        dict[str, JsonValue],
+        str | None,
+        str | None,
+        str | None,
+        bool,
+        bool,
+        str | None,
+    ]:
         merged_profile = dict(next_profile)
+        current_owner = (
+            source_name
+            if source_name is not None and source_name != profile_name
+            else profile_name
+        )
         provider_raw = merged_profile.get(
             "provider", ProviderType.OPENAI_COMPATIBLE.value
         )
@@ -914,6 +999,8 @@ class ModelConfigManager:
                 merged_profile,
                 None,
                 None,
+                None,
+                False,
                 False,
                 None,
             )
@@ -923,11 +1010,26 @@ class ModelConfigManager:
                 and "codeagent_auth" in existing_profile
             ):
                 merged_profile["codeagent_auth"] = existing_profile["codeagent_auth"]
+                preserved_auth = (
+                    self._resolve_codeagent_auth(current_owner, existing_profile)
+                    if isinstance(existing_profile, dict)
+                    else None
+                )
                 return (
                     merged_profile,
                     None,
                     None,
-                    current_refresh_token is not None,
+                    None,
+                    (
+                        preserved_auth is not None
+                        and preserved_auth.auth_method == CodeAgentAuthMethod.SSO
+                        and current_refresh_token is not None
+                    ),
+                    (
+                        preserved_auth is not None
+                        and preserved_auth.auth_method == CodeAgentAuthMethod.PASSWORD
+                        and current_password is not None
+                    ),
                     None,
                 )
             raise ValueError(
@@ -936,16 +1038,97 @@ class ModelConfigManager:
         raw_codeagent_auth = merged_profile.get("codeagent_auth")
         if not isinstance(raw_codeagent_auth, dict):
             raise ValueError("codeagent_auth must be an object")
-        current_owner = (
-            source_name
-            if source_name is not None and source_name != profile_name
-            else profile_name
-        )
         existing_codeagent_auth = (
             self._resolve_codeagent_auth(current_owner, existing_profile)
             if isinstance(existing_profile, dict)
             else None
         )
+        auth_method_raw = raw_codeagent_auth.get("auth_method")
+        normalized_auth_method = (
+            auth_method_raw.strip()
+            if isinstance(auth_method_raw, str) and auth_method_raw.strip()
+            else None
+        )
+        if normalized_auth_method not in (
+            None,
+            CodeAgentAuthMethod.SSO.value,
+            CodeAgentAuthMethod.PASSWORD.value,
+        ):
+            raise ValueError("CodeAgent auth auth_method must be 'sso' or 'password'.")
+        resolved_auth_method = (
+            CodeAgentAuthMethod.PASSWORD
+            if normalized_auth_method == CodeAgentAuthMethod.PASSWORD.value
+            else CodeAgentAuthMethod.SSO
+        )
+        if resolved_auth_method == CodeAgentAuthMethod.PASSWORD:
+            password = raw_codeagent_auth.get("password")
+            next_password = (
+                password.strip()
+                if isinstance(password, str) and password.strip()
+                else None
+            )
+            next_username = raw_codeagent_auth.get("username")
+            normalized_username = (
+                next_username.strip()
+                if isinstance(next_username, str) and next_username.strip()
+                else None
+            )
+            current_username = (
+                existing_codeagent_auth.username
+                if existing_codeagent_auth is not None
+                else None
+            )
+            existing_password = (
+                existing_codeagent_auth.password
+                if existing_codeagent_auth is not None
+                else None
+            )
+            stored_password = self._get_profile_codeagent_password(current_owner)
+            if normalized_username is None:
+                raise ValueError(
+                    "CodeAgent auth username requires a value for password auth."
+                )
+            preserve_password = False
+            if next_password is None:
+                if (
+                    current_username is not None
+                    and normalized_username != current_username.strip()
+                ):
+                    raise ValueError(
+                        "CodeAgent auth password must be re-entered after changing the username."
+                    )
+                if existing_password is not None:
+                    if stored_password is not None:
+                        preserve_password = True
+                    else:
+                        next_password = existing_password
+                elif current_password is not None:
+                    preserve_password = True
+                else:
+                    raise ValueError(
+                        "CodeAgent auth password requires a value the first time it is configured."
+                    )
+            validated = CodeAgentAuthConfig.model_validate(
+                {
+                    "auth_method": CodeAgentAuthMethod.PASSWORD.value,
+                    "username": normalized_username,
+                    "password": next_password or current_password or existing_password,
+                }
+            )
+            merged_profile["codeagent_auth"] = {
+                "auth_method": validated.auth_method.value,
+                "username": validated.username,
+                "has_password": True,
+            }
+            return (
+                merged_profile,
+                None,
+                None,
+                next_password,
+                False,
+                preserve_password,
+                None,
+            )
         token_result = None
         pending_oauth_session_id = None
         oauth_session_id = raw_codeagent_auth.get("oauth_session_id")
@@ -1012,6 +1195,7 @@ class ModelConfigManager:
         merged_profile["codeagent_auth"] = cast(
             JsonValue,
             {
+                "auth_method": CodeAgentAuthMethod.SSO.value,
                 "has_access_token": bool(
                     next_access_token
                     or current_access_token
@@ -1028,7 +1212,9 @@ class ModelConfigManager:
             merged_profile,
             next_access_token,
             next_refresh_token,
+            None,
             preserve_tokens,
+            False,
             pending_oauth_session_id if not consume_oauth_session else None,
         )
 
@@ -1128,6 +1314,16 @@ class ModelConfigManager:
             field_name=_MODEL_PROFILE_CODEAGENT_ACCESS_TOKEN_FIELD,
         )
 
+    def _get_profile_codeagent_password(self, profile_name: str | None) -> str | None:
+        if profile_name is None:
+            return None
+        return self._secret_store.get_secret(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
+        )
+
     def _get_profile_codeagent_refresh_token(
         self,
         profile_name: str | None,
@@ -1152,6 +1348,19 @@ class ModelConfigManager:
             owner_id=profile_name,
             field_name=_MODEL_PROFILE_CODEAGENT_ACCESS_TOKEN_FIELD,
             value=access_token,
+        )
+
+    def _set_profile_codeagent_password(
+        self,
+        profile_name: str,
+        password: str,
+    ) -> None:
+        self._secret_store.set_secret(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
+            value=password,
         )
 
     def _set_profile_codeagent_refresh_token(
@@ -1179,6 +1388,14 @@ class ModelConfigManager:
             namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
             owner_id=profile_name,
             field_name=_MODEL_PROFILE_CODEAGENT_REFRESH_TOKEN_FIELD,
+        )
+
+    def _delete_profile_codeagent_password(self, profile_name: str) -> None:
+        self._secret_store.delete_secret(
+            self._config_dir,
+            namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+            owner_id=profile_name,
+            field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
         )
 
     def _delete_profile_secret_owner(self, profile_name: str) -> None:
@@ -1247,6 +1464,35 @@ class ModelConfigManager:
         if preserve_password:
             return
         self._delete_profile_maas_password(name)
+
+    def _apply_profile_codeagent_password_update(
+        self,
+        *,
+        name: str,
+        source_name: str | None,
+        next_password: str | None,
+        preserve_password: bool,
+    ) -> None:
+        if source_name is not None and source_name != name:
+            if next_password is not None:
+                self._set_profile_codeagent_password(name, next_password)
+                self._delete_profile_codeagent_password(source_name)
+                return
+            if preserve_password:
+                existing_password = self._get_profile_codeagent_password(source_name)
+                if existing_password is not None:
+                    self._set_profile_codeagent_password(name, existing_password)
+                self._delete_profile_codeagent_password(source_name)
+                return
+            self._delete_profile_codeagent_password(source_name)
+            self._delete_profile_codeagent_password(name)
+            return
+        if next_password is not None:
+            self._set_profile_codeagent_password(name, next_password)
+            return
+        if preserve_password:
+            return
+        self._delete_profile_codeagent_password(name)
 
     def _apply_profile_codeagent_token_update(
         self,
@@ -1505,7 +1751,18 @@ def _build_maas_auth_profile_payload(
 def _build_codeagent_auth_profile_payload(
     codeagent_auth: CodeAgentAuthConfig,
 ) -> dict[str, JsonValue]:
+    if codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
+        return {
+            "auth_method": codeagent_auth.auth_method.value,
+            "username": codeagent_auth.username or "",
+            "password": codeagent_auth.password or "",
+            "has_password": codeagent_auth.password is not None
+            or codeagent_auth.has_password,
+            "has_access_token": False,
+            "has_refresh_token": False,
+        }
     return {
+        "auth_method": codeagent_auth.auth_method.value,
         "has_access_token": codeagent_auth.access_token is not None
         or codeagent_auth.has_access_token,
         "has_refresh_token": codeagent_auth.refresh_token is not None

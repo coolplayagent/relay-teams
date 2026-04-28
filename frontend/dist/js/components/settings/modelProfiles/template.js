@@ -63,7 +63,7 @@ export function renderModelProfilesPanelMarkup() {
                                             </span>
                                             <span>
                                                 <strong data-i18n="settings.model.provider_codeagent">CodeAgent Model</strong>
-                                                <span data-i18n="settings.model.provider_codeagent_copy">Use CodeAgent models with SSO sign-in</span>
+                                                <span data-i18n="settings.model.provider_codeagent_copy">Use CodeAgent models with SSO or username/password sign-in</span>
                                             </span>
                                         </button>
                                         <button class="model-provider-choice" id="profile-provider-custom-btn" type="button" data-provider-mode="custom" data-provider-value="openai_compatible">
@@ -159,15 +159,15 @@ export function renderModelProfilesPanelMarkup() {
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="profile-credentials-row" id="profile-maas-auth-fields" style="display:none;">
+                                    <div class="profile-credentials-row profile-maas-credentials-row" id="profile-maas-auth-fields" style="display:none;">
                                         <div class="form-group">
-                                            <label for="profile-maas-username">MAAS Username</label>
-                                            <input type="text" id="profile-maas-username" placeholder="username" autocomplete="username">
+                                            <label for="profile-maas-username" data-i18n="settings.model.username">Username</label>
+                                            <input type="text" id="profile-maas-username" placeholder="username" data-i18n-placeholder="settings.model.username_placeholder" autocomplete="username">
                                         </div>
                                         <div class="form-group">
-                                            <label for="profile-maas-password">MAAS Password</label>
+                                            <label for="profile-maas-password" data-i18n="settings.model.password">Password</label>
                                             <div class="secure-input-row">
-                                                <input type="password" id="profile-maas-password" placeholder="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                                                <input type="password" id="profile-maas-password" placeholder="password" data-i18n-placeholder="settings.model.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
                                                 <button class="secure-input-btn" id="toggle-profile-maas-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
                                                     <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
                                                         <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
@@ -179,12 +179,37 @@ export function renderModelProfilesPanelMarkup() {
                                         <div class="form-group-span-2" id="profile-maas-model-slot"></div>
                                     </div>
                                     <div class="profile-credentials-row profile-codeagent-credentials-row" id="profile-codeagent-auth-fields" style="display:none;">
-                                        <div class="form-group form-group-inline-action profile-codeagent-sso-group">
-                                            <label for="profile-codeagent-login-status">CodeAgent SSO</label>
-                                            <div class="codeagent-sso-control">
-                                                <button class="settings-inline-action settings-list-action codeagent-sso-login-btn" type="button" id="profile-codeagent-login-status" data-i18n="settings.model.codeagent_sign_in_sso" data-i18n-title="settings.model.codeagent_sign_in_sso" data-i18n-aria-label="settings.model.codeagent_sign_in_sso" aria-controls="profile-codeagent-login-status-message">Sign in with SSO</button>
+                                        <div class="form-group profile-codeagent-auth-method-row">
+                                            <label for="profile-codeagent-auth-method" data-i18n="settings.model.codeagent_auth_method">CodeAgent Auth Method</label>
+                                            <select id="profile-codeagent-auth-method">
+                                                <option value="sso" data-i18n="settings.model.codeagent_auth_method_sso">SSO Sign-In</option>
+                                                <option value="password" data-i18n="settings.model.codeagent_auth_method_password">Username and Password</option>
+                                            </select>
+                                        </div>
+                                        <div class="profile-codeagent-auth-detail-row">
+                                            <div class="form-group form-group-inline-action profile-codeagent-sso-group" id="profile-codeagent-sso-group">
+                                                <label for="profile-codeagent-login-status" data-i18n="settings.model.codeagent_sso_field">SSO Sign-In</label>
+                                                <div class="codeagent-sso-control">
+                                                    <button class="settings-inline-action settings-list-action codeagent-sso-login-btn" type="button" id="profile-codeagent-login-status" data-i18n="settings.model.codeagent_sign_in_sso" data-i18n-title="settings.model.codeagent_sign_in_sso" data-i18n-aria-label="settings.model.codeagent_sign_in_sso" aria-controls="profile-codeagent-login-status-message">Sign in with SSO</button>
+                                                </div>
+                                                <div class="codeagent-sso-status-message" id="profile-codeagent-login-status-message" role="status" aria-live="polite" style="display:none;"></div>
                                             </div>
-                                            <div class="codeagent-sso-status-message" id="profile-codeagent-login-status-message" role="status" aria-live="polite" style="display:none;"></div>
+                                            <div class="form-group" id="profile-codeagent-username-group" style="display:none;">
+                                                <label for="profile-codeagent-username" data-i18n="settings.model.codeagent_username">CodeAgent Username</label>
+                                                <input type="text" id="profile-codeagent-username" placeholder="username" data-i18n-placeholder="settings.model.codeagent_username_placeholder" autocomplete="username">
+                                            </div>
+                                            <div class="form-group" id="profile-codeagent-password-group" style="display:none;">
+                                                <label for="profile-codeagent-password" data-i18n="settings.model.codeagent_password">CodeAgent Password</label>
+                                                <div class="secure-input-row">
+                                                    <input type="password" id="profile-codeagent-password" placeholder="password" data-i18n-placeholder="settings.model.codeagent_password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                                                    <button class="secure-input-btn" id="toggle-profile-codeagent-password-btn" type="button" title="Show password" aria-label="Show password" style="display:none;">
+                                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                                        <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                                                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+                                                    </svg>
+                                                    </button>
+                                                </div>
+                                            </div>
                                         </div>
                                         <div class="form-group-span-2" id="profile-codeagent-model-slot"></div>
                                     </div>

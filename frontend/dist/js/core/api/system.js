@@ -424,7 +424,7 @@ export async function verifyCodeAgentAuth(profileName) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ profile_name: profileName }),
         },
-        'Failed to verify CodeAgent SSO status',
+        'Failed to verify CodeAgent auth status',
     );
 }
 

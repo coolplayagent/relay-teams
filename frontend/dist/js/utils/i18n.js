@@ -3888,7 +3888,27 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.hooks.error_handler_index': '第 {index} 个处理器',
 });
 
+Object.assign(TRANSLATIONS['zh-CN'], {
+    'settings.model.username': '\u7528\u6237\u540d',
+    'settings.model.username_placeholder': '\u7528\u6237\u540d',
+    'settings.model.password': '\u5bc6\u7801',
+    'settings.model.password_placeholder': '\u5bc6\u7801',
+});
+
 Object.assign(TRANSLATIONS['en-US'], {
+    'settings.model.provider_codeagent_copy': 'Use CodeAgent models with SSO or username/password sign-in',
+    'settings.model.username': 'Username',
+    'settings.model.username_placeholder': 'username',
+    'settings.model.password': 'Password',
+    'settings.model.password_placeholder': 'password',
+    'settings.model.codeagent_auth_method': 'Authentication Method',
+    'settings.model.codeagent_auth_method_sso': 'SSO Sign-In',
+    'settings.model.codeagent_auth_method_password': 'Username and Password',
+    'settings.model.codeagent_sso_field': 'SSO Sign-In',
+    'settings.model.codeagent_username': 'Username',
+    'settings.model.codeagent_username_placeholder': 'username',
+    'settings.model.codeagent_password': 'Password',
+    'settings.model.codeagent_password_placeholder': 'password',
     'settings.model.codeagent_sign_in_sso': 'Sign in with SSO',
     'settings.model.codeagent_sso_starting': 'Starting SSO login...',
     'settings.model.codeagent_sso_saved': 'Saved sign-in requires verification',
@@ -3899,9 +3919,28 @@ Object.assign(TRANSLATIONS['en-US'], {
     'settings.model.codeagent_sso_popup_blocked': 'SSO popup was blocked. Click Sign in with SSO again to continue.',
     'settings.model.codeagent_sso_timed_out': 'SSO login timed out',
     'settings.model.codeagent_sso_failed': 'SSO failed: {error}',
+    'settings.model.codeagent_credentials_saved': 'Saved credentials require verification',
+    'settings.model.codeagent_credentials_verifying': 'Verifying saved credentials',
+    'settings.model.codeagent_credentials_expired': 'Saved credentials expired. Update username or password.',
+    'settings.model.codeagent_password_reenter': 'Re-enter password after changing username.',
+    'settings.model.codeagent_credentials_ready': 'Credentials ready',
+    'settings.model.codeagent_credentials_verified': 'Credentials verified',
 });
 
 Object.assign(TRANSLATIONS['zh-CN'], {
+    'settings.model.username': '用户名',
+    'settings.model.username_placeholder': '用户名',
+    'settings.model.password': '密码',
+    'settings.model.password_placeholder': '密码',
+    'settings.model.provider_codeagent_copy': '使用 CodeAgent 模型，支持 SSO 或用户名密码登录',
+    'settings.model.codeagent_auth_method': '认证方式',
+    'settings.model.codeagent_auth_method_sso': 'SSO 登录',
+    'settings.model.codeagent_auth_method_password': '用户名和密码',
+    'settings.model.codeagent_sso_field': 'SSO 登录',
+    'settings.model.codeagent_username': '用户名',
+    'settings.model.codeagent_username_placeholder': '用户名',
+    'settings.model.codeagent_password': '密码',
+    'settings.model.codeagent_password_placeholder': '密码',
     'settings.model.codeagent_sign_in_sso': '使用 SSO 登录',
     'settings.model.codeagent_sso_starting': '正在启动 SSO 登录...',
     'settings.model.codeagent_sso_saved': '已保存登录，需校验状态',
@@ -3912,6 +3951,12 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.model.codeagent_sso_popup_blocked': 'SSO 弹窗被拦截，请再次点击“使用 SSO 登录”继续。',
     'settings.model.codeagent_sso_timed_out': 'SSO 登录超时',
     'settings.model.codeagent_sso_failed': 'SSO 登录失败：{error}',
+    'settings.model.codeagent_credentials_saved': '已保存凭据，需校验状态',
+    'settings.model.codeagent_credentials_verifying': '正在校验已保存的凭据',
+    'settings.model.codeagent_credentials_expired': '已保存凭据已失效，请更新用户名或密码。',
+    'settings.model.codeagent_password_reenter': '修改用户名后请重新输入密码。',
+    'settings.model.codeagent_credentials_ready': '凭据已就绪',
+    'settings.model.codeagent_credentials_verified': '凭据已验证',
 });
 
 Object.assign(TRANSLATIONS['en-US'], {

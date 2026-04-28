@@ -25,7 +25,13 @@ from relay_teams.providers.codeagent_auth import (
     is_codeagent_chat_completion_request,
     save_codeagent_oauth_tokens,
 )
+from relay_teams.providers.maas_auth import (
+    MaaSAuthConfig,
+    MaaSAuthContext,
+    MaaSLoginError,
+)
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_CODEAGENT_CLIENT_ID,
@@ -253,6 +259,106 @@ def test_codeagent_token_service_uses_configured_access_token_first(
     assert token == "fresh-access-token"
 
 
+def test_codeagent_token_service_password_login_reuses_maas_token_service(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeMaaSTokenService:
+        def get_auth_context_sync(
+            self,
+            *,
+            auth_config: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> MaaSAuthContext:
+            captured["auth_config"] = auth_config
+            captured["ssl_verify"] = ssl_verify
+            captured["connect_timeout_seconds"] = connect_timeout_seconds
+            captured["force_refresh"] = force_refresh
+            return MaaSAuthContext(token="maas-issued-token", department=None)
+
+    monkeypatch.setattr(
+        codeagent_auth_module,
+        "get_maas_token_service",
+        lambda: _FakeMaaSTokenService(),
+    )
+
+    token = CodeAgentTokenService().get_token_sync(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        auth_config=CodeAgentAuthConfig(
+            auth_method=CodeAgentAuthMethod.PASSWORD,
+            username="relay-user",
+            password="relay-password",
+        ),
+        ssl_verify=False,
+        connect_timeout_seconds=12.0,
+    )
+
+    assert token == "maas-issued-token"
+    auth_config = cast(MaaSAuthConfig, captured["auth_config"])
+    assert auth_config.username == "relay-user"
+    assert auth_config.password == "relay-password"
+    assert captured["ssl_verify"] is False
+    assert captured["connect_timeout_seconds"] == pytest.approx(12.0)
+    assert captured["force_refresh"] is False
+
+
+def test_codeagent_token_service_password_login_sync_requires_username_and_password() -> (
+    None
+):
+    with pytest.raises(
+        CodeAgentOAuthError,
+        match="CodeAgent username/password is not configured.",
+    ):
+        CodeAgentTokenService().get_token_result_sync(
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            auth_config=CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+            ),
+            ssl_verify=None,
+            connect_timeout_seconds=15.0,
+        )
+
+
+def test_codeagent_token_service_password_login_sync_maps_maas_login_error(
+    monkeypatch,
+) -> None:
+    class _FailingMaaSTokenService:
+        def get_auth_context_sync(
+            self,
+            *,
+            auth_config: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> MaaSAuthContext:
+            _ = auth_config, ssl_verify, connect_timeout_seconds, force_refresh
+            raise MaaSLoginError("password login denied", status_code=401)
+
+    monkeypatch.setattr(
+        codeagent_auth_module,
+        "get_maas_token_service",
+        lambda: _FailingMaaSTokenService(),
+    )
+
+    with pytest.raises(CodeAgentOAuthError, match="password login denied") as exc_info:
+        CodeAgentTokenService().get_token_result_sync(
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            auth_config=CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+                password="relay-password",
+            ),
+            ssl_verify=None,
+            connect_timeout_seconds=15.0,
+        )
+
+    assert exc_info.value.status_code == 401
+
+
 def test_codeagent_token_service_get_token_result_sync_uses_cached_result() -> None:
     service = CodeAgentTokenService()
     auth_config = CodeAgentAuthConfig(refresh_token="refresh-token")
@@ -277,6 +383,21 @@ def test_codeagent_token_service_get_token_result_sync_uses_cached_result() -> N
     )
 
     assert result == token_result
+
+
+def test_codeagent_token_service_token_result_from_config_skips_password_auth() -> None:
+    service = CodeAgentTokenService()
+
+    assert (
+        service._token_result_from_config(
+            CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+                password="relay-password",
+            )
+        )
+        is None
+    )
 
 
 def test_codeagent_token_service_get_token_result_sync_rechecks_cache_inside_lock(
@@ -637,6 +758,109 @@ async def test_codeagent_token_service_get_token_uses_cached_async_result() -> N
     )
 
     assert token == "cached-access-token"
+
+
+@pytest.mark.asyncio
+async def test_codeagent_token_service_password_login_async_reuses_maas_token_service(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _FakeMaaSTokenService:
+        async def get_auth_context(
+            self,
+            *,
+            auth_config: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> MaaSAuthContext:
+            captured["auth_config"] = auth_config
+            captured["ssl_verify"] = ssl_verify
+            captured["connect_timeout_seconds"] = connect_timeout_seconds
+            captured["force_refresh"] = force_refresh
+            return MaaSAuthContext(token="maas-issued-token", department=None)
+
+    monkeypatch.setattr(
+        codeagent_auth_module,
+        "get_maas_token_service",
+        lambda: _FakeMaaSTokenService(),
+    )
+
+    token = await CodeAgentTokenService().get_token(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        auth_config=CodeAgentAuthConfig(
+            auth_method=CodeAgentAuthMethod.PASSWORD,
+            username="relay-user",
+            password="relay-password",
+        ),
+        ssl_verify=False,
+        connect_timeout_seconds=12.0,
+    )
+
+    assert token == "maas-issued-token"
+    auth_config = cast(MaaSAuthConfig, captured["auth_config"])
+    assert auth_config.username == "relay-user"
+    assert auth_config.password == "relay-password"
+    assert captured["ssl_verify"] is False
+    assert captured["connect_timeout_seconds"] == pytest.approx(12.0)
+    assert captured["force_refresh"] is False
+
+
+@pytest.mark.asyncio
+async def test_codeagent_token_service_password_login_async_requires_username_and_password() -> (
+    None
+):
+    with pytest.raises(
+        CodeAgentOAuthError,
+        match="CodeAgent username/password is not configured.",
+    ):
+        await CodeAgentTokenService().get_token_result(
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            auth_config=CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+            ),
+            ssl_verify=None,
+            connect_timeout_seconds=15.0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_codeagent_token_service_password_login_async_maps_maas_login_error(
+    monkeypatch,
+) -> None:
+    class _FailingMaaSTokenService:
+        async def get_auth_context(
+            self,
+            *,
+            auth_config: object,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> MaaSAuthContext:
+            _ = auth_config, ssl_verify, connect_timeout_seconds, force_refresh
+            raise MaaSLoginError("password login denied", status_code=401)
+
+    monkeypatch.setattr(
+        codeagent_auth_module,
+        "get_maas_token_service",
+        lambda: _FailingMaaSTokenService(),
+    )
+
+    with pytest.raises(CodeAgentOAuthError, match="password login denied") as exc_info:
+        await CodeAgentTokenService().get_token_result(
+            base_url=DEFAULT_CODEAGENT_BASE_URL,
+            auth_config=CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+                password="relay-password",
+            ),
+            ssl_verify=None,
+            connect_timeout_seconds=15.0,
+        )
+
+    assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio

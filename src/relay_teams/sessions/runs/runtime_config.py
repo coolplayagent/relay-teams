@@ -21,10 +21,12 @@ from relay_teams.paths import (
 )
 from relay_teams.providers.codeagent_auth import (
     codeagent_access_token_secret_field_name,
+    codeagent_password_secret_field_name,
     codeagent_refresh_token_secret_field_name,
 )
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
@@ -54,6 +56,7 @@ _MODEL_PROFILE_SECRET_NAMESPACE = "model_profile"
 _MODEL_PROFILE_SECRET_FIELD = "api_key"
 _MODEL_PROFILE_MAAS_PASSWORD_FIELD = maas_password_secret_field_name()
 _MODEL_PROFILE_CODEAGENT_ACCESS_TOKEN_FIELD = codeagent_access_token_secret_field_name()
+_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD = codeagent_password_secret_field_name()
 _MODEL_PROFILE_CODEAGENT_REFRESH_TOKEN_FIELD = (
     codeagent_refresh_token_secret_field_name()
 )
@@ -256,7 +259,16 @@ def load_llm_profile_state(
                     f"Invalid profile '{name}': MAAS profiles require maas_auth with a password."
                 )
         elif provider == ProviderType.CODEAGENT:
-            if codeagent_auth is None or codeagent_auth.refresh_token is None:
+            if codeagent_auth is None:
+                raise ValueError(
+                    f"Invalid profile '{name}': CodeAgent profiles require codeagent_auth configuration."
+                )
+            if codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
+                if codeagent_auth.username is None or codeagent_auth.password is None:
+                    raise ValueError(
+                        f"Invalid profile '{name}': CodeAgent password profiles require codeagent_auth.username and password."
+                    )
+            elif codeagent_auth.refresh_token is None:
                 raise ValueError(
                     f"Invalid profile '{name}': CodeAgent profiles require codeagent_auth from completed SSO login."
                 )
@@ -556,6 +568,48 @@ def _resolve_profile_codeagent_auth(
         )
     payload = dict(raw_value)
     normalized_payload: dict[str, str | bool] = {}
+    auth_method_raw = payload.get("auth_method")
+    if isinstance(auth_method_raw, str) and auth_method_raw.strip():
+        normalized_payload["auth_method"] = auth_method_raw.strip()
+    resolved_auth_method = (
+        CodeAgentAuthMethod.PASSWORD
+        if normalized_payload.get("auth_method") == CodeAgentAuthMethod.PASSWORD.value
+        else CodeAgentAuthMethod.SSO
+    )
+
+    username = payload.get("username")
+    if isinstance(username, str) and username.strip():
+        normalized_payload["username"] = username.strip()
+
+    password = payload.get("password")
+    if resolved_auth_method == CodeAgentAuthMethod.PASSWORD:
+        if isinstance(password, str) and password.strip():
+            normalized_payload["password"] = _resolve_required_config_value(
+                password,
+                env_values,
+                profile_name=profile_name,
+                field_name="codeagent_auth.password",
+            )
+        else:
+            secret_value = get_secret_store().get_secret(
+                config_dir,
+                namespace=_MODEL_PROFILE_SECRET_NAMESPACE,
+                owner_id=profile_name,
+                field_name=_MODEL_PROFILE_CODEAGENT_PASSWORD_FIELD,
+            )
+            if secret_value is not None:
+                normalized_payload["password"] = _resolve_required_config_value(
+                    secret_value,
+                    env_values,
+                    profile_name=profile_name,
+                    field_name="codeagent_auth.password",
+                )
+        if payload.get("has_password"):
+            normalized_payload["has_password"] = True
+        return CodeAgentAuthConfig.model_validate(normalized_payload).with_secret_owner(
+            config_dir=config_dir,
+            owner_id=profile_name,
+        )
 
     access_token = _resolve_profile_codeagent_token(
         config_dir=config_dir,
