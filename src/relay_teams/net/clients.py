@@ -17,6 +17,7 @@ from relay_teams.env.runtime_env import load_merged_env_vars
 from relay_teams.env.hook_runtime_env import merge_tool_hook_runtime_env
 from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
 from relay_teams.net.proxy_transports import (
+    AsyncRequestLimiter,
     AsyncProxyRoutingTransport,
     SyncProxyRoutingTransport,
 )
@@ -76,6 +77,7 @@ def create_async_http_client(
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT,
     connect_timeout_seconds: float = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
     follow_redirects: bool = False,
+    request_limiter: AsyncRequestLimiter | None = None,
 ) -> httpx.AsyncClient:
     resolved_proxy_config = _resolve_proxy_config(
         merged_env=merged_env,
@@ -93,6 +95,7 @@ def create_async_http_client(
         transport=AsyncProxyRoutingTransport(
             proxy_config=resolved_proxy_config,
             ssl_verify=resolved_ssl_verify,
+            request_limiter=request_limiter,
         ),
         follow_redirects=follow_redirects,
     )

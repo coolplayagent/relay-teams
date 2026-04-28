@@ -78,6 +78,7 @@ def test_build_llm_http_client_loads_saved_proxy_settings_when_env_not_provided(
     client = llm_client.build_llm_http_client()
 
     assert isinstance(client, _FakeAsyncClient)
+    assert captured_kwargs.pop("request_limiter") is not None
     assert captured_kwargs == {
         "merged_env": {
             "HTTPS_PROXY": "http://alice:secret@proxy.internal:8443",
