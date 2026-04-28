@@ -444,6 +444,44 @@ def test_build_mcp_server_stdio_inherits_process_env_and_prefers_explicit_env(
     assert server.env["MCP_SPEC_ONLY"] == "from-spec"
 
 
+def test_build_mcp_server_stdio_expands_explicit_env_references(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("MCP_TOKEN", "token-from-process")
+    monkeypatch.setenv("MCP_HOME", "C:/Users/tester")
+    monkeypatch.setenv("MCP_MODE", "stdio")
+    monkeypatch.setenv("TOKEN", "same-name-token")
+
+    server = build_mcp_server(
+        McpServerSpec(
+            name="context7",
+            config={"mcpServers": {"context7": {"command": "npx"}}},
+            server_config={
+                "command": "npx",
+                "args": ["-y", "@upstash/context7-mcp"],
+                "env": {
+                    "TOKEN": "{{MCP_TOKEN}}",
+                    "SAME_NAME_TOKEN": "{{TOKEN}}",
+                    "CACHE_DIR": "%MCP_HOME%/.cache/context7",
+                    "MODE": "$MCP_MODE",
+                    "MISSING": "${MCP_MISSING}",
+                    "TEMPLATE_MISSING": "{{MCP_MISSING}}",
+                },
+            },
+            source=McpConfigScope.SESSION,
+        )
+    )
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert server.env["TOKEN"] == "token-from-process"
+    assert server.env["SAME_NAME_TOKEN"] == "same-name-token"
+    assert server.env["CACHE_DIR"] == "C:/Users/tester/.cache/context7"
+    assert server.env["MODE"] == "stdio"
+    assert server.env["MISSING"] == "${MCP_MISSING}"
+    assert server.env["TEMPLATE_MISSING"] == "{{MCP_MISSING}}"
+
+
 def test_registry_resolve_server_names_ignores_unknown_servers_when_not_strict() -> (
     None
 ):
