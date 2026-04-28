@@ -28,6 +28,7 @@ from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegist
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 from relay_teams.sessions.session_rounds_projection import (
+    ROUND_PROJECTION_EVENT_TYPES,
     approvals_to_projection,
     build_session_rounds,
     build_session_timeline_rounds,
@@ -1238,6 +1239,29 @@ class SessionService:
         events = self._event_log.list_by_session(session_id)
         return cast(list[dict[str, object]], list(events))
 
+    def _get_round_projection_events(self, session_id: str) -> list[dict[str, object]]:
+        if self._event_log is None:
+            return []
+        events = self._event_log.list_by_session_event_types(
+            session_id,
+            ROUND_PROJECTION_EVENT_TYPES,
+        )
+        return cast(list[dict[str, object]], list(events))
+
+    def _get_round_projection_events_for_runs(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+    ) -> list[dict[str, object]]:
+        if self._event_log is None:
+            return []
+        events = self._event_log.list_by_session_run_ids_event_types(
+            session_id,
+            run_ids,
+            ROUND_PROJECTION_EVENT_TYPES,
+        )
+        return cast(list[dict[str, object]], list(events))
+
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
         return cast(
             list[dict[str, object]],
@@ -1263,40 +1287,89 @@ class SessionService:
             if record.envelope.parent_task_id is not None
         ]
 
-    def build_session_rounds(self, session_id: str) -> list[dict[str, object]]:
+    def build_session_rounds(
+        self,
+        session_id: str,
+        *,
+        included_run_ids: set[str] | None = None,
+        include_history_markers: bool = True,
+    ) -> list[dict[str, object]]:
         excluded_run_ids = self._subagent_run_ids(session_id)
+        selected_run_ids = (
+            tuple(sorted(included_run_ids)) if included_run_ids is not None else None
+        )
         todos_by_run_id = (
             {
                 snapshot.run_id: snapshot.model_dump(mode="json")
                 for snapshot in self._todo_service.list_for_session(session_id)
+                if included_run_ids is None or snapshot.run_id in included_run_ids
             }
             if self._todo_service is not None
             else {}
         )
-        intent_input_parts_by_run = self._session_run_intent_input_parts_by_run(
-            session_id
+        intent_input_parts_by_run = (
+            self._session_run_intent_input_parts_by_run(session_id)
+            if included_run_ids is None
+            else {
+                run_id: parts
+                for run_id, parts in self._session_run_intent_input_parts_by_run(
+                    session_id
+                ).items()
+                if run_id in included_run_ids
+            }
         )
-        runtime_by_run = self._session_run_runtime_by_run(session_id)
+        runtime_by_run = {
+            run_id: runtime
+            for run_id, runtime in self._session_run_runtime_by_run(session_id).items()
+            if included_run_ids is None or run_id in included_run_ids
+        }
         rounds = build_session_rounds(
             session_id=session_id,
             agent_repo=self._agent_repo,
             task_repo=self._task_repo,
             approval_tickets_by_run=approvals_to_projection(
-                self._approval_ticket_repo.list_open_by_session(session_id)
+                [
+                    record
+                    for record in self._approval_ticket_repo.list_open_by_session(
+                        session_id
+                    )
+                    if included_run_ids is None or record.run_id in included_run_ids
+                ]
             ),
             run_runtime_repo=self._run_runtime_repo,
             get_session_messages=lambda current_session_id: cast(
                 list[dict[str, object]],
-                self._message_repo.get_messages_by_session(
-                    current_session_id,
-                    include_cleared=True,
-                    include_hidden_from_context=True,
+                (
+                    self._message_repo.get_messages_by_session(
+                        current_session_id,
+                        include_cleared=True,
+                        include_hidden_from_context=True,
+                    )
+                    if selected_run_ids is None
+                    else self._message_repo.get_messages_by_session_run_ids(
+                        current_session_id,
+                        selected_run_ids,
+                        include_cleared=True,
+                        include_hidden_from_context=True,
+                    )
                 ),
             ),
             get_run_intent_input=intent_input_parts_by_run.get,
-            get_session_history_markers=self._get_session_history_markers,
-            get_session_events=self.get_global_events,
+            get_session_history_markers=(
+                self._get_session_history_markers if include_history_markers else None
+            ),
+            get_session_events=(
+                self._get_round_projection_events
+                if selected_run_ids is None
+                else lambda current_session_id: (
+                    self._get_round_projection_events_for_runs(
+                        current_session_id,
+                        selected_run_ids,
+                    )
+                )
+            ),
             excluded_run_ids=excluded_run_ids,
+            included_run_ids=included_run_ids,
             run_runtime_by_run=runtime_by_run,
         )
         question_counts_by_run = self._pending_user_question_counts_by_run(session_id)
@@ -1352,7 +1425,7 @@ class SessionService:
             ),
             get_run_intent_input=intent_input_parts_by_run.get,
             get_session_history_markers=self._get_session_history_markers,
-            get_session_events=self.get_global_events,
+            get_session_events=self._get_round_projection_events,
             excluded_run_ids=excluded_run_ids,
             run_runtime_by_run=runtime_by_run,
         )
@@ -1426,8 +1499,52 @@ class SessionService:
         if timeline:
             rounds = self.build_session_timeline_rounds(session_id)
             return timeline_rounds(rounds)
-        rounds = self.build_session_rounds(session_id)
-        return paginate_rounds(rounds, limit=limit, cursor_run_id=cursor_run_id)
+        timeline_items = self.build_session_timeline_rounds(session_id)
+        page = paginate_rounds(
+            timeline_items,
+            limit=limit,
+            cursor_run_id=cursor_run_id,
+        )
+        page_items = page.get("items")
+        if not isinstance(page_items, list) or not page_items:
+            return page
+        page_run_ids = tuple(
+            str(item.get("run_id") or "")
+            for item in page_items
+            if isinstance(item, dict) and str(item.get("run_id") or "")
+        )
+        if not page_run_ids:
+            return page
+        full_rounds = self.build_session_rounds(
+            session_id,
+            included_run_ids=set(page_run_ids),
+            include_history_markers=False,
+        )
+        full_round_by_run = {
+            str(round_item.get("run_id") or ""): round_item
+            for round_item in full_rounds
+        }
+        page_marker_by_run = {
+            str(item.get("run_id") or ""): {
+                "clear_marker_before": item.get("clear_marker_before"),
+                "compaction_marker_before": item.get("compaction_marker_before"),
+            }
+            for item in page_items
+            if isinstance(item, dict) and str(item.get("run_id") or "")
+        }
+        resolved_items: list[dict[str, object]] = []
+        for run_id in page_run_ids:
+            full_round = full_round_by_run.get(run_id)
+            if full_round is None:
+                continue
+            markers = page_marker_by_run.get(run_id, {})
+            full_round["clear_marker_before"] = markers.get("clear_marker_before")
+            full_round["compaction_marker_before"] = markers.get(
+                "compaction_marker_before"
+            )
+            resolved_items.append(full_round)
+        page["items"] = resolved_items
+        return page
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
         rounds = self.build_session_rounds(session_id)

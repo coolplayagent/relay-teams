@@ -22,6 +22,7 @@ SETTINGS_ADMIN_THREAD_WORKER_COUNT = 4
 LOGS_INGEST_THREAD_WORKER_COUNT = 2
 FILE_MEDIA_THREAD_WORKER_COUNT = 4
 RUNTIME_BACKGROUND_THREAD_WORKER_COUNT = 4
+NETWORK_PROBE_THREAD_WORKER_COUNT = 4
 SLOW_SERVER_CALL_SECONDS = 1.0
 DEFAULT_ROUTE_WORK_QUEUE_TIMEOUT_SECONDS = 4.0
 LOGGER = get_logger(__name__)
@@ -35,6 +36,7 @@ class RouteWorkClass(str, Enum):
     LOGS_INGEST = "logs_ingest"
     FILE_MEDIA = "file_media"
     RUNTIME_BACKGROUND = "runtime_background"
+    NETWORK_PROBE = "network_probe"
 
 
 class RouteWorkRejectedError(RuntimeError):
@@ -49,6 +51,7 @@ _ROUTE_WORKER_COUNTS = {
     RouteWorkClass.LOGS_INGEST: LOGS_INGEST_THREAD_WORKER_COUNT,
     RouteWorkClass.FILE_MEDIA: FILE_MEDIA_THREAD_WORKER_COUNT,
     RouteWorkClass.RUNTIME_BACKGROUND: RUNTIME_BACKGROUND_THREAD_WORKER_COUNT,
+    RouteWorkClass.NETWORK_PROBE: NETWORK_PROBE_THREAD_WORKER_COUNT,
 }
 _ROUTE_QUEUE_LIMITS = {
     RouteWorkClass.CRITICAL_CONTROL: ISOLATED_THREAD_WORKER_COUNT * 2,
@@ -58,6 +61,7 @@ _ROUTE_QUEUE_LIMITS = {
     RouteWorkClass.LOGS_INGEST: LOGS_INGEST_THREAD_WORKER_COUNT * 2,
     RouteWorkClass.FILE_MEDIA: FILE_MEDIA_THREAD_WORKER_COUNT * 2,
     RouteWorkClass.RUNTIME_BACKGROUND: RUNTIME_BACKGROUND_THREAD_WORKER_COUNT * 2,
+    RouteWorkClass.NETWORK_PROBE: NETWORK_PROBE_THREAD_WORKER_COUNT * 2,
 }
 _ROUTE_EXECUTORS = {
     work_class: ThreadPoolExecutor(
@@ -229,6 +233,22 @@ async def call_maybe_async_in_session_read_thread(
 ) -> ResultT:
     return await call_route_work(
         RouteWorkClass.SESSION_READ,
+        operation,
+        function,
+        *args,
+        **kwargs,
+    )
+
+
+async def call_maybe_async_in_network_probe_thread(
+    operation: str,
+    function: Callable[ParamT, ResultT | Awaitable[ResultT]],
+    /,
+    *args: ParamT.args,
+    **kwargs: ParamT.kwargs,
+) -> ResultT:
+    return await call_route_work(
+        RouteWorkClass.NETWORK_PROBE,
         operation,
         function,
         *args,

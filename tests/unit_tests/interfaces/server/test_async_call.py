@@ -13,6 +13,7 @@ from relay_teams.interfaces.server import async_call
 from relay_teams.interfaces.server.async_call import (
     call_maybe_async,
     call_maybe_async_in_isolated_thread,
+    call_maybe_async_in_network_probe_thread,
     call_maybe_async_in_session_read_thread,
     call_route_work,
     RouteWorkClass,
@@ -181,6 +182,57 @@ async def test_session_read_thread_is_not_blocked_by_default_executor() -> None:
         release_default_worker.set()
         completed = await blocking_task
         assert completed is None
+
+
+@pytest.mark.asyncio
+async def test_network_probe_thread_isolated_from_critical_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executor = ThreadPoolExecutor(max_workers=1)
+    release_worker = threading.Event()
+    worker_started = threading.Event()
+
+    monkeypatch.setitem(
+        async_call._ROUTE_EXECUTORS,
+        RouteWorkClass.CRITICAL_CONTROL,
+        executor,
+    )
+    monkeypatch.setitem(
+        async_call._ROUTE_SEMAPHORES,
+        RouteWorkClass.CRITICAL_CONTROL,
+        asyncio.Semaphore(1),
+    )
+
+    def block_critical_control() -> str:
+        worker_started.set()
+        _ = release_worker.wait(timeout=5.0)
+        return "done"
+
+    blocking_task = asyncio.create_task(
+        call_route_work(
+            RouteWorkClass.CRITICAL_CONTROL,
+            "test.blocking_critical",
+            block_critical_control,
+        )
+    )
+    try:
+        started = await asyncio.to_thread(worker_started.wait, 1.0)
+        assert started is True
+
+        def load_probe_value() -> str:
+            return "probe-ok"
+
+        result = await asyncio.wait_for(
+            call_maybe_async_in_network_probe_thread(
+                "test.network_probe",
+                load_probe_value,
+            ),
+            timeout=1.0,
+        )
+        assert result == "probe-ok"
+    finally:
+        release_worker.set()
+        assert await blocking_task == "done"
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from relay_teams.interfaces.server.async_call import (
     call_maybe_async,
     call_maybe_async_in_isolated_thread,
+    call_maybe_async_in_network_probe_thread,
 )
 from relay_teams.env.clawhub_config_models import ClawHubConfig
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
@@ -291,7 +292,11 @@ async def probe_ssh_profile_connectivity(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileConnectivityProbeResult:
     try:
-        return await call_maybe_async(service.probe_connectivity, req)
+        return await call_maybe_async_in_network_probe_thread(
+            "ssh.probe_connectivity",
+            service.probe_connectivity,
+            req,
+        )
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -663,7 +668,11 @@ async def probe_model_connectivity(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelConnectivityProbeResult:
     try:
-        return await call_maybe_async(service.probe_connectivity, req)
+        return await call_maybe_async_in_network_probe_thread(
+            "model.probe_connectivity",
+            service.probe_connectivity,
+            req,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -674,7 +683,11 @@ async def discover_model_catalog(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelDiscoveryResult:
     try:
-        return await call_maybe_async(service.discover_models, req)
+        return await call_maybe_async_in_network_probe_thread(
+            "model.discover_models",
+            service.discover_models,
+            req,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

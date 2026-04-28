@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pydantic import JsonValue
 
 from relay_teams.media import InlineMediaContentPart
 from relay_teams.media import MediaModality
@@ -21,6 +22,7 @@ from relay_teams.sessions.runs.user_question_models import UserQuestionOption
 from relay_teams.sessions.runs.user_question_models import UserQuestionPrompt
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository
 from relay_teams.sessions.session_service import SessionService
+from relay_teams.sessions.session_rounds_projection import build_session_timeline_rounds
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
@@ -239,6 +241,172 @@ def test_session_rounds_timeline_bypasses_full_round_projection(
     assert first.get("run_id") == "run-1"
     assert first.get("intent") == "timeline only"
     assert "coordinator_messages" not in first
+
+
+def test_session_rounds_page_targets_only_visible_run_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "rounds_page_targeted_messages.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    task_repo = TaskRepository(db_path)
+    for index in range(3):
+        _ = task_repo.create(
+            TaskEnvelope(
+                task_id=f"task-root-{index}",
+                session_id="session-1",
+                parent_task_id=None,
+                trace_id=f"run-{index}",
+                objective=f"work {index}",
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+            )
+        )
+
+    def fail_full_session_message_load(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("paged rounds should not load every session message")
+
+    captured_run_ids: list[tuple[str, ...]] = []
+    original_targeted_load = service._message_repo.get_messages_by_session_run_ids
+
+    def capture_targeted_load(
+        session_id: str,
+        run_ids: tuple[str, ...],
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        captured_run_ids.append(run_ids)
+        return original_targeted_load(
+            session_id,
+            run_ids,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
+    monkeypatch.setattr(
+        service._message_repo,
+        "get_messages_by_session",
+        fail_full_session_message_load,
+    )
+    monkeypatch.setattr(
+        service._message_repo,
+        "get_messages_by_session_run_ids",
+        capture_targeted_load,
+    )
+
+    page = service.get_session_rounds("session-1", limit=1)
+    items = page.get("items")
+
+    assert isinstance(items, list)
+    assert len(items) == 1
+    assert page.get("has_more") is True
+    assert captured_run_ids == [(str(items[0].get("run_id") or ""),)]
+
+
+def test_build_session_timeline_rounds_filters_included_run_ids(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "timeline_rounds_included_runs.db"
+    task_repo = TaskRepository(db_path)
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-1",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-1",
+            objective="first run",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-2",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-2",
+            objective="second run",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    rounds = build_session_timeline_rounds(
+        session_id="session-1",
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        get_session_user_messages=lambda _session_id: [],
+        included_run_ids={"run-2"},
+    )
+
+    assert [round_item["run_id"] for round_item in rounds] == ["run-2"]
+
+
+def test_round_projection_events_return_empty_without_event_log(tmp_path: Path) -> None:
+    service = _build_service(tmp_path / "round_events_without_log.db")
+    service._event_log = None
+
+    assert service._get_round_projection_events("session-1") == []
+    assert service._get_round_projection_events_for_runs("session-1", ("run-1",)) == []
+
+
+def test_get_session_rounds_returns_empty_page_without_timeline_items(
+    tmp_path: Path,
+) -> None:
+    service = _build_service(tmp_path / "rounds_empty_page.db")
+
+    page = service.get_session_rounds("session-1")
+
+    assert page.get("items") == []
+
+
+def test_get_session_rounds_keeps_page_when_timeline_items_have_no_run_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _build_service(tmp_path / "rounds_page_without_run_ids.db")
+    page_items: list[dict[str, object]] = [{"intent": "missing run id"}]
+
+    def timeline_without_run_ids(_session_id: str) -> list[dict[str, object]]:
+        return list(page_items)
+
+    monkeypatch.setattr(
+        service,
+        "build_session_timeline_rounds",
+        timeline_without_run_ids,
+    )
+
+    page = service.get_session_rounds("session-1")
+
+    assert page.get("items") == page_items
+
+
+def test_get_session_rounds_skips_timeline_items_missing_full_rounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _build_service(tmp_path / "rounds_missing_full_round.db")
+
+    def timeline_rounds(_session_id: str) -> list[dict[str, object]]:
+        return [{"run_id": "run-1", "intent": "missing full round"}]
+
+    def no_full_rounds(
+        _session_id: str,
+        *,
+        included_run_ids: set[str] | None = None,
+        include_history_markers: bool = True,
+    ) -> list[dict[str, object]]:
+        assert included_run_ids == {"run-1"}
+        assert include_history_markers is False
+        return []
+
+    monkeypatch.setattr(service, "build_session_timeline_rounds", timeline_rounds)
+    monkeypatch.setattr(service, "build_session_rounds", no_full_rounds)
+
+    page = service.get_session_rounds("session-1")
+
+    assert page.get("items") == []
 
 
 def test_session_rounds_timeline_applies_runtime_phase_and_todo_overlay(

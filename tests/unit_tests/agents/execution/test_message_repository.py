@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
 from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
@@ -125,6 +126,59 @@ def test_message_repo_hides_duplicate_task_objective_messages(tmp_path: Path) ->
     messages = repo.get_messages_by_session("session-1")
 
     assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_message_repo_lists_messages_by_session_run_ids(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_session_run_ids.db"
+    repo = MessageRepository(db_path)
+    reminder = render_system_reminder("Check todos.")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="query time")])],
+    )
+    repo.append_user_prompt_if_missing(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-2",
+        trace_id="run-2",
+        content=reminder,
+    )
+    repo.append(
+        session_id="session-2",
+        workspace_id="default",
+        instance_id="inst-2",
+        task_id="task-3",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="other session")])],
+    )
+
+    empty_messages = repo.get_messages_by_session_run_ids(
+        "session-1",
+        ("", "   "),
+    )
+    messages = await repo.get_messages_by_session_run_ids_async(
+        "session-1",
+        ("run-1", "run-2", "run-1"),
+    )
+
+    assert empty_messages == []
+    assert [message["trace_id"] for message in messages] == ["run-1"]
+    payload = cast(dict[str, object], messages[0]["message"])
+    parts = cast(list[dict[str, object]], payload["parts"])
+    assert parts[0]["content"] == "query time"
 
 
 def test_message_repo_filters_system_reminders_from_public_message_reads(

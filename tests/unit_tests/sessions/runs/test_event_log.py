@@ -72,6 +72,70 @@ async def test_event_log_async_hot_paths_do_not_reinitialize_schema(
 
 
 @pytest.mark.asyncio
+async def test_event_log_lists_session_run_events_by_type(
+    tmp_path: Path,
+) -> None:
+    event_log = EventLog(tmp_path / "event_log_session_run_event_types.db")
+    run_started_id = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            instance_id="instance-1",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"started": true}',
+        )
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-2",
+            trace_id="run-2",
+            task_id="task-2",
+            instance_id="instance-2",
+            event_type=RunEventType.MODEL_STEP_STARTED,
+            payload_json="{}",
+        )
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-2",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-3",
+            instance_id="instance-3",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json="{}",
+        )
+    )
+
+    try:
+        empty_by_type = event_log.list_by_session_event_types("session-1", ("", "  "))
+        by_type = await event_log.list_by_session_event_types_async(
+            "session-1",
+            (RunEventType.RUN_STARTED.value,),
+        )
+        empty_by_run_and_type = event_log.list_by_session_run_ids_event_types(
+            "session-1",
+            (),
+            (RunEventType.RUN_STARTED.value,),
+        )
+        by_run_and_type = await event_log.list_by_session_run_ids_event_types_async(
+            "session-1",
+            ("run-1", "run-2", "run-1"),
+            (RunEventType.RUN_STARTED.value,),
+        )
+    finally:
+        await event_log.close_async()
+
+    assert empty_by_type == ()
+    assert empty_by_run_and_type == ()
+    assert tuple(row["trace_id"] for row in by_type) == ("run-1",)
+    assert tuple(row["id"] for row in by_run_and_type) == (run_started_id,)
+
+
+@pytest.mark.asyncio
 async def test_event_log_lists_session_events_after_id_and_filters_subagent_runs(
     tmp_path: Path,
 ) -> None:
