@@ -24,6 +24,30 @@
     color: var(--button-primary-text);
 }
 
+.settings-modal .section-action-btn.primary-btn,
+.feedback-dialog .feedback-action-btn {
+    width: 88px;
+    min-width: 88px;
+}
+
+.settings-modal #save-hooks-btn,
+.feedback-dialog [data-feedback-confirm] {
+    width: 88px;
+    min-width: 88px;
+}
+
+.settings-modal #save-hooks-btn {
+    max-width: 88px;
+}
+
+@media (max-width: 480px) {
+    .feedback-dialog .feedback-action-btn {
+        flex: 1 1 0;
+        width: auto;
+        min-width: 0;
+    }
+}
+
 .primary-btn:hover {
     background: var(--button-primary-hover);
     border-color: var(--button-primary-hover);

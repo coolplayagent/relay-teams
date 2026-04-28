@@ -566,6 +566,12 @@ export function bindHooksSettingsHandlers() {
 export async function loadHooksSettingsPanel() {
     globalThis.__loadCalls.hooks += 1;
 }
+
+export function syncHooksSettingsActions() {
+    document.getElementById('add-hook-btn').style.display = 'inline-flex';
+    document.getElementById('validate-hooks-btn').style.display = 'inline-flex';
+    document.getElementById('save-hooks-btn').style.display = 'inline-flex';
+}
 """.strip(),
         encoding="utf-8",
     )
