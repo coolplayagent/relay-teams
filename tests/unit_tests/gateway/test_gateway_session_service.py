@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import cast
 
+import pytest
+
 from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.gateway_model_profile_override import (
     GatewayModelProfileOverride,
@@ -85,6 +87,103 @@ def test_resolve_or_create_session_preserves_model_profile_override_on_rebind() 
     assert profile_store.get(second.internal_session_id) == previous_profile
 
 
+def test_resolve_or_bind_internal_session_uses_existing_session() -> None:
+    repository = _FakeGatewaySessionRepository()
+    session_service = _FakeSessionService()
+    service = GatewaySessionService(
+        repository=cast(GatewaySessionRepository, repository),
+        session_service=cast(SessionService, session_service),
+    )
+    internal_session = session_service.create_session(workspace_id="workspace-1")
+
+    gateway_session = service.resolve_or_bind_internal_session(
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id="xiaoluban:account:workspace-1:internal:session-1",
+        internal_session_id=internal_session.session_id,
+        workspace_id="workspace-1",
+        channel_state={"sender": "uid"},
+    )
+
+    assert gateway_session.internal_session_id == internal_session.session_id
+    assert len(session_service.sessions) == 1
+    assert gateway_session.channel_state == {"sender": "uid"}
+
+
+def test_resolve_or_bind_internal_session_updates_existing_mapping() -> None:
+    repository = _FakeGatewaySessionRepository()
+    session_service = _FakeSessionService()
+    service = GatewaySessionService(
+        repository=cast(GatewaySessionRepository, repository),
+        session_service=cast(SessionService, session_service),
+    )
+    first = session_service.create_session(workspace_id="workspace-1")
+    second = session_service.create_session(workspace_id="workspace-1")
+    existing = GatewaySessionRecord(
+        gateway_session_id="gws-existing",
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id="xiaoluban:account:workspace-1:internal:session",
+        internal_session_id=first.session_id,
+        active_run_id="run-active",
+        channel_state={"receiver": "old"},
+    )
+    repository.create(existing)
+
+    gateway_session = service.resolve_or_bind_internal_session(
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id=existing.external_session_id,
+        internal_session_id=second.session_id,
+        workspace_id="workspace-1",
+        channel_state={"sender": "new"},
+        peer_user_id="sender",
+    )
+
+    assert gateway_session.gateway_session_id == "gws-existing"
+    assert gateway_session.internal_session_id == second.session_id
+    assert gateway_session.active_run_id is None
+    assert gateway_session.peer_user_id == "sender"
+    assert gateway_session.channel_state == {"receiver": "old", "sender": "new"}
+
+
+def test_gateway_session_service_list_helpers_delegate() -> None:
+    repository = _FakeGatewaySessionRepository()
+    session_service = _FakeSessionService()
+    service = GatewaySessionService(
+        repository=cast(GatewaySessionRepository, repository),
+        session_service=cast(SessionService, session_service),
+    )
+    workspace_1 = session_service.create_session(workspace_id="workspace-1")
+    _ = session_service.create_session(workspace_id="workspace-2")
+    record = GatewaySessionRecord(
+        gateway_session_id="gws-existing",
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id="xiaoluban:account:workspace-1:session",
+        internal_session_id=workspace_1.session_id,
+    )
+    repository.create(record)
+
+    assert service.get_by_internal_session_id(workspace_1.session_id) == record
+    assert service.list_all() == (record,)
+    assert service.list_internal_by_workspace("workspace-1") == (workspace_1,)
+
+
+def test_resolve_or_bind_internal_session_rejects_workspace_mismatch() -> None:
+    repository = _FakeGatewaySessionRepository()
+    session_service = _FakeSessionService()
+    service = GatewaySessionService(
+        repository=cast(GatewaySessionRepository, repository),
+        session_service=cast(SessionService, session_service),
+    )
+    internal_session = session_service.create_session(workspace_id="workspace-1")
+
+    with pytest.raises(ValueError, match="does not belong to workspace"):
+        service.resolve_or_bind_internal_session(
+            channel_type=GatewayChannelType.XIAOLUBAN,
+            external_session_id="xiaoluban:account:workspace-2:internal:session-1",
+            internal_session_id=internal_session.session_id,
+            workspace_id="workspace-2",
+        )
+
+
 class _FakeGatewaySessionRepository:
     def __init__(self) -> None:
         self.records: dict[str, GatewaySessionRecord] = {}
@@ -110,6 +209,18 @@ class _FakeGatewaySessionRepository:
     def update(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
         self.records[record.gateway_session_id] = record
         return record
+
+    def get_by_internal_session_id(
+        self,
+        internal_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        for record in self.records.values():
+            if record.internal_session_id == internal_session_id:
+                return record
+        return None
+
+    def list_all(self) -> tuple[GatewaySessionRecord, ...]:
+        return tuple(self.records.values())
 
 
 class _FakeSessionService:
@@ -145,3 +256,6 @@ class _FakeSessionService:
 
     def delete(self, session_id: str) -> None:
         self.sessions.pop(session_id, None)
+
+    def list_sessions(self) -> tuple[SessionRecord, ...]:
+        return tuple(self.sessions.values())

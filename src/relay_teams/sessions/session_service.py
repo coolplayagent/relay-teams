@@ -997,6 +997,11 @@ class SessionService:
         )
         self._invalidate_list_sessions_cache()
 
+    def list_sessions_by_workspace(
+        self, workspace_id: str
+    ) -> tuple[SessionRecord, ...]:
+        return self._session_repo.list_by_workspace(workspace_id)
+
     def list_sessions_by_project(
         self,
         *,
