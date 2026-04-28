@@ -73,3 +73,16 @@ def test_build_assistant_error_message_uses_auth_invalid_code() -> None:
     )
 
     assert "API key is invalid" in message
+
+
+def test_build_assistant_error_message_uses_incomplete_todos_guidance() -> None:
+    message = build_assistant_error_message(
+        error_code="incomplete_todos",
+        error_message="You attempted to finish while run-scoped todos are still incomplete.",
+    )
+
+    assert "could not be marked complete" in message
+    assert "run-scoped todos are still incomplete" in message
+    assert "Reconcile the persisted todo list" in message
+    assert "Do not repeat already successful tool calls" in message
+    assert "API or execution error" not in message
