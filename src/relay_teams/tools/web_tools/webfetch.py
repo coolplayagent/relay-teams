@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
+import weakref
 from urllib.parse import ParseResult, urljoin, urlparse
 from xml.etree.ElementTree import Element, ParseError
 
@@ -65,6 +67,8 @@ REDIRECT_REQUIRED_ERROR_TYPE = "redirect_required"
 WEBFETCH_FINAL_URL_EXTENSION_KEY = "agent_teams_final_url"
 MAX_REDIRECTS = 10
 MAX_REDIRECT_BODY_BYTES = 64 * 1024
+AUTOMATED_FETCH_BLOCK_SCAN_BYTES = 256 * 1024
+WEBFETCH_PROJECTION_WORKER_CONCURRENCY = 1
 BROWSER_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
@@ -113,6 +117,10 @@ ANCHOR_REDIRECT_PATTERN = re.compile(
     r"""<a[^>]+href\s*=\s*["']([^"']+)["']""",
     re.IGNORECASE,
 )
+_WEBFETCH_PROJECTION_SEMAPHORES: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, asyncio.Semaphore
+] = weakref.WeakKeyDictionary()
+_WEBFETCH_PROJECTION_SEMAPHORES_LOCK = threading.Lock()
 
 
 class WebFetchExtractMode(StrEnum):
@@ -397,14 +405,14 @@ async def fetch_webfetch_projection(
             )
         enforce_text_content_length_limit(response)
         body = await read_response_body(response)
-        return build_webfetch_projection(
+        return await build_webfetch_projection_in_worker(
             workspace_dir=workspace_dir,
             tool_call_id=tool_call_id,
             requested_url=requested_url,
             final_url=resolve_webfetch_response_url(response),
             response_format=response_format,
             content_type=content_type,
-            response_headers=response.headers,
+            response_headers=dict(response.headers),
             body=body,
             extract=extract,
             item_limit=item_limit,
@@ -674,10 +682,19 @@ async def is_textual_challenge_response(response: httpx.Response) -> bool:
         and response.status_code not in ANTI_BOT_STATUS_CODES
     ):
         return False
-    body_text = (await response.aread()).decode("utf-8", errors="replace").lower()
-    if any(marker in body_text for marker in ENTERPRISE_PROXY_BLOCK_MARKERS):
+    body = await response.aread()
+    return await asyncio.to_thread(body_has_automated_fetch_challenge_marker, body)
+
+
+def body_has_automated_fetch_challenge_marker(body: bytes) -> bool:
+    scan_text = (
+        body[:AUTOMATED_FETCH_BLOCK_SCAN_BYTES]
+        .decode("utf-8", errors="replace")
+        .lower()
+    )
+    if any(marker in scan_text for marker in ENTERPRISE_PROXY_BLOCK_MARKERS):
         return False
-    return any(marker in body_text for marker in ANTI_BOT_CHALLENGE_MARKERS)
+    return any(marker in scan_text for marker in ANTI_BOT_CHALLENGE_MARKERS)
 
 
 async def fetch_with_reader_fallback(
@@ -1089,6 +1106,83 @@ def build_webfetch_projection(
         output=rendered_output,
         metadata=build_text_result_metadata(response_headers),
     )
+
+
+async def build_webfetch_projection_in_worker(
+    *,
+    workspace_dir: Path,
+    tool_call_id: str,
+    requested_url: str,
+    final_url: str,
+    response_format: str,
+    content_type: str,
+    response_headers: Mapping[str, str] | None = None,
+    body: bytes,
+    extract: WebFetchExtractMode,
+    item_limit: int,
+) -> ToolResultProjection:
+    projection_semaphore = get_webfetch_projection_semaphore()
+    await projection_semaphore.acquire()
+    projection_task = asyncio.create_task(
+        asyncio.to_thread(
+            build_webfetch_projection,
+            workspace_dir=workspace_dir,
+            tool_call_id=tool_call_id,
+            requested_url=requested_url,
+            final_url=final_url,
+            response_format=response_format,
+            content_type=content_type,
+            response_headers=response_headers,
+            body=body,
+            extract=extract,
+            item_limit=item_limit,
+        )
+    )
+    try:
+        return await asyncio.shield(projection_task)
+    finally:
+        release_webfetch_projection_semaphore_when_done(
+            projection_task,
+            projection_semaphore,
+        )
+
+
+def get_webfetch_projection_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    with _WEBFETCH_PROJECTION_SEMAPHORES_LOCK:
+        semaphore = _WEBFETCH_PROJECTION_SEMAPHORES.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(WEBFETCH_PROJECTION_WORKER_CONCURRENCY)
+            _WEBFETCH_PROJECTION_SEMAPHORES[loop] = semaphore
+        return semaphore
+
+
+def release_webfetch_projection_semaphore_when_done(
+    projection_task: asyncio.Task[ToolResultProjection],
+    projection_semaphore: asyncio.Semaphore,
+) -> None:
+    # The shielded worker keeps running after caller cancellation; keep the
+    # permit until the CPU-heavy projection actually exits.
+    if projection_task.done():
+        projection_semaphore.release()
+        consume_webfetch_projection_task_exception(projection_task)
+        return
+
+    def release_projection_semaphore(
+        completed_task: asyncio.Future[ToolResultProjection],
+    ) -> None:
+        projection_semaphore.release()
+        consume_webfetch_projection_task_exception(completed_task)
+
+    projection_task.add_done_callback(release_projection_semaphore)
+
+
+def consume_webfetch_projection_task_exception(
+    projection_task: asyncio.Future[ToolResultProjection],
+) -> None:
+    if projection_task.cancelled():
+        return
+    projection_task.exception()
 
 
 def is_binary_response(content_type: str) -> bool:
