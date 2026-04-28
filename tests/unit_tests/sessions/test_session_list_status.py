@@ -94,6 +94,23 @@ def test_list_sessions_includes_active_run_overlay(tmp_path: Path) -> None:
     assert idle.pending_tool_approval_count == 0
 
 
+def test_list_sessions_by_workspace_filters_sessions(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_list_by_workspace.db"
+    service = _build_service(db_path)
+    _ = service.create_session(
+        session_id="session-workspace-1",
+        workspace_id="workspace-1",
+    )
+    _ = service.create_session(
+        session_id="session-workspace-2",
+        workspace_id="workspace-2",
+    )
+
+    sessions = service.list_sessions_by_workspace("workspace-1")
+
+    assert [session.session_id for session in sessions] == ["session-workspace-1"]
+
+
 def test_list_sessions_uses_runtime_overlay_for_running_subagent(
     tmp_path: Path,
 ) -> None:

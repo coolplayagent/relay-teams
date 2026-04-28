@@ -180,6 +180,63 @@ class GatewaySessionService:
         )
         return self._repository.update(updated)
 
+    def resolve_or_bind_internal_session(
+        self,
+        *,
+        channel_type: GatewayChannelType,
+        external_session_id: str,
+        internal_session_id: str,
+        workspace_id: str,
+        capabilities: dict[str, JsonValue] | None = None,
+        channel_state: dict[str, JsonValue] | None = None,
+        peer_user_id: str | None = None,
+        peer_chat_id: str | None = None,
+    ) -> GatewaySessionRecord:
+        internal_session = self._session_service.get_session(internal_session_id)
+        if internal_session.workspace_id != workspace_id:
+            raise ValueError("internal session does not belong to workspace")
+        existing = self._repository.get_by_external(
+            channel_type=channel_type,
+            external_session_id=external_session_id,
+        )
+        now = self._utcnow()
+        normalized_capabilities = capabilities or {}
+        normalized_channel_state = channel_state or {}
+        if existing is not None:
+            active_run_id = (
+                existing.active_run_id
+                if existing.internal_session_id == internal_session_id
+                else None
+            )
+            updated = existing.model_copy(
+                update={
+                    "internal_session_id": internal_session_id,
+                    "active_run_id": active_run_id,
+                    "peer_user_id": peer_user_id or existing.peer_user_id,
+                    "peer_chat_id": peer_chat_id or existing.peer_chat_id,
+                    "capabilities": normalized_capabilities or existing.capabilities,
+                    "channel_state": {
+                        **existing.channel_state,
+                        **normalized_channel_state,
+                    },
+                    "updated_at": now,
+                }
+            )
+            return self._repository.update(updated)
+        record = GatewaySessionRecord(
+            gateway_session_id=f"gws_{uuid4().hex[:12]}",
+            channel_type=channel_type,
+            external_session_id=external_session_id,
+            internal_session_id=internal_session_id,
+            peer_user_id=peer_user_id,
+            peer_chat_id=peer_chat_id,
+            capabilities=normalized_capabilities,
+            channel_state=normalized_channel_state,
+            created_at=now,
+            updated_at=now,
+        )
+        return self._repository.create(record)
+
     def _create_internal_session(
         self,
         *,
@@ -232,6 +289,18 @@ class GatewaySessionService:
         internal_session_id: str,
     ) -> GatewaySessionRecord | None:
         return self._repository.get_by_internal_session_id(internal_session_id)
+
+    def list_all(self) -> tuple[GatewaySessionRecord, ...]:
+        return self._repository.list_all()
+
+    def list_internal_by_workspace(
+        self, workspace_id: str
+    ) -> tuple[SessionRecord, ...]:
+        return tuple(
+            s
+            for s in self._session_service.list_sessions()
+            if s.workspace_id == workspace_id
+        )
 
     def bind_active_run(
         self,
