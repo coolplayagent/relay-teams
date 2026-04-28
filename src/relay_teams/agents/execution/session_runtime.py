@@ -16,6 +16,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    TextPart,
     ToolCallPart,
     ToolCallPartDelta,
     ToolReturnPart,
@@ -42,6 +43,12 @@ from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
+from relay_teams.sessions.runs.injection_classification import (
+    INJECTION_CLASSIFIER,
+    InjectionBoundaryContext,
+    InjectionDisposition,
+    public_injection_payload_json,
+)
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
@@ -452,7 +459,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             instance_id=request.instance_id,
                             role_id=request.role_id,
                             event_type=RunEventType.INJECTION_APPLIED,
-                            payload_json=msg.model_dump_json(),
+                            payload_json=public_injection_payload_json(msg),
                         ),
                     )
                     appended = (
@@ -713,7 +720,22 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 request.run_id, request.instance_id
                             )
                             if injections:
-                                for msg in injections:
+                                boundary_context = InjectionBoundaryContext(
+                                    final_answer_ready=_messages_include_final_answer(
+                                        new_to_process
+                                    ),
+                                )
+                                applied_injections = [
+                                    msg
+                                    for msg in injections
+                                    if INJECTION_CLASSIFIER.disposition(
+                                        msg, context=boundary_context
+                                    )
+                                    == InjectionDisposition.APPLY
+                                ]
+                                if not applied_injections:
+                                    continue
+                                for msg in applied_injections:
                                     await publish_run_event_async(
                                         self._run_event_hub,
                                         RunEvent(
@@ -724,7 +746,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                             instance_id=request.instance_id,
                                             role_id=request.role_id,
                                             event_type=RunEventType.INJECTION_APPLIED,
-                                            payload_json=msg.model_dump_json(),
+                                            payload_json=public_injection_payload_json(
+                                                msg
+                                            ),
                                         ),
                                     )
                                     await self._message_repo.append_user_prompt_if_missing_async(
@@ -1044,3 +1068,16 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             return text
         finally:
             await self._close_run_scoped_llm_http_client(request=request)
+
+
+def _messages_include_final_answer(
+    messages: Sequence[ModelRequest | ModelResponse],
+) -> bool:
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            continue
+        if any(isinstance(part, ToolCallPart) for part in message.parts):
+            continue
+        if any(isinstance(part, TextPart) for part in message.parts):
+            return True
+    return False

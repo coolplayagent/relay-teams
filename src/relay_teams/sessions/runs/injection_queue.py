@@ -37,12 +37,20 @@ class RunInjectionManager:
         content: UserPromptContent,
         sender_instance_id: str | None = None,
         sender_role_id: str | None = None,
+        visibility: str = "public",
+        internal_kind: str = "",
+        internal_delivery_mode: str = "",
+        internal_issue_key: str = "",
     ) -> InjectionMessage:
         priority = _priority_for(source)
         message = InjectionMessage(
             run_id=run_id,
             recipient_instance_id=recipient_instance_id,
             source=source,
+            visibility="internal" if visibility == "internal" else "public",
+            internal_kind=internal_kind,
+            internal_delivery_mode=internal_delivery_mode,
+            internal_issue_key=internal_issue_key,
             content=content,
             sender_instance_id=sender_instance_id,
             sender_role_id=sender_role_id,

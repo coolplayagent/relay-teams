@@ -5,6 +5,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
+
 
 class ReminderKind(str, Enum):
     TOOL_FAILURE = "tool_failure"
@@ -84,6 +86,7 @@ class ReminderDecision(BaseModel):
 
     issue: bool = False
     kind: Optional[ReminderKind] = None
+    delivery_mode: SystemReminderDeliveryMode = SystemReminderDeliveryMode.GUIDANCE
     issue_key: str = ""
     content: str = ""
     retry_completion: bool = False

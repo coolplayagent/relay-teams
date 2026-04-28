@@ -12,13 +12,14 @@ from relay_teams.reminders.models import (
 from relay_teams.reminders.state import ReminderRunState, can_issue
 from relay_teams.reminders.tool_effects import classify_tool_effect
 from relay_teams.reminders.models import ToolEffect
+from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
 
 
 class ReminderPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     tool_failure_cooldown_seconds: int = Field(default=60, ge=0)
-    read_only_streak_threshold: int = Field(default=5, ge=1)
+    read_only_streak_threshold: int = Field(default=50, ge=1)
     read_only_streak_cooldown_seconds: int = Field(default=600, ge=0)
     context_pressure_cooldown_seconds: int = Field(default=900, ge=0)
     completion_max_retries: int = Field(default=3, ge=0)
@@ -53,6 +54,7 @@ class SystemReminderPolicy:
                 ReminderDecision(
                     issue=True,
                     kind=ReminderKind.TOOL_FAILURE,
+                    delivery_mode=SystemReminderDeliveryMode.GUIDANCE,
                     issue_key=issue_key,
                     content=(
                         f"The `{observation.tool_name}` tool failed with `{error_type}`: "
@@ -85,6 +87,7 @@ class SystemReminderPolicy:
             ReminderDecision(
                 issue=True,
                 kind=ReminderKind.READ_ONLY_STREAK,
+                delivery_mode=SystemReminderDeliveryMode.GUIDANCE,
                 issue_key=issue_key,
                 content=(
                     f"You have used {next_streak} read-only tools in a row. If you "
@@ -124,6 +127,7 @@ class SystemReminderPolicy:
                 ReminderDecision(
                     issue=True,
                     kind=ReminderKind.INCOMPLETE_TODOS,
+                    delivery_mode=SystemReminderDeliveryMode.COMPLETION_GUARD,
                     issue_key="incomplete_todos:failed_completion",
                     content=content,
                     fail_completion=True,
@@ -135,6 +139,7 @@ class SystemReminderPolicy:
             ReminderDecision(
                 issue=True,
                 kind=ReminderKind.INCOMPLETE_TODOS,
+                delivery_mode=SystemReminderDeliveryMode.COMPLETION_GUARD,
                 issue_key=f"incomplete_todos:retry:{retry_count}",
                 content=content,
                 retry_completion=True,
@@ -172,6 +177,7 @@ class SystemReminderPolicy:
             ReminderDecision(
                 issue=True,
                 kind=observation.kind,
+                delivery_mode=SystemReminderDeliveryMode.GUIDANCE,
                 issue_key=issue_key,
                 content=content,
                 reason=observation.kind.value,

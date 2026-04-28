@@ -30,6 +30,27 @@ def test_policy_reminds_after_read_only_streak_threshold() -> None:
     assert state.read_only_streak == 2
 
 
+def test_policy_default_read_only_streak_threshold_is_fifty() -> None:
+    policy = SystemReminderPolicy()
+    state = ReminderRunState()
+
+    for index in range(49):
+        decision, state = policy.evaluate_tool_result(
+            observation=_tool_result("read", call_id=f"call-read-{index}"),
+            state=state,
+        )
+        assert decision.issue is False
+
+    decision, state = policy.evaluate_tool_result(
+        observation=_tool_result("read", call_id="call-read-49"),
+        state=state,
+    )
+
+    assert decision.issue is True
+    assert decision.kind == ReminderKind.READ_ONLY_STREAK
+    assert state.read_only_streak == 50
+
+
 def test_policy_resets_read_only_streak_after_mutating_tool() -> None:
     policy = SystemReminderPolicy(ReminderPolicyConfig(read_only_streak_threshold=2))
     state = ReminderRunState(read_only_streak=1)
@@ -102,6 +123,7 @@ def test_policy_fails_completion_after_retry_limit() -> None:
 def _tool_result(
     tool_name: str,
     *,
+    call_id: str = "",
     ok: bool = True,
     error_type: str = "",
     error_message: str = "",
@@ -114,7 +136,7 @@ def _tool_result(
         instance_id="inst-1",
         role_id="role-1",
         tool_name=tool_name,
-        tool_call_id=f"call-{tool_name}",
+        tool_call_id=call_id or f"call-{tool_name}",
         ok=ok,
         error_type=error_type,
         error_message=error_message,

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from typing import cast
 
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.reminders import render_system_reminder
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.enums import InjectionSource
+from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.system_injection import SystemInjectionSink
+from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
+
+
+class _CapturingRunEventHub:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def publish(self, event: RunEvent) -> None:
+        self.events.append(event)
 
 
 def test_append_and_enqueue_persists_message_and_queues_injection(
@@ -138,8 +150,21 @@ def test_enqueue_only_degrades_when_active_run_disappears() -> None:
             recipient_instance_id: str,
             source: InjectionSource,
             content: object,
+            visibility: str = "public",
+            internal_kind: str = "",
+            internal_delivery_mode: str = "",
+            internal_issue_key: str = "",
         ) -> object:
-            _ = (run_id, recipient_instance_id, source, content)
+            _ = (
+                run_id,
+                recipient_instance_id,
+                source,
+                content,
+                visibility,
+                internal_kind,
+                internal_delivery_mode,
+                internal_issue_key,
+            )
             raise KeyError("run disappeared")
 
     sink = SystemInjectionSink(
@@ -159,3 +184,35 @@ def test_enqueue_only_degrades_when_active_run_disappears() -> None:
     )
 
     assert result.enqueued is False
+
+
+def test_enqueue_only_redacts_internal_system_reminder_events() -> None:
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    event_hub = _CapturingRunEventHub()
+    sink = SystemInjectionSink(
+        injection_manager=injection_manager,
+        run_event_hub=cast(RunEventHub, event_hub),
+        message_repo=None,
+    )
+
+    result = sink.enqueue_only(
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="role-1",
+        content=render_system_reminder("Do not leak this body."),
+        visibility="internal",
+        internal_kind="read_only_streak",
+        internal_delivery_mode=SystemReminderDeliveryMode.GUIDANCE.value,
+        internal_issue_key="read_only_streak",
+    )
+
+    payload = json.loads(event_hub.events[0].payload_json)
+    assert result.enqueued is True
+    assert payload["content_redacted"] is True
+    assert payload["internal_kind"] == "read_only_streak"
+    assert "<system-reminder>" not in event_hub.events[0].payload_json
+    assert "Do not leak this body" not in event_hub.events[0].payload_json

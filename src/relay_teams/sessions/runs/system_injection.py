@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
+from relay_teams.sessions.runs.injection_classification import (
+    public_injection_payload_json,
+)
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 
@@ -41,6 +44,10 @@ class SystemInjectionSink:
         role_id: str,
         content: str,
         source: InjectionSource = InjectionSource.SYSTEM,
+        visibility: str = "public",
+        internal_kind: str = "",
+        internal_delivery_mode: str = "",
+        internal_issue_key: str = "",
     ) -> SystemInjectionResult:
         record = self._enqueue(
             session_id=session_id,
@@ -51,6 +58,10 @@ class SystemInjectionSink:
             role_id=role_id,
             content=content,
             source=source,
+            visibility=visibility,
+            internal_kind=internal_kind,
+            internal_delivery_mode=internal_delivery_mode,
+            internal_issue_key=internal_issue_key,
         )
         return SystemInjectionResult(enqueued=record is not None)
 
@@ -65,6 +76,10 @@ class SystemInjectionSink:
         role_id: str,
         content: str,
         source: InjectionSource = InjectionSource.SYSTEM,
+        visibility: str = "public",
+        internal_kind: str = "",
+        internal_delivery_mode: str = "",
+        internal_issue_key: str = "",
     ) -> SystemInjectionResult:
         record = await self._enqueue_async(
             session_id=session_id,
@@ -75,6 +90,10 @@ class SystemInjectionSink:
             role_id=role_id,
             content=content,
             source=source,
+            visibility=visibility,
+            internal_kind=internal_kind,
+            internal_delivery_mode=internal_delivery_mode,
+            internal_issue_key=internal_issue_key,
         )
         return SystemInjectionResult(enqueued=record is not None)
 
@@ -91,6 +110,10 @@ class SystemInjectionSink:
         conversation_id: str,
         content: str,
         source: InjectionSource = InjectionSource.SYSTEM,
+        visibility: str = "public",
+        internal_kind: str = "",
+        internal_delivery_mode: str = "",
+        internal_issue_key: str = "",
     ) -> SystemInjectionResult:
         appended = self._append(
             session_id=session_id,
@@ -111,6 +134,10 @@ class SystemInjectionSink:
             role_id=role_id,
             content=content,
             source=source,
+            visibility=visibility,
+            internal_kind=internal_kind,
+            internal_delivery_mode=internal_delivery_mode,
+            internal_issue_key=internal_issue_key,
         )
         return SystemInjectionResult(appended=appended, enqueued=record is not None)
 
@@ -127,6 +154,10 @@ class SystemInjectionSink:
         conversation_id: str,
         content: str,
         source: InjectionSource = InjectionSource.SYSTEM,
+        visibility: str = "public",
+        internal_kind: str = "",
+        internal_delivery_mode: str = "",
+        internal_issue_key: str = "",
     ) -> SystemInjectionResult:
         appended = await self._append_async(
             session_id=session_id,
@@ -147,6 +178,10 @@ class SystemInjectionSink:
             role_id=role_id,
             content=content,
             source=source,
+            visibility=visibility,
+            internal_kind=internal_kind,
+            internal_delivery_mode=internal_delivery_mode,
+            internal_issue_key=internal_issue_key,
         )
         return SystemInjectionResult(appended=appended, enqueued=record is not None)
 
@@ -259,6 +294,10 @@ class SystemInjectionSink:
         role_id: str,
         content: str,
         source: InjectionSource,
+        visibility: str,
+        internal_kind: str,
+        internal_delivery_mode: str,
+        internal_issue_key: str,
     ) -> Optional[InjectionMessage]:
         if not self._injection_manager.is_active(run_id):
             return None
@@ -268,6 +307,10 @@ class SystemInjectionSink:
                 recipient_instance_id=instance_id,
                 source=source,
                 content=content,
+                visibility=visibility,
+                internal_kind=internal_kind,
+                internal_delivery_mode=internal_delivery_mode,
+                internal_issue_key=internal_issue_key,
             )
         except KeyError:
             return None
@@ -280,7 +323,7 @@ class SystemInjectionSink:
                 instance_id=instance_id,
                 role_id=role_id,
                 event_type=RunEventType.INJECTION_ENQUEUED,
-                payload_json=record.model_dump_json(),
+                payload_json=public_injection_payload_json(record),
             )
         )
         return record
@@ -296,6 +339,10 @@ class SystemInjectionSink:
         role_id: str,
         content: str,
         source: InjectionSource,
+        visibility: str,
+        internal_kind: str,
+        internal_delivery_mode: str,
+        internal_issue_key: str,
     ) -> Optional[InjectionMessage]:
         if not self._injection_manager.is_active(run_id):
             return None
@@ -305,6 +352,10 @@ class SystemInjectionSink:
                 recipient_instance_id=instance_id,
                 source=source,
                 content=content,
+                visibility=visibility,
+                internal_kind=internal_kind,
+                internal_delivery_mode=internal_delivery_mode,
+                internal_issue_key=internal_issue_key,
             )
         except KeyError:
             return None
@@ -318,7 +369,7 @@ class SystemInjectionSink:
                 instance_id=instance_id,
                 role_id=role_id,
                 event_type=RunEventType.INJECTION_ENQUEUED,
-                payload_json=record.model_dump_json(),
+                payload_json=public_injection_payload_json(record),
             ),
         )
         return record
