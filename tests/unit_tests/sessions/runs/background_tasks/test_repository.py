@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from relay_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskKind,
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -155,6 +156,58 @@ def test_background_task_repository_lists_interruptible_records(tmp_path: Path) 
     )
 
 
+def test_background_task_repository_keeps_foreground_subagents_recoverable(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-subagent-recoverable.db"
+    repo = BackgroundTaskRepository(db_path)
+    foreground_subagent = BackgroundTaskRecord(
+        background_task_id="sync-subagent",
+        run_id="run-1",
+        session_id="session-1",
+        kind=BackgroundTaskKind.SUBAGENT,
+        instance_id="inst-1",
+        role_id="writer",
+        tool_call_id="call-subagent",
+        command="subagent:Explorer",
+        cwd="/tmp/project",
+        execution_mode="foreground",
+        status=BackgroundTaskStatus.RUNNING,
+        log_path="",
+        subagent_role_id="Explorer",
+        subagent_run_id="subagent-run-1",
+        subagent_task_id="task-subagent-1",
+        subagent_instance_id="inst-subagent-1",
+    )
+    running_command = BackgroundTaskRecord(
+        background_task_id="exec-running",
+        run_id="run-1",
+        session_id="session-1",
+        command="sleep 30",
+        cwd="/tmp/project",
+        status=BackgroundTaskStatus.RUNNING,
+        pid=111,
+        log_path="tmp/background_tasks/exec-running.log",
+    )
+    repo.upsert(foreground_subagent)
+    repo.upsert(running_command)
+
+    interruptible = repo.list_interruptible()
+    affected = repo.mark_transient_background_tasks_interrupted()
+
+    loaded_subagent = repo.get("sync-subagent")
+    loaded_command = repo.get("exec-running")
+    assert tuple(record.background_task_id for record in interruptible) == (
+        "exec-running",
+    )
+    assert affected == 1
+    assert loaded_subagent is not None
+    assert loaded_subagent.status == BackgroundTaskStatus.RUNNING
+    assert loaded_subagent.completed_at is None
+    assert loaded_command is not None
+    assert loaded_command.status == BackgroundTaskStatus.STOPPED
+
+
 def test_background_task_repository_can_interrupt_specific_records(
     tmp_path: Path,
 ) -> None:
@@ -235,10 +288,29 @@ async def test_background_task_repository_async_methods_match_sync_behavior(
         status=BackgroundTaskStatus.COMPLETED,
         log_path="tmp/background_tasks/exec-other.log",
     )
+    foreground_subagent = BackgroundTaskRecord(
+        background_task_id="sync-subagent",
+        run_id="run-1",
+        session_id="session-1",
+        kind=BackgroundTaskKind.SUBAGENT,
+        instance_id="inst-1",
+        role_id="writer",
+        tool_call_id="call-subagent",
+        command="subagent:Explorer",
+        cwd="/tmp/project",
+        execution_mode="foreground",
+        status=BackgroundTaskStatus.RUNNING,
+        log_path="",
+        subagent_role_id="Explorer",
+        subagent_run_id="subagent-run-1",
+        subagent_task_id="task-subagent-1",
+        subagent_instance_id="inst-subagent-1",
+    )
 
     persisted = await repo.upsert_async(running)
     _ = await repo.upsert_async(blocked)
     _ = await repo.upsert_async(other_session)
+    _ = await repo.upsert_async(foreground_subagent)
 
     loaded = await repo.get_async("exec-running")
     by_run = await repo.list_by_run_async("run-1")
@@ -257,14 +329,17 @@ async def test_background_task_repository_async_methods_match_sync_behavior(
     assert loaded is not None
     assert loaded.output_excerpt == "booting"
     assert tuple(record.background_task_id for record in by_run) == (
+        "sync-subagent",
         "exec-blocked",
         "exec-running",
     )
     assert tuple(record.background_task_id for record in by_session) == (
+        "sync-subagent",
         "exec-blocked",
         "exec-running",
     )
     assert tuple(record.background_task_id for record in all_records) == (
+        "sync-subagent",
         "exec-other",
         "exec-blocked",
         "exec-running",

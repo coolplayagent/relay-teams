@@ -19,6 +19,7 @@ from relay_teams.skills.discovery import SkillsDirectory
 from relay_teams.skills.skill_models import SkillSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.sessions.runs.background_tasks.models import (
+    BackgroundTaskKind,
     BackgroundTaskRecord,
     BackgroundTaskStatus,
 )
@@ -620,4 +621,72 @@ def test_container_preserves_background_task_rows_when_startup_kill_fails(
         "kill:3210",
         "kill:6543",
         "mark:('exec-killed',)",
+    ]
+
+
+def test_container_preserves_recoverable_foreground_subagent_records_on_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from relay_teams.interfaces.server import container as container_module
+
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    lifecycle: list[str] = []
+    interruptible = (
+        BackgroundTaskRecord(
+            background_task_id="sync-subagent",
+            run_id="run-1",
+            session_id="session-1",
+            kind=BackgroundTaskKind.SUBAGENT,
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-subagent",
+            command="subagent:Explorer",
+            cwd=str(tmp_path),
+            execution_mode="foreground",
+            status=BackgroundTaskStatus.RUNNING,
+            log_path="",
+            subagent_role_id="Explorer",
+            subagent_run_id="subagent-run-1",
+            subagent_task_id="task-subagent-1",
+            subagent_instance_id="inst-subagent-1",
+        ),
+        BackgroundTaskRecord(
+            background_task_id="exec-running",
+            run_id="run-1",
+            session_id="session-1",
+            command="sleep 30",
+            cwd=str(tmp_path),
+            status=BackgroundTaskStatus.RUNNING,
+            pid=3210,
+            log_path="tmp/background_tasks/exec-running.log",
+        ),
+    )
+
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "list_interruptible",
+        lambda self: interruptible,
+    )
+    monkeypatch.setattr(
+        container_module,
+        "kill_process_tree_by_pid",
+        lambda pid: lifecycle.append(f"kill:{pid}") or True,
+    )
+    monkeypatch.setattr(
+        container_module.BackgroundTaskRepository,
+        "mark_transient_background_tasks_interrupted",
+        lambda self, *, background_task_ids=None: (
+            lifecycle.append(f"mark:{background_task_ids}")
+            or len(background_task_ids or ())
+        ),
+    )
+
+    _ = ServerContainer(config_dir=config_dir)
+
+    assert lifecycle == [
+        "kill:3210",
+        "mark:('exec-running',)",
     ]

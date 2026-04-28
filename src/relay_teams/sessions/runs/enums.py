@@ -39,6 +39,7 @@ class RunEventType(str, Enum):
     THINKING_DELTA = "thinking_delta"
     THINKING_FINISHED = "thinking_finished"
     TOOL_CALL = "tool_call"
+    TOOL_CALL_BATCH_SEALED = "tool_call_batch_sealed"
     TOOL_INPUT_VALIDATION_FAILED = "tool_input_validation_failed"
     TOOL_RESULT = "tool_result"
     INJECTION_ENQUEUED = "injection_enqueued"

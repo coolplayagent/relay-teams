@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import ast
-import logging
 import json
+import logging
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Protocol, cast, runtime_checkable
 
 from pydantic import JsonValue
@@ -18,6 +20,8 @@ from pydantic_ai.messages import (
     PartEndEvent,
     PartStartEvent,
     RetryPromptPart,
+    TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolCallPartDelta,
     ToolReturnPart,
@@ -37,6 +41,9 @@ from relay_teams.agents.execution.stream_events import StreamEventService
 from relay_teams.agents.execution.tool_args_recovery import ToolArgsRecoveryService
 from relay_teams.agents.execution.tool_result_state import ToolResultStateService
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.tool_call_history import (
+    normalize_replayed_messages_to_safe_boundary,
+)
 from relay_teams.logger import get_logger, log_event, log_model_stream_chunk
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
@@ -44,13 +51,23 @@ from relay_teams.providers.llm_retry import LlmRetryErrorInfo
 from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.assistant_errors import build_tool_error_result
+from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
+from relay_teams.sessions.runs.background_tasks.projection import (
+    build_background_task_result_payload,
+)
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.tools.runtime.persisted_state import (
+    PersistedToolCallBatchState,
     PersistedToolCallState,
+    ToolCallBatchStatus,
     ToolExecutionStatus,
+    merge_tool_call_state_async,
     load_or_recover_tool_call_state,
+    recover_tool_call_batches_from_event_log,
 )
+from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.recoverable_invoker import RecoverableToolInvoker
 from relay_teams.workspace import build_conversation_id
 
 LOGGER = get_logger(__name__)
@@ -248,6 +265,33 @@ class _NullPromptHistoryMessageRepo:
         )
 
 
+@runtime_checkable
+class _SubagentWaitResult(Protocol):
+    output: str
+
+
+@runtime_checkable
+class _SubagentWaitService(Protocol):
+    async def wait_for_subagent_run(
+        self,
+        *,
+        parent_run_id: str,
+        subagent_run_id: str,
+    ) -> _SubagentWaitResult:
+        raise NotImplementedError  # pragma: no cover
+
+
+@runtime_checkable
+class _SubagentRecordLookupService(Protocol):
+    def subagent_record_for_tool_call(
+        self,
+        *,
+        parent_run_id: str,
+        tool_call_id: str,
+    ) -> BackgroundTaskRecord | None:
+        raise NotImplementedError  # pragma: no cover
+
+
 class _NullRunIntentRepo:
     def get(self, run_id: str, *, fallback_session_id: str | None = None) -> object:
         _ = (run_id, fallback_session_id)
@@ -267,8 +311,29 @@ def _tool_result_error_code(result: dict[str, JsonValue]) -> str:
             return code.strip()
     visible_result = result.get("visible_result")
     if isinstance(visible_result, dict):
-        return _tool_result_error_code(cast(dict[str, JsonValue], visible_result))
+        return _tool_result_error_code(visible_result)
     return ""
+
+
+def _is_thinking_only_response(message: ModelResponse) -> bool:
+    if not message.parts:
+        return False
+    if any(isinstance(part, (TextPart, ToolCallPart)) for part in message.parts):
+        return False
+    return all(isinstance(part, ThinkingPart) for part in message.parts)
+
+
+def _tool_args_from_preview(value: str) -> dict[str, JsonValue] | str:
+    text = value.strip()
+    if not text:
+        return {}
+    try:
+        decoded = json.loads(text)
+    except Exception:
+        return text
+    if isinstance(decoded, dict):
+        return cast(dict[str, JsonValue], decoded)
+    return text
 
 
 class SessionSupportMixin(AgentLlmSessionMixinBase):
@@ -826,7 +891,23 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
     def _filter_model_messages(
         self, messages: Sequence[ModelRequest | ModelResponse]
     ) -> list[ModelRequest | ModelResponse]:
-        return list(messages)
+        filtered: list[ModelRequest | ModelResponse] = []
+        for message in messages:
+            if isinstance(message, ModelResponse) and _is_thinking_only_response(
+                message
+            ):
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.history.dropped_thinking_only_response",
+                    message=(
+                        "Dropped thinking-only assistant response before prompt replay"
+                    ),
+                    payload={},
+                )
+                continue
+            filtered.append(message)
+        return filtered
 
     def _collect_pending_tool_calls(
         self, messages: Sequence[ModelRequest | ModelResponse]
@@ -928,6 +1009,21 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             )
         if not recovered_parts and not recovered_orphaned_parts:
             return next_pending_messages, 0
+        recovered_tool_call_id_values: list[JsonValue] = [
+            value for value in recovered_tool_call_ids
+        ]
+        recovered_tool_name_values: list[JsonValue] = [
+            value for value in recovered_tool_names
+        ]
+        recovery_payload: dict[str, JsonValue] = {
+            "run_id": request.run_id,
+            "task_id": request.task_id,
+            "role_id": request.role_id,
+            "instance_id": request.instance_id,
+            "recovered_tool_call_ids": recovered_tool_call_id_values,
+            "recovered_tool_names": recovered_tool_name_values,
+            "recovered_count": len(recovered_parts),
+        }
         log_event(
             LOGGER,
             logging.WARNING,
@@ -935,23 +1031,301 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             message=(
                 "Recovered persisted tool results for pending tool calls before resume"
             ),
-            payload=cast(
-                dict[str, JsonValue],
-                {
-                    "run_id": request.run_id,
-                    "task_id": request.task_id,
-                    "role_id": request.role_id,
-                    "instance_id": request.instance_id,
-                    "recovered_tool_call_ids": recovered_tool_call_ids,
-                    "recovered_tool_names": recovered_tool_names,
-                    "recovered_count": len(recovered_parts),
-                },
-            ),
+            payload=recovery_payload,
         )
         if recovered_parts:
             next_pending_messages.append(ModelRequest(parts=recovered_parts))
         return next_pending_messages, len(recovered_parts) + len(
             recovered_orphaned_parts
+        )
+
+    async def _recover_uncommitted_tool_batches_async(
+        self,
+        *,
+        request: LLMRequest,
+        history: list[ModelRequest | ModelResponse],
+        deps: ToolDeps,
+        recover_ready_calls: bool,
+    ) -> tuple[list[ModelRequest | ModelResponse], int]:
+        if self._shared_store is None or self._event_bus is None:
+            return history, 0
+        try:
+            _ = recover_tool_call_batches_from_event_log(
+                event_log=self._event_bus,
+                shared_store=self._shared_store,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+            )
+        except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
+            skipped_payload: dict[str, JsonValue] = {
+                "run_id": request.run_id,
+                "task_id": request.task_id,
+                "trace_id": request.trace_id,
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            }
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.request.skipped_tool_batch_event_log_recovery",
+                message=(
+                    "Skipped best-effort tool-call batch event-log recovery before "
+                    "resume"
+                ),
+                payload=skipped_payload,
+            )
+        committed_tool_call_ids = self._committed_tool_call_ids_from_history(history)
+        recovered_count = 0
+        current_history = history
+        for batch in self._task_tool_call_batch_states(request.task_id):
+            if not self._batch_matches_request(batch=batch, request=request):
+                continue
+            if not self._is_recoverable_tool_call_batch(batch):
+                continue
+            batch_call_ids = {
+                item.tool_call_id for item in batch.items if item.tool_call_id
+            }
+            uncommitted_items = tuple(
+                item
+                for item in batch.items
+                if item.tool_call_id
+                and item.tool_call_id not in committed_tool_call_ids
+            )
+            uncommitted_call_ids = {
+                item.tool_call_id for item in uncommitted_items if item.tool_call_id
+            }
+            if not batch_call_ids or not uncommitted_call_ids:
+                continue
+            recovered_messages = await self._recovered_batch_messages(
+                request=request,
+                deps=deps,
+                batch=batch.model_copy(update={"items": uncommitted_items}),
+                recover_ready_calls=recover_ready_calls,
+            )
+            if recovered_messages is None:
+                continue
+            (
+                current_history,
+                remaining,
+                _published,
+                _validation_failures,
+            ) = await self._commit_all_safe_messages_async(
+                request=request,
+                history=current_history,
+                pending_messages=recovered_messages,
+            )
+            if remaining:
+                continue
+            committed_tool_call_ids.update(uncommitted_call_ids)
+            recovered_count += len(uncommitted_call_ids)
+        return current_history, recovered_count
+
+    async def _recovered_batch_messages(
+        self,
+        *,
+        request: LLMRequest,
+        deps: ToolDeps,
+        batch: PersistedToolCallBatchState,
+        recover_ready_calls: bool,
+    ) -> list[ModelRequest | ModelResponse] | None:
+        call_parts: list[ToolCallPart] = []
+        result_parts: list[ToolReturnPart] = []
+        for item in sorted(batch.items, key=lambda candidate: candidate.index):
+            try:
+                state = load_or_recover_tool_call_state(
+                    shared_store=self._shared_store,
+                    event_log=self._event_bus,
+                    trace_id=request.trace_id,
+                    task_id=request.task_id,
+                    tool_call_id=item.tool_call_id,
+                    task_repo=self._task_repo,
+                )
+            except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
+                skipped_payload: dict[str, JsonValue] = {
+                    "run_id": request.run_id,
+                    "task_id": request.task_id,
+                    "trace_id": request.trace_id,
+                    "batch_id": batch.batch_id,
+                    "tool_call_id": item.tool_call_id,
+                    "error_type": exc.__class__.__name__,
+                    "error": str(exc),
+                }
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.request.skipped_tool_batch_item_state_recovery",
+                    message=(
+                        "Skipped tool-call batch recovery after item state "
+                        "lookup failed"
+                    ),
+                    payload=skipped_payload,
+                )
+                return None
+            call_parts.append(
+                ToolCallPart(
+                    tool_name=item.tool_name,
+                    args=_tool_args_from_preview(item.args_preview),
+                    tool_call_id=item.tool_call_id,
+                )
+            )
+            visible_result = await self._visible_result_for_batch_item(
+                request=request,
+                deps=deps,
+                state=state,
+                tool_call_id=item.tool_call_id,
+                tool_name=item.tool_name,
+                raw_args=item.args_preview,
+                recover_ready_calls=recover_ready_calls,
+            )
+            if visible_result is None:
+                return None
+            result_parts.append(
+                ToolReturnPart(
+                    tool_name=item.tool_name,
+                    tool_call_id=item.tool_call_id,
+                    content=visible_result,
+                )
+            )
+        if not call_parts or len(call_parts) != len(result_parts):
+            return None
+        return [ModelResponse(parts=call_parts), ModelRequest(parts=result_parts)]
+
+    @staticmethod
+    def _is_recoverable_tool_call_batch(batch: PersistedToolCallBatchState) -> bool:
+        if batch.status == ToolCallBatchStatus.SEALED:
+            return True
+        return batch.status == ToolCallBatchStatus.OPEN and bool(batch.items)
+
+    async def _visible_result_for_batch_item(
+        self,
+        *,
+        request: LLMRequest,
+        deps: ToolDeps,
+        state: PersistedToolCallState | None,
+        tool_call_id: str,
+        tool_name: str,
+        raw_args: object,
+        recover_ready_calls: bool,
+    ) -> dict[str, JsonValue] | None:
+        visible_result = self._visible_tool_result_from_state(
+            state=state,
+            expected_tool_name=tool_name,
+        )
+        if visible_result is not None:
+            return visible_result
+        if state is None:
+            return None
+        if state.execution_status == ToolExecutionStatus.READY:
+            if not recover_ready_calls:
+                return None
+            return await self._invoke_and_persist_recovered_tool_call_async(
+                request=request,
+                deps=deps,
+                state=state,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                raw_args=raw_args,
+            )
+        if (
+            state.execution_status == ToolExecutionStatus.RUNNING
+            and tool_name == "spawn_subagent"
+        ):
+            resumed_result = await self._resume_pending_spawn_subagent_call(
+                request=request,
+                state=state,
+            )
+            if resumed_result is not None:
+                return resumed_result
+            if recover_ready_calls and not self._spawn_subagent_has_durable_launch(
+                request=request,
+                state=state,
+            ):
+                return await self._invoke_and_persist_recovered_tool_call_async(
+                    request=request,
+                    deps=deps,
+                    state=state,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    raw_args=raw_args,
+                )
+            return None
+        if state.execution_status == ToolExecutionStatus.RUNNING:
+            return cast(
+                dict[str, JsonValue],
+                build_tool_error_result(
+                    error_code="tool_execution_interrupted",
+                    message=(
+                        "Tool execution was interrupted before its result was "
+                        "durably recorded; it was not retried automatically."
+                    ),
+                ),
+            )
+        return None
+
+    async def _invoke_and_persist_recovered_tool_call_async(
+        self,
+        *,
+        request: LLMRequest,
+        deps: ToolDeps,
+        state: PersistedToolCallState,
+        tool_call_id: str,
+        tool_name: str,
+        raw_args: object,
+    ) -> dict[str, JsonValue]:
+        visible_result = await RecoverableToolInvoker().invoke_async(
+            tool_registry=self._tool_registry,
+            deps=deps,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            raw_args=raw_args,
+        )
+        shared_store = getattr(self, "_shared_store", None)
+        if shared_store is None:
+            return visible_result
+        runtime_meta: dict[str, JsonValue] = {
+            "tool_result_durably_recorded": True,
+            "tool_result_event_published": False,
+            "recovered_tool_call": True,
+        }
+        result_envelope: dict[str, JsonValue] = {
+            "visible_result": visible_result,
+            "runtime_meta": runtime_meta,
+        }
+        await merge_tool_call_state_async(
+            shared_store=shared_store,
+            task_id=request.task_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            run_id=request.run_id,
+            session_id=request.session_id,
+            instance_id=request.instance_id,
+            role_id=request.role_id,
+            args_preview=state.args_preview,
+            execution_status=(
+                ToolExecutionStatus.FAILED
+                if visible_result.get("ok") is False
+                else ToolExecutionStatus.COMPLETED
+            ),
+            result_envelope=result_envelope,
+            batch_id=state.batch_id,
+            batch_index=state.batch_index,
+            batch_size=state.batch_size,
+            finished_at=datetime.now(tz=timezone.utc).isoformat(),
+        )
+        return visible_result
+
+    @staticmethod
+    def _batch_matches_request(
+        *,
+        batch: PersistedToolCallBatchState,
+        request: LLMRequest,
+    ) -> bool:
+        return (
+            batch.run_id == request.run_id
+            and batch.session_id == request.session_id
+            and batch.instance_id == request.instance_id
+            and batch.role_id == request.role_id
+            and batch.task_id == request.task_id
         )
 
     def _interleave_recovered_orphaned_tool_results(
@@ -1099,7 +1473,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             return set()
         try:
             events = event_bus.list_by_trace(request.trace_id)
-        except Exception:
+        except (KeyError, RuntimeError, ValueError, sqlite3.Error):
             return set()
         superseded_ids: set[str] = set()
         for event in events:
@@ -1172,10 +1546,17 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             history = message_repo.get_history_for_conversation(
                 resolved_conversation_id
             )
-        except Exception:
+        except (KeyError, RuntimeError, ValueError, sqlite3.Error):
             return set()
+        return self._committed_tool_call_ids_from_history(history)
+
+    @staticmethod
+    def _committed_tool_call_ids_from_history(
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> set[str]:
+        safe_history = normalize_replayed_messages_to_safe_boundary(history)
         committed_ids: set[str] = set()
-        for message in history:
+        for message in safe_history:
             for part in message.parts:
                 if isinstance(part, ToolCallPart | ToolReturnPart):
                     tool_call_id = str(part.tool_call_id or "").strip()
@@ -1190,16 +1571,72 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         shared_store = getattr(self, "_shared_store", None)
         if shared_store is None:
             return ()
-        entries = shared_store.snapshot(
-            ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
-        )
+        try:
+            entries = shared_store.snapshot(
+                ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
+            )
+        except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.request.skipped_tool_call_state_snapshot",
+                message=(
+                    "Skipped best-effort persisted tool-call state snapshot before "
+                    "resume"
+                ),
+                payload={
+                    "task_id": task_id,
+                    "error_type": exc.__class__.__name__,
+                    "error": str(exc),
+                },
+            )
+            return ()
         states: list[PersistedToolCallState] = []
         for key, raw_value in entries:
             if not key.startswith("tool_call_state:"):
                 continue
             try:
                 state = PersistedToolCallState.model_validate_json(raw_value)
-            except Exception:
+            except ValueError:
+                continue
+            states.append(state)
+        states.sort(key=lambda item: item.updated_at)
+        return tuple(states)
+
+    def _task_tool_call_batch_states(
+        self,
+        task_id: str,
+    ) -> tuple[PersistedToolCallBatchState, ...]:
+        shared_store = getattr(self, "_shared_store", None)
+        if shared_store is None:
+            return ()
+        try:
+            entries = shared_store.snapshot(
+                ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
+            )
+        except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.request.skipped_tool_call_batch_state_snapshot",
+                message=(
+                    "Skipped best-effort persisted tool-call batch state snapshot "
+                    "before resume"
+                ),
+                payload={
+                    "task_id": task_id,
+                    "error_type": exc.__class__.__name__,
+                    "error": str(exc),
+                },
+            )
+            return ()
+        states: list[PersistedToolCallBatchState] = []
+        for key, raw_value in entries:
+            if not key.startswith("tool_call_batch:"):
+                continue
+            try:
+                state = PersistedToolCallBatchState.model_validate_json(raw_value)
+            except ValueError:
                 continue
             states.append(state)
         states.sort(key=lambda item: item.updated_at)
@@ -1218,12 +1655,29 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             return None
         call_state = state.call_state
         call_state_kind = str(call_state.get("kind") or "").strip()
-        if call_state_kind and call_state_kind != "spawn_subagent_sync":
+        if call_state_kind and call_state_kind not in {
+            "spawn_subagent_sync",
+            "spawn_subagent_background",
+        }:
             return None
         background_task_service = getattr(self, "_background_task_service", None)
-        if background_task_service is None:
+        if not isinstance(background_task_service, _SubagentWaitService):
             return None
+        record = self._subagent_record_for_tool_state(
+            service=background_task_service,
+            request=request,
+            state=state,
+        )
+        if self._is_background_subagent_recovery(
+            call_state=call_state,
+            record=record,
+        ):
+            if record is None:
+                return None
+            return self._visible_background_subagent_result(record)
         subagent_run_id = str(call_state.get("subagent_run_id") or "").strip()
+        if not subagent_run_id and record is not None:
+            subagent_run_id = str(record.subagent_run_id or "").strip()
         if not subagent_run_id:
             return None
         try:
@@ -1236,20 +1690,14 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             current_task = asyncio.current_task()
             if current_task is not None and current_task.cancelling():
                 raise
-            return cast(
-                dict[str, JsonValue],
-                build_tool_error_result(
-                    error_code="subagent_execution_cancelled",
-                    message="Subagent was cancelled during recovery",
-                ),
+            return build_tool_error_result(
+                error_code="subagent_execution_cancelled",
+                message="Subagent was cancelled during recovery",
             )
         except RuntimeError as exc:
-            return cast(
-                dict[str, JsonValue],
-                build_tool_error_result(
-                    error_code="subagent_execution_failed",
-                    message=str(exc) or "Subagent failed",
-                ),
+            return build_tool_error_result(
+                error_code="subagent_execution_failed",
+                message=str(exc) or "Subagent failed",
             )
         return {
             "ok": True,
@@ -1257,6 +1705,78 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 "completed": True,
                 "output": result.output,
             },
+            "meta": {
+                "tool_result_event_published": True,
+            },
+        }
+
+    @staticmethod
+    def _subagent_record_for_tool_state(
+        *,
+        service: _SubagentWaitService,
+        request: LLMRequest,
+        state: PersistedToolCallState,
+    ) -> BackgroundTaskRecord | None:
+        if not isinstance(service, _SubagentRecordLookupService):
+            return None
+        tool_call_id = str(state.tool_call_id or "").strip()
+        if not tool_call_id:
+            return None
+        return service.subagent_record_for_tool_call(
+            parent_run_id=request.run_id,
+            tool_call_id=tool_call_id,
+        )
+
+    def _spawn_subagent_has_durable_launch(
+        self,
+        *,
+        request: LLMRequest,
+        state: PersistedToolCallState,
+    ) -> bool:
+        call_state = state.call_state
+        for key in (
+            "background_task_id",
+            "subagent_run_id",
+            "subagent_task_id",
+            "subagent_instance_id",
+        ):
+            if str(call_state.get(key) or "").strip():
+                return True
+        background_task_service = getattr(self, "_background_task_service", None)
+        if not isinstance(background_task_service, _SubagentWaitService):
+            return False
+        return (
+            self._subagent_record_for_tool_state(
+                service=background_task_service,
+                request=request,
+                state=state,
+            )
+            is not None
+        )
+
+    @staticmethod
+    def _is_background_subagent_recovery(
+        *,
+        call_state: dict[str, JsonValue],
+        record: BackgroundTaskRecord | None,
+    ) -> bool:
+        if str(call_state.get("kind") or "").strip() == "spawn_subagent_background":
+            return True
+        if SessionSupportMixin._truthy_json_value(call_state.get("background")):
+            return True
+        return record is not None and record.execution_mode == "background"
+
+    @staticmethod
+    def _visible_background_subagent_result(
+        record: BackgroundTaskRecord,
+    ) -> dict[str, JsonValue]:
+        return {
+            "ok": True,
+            "data": build_background_task_result_payload(
+                record,
+                completed=not record.is_active,
+                include_task_id=True,
+            ),
             "meta": {
                 "tool_result_event_published": True,
             },
@@ -1448,6 +1968,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
     def _event_publishing_service(self) -> EventPublishingService:
         return EventPublishingService(
             run_event_hub=getattr(self, "_run_event_hub", None),
+            shared_store=getattr(self, "_shared_store", None),
         )
 
     def _message_commit_service(self) -> MessageCommitService:
