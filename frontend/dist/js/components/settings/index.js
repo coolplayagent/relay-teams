@@ -8,7 +8,11 @@ import {
     loadCommandsSettingsPanel,
     syncCommandsSettingsActions,
 } from './commandsSettings.js';
-import { bindHooksSettingsHandlers, loadHooksSettingsPanel } from './hooksSettings.js';
+import {
+    bindHooksSettingsHandlers,
+    loadHooksSettingsPanel,
+    syncHooksSettingsActions,
+} from './hooksSettings.js';
 import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfiles.js';
 import { renderModelProfilesPanelMarkup } from './modelProfiles/template.js';
 import {
@@ -818,7 +822,7 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-command-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                         </div>
                         <div class="settings-panel-actions-group settings-panel-actions-group-end">
-                            <button class="secondary-btn section-action-btn settings-action" id="add-hook-btn" type="button" style="display:none;" data-i18n="settings.hooks.add_group">Add Hook</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="add-hook-btn" type="button" style="display:none;" data-i18n="settings.hooks.add_group">新增 Hook</button>
                             <button class="secondary-btn section-action-btn settings-action" id="validate-hooks-btn" type="button" style="display:none;" data-i18n="settings.action.validate">Validate</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-hooks-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;" data-i18n="settings.action.add_profile">Add Profile</button>
@@ -985,9 +989,7 @@ function renderPanelActions(tab) {
         return;
     }
     if (tab === 'hooks') {
-        document.getElementById('validate-hooks-btn').style.display = 'inline-flex';
-        document.getElementById('add-hook-btn').style.display = 'inline-flex';
-        document.getElementById('save-hooks-btn').style.display = 'inline-flex';
+        syncHooksSettingsActions();
         return;
     }
     if (tab === 'agents') {

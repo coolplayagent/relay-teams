@@ -148,6 +148,70 @@ def test_hooks_settings_panel_renders_empty_and_error_states(tmp_path: Path) -> 
     assert "boom" in str(error_payload["html"])
 
 
+def test_hooks_settings_add_after_load_error_enables_save_actions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config=None,
+        runtime_view=None,
+        api_source="""
+export async function fetchHooksConfig() {
+    throw new Error('broken config');
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig() {
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener(type, handler) { globalThis.__addHookClick = handler; } },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener(type, handler) { globalThis.__saveClick = handler; } },
+};
+globalThis.document = {
+    addEventListener() {},
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+const htmlAfterFailure = host.innerHTML;
+globalThis.__addHookClick();
+const htmlAfterAdd = host.innerHTML;
+console.log(JSON.stringify({
+    htmlAfterFailure,
+    htmlAfterAdd,
+    saveDisplay: buttons.save.style.display,
+    validateDisplay: buttons.validate.style.display,
+}));
+""",
+    )
+
+    assert "Load Failed" in cast(str, payload["htmlAfterFailure"])
+    assert "Load Failed" not in cast(str, payload["htmlAfterAdd"])
+    assert payload["saveDisplay"] == "inline-flex"
+    assert payload["validateDisplay"] == "inline-flex"
+
+
 def test_hooks_settings_panel_keeps_editor_when_runtime_view_load_fails(
     tmp_path: Path,
 ) -> None:
@@ -271,6 +335,265 @@ console.log(JSON.stringify({ html: host.innerHTML }));
     assert "fresh hook" in html
     assert "stale hook" not in html
     assert "Loading loaded hooks..." not in html
+
+
+def test_hooks_settings_delete_autosave_ignores_stale_reload_result(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config=None,
+        runtime_view=None,
+        api_source="""
+let configCalls = 0;
+let runtimeCalls = 0;
+
+export async function fetchHooksConfig() {
+    configCalls += 1;
+    if (configCalls === 1) {
+        return {
+            hooks: {
+                PreToolUse: [
+                    {
+                        name: 'Python write guard',
+                        matcher: 'Write',
+                        hooks: [
+                            {
+                                type: 'command',
+                                name: 'lint changed files',
+                                command: 'python lint.py',
+                            },
+                        ],
+                    },
+                    {
+                        name: 'Shell guard',
+                        matcher: 'Bash',
+                        hooks: [
+                            {
+                                type: 'command',
+                                name: 'check shell',
+                                command: 'python shell_guard.py',
+                            },
+                        ],
+                    },
+                ],
+            },
+        };
+    }
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Fresh reload guard',
+                    matcher: 'Edit',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'fresh command',
+                            command: 'python fresh.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    runtimeCalls += 1;
+    if (runtimeCalls === 1) {
+        return {
+            sources: [{ scope: 'project', path: '/workspace/.relay-teams/hooks-first.json' }],
+            loaded_hooks: [{ name: 'first runtime hook', handler_type: 'command', event_name: 'PreToolUse', matcher: 'Write', source: { scope: 'project', path: '/workspace/.relay-teams/hooks-first.json' } }],
+        };
+    }
+    if (runtimeCalls === 2) {
+        return {
+            sources: [{ scope: 'project', path: '/workspace/.relay-teams/hooks-fresh.json' }],
+            loaded_hooks: [{ name: 'fresh runtime hook', handler_type: 'command', event_name: 'PreToolUse', matcher: 'Edit', source: { scope: 'project', path: '/workspace/.relay-teams/hooks-fresh.json' } }],
+        };
+    }
+    return {
+        sources: [{ scope: 'project', path: '/workspace/.relay-teams/hooks-stale-delete.json' }],
+        loaded_hooks: [{ name: 'stale delete runtime hook', handler_type: 'command', event_name: 'PreToolUse', matcher: 'Bash', source: { scope: 'project', path: '/workspace/.relay-teams/hooks-stale-delete.json' } }],
+    };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayloads.push(payload);
+    await new Promise(resolve => {
+        globalThis.__resolveDeleteSave = resolve;
+    });
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.__savedPayloads = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+const deleteSave = listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+await loadHooksSettingsPanel();
+globalThis.__resolveDeleteSave();
+await deleteSave;
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({
+    html: host.innerHTML,
+    savedPayloads: globalThis.__savedPayloads,
+}));
+""",
+    )
+
+    html = cast(str, payload["html"])
+    saved_payloads = cast(list[dict[str, object]], payload["savedPayloads"])
+    assert len(saved_payloads) == 1
+    assert "fresh runtime hook" in html
+    assert "Fresh reload guard" in html
+    assert "stale delete runtime hook" not in html
+    assert "Shell guard" not in html
+
+
+def test_hooks_settings_delete_autosave_persists_after_reload_during_validation(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config=None,
+        runtime_view=None,
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'Shell guard',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'check shell',
+                            command: 'python shell_guard.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayloads.push(payload);
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    await new Promise(resolve => {
+        globalThis.__resolveDeleteValidation = resolve;
+    });
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.__savedPayloads = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+const deleteSave = listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+await loadHooksSettingsPanel();
+globalThis.__resolveDeleteValidation();
+await deleteSave;
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({ savedPayloads: globalThis.__savedPayloads }));
+""",
+    )
+
+    saved_payloads = cast(list[dict[str, object]], payload["savedPayloads"])
+    assert len(saved_payloads) == 1
+    saved_hooks = cast(dict[str, object], saved_payloads[0]["hooks"])
+    saved_groups = cast(list[dict[str, object]], saved_hooks["PreToolUse"])
+    assert len(saved_groups) == 1
+    assert saved_groups[0]["name"] == "Shell guard"
 
 
 def test_hooks_settings_panel_switches_card_into_edit_mode(tmp_path: Path) -> None:
@@ -1137,6 +1460,1120 @@ console.log(JSON.stringify({ savedPayload: globalThis.__savedPayload }));
             "prompt": "review the final answer",
         }
     ]
+
+
+def test_hooks_settings_saves_empty_config_after_deleting_last_group(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayload = payload;
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+const saveDisplayAfterDelete = buttons.save.style.display;
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({
+    savedPayload: globalThis.__savedPayload,
+    feedbackCalls: globalThis.__feedbackCalls || [],
+    saveDisplayAfterDelete,
+    saveDisplayAfterDeleteSave: buttons.save.style.display,
+}));
+""",
+    )
+
+    assert payload["savedPayload"] == {"hooks": {}}
+    assert payload["feedbackCalls"] == []
+    assert payload["saveDisplayAfterDelete"] == "none"
+    assert payload["saveDisplayAfterDeleteSave"] == "none"
+
+
+def test_hooks_settings_delete_does_not_persist_other_group_drafts(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "Shell guard",
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "check shell",
+                                "command": "python shell_guard.py",
+                            }
+                        ],
+                    },
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'Shell guard',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'check shell',
+                            command: 'python shell_guard.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayload = payload;
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'edit-group', groupId: '2' } };
+            }
+            return null;
+        },
+    },
+});
+listeners.input({
+    target: {
+        dataset: { hooksField: 'name', groupId: '2', handlerId: '0' },
+        value: 'Draft shell guard',
+    },
+});
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({
+    savedPayload: globalThis.__savedPayload,
+    saveDisplay: buttons.save.style.display,
+    html: host.innerHTML,
+}));
+""",
+    )
+
+    saved_payload = cast(dict[str, object], payload["savedPayload"])
+    saved_hooks = cast(dict[str, object], saved_payload["hooks"])
+    groups = cast(list[dict[str, object]], saved_hooks["PreToolUse"])
+    assert len(groups) == 1
+    assert groups[0]["name"] == "Shell guard"
+    assert payload["saveDisplay"] == "inline-flex"
+    assert "Draft shell guard" in cast(str, payload["html"])
+
+
+def test_hooks_settings_delete_failure_shows_delete_result_dialog(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig() {
+    throw new Error('write denied');
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({
+    feedbackCalls: globalThis.__feedbackCalls || [],
+    saveDisplay: buttons.save.style.display,
+    validateDisplay: buttons.validate.style.display,
+}));
+""",
+    )
+
+    assert payload["feedbackCalls"] == [
+        {
+            "title": "Delete Result",
+            "message": "Failed to delete hook: write denied",
+            "tone": "error",
+        }
+    ]
+    assert payload["saveDisplay"] == "inline-flex"
+    assert payload["validateDisplay"] == "inline-flex"
+
+
+def test_hooks_settings_serializes_concurrent_delete_saves(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "Shell guard",
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "check shell",
+                                "command": "python shell_guard.py",
+                            }
+                        ],
+                    },
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'Shell guard',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'check shell',
+                            command: 'python shell_guard.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayloads.push(payload);
+    if (globalThis.__savedPayloads.length === 1) {
+        await new Promise(resolve => {
+            globalThis.__resolveFirstSave = resolve;
+        });
+    }
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.__savedPayloads = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+function removeGroup(groupId) {
+    return listeners.click({
+        target: {
+            closest(selector) {
+                if (selector === '[data-hooks-action]') {
+                    return { dataset: { hooksAction: 'remove-group', groupId } };
+                }
+                return null;
+            },
+        },
+    });
+}
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+const firstDelete = removeGroup('1');
+await new Promise(resolve => setTimeout(resolve, 0));
+const secondDelete = removeGroup('2');
+await new Promise(resolve => setTimeout(resolve, 0));
+globalThis.__resolveFirstSave();
+await firstDelete;
+await secondDelete;
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({ savedPayloads: globalThis.__savedPayloads }));
+""",
+    )
+
+    saved_payloads = cast(list[dict[str, object]], payload["savedPayloads"])
+    assert len(saved_payloads) == 2
+    first_hooks = cast(dict[str, object], saved_payloads[0]["hooks"])
+    first_groups = cast(list[dict[str, object]], first_hooks["PreToolUse"])
+    assert len(first_groups) == 1
+    assert first_groups[0]["name"] == "Shell guard"
+    assert saved_payloads[1] == {"hooks": {}}
+
+
+def test_hooks_settings_queues_manual_save_after_delete_autosave(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "Shell guard",
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "check shell",
+                                "command": "python shell_guard.py",
+                            }
+                        ],
+                    },
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'Shell guard',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'check shell',
+                            command: 'python shell_guard.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayloads.push(payload);
+    if (globalThis.__savedPayloads.length === 1) {
+        await new Promise(resolve => {
+            globalThis.__resolveFirstSave = resolve;
+        });
+    }
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener(type, handler) { globalThis.__saveClick = handler; } },
+};
+globalThis.__savedPayloads = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+const deleteSave = listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'edit-group', groupId: '2' } };
+            }
+            return null;
+        },
+    },
+});
+listeners.input({
+    target: {
+        dataset: { hooksField: 'name', groupId: '2', handlerId: '0' },
+        value: 'Draft shell guard',
+    },
+});
+const manualSave = globalThis.__saveClick();
+await new Promise(resolve => setTimeout(resolve, 0));
+globalThis.__resolveFirstSave();
+await deleteSave;
+await manualSave;
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({ savedPayloads: globalThis.__savedPayloads }));
+""",
+    )
+
+    saved_payloads = cast(list[dict[str, object]], payload["savedPayloads"])
+    assert len(saved_payloads) == 2
+    first_hooks = cast(dict[str, object], saved_payloads[0]["hooks"])
+    first_groups = cast(list[dict[str, object]], first_hooks["PreToolUse"])
+    assert len(first_groups) == 1
+    assert first_groups[0]["name"] == "Shell guard"
+    second_hooks = cast(dict[str, object], saved_payloads[1]["hooks"])
+    second_groups = cast(list[dict[str, object]], second_hooks["PreToolUse"])
+    assert len(second_groups) == 1
+    assert second_groups[0]["name"] == "Draft shell guard"
+
+
+def test_hooks_settings_delete_after_in_flight_manual_save_persists_delete(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "Shell guard",
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "check shell",
+                                "command": "python shell_guard.py",
+                            }
+                        ],
+                    },
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'Shell guard',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'check shell',
+                            command: 'python shell_guard.py',
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayloads.push(payload);
+    if (globalThis.__savedPayloads.length === 1) {
+        await new Promise(resolve => {
+            globalThis.__resolveFirstSave = resolve;
+        });
+    }
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener(type, handler) { globalThis.__saveClick = handler; } },
+};
+globalThis.__savedPayloads = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'edit-group', groupId: '2' } };
+            }
+            return null;
+        },
+    },
+});
+listeners.input({
+    target: {
+        dataset: { hooksField: 'name', groupId: '2', handlerId: '0' },
+        value: 'Saved shell guard',
+    },
+});
+const manualSave = globalThis.__saveClick();
+await new Promise(resolve => setTimeout(resolve, 0));
+const deleteSave = listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+globalThis.__resolveFirstSave();
+await manualSave;
+await deleteSave;
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({ savedPayloads: globalThis.__savedPayloads }));
+""",
+    )
+
+    saved_payloads = cast(list[dict[str, object]], payload["savedPayloads"])
+    assert len(saved_payloads) == 2
+    first_hooks = cast(dict[str, object], saved_payloads[0]["hooks"])
+    first_groups = cast(list[dict[str, object]], first_hooks["PreToolUse"])
+    assert len(first_groups) == 2
+    assert first_groups[1]["name"] == "Saved shell guard"
+    second_hooks = cast(dict[str, object], saved_payloads[1]["hooks"])
+    second_groups = cast(list[dict[str, object]], second_hooks["PreToolUse"])
+    assert len(second_groups) == 1
+    assert second_groups[0]["name"] == "Saved shell guard"
+
+
+def test_hooks_settings_delete_success_ignores_invalid_unrelated_draft(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "HTTP audit",
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "http",
+                                "name": "notify audit",
+                                "url": "https://hooks.example.test/audit",
+                                "headers": {"Authorization": "Bearer $HOOK_TOKEN"},
+                            }
+                        ],
+                    },
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'HTTP audit',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'http',
+                            name: 'notify audit',
+                            url: 'https://hooks.example.test/audit',
+                            headers: { Authorization: 'Bearer $HOOK_TOKEN' },
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayload = payload;
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.__feedbackCalls = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'edit-group', groupId: '2' } };
+            }
+            return null;
+        },
+    },
+});
+listeners.input({
+    target: {
+        dataset: { hooksField: 'headers', groupId: '2', handlerId: '2' },
+        value: '{"Authorization":',
+    },
+});
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '1' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({
+    feedbackCalls: globalThis.__feedbackCalls,
+    savedPayload: globalThis.__savedPayload,
+    saveDisplay: buttons.save.style.display,
+}));
+""",
+    )
+
+    assert payload["feedbackCalls"] == []
+    saved_payload = cast(dict[str, object], payload["savedPayload"])
+    saved_hooks = cast(dict[str, object], saved_payload["hooks"])
+    saved_groups = cast(list[dict[str, object]], saved_hooks["PreToolUse"])
+    assert len(saved_groups) == 1
+    assert saved_groups[0]["name"] == "HTTP audit"
+    assert payload["saveDisplay"] == "inline-flex"
+
+
+def test_hooks_settings_delete_bad_saved_headers_group_recovers_config(
+    tmp_path: Path,
+) -> None:
+    payload = _run_hooks_settings_script(
+        tmp_path=tmp_path,
+        hooks_config={
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "name": "Python write guard",
+                        "matcher": "Write",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "name": "lint changed files",
+                                "command": "python lint.py",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "Bad HTTP audit",
+                        "matcher": "Bash",
+                        "hooks": [
+                            {
+                                "type": "http",
+                                "name": "notify audit",
+                                "url": "https://hooks.example.test/audit",
+                                "headers": {"Authorization": 123},
+                            }
+                        ],
+                    },
+                ]
+            }
+        },
+        runtime_view={"sources": [], "loaded_hooks": []},
+        api_source="""
+export async function fetchHooksConfig() {
+    return {
+        hooks: {
+            PreToolUse: [
+                {
+                    name: 'Python write guard',
+                    matcher: 'Write',
+                    hooks: [
+                        {
+                            type: 'command',
+                            name: 'lint changed files',
+                            command: 'python lint.py',
+                        },
+                    ],
+                },
+                {
+                    name: 'Bad HTTP audit',
+                    matcher: 'Bash',
+                    hooks: [
+                        {
+                            type: 'http',
+                            name: 'notify audit',
+                            url: 'https://hooks.example.test/audit',
+                            headers: { Authorization: 123 },
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+}
+
+export async function fetchHookRuntimeView() {
+    return { sources: [], loaded_hooks: [] };
+}
+
+export async function saveHooksConfig(payload) {
+    globalThis.__savedPayload = payload;
+    return { status: 'ok' };
+}
+
+export async function validateHooksConfig() {
+    return { status: 'ok' };
+}
+""",
+        runner_source="""
+const listeners = {};
+const host = { innerHTML: '' };
+const buttons = {
+    add: { style: {}, addEventListener() {} },
+    validate: { style: {}, addEventListener() {} },
+    save: { style: {}, addEventListener() {} },
+};
+globalThis.__feedbackCalls = [];
+globalThis.document = {
+    addEventListener(name, handler) {
+        listeners[name] = handler;
+    },
+    getElementById(id) {
+        if (id === 'hooks-runtime-status') return host;
+        if (id === 'add-hook-btn') return buttons.add;
+        if (id === 'validate-hooks-btn') return buttons.validate;
+        if (id === 'save-hooks-btn') return buttons.save;
+        if (id === 'hooks-panel') return { style: { display: 'block' } };
+        return null;
+    },
+};
+
+const { bindHooksSettingsHandlers, loadHooksSettingsPanel } = await import('./hooksSettings.mjs');
+bindHooksSettingsHandlers();
+await loadHooksSettingsPanel();
+await listeners.click({
+    target: {
+        closest(selector) {
+            if (selector === '[data-hooks-action]') {
+                return { dataset: { hooksAction: 'remove-group', groupId: '2' } };
+            }
+            return null;
+        },
+    },
+});
+await new Promise(resolve => setTimeout(resolve, 0));
+console.log(JSON.stringify({
+    feedbackCalls: globalThis.__feedbackCalls,
+    savedPayload: globalThis.__savedPayload,
+}));
+""",
+    )
+
+    assert payload["feedbackCalls"] == []
+    saved_payload = cast(dict[str, object], payload["savedPayload"])
+    saved_hooks = cast(dict[str, object], saved_payload["hooks"])
+    saved_groups = cast(list[dict[str, object]], saved_hooks["PreToolUse"])
+    assert len(saved_groups) == 1
+    assert saved_groups[0]["name"] == "Python write guard"
 
 
 def test_hooks_settings_blocks_empty_agent_role_on_save(tmp_path: Path) -> None:
@@ -2504,6 +3941,11 @@ export async function showAlertDialog({ title = '', message = '', tone = 'info' 
     globalThis.__feedbackCalls.push({ title, message, tone });
     return true;
 }
+
+export function showToast({ title = '', message = '', tone = 'info' } = {}) {
+    globalThis.__feedbackCalls = globalThis.__feedbackCalls || [];
+    globalThis.__feedbackCalls.push({ title, message, tone });
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -2595,6 +4037,9 @@ const STRINGS = {
     'settings.hooks.save_failed': 'Failed to save hooks config.',
     'settings.hooks.save_failed_detail': 'Failed to save hooks config: {error}',
     'settings.hooks.save_result_title': 'Save Result',
+    'settings.hooks.delete_failed': 'Failed to delete hook.',
+    'settings.hooks.delete_failed_detail': 'Failed to delete hook: {error}',
+    'settings.hooks.delete_result_title': 'Delete Result',
     'settings.panel.hooks.title': 'Hooks',
     'settings.panel.hooks.description': 'View currently loaded hooks and provide custom editing.',
     'settings.action.validate': 'Validate',

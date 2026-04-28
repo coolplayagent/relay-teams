@@ -183,6 +183,7 @@ const PROMPT_PLACEHOLDERS = {
 
 let latestRuntimeView = null;
 let editorGroups = [];
+let lastSavedEditorGroups = [];
 let latestLoadErrorMessage = '';
 let latestRuntimeLoadErrorMessage = '';
 let latestConfigMessage = '';
@@ -193,7 +194,9 @@ let activeHooksLoadRequestId = 0;
 let nextGroupId = 1;
 let nextHandlerId = 1;
 let editingGroupId = null;
+let hooksConfigDirty = false;
 let groupEditSnapshots = new Map();
+let hooksPersistenceChain = Promise.resolve();
 const collapsedHandlerEditors = new Map();
 let agentRoleOptions = [];
 
@@ -213,6 +216,8 @@ export function bindHooksSettingsHandlers() {
             const group = createDefaultGroup();
             editorGroups = [...editorGroups, group];
             editingGroupId = group.id;
+            hooksConfigDirty = true;
+            latestLoadErrorMessage = '';
             latestConfigMessage = '';
             renderHooksPanel();
         });
@@ -232,12 +237,25 @@ export function bindHooksSettingsHandlers() {
     handlersBound = true;
 }
 
+export function syncHooksSettingsActions() {
+    if (!isHooksPanelActive()) {
+        return;
+    }
+    setActionDisplay('add-hook-btn', true);
+    const hasEditableHooks = !loadInFlight
+        && !latestLoadErrorMessage
+        && (editorGroups.length > 0 || editingGroupId !== null || hooksConfigDirty);
+    setActionDisplay('validate-hooks-btn', hasEditableHooks);
+    setActionDisplay('save-hooks-btn', hasEditableHooks);
+}
+
 export async function loadHooksSettingsPanel() {
     const requestId = ++activeHooksLoadRequestId;
     loadInFlight = true;
     latestLoadErrorMessage = '';
     latestRuntimeLoadErrorMessage = '';
     latestConfigMessage = '';
+    hooksConfigDirty = false;
     renderHooksPanel();
     const configPromise = fetchHooksConfig();
     const runtimeViewPromise = fetchHookRuntimeView();
@@ -248,6 +266,7 @@ export async function loadHooksSettingsPanel() {
             return;
         }
         editorGroups = deserializeHooksConfig(config);
+        lastSavedEditorGroups = cloneGroups(editorGroups);
         try {
             agentRoleOptions = normalizeAgentRoleOptions(await roleOptionsPromise);
         } catch (e) {
@@ -260,6 +279,7 @@ export async function loadHooksSettingsPanel() {
         }
         latestRuntimeLoadErrorMessage = '';
         editingGroupId = null;
+        hooksConfigDirty = false;
         groupEditSnapshots = new Map();
         collapsedHandlerEditors.clear();
         try {
@@ -291,7 +311,9 @@ export async function loadHooksSettingsPanel() {
         latestRuntimeLoadErrorMessage = '';
         latestRuntimeView = null;
         editorGroups = [];
+        lastSavedEditorGroups = [];
         editingGroupId = null;
+        hooksConfigDirty = false;
         groupEditSnapshots = new Map();
         collapsedHandlerEditors.clear();
         logError(
@@ -337,6 +359,7 @@ async function handleHooksClick(event) {
     }
     if (action === 'remove-group') {
         const groupId = Number(actionTarget.dataset.groupId || '0');
+        const deletedSavedGroups = lastSavedEditorGroups.filter(group => group.id === groupId);
         editorGroups = editorGroups.filter(group => group.id !== groupId);
         if (editingGroupId === groupId) {
             editingGroupId = null;
@@ -345,6 +368,10 @@ async function handleHooksClick(event) {
         clearCollapsedHandlersForGroup(groupId);
         latestConfigMessage = '';
         renderHooksPanel();
+        await queuePersistHooksAfterDelete({
+            deletedSavedGroups: cloneGroups(deletedSavedGroups),
+            requestId: activeHooksLoadRequestId,
+        });
         return;
     }
     if (action === 'add-handler') {
@@ -361,6 +388,7 @@ async function handleHooksClick(event) {
             };
         });
         collapsedHandlerEditors.set(getHandlerEditorKey(groupId, nextHandler.id), true);
+        hooksConfigDirty = true;
         latestConfigMessage = '';
         renderHooksPanel();
         return;
@@ -391,6 +419,7 @@ async function handleHooksClick(event) {
             };
         });
         collapsedHandlerEditors.delete(getHandlerEditorKey(groupId, handlerId));
+        hooksConfigDirty = true;
         latestConfigMessage = '';
         renderHooksPanel();
         return;
@@ -416,6 +445,7 @@ function handleHooksInput(event) {
     const groupId = Number(target.dataset.groupId || '0');
     const handlerId = Number(target.dataset.handlerId || '0');
     latestConfigMessage = '';
+    hooksConfigDirty = true;
     if (handlerId) {
         updateHandlerField(groupId, handlerId, field, readInputValue(target));
     } else {
@@ -459,7 +489,13 @@ async function validateCurrentHooksConfig() {
 }
 
 async function saveCurrentHooksConfig() {
+    hooksPersistenceChain = hooksPersistenceChain.then(() => persistCurrentHooksConfig());
+    await hooksPersistenceChain;
+}
+
+async function persistCurrentHooksConfig() {
     try {
+        const savedEditorGroups = cloneGroups(editorGroups).map(group => ({ ...group, isNew: false }));
         const payload = serializeHooksConfig(editorGroups);
         validateHooksPayloadForEditor(payload);
         await validateHooksConfig(payload);
@@ -467,7 +503,9 @@ async function saveCurrentHooksConfig() {
         latestConfigMessageTone = 'success';
         latestConfigMessage = t('settings.hooks.save_success');
         editorGroups = editorGroups.map(group => ({ ...group, isNew: false }));
+        lastSavedEditorGroups = savedEditorGroups;
         editingGroupId = null;
+        hooksConfigDirty = false;
         groupEditSnapshots = new Map();
         try {
             latestRuntimeView = await fetchHookRuntimeView();
@@ -507,7 +545,104 @@ async function saveCurrentHooksConfig() {
     renderHooksPanel();
 }
 
+async function queuePersistHooksAfterDelete(deleteSnapshot) {
+    hooksPersistenceChain = hooksPersistenceChain.then(() =>
+        persistHooksAfterDelete(deleteSnapshot),
+    );
+    await hooksPersistenceChain;
+}
+
+async function persistHooksAfterDelete(deleteSnapshot) {
+    const { deletedSavedGroups, requestId } = deleteSnapshot;
+    const requestIsCurrent = requestId === activeHooksLoadRequestId;
+    const persistedGroups = lastSavedEditorGroups.filter(
+        group => !matchesDeletedSavedGroup(group, deletedSavedGroups, requestIsCurrent),
+    );
+    if (persistedGroups.length === lastSavedEditorGroups.length) {
+        if (requestId !== activeHooksLoadRequestId) {
+            return;
+        }
+        reconcileHooksDirtyState();
+        renderHooksPanel();
+        return;
+    }
+    try {
+        const payload = serializeHooksConfig(persistedGroups);
+        validateHooksPayloadForEditor(payload);
+        await validateHooksConfig(payload);
+        await saveHooksConfig(payload);
+        if (requestId !== activeHooksLoadRequestId) {
+            return;
+        }
+        lastSavedEditorGroups = cloneGroups(persistedGroups);
+        reconcileHooksDirtyState();
+        latestConfigMessageTone = 'info';
+        latestConfigMessage = '';
+        try {
+            const runtimeView = await fetchHookRuntimeView();
+            if (requestId !== activeHooksLoadRequestId) {
+                return;
+            }
+            latestRuntimeView = runtimeView;
+            latestRuntimeLoadErrorMessage = '';
+        } catch (e) {
+            if (requestId !== activeHooksLoadRequestId) {
+                return;
+            }
+            latestRuntimeView = null;
+            latestRuntimeLoadErrorMessage =
+                e?.message || t('settings.hooks.runtime_load_failed');
+            logError(
+                'frontend.hooks_settings.runtime_load_failed',
+                'Failed to refresh hooks runtime view after delete',
+                errorToPayload(e),
+            );
+        }
+    } catch (e) {
+        if (requestId !== activeHooksLoadRequestId) {
+            return;
+        }
+        hooksConfigDirty = true;
+        latestConfigMessageTone = 'error';
+        const errorReason = resolveHooksErrorReason(e);
+        latestConfigMessage = errorReason
+            ? formatMessage('settings.hooks.delete_failed_detail', { error: errorReason })
+            : t('settings.hooks.delete_failed');
+        logError(
+            'frontend.hooks_settings.delete_save_failed',
+            'Failed to save hooks config after deleting hook group',
+            errorToPayload(e),
+        );
+        await showAlertDialog({
+            title: t('settings.hooks.delete_result_title'),
+            message: latestConfigMessage,
+            tone: 'error',
+        });
+    }
+    renderHooksPanel();
+}
+
+function matchesDeletedSavedGroup(group, deletedSavedGroups, requestIsCurrent) {
+    return deletedSavedGroups.some(deletedGroup => {
+        if (requestIsCurrent && group.id === deletedGroup.id) {
+            return true;
+        }
+        return groupsHaveSameSavedIdentity(group, deletedGroup);
+    });
+}
+
+function groupsHaveSameSavedIdentity(group, deletedGroup) {
+    return group.event_name === deletedGroup.event_name
+        && group.name === deletedGroup.name
+        && group.matcher === deletedGroup.matcher
+        && JSON.stringify(group.role_ids) === JSON.stringify(deletedGroup.role_ids)
+        && JSON.stringify(group.session_modes) === JSON.stringify(deletedGroup.session_modes)
+        && JSON.stringify(group.run_kinds) === JSON.stringify(deletedGroup.run_kinds)
+        && JSON.stringify(group.handlers) === JSON.stringify(deletedGroup.handlers);
+}
+
 function renderHooksPanel() {
+    syncHooksSettingsActions();
     const host = document.getElementById('hooks-runtime-status');
     if (!host) {
         return;
@@ -526,6 +661,18 @@ function renderHooksPanel() {
         return;
     }
     host.innerHTML = renderMergedHooksShell();
+}
+
+function isHooksPanelActive() {
+    const panel = document.getElementById('hooks-panel');
+    return !panel || panel.style.display !== 'none';
+}
+
+function setActionDisplay(id, visible) {
+    const element = document.getElementById(id);
+    if (element?.style) {
+        element.style.display = visible ? 'inline-flex' : 'none';
+    }
 }
 
 function startEditingGroup(groupId) {
@@ -549,6 +696,20 @@ function cancelEditingGroup(groupId) {
     if (editingGroupId === groupId) {
         editingGroupId = null;
     }
+    reconcileHooksDirtyState();
+}
+
+function reconcileHooksDirtyState() {
+    try {
+        hooksConfigDirty = JSON.stringify(serializeHooksConfig(editorGroups))
+            !== JSON.stringify(serializeHooksConfig(lastSavedEditorGroups));
+    } catch {
+        hooksConfigDirty = true;
+    }
+}
+
+function cloneGroups(groups) {
+    return groups.map(group => cloneGroup(group));
 }
 
 function renderMergedHooksShell() {

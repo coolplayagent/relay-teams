@@ -421,6 +421,9 @@ const TRANSLATIONS = {
         'settings.hooks.save_failed': 'Failed to save hooks config.',
         'settings.hooks.save_failed_detail': 'Failed to save hooks config: {error}',
         'settings.hooks.save_result_title': 'Save Result',
+        'settings.hooks.delete_failed': 'Failed to delete hook.',
+        'settings.hooks.delete_failed_detail': 'Failed to delete hook: {error}',
+        'settings.hooks.delete_result_title': 'Delete Result',
         'settings.appearance.colors': 'Colors',
         'settings.appearance.accent': 'Accent',
         'settings.appearance.background': 'Background',
@@ -1487,7 +1490,6 @@ const TRANSLATIONS = {
         'settings.hooks.if_rule': 'If 规则',
         'settings.hooks.empty': '当前没有 Hook 配置',
         'settings.hooks.empty_copy': '添加一个 Hook 来开始构建当前页面展示的 Hooks。',
-        'settings.hooks.add_group': '添加 Hook',
         'settings.hooks.edit_group': '编辑',
         'settings.hooks.delete_group': '删除 Hook',
         'settings.hooks.handlers': '处理器',
@@ -1534,7 +1536,7 @@ const TRANSLATIONS = {
         'settings.hooks.runtime_section_copy': '查看当前运行时合并后实际生效的 Hook。',
         'settings.hooks.config_empty': '当前没有用户级 Hook 配置',
         'settings.hooks.config_empty_copy': '添加一个匹配组来开始构建用户级 Hook。',
-        'settings.hooks.add_group': '添加 Hook',
+        'settings.hooks.add_group': '新增 Hook',
         'settings.hooks.delete_group': '删除 Hook',
         'settings.hooks.handlers': '处理器',
         'settings.hooks.handlers_count_suffix': '个处理器',
@@ -3906,6 +3908,12 @@ function resolvePreferredLanguage() {
     }
     return DEFAULT_LANGUAGE;
 }
+
+Object.assign(TRANSLATIONS['zh-CN'], {
+    'settings.hooks.delete_failed': '\u5220\u9664 Hook \u5931\u8d25\u3002',
+    'settings.hooks.delete_failed_detail': '\u5220\u9664 Hook \u5931\u8d25\uff1a{error}',
+    'settings.hooks.delete_result_title': '\u5220\u9664\u7ed3\u679c',
+});
 
 function updateLanguageButton() {
     const button = document?.getElementById?.('language-toggle-btn');
