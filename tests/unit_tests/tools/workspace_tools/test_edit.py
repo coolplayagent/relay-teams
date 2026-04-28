@@ -1,11 +1,21 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+import inspect
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from pydantic import JsonValue
+from pydantic_ai import Agent
 
+from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.tools.runtime.context import ToolContext, ToolDeps
+from relay_teams.tools.runtime.models import ToolResultProjection
+from relay_teams.tools.workspace_tools import register_edit
 from relay_teams.tools.workspace_tools.edit import (
     _project_edit_result,
     apply_edit,
@@ -13,10 +23,40 @@ from relay_teams.tools.workspace_tools.edit import (
     replace_content,
 )
 from relay_teams.tools.workspace_tools.edit_state import (
+    READ_STATE_PREFIX,
     assert_file_was_read,
     load_file_read_state,
+    normalize_resolved_path,
     record_file_read,
+    record_file_read_async,
 )
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self,
+        *,
+        description: str,
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        del description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
+
+
+class _FakeWorkspace:
+    def __init__(self, root: Path) -> None:
+        self.scope_root = root
+
+    def resolve_path(self, relative_path: str, *, write: bool = False) -> Path:
+        _ = write
+        return (self.scope_root / relative_path).resolve()
 
 
 def test_replace_content_replaces_unique_exact_match() -> None:
@@ -186,6 +226,120 @@ def test_file_read_state_does_not_leak_between_conversations(tmp_path: Path) -> 
         )
         is None
     )
+
+
+def test_file_read_state_ignores_invalid_persisted_payload(tmp_path: Path) -> None:
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("content", encoding="utf-8")
+    shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(scope_type=ScopeType.SESSION, scope_id="session-1"),
+            key=(
+                f"{READ_STATE_PREFIX}conversation-1:"
+                f"{normalize_resolved_path(file_path)}"
+            ),
+            value_json='{"path": "", "mtime_ns": -1, "size": -1}',
+        )
+    )
+
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id="conversation-1",
+            path=file_path,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_file_read_state_round_trips(tmp_path: Path) -> None:
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    file_path = tmp_path / "file.txt"
+    file_path.write_text("content", encoding="utf-8")
+
+    await record_file_read_async(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
+
+    state = load_file_read_state(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
+    assert state is not None
+    assert state.path.endswith("file.txt")
+
+
+@pytest.mark.asyncio
+async def test_edit_tool_runs_registered_sync_action(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import edit as edit_module
+
+    file_path = tmp_path / "demo.txt"
+    file_path.write_text("before\n", encoding="utf-8")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
+    fake_agent = _FakeAgent()
+    register_edit(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, JsonValue]]],
+        fake_agent.tools["edit"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id="conversation-1",
+        )
+    )
+
+    async def _fake_execute_tool_call(
+        ctx: ToolContext,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., ToolResultProjection | Awaitable[ToolResultProjection]],
+        raw_args: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, JsonValue]:
+        del ctx, tool_name, args_summary, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in raw_args.items() if key in parameter_names
+        }
+        maybe_projection = action(**action_args)
+        if inspect.isawaitable(maybe_projection):
+            projection = await maybe_projection
+        else:
+            projection = maybe_projection
+        return cast(dict[str, JsonValue], projection.internal_data)
+
+    monkeypatch.setattr(edit_module, "execute_tool_call", _fake_execute_tool_call)
+
+    result = await tool(
+        cast(ToolContext, cast(object, ctx)),
+        path="demo.txt",
+        old_string="before\n",
+        new_string="after\n",
+    )
+
+    assert "Edit applied successfully." in cast(str, result["output"])
+    assert file_path.read_text(encoding="utf-8") == "after\n"
 
 
 def test_edit_file_with_guard_rejects_external_change_after_read(

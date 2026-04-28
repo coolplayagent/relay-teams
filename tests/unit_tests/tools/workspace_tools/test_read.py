@@ -211,7 +211,8 @@ def test_read_image_capability_error_allows_explicit_support() -> None:
     assert read_module._read_image_capability_error("src/diagram.png", True) == ""
 
 
-def test_project_image_read_result_rejects_missing_media_service_and_invalid_image(
+@pytest.mark.asyncio
+async def test_project_image_read_result_rejects_missing_media_service_and_invalid_image(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -232,7 +233,7 @@ def test_project_image_read_result_rejects_missing_media_service_and_invalid_ima
         ValueError,
         match="Cannot read image file without media asset support",
     ):
-        read_module._project_image_read_result(
+        await read_module._project_image_read_result(
             ctx=cast(ToolContext, cast(object, ctx_without_media)),
             file_path=file_path,
             path="src/diagram.png",
@@ -253,7 +254,7 @@ def test_project_image_read_result_rejects_missing_media_service_and_invalid_ima
     )
 
     with pytest.raises(ValueError, match="Cannot read binary file: src/diagram.png"):
-        read_module._project_image_read_result(
+        await read_module._project_image_read_result(
             ctx=cast(ToolContext, cast(object, ctx_with_media)),
             file_path=file_path,
             path="src/diagram.png",
@@ -550,6 +551,69 @@ async def test_read_tool_reads_notebook_cell_without_outputs(
             session_id="session-1",
             conversation_id="conversation-1",
             path=file_path,
+        )
+        is not None
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_tool_records_text_file_read_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import read as read_module
+
+    source_dir = tmp_path / "src"
+    source_dir.mkdir()
+    file_path = source_dir / "demo.txt"
+    file_path.write_text("alpha\nbeta\n", encoding="utf-8")
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    fake_agent = _FakeAgent()
+    register_read(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, object]]],
+        fake_agent.tools["read"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            task_id="task-1",
+            session_id="session-1",
+            conversation_id="conversation-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        action: Callable[..., Awaitable[ToolResultProjection]],
+        approval_request=None,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del ctx, tool_name, approval_request, kwargs
+        parameter_names = set(inspect.signature(action).parameters)
+        action_args = {
+            key: value for key, value in args_summary.items() if key in parameter_names
+        }
+        projected = await action(**action_args)
+        return cast(dict[str, object], projected.internal_data)
+
+    monkeypatch.setattr(read_module, "execute_tool_call", _fake_execute_tool)
+
+    result = await tool(ctx, path="src/demo.txt")
+
+    output = cast(str, result["output"])
+    assert "<type>file</type>" in output
+    assert "1: alpha" in output
+    assert (
+        load_file_read_state(
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id="conversation-1",
+            path=file_path.resolve(),
         )
         is not None
     )
