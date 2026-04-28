@@ -10,6 +10,8 @@ from relay_teams.agents.tasks.models import TaskEnvelope, TaskRecord
 from relay_teams.persistence import async_fetchall, async_fetchone
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
+
 
 class TaskRepository(SharedSqliteRepository):
     def __init__(self, db_path: Path) -> None:
@@ -40,6 +42,9 @@ class TaskRepository(SharedSqliteRepository):
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_session_trace ON tasks(session_id, trace_id, created_at)"
             )
 
         self._run_write(
@@ -72,6 +77,9 @@ class TaskRepository(SharedSqliteRepository):
             )
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_session_trace ON tasks(session_id, trace_id, created_at)"
             )
 
         await self._run_async_write(
@@ -450,6 +458,42 @@ class TaskRepository(SharedSqliteRepository):
                 (session_id,),
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
+
+    def list_by_session_run_ids(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+    ) -> tuple[TaskRecord, ...]:
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
+        )
+        if not normalized_run_ids:
+            return ()
+        rows: list[sqlite3.Row] = []
+        chunk_size = _SQLITE_SAFE_VARIABLE_LIMIT - 1
+        with self._lock:
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows.extend(
+                    self._conn.execute(
+                        f"SELECT * FROM tasks WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY created_at ASC",
+                        (session_id, *run_id_chunk),
+                    ).fetchall()
+                )
+        rows.sort(key=lambda row: str(row["created_at"] or ""))
+        return tuple(self._to_record(row) for row in rows)
+
+    async def list_by_session_run_ids_async(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+    ) -> tuple[TaskRecord, ...]:
+        return await self._call_sync_async(
+            self.list_by_session_run_ids,
+            session_id,
+            run_ids,
+        )
 
     async def list_by_session_async(self, session_id: str) -> tuple[TaskRecord, ...]:
         rows = await self._run_async_read(

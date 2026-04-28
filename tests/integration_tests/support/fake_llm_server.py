@@ -257,10 +257,14 @@ def plan_fake_response(payload: object) -> dict[str, object]:
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return {"kind": "text", "content": "fake-response"}
+    if _normal_tool_pressure_mode(messages):
+        return _plan_normal_tool_pressure_response(payload, messages)
     if _orch_clone_worker_mode(messages):
         return _plan_orch_clone_worker_response(messages)
     if _orch_clone_benchmark_mode(messages):
         return _plan_orch_clone_benchmark_response(messages)
+    if _orch_tool_pressure_mode(messages):
+        return _plan_orch_tool_pressure_response(messages)
     if _rolling_summary_compaction_mode(messages):
         return _plan_rolling_summary_compaction_response(messages)
     if _rolling_summary_phase_mode(messages):
@@ -444,6 +448,198 @@ def _plan_orch_clone_worker_response(messages: list[object]) -> dict[str, object
         "delay_before_ms": max(0, min(2_000, delay_ms)),
         "content": "[fake-llm] clone worker completed",
     }
+
+
+def _normal_tool_pressure_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[normal-tool-pressure")
+
+
+def _plan_normal_tool_pressure_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "shell" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] shell is not available for tool pressure.",
+        }
+    config = _extract_normal_tool_pressure_config(messages)
+    completed_call_ids = _extract_tool_call_ids(
+        messages,
+        prefix=config.tool_call_prefix,
+    )
+    if len(completed_call_ids) >= config.tool_count:
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] normal tool pressure completed "
+                f"{config.tool_count} shell calls."
+            ),
+        }
+    return {
+        "kind": "tool_calls",
+        "tool_calls": [
+            {
+                "tool_name": "shell",
+                "tool_call_id": f"{config.tool_call_prefix}{index + 1}",
+                "arguments": {
+                    "command": _build_tool_pressure_shell_command(
+                        index=index + 1,
+                        delay_ms=config.delay_ms,
+                    ),
+                    "background": False,
+                    "timeout_ms": max(5_000, config.delay_ms + 5_000),
+                },
+            }
+            for index in range(config.tool_count)
+        ],
+    }
+
+
+class _NormalToolPressureConfig:
+    def __init__(
+        self,
+        *,
+        tool_count: int,
+        delay_ms: int,
+        tool_call_prefix: str,
+    ) -> None:
+        self.tool_count = tool_count
+        self.delay_ms = delay_ms
+        self.tool_call_prefix = tool_call_prefix
+
+
+def _extract_normal_tool_pressure_config(
+    messages: list[object],
+) -> _NormalToolPressureConfig:
+    user_text = _extract_last_user_text(messages)
+    match = re.search(
+        r"\[normal-tool-pressure\s+count=(\d+)\s+delay=(\d+)(?:\s+tag=([A-Za-z0-9_-]+))?\]",
+        user_text,
+    )
+    if match is None:
+        return _NormalToolPressureConfig(
+            tool_count=4,
+            delay_ms=100,
+            tool_call_prefix="call-normal-tool-pressure-",
+        )
+    tag = match.group(3) or ""
+    prefix_tag = f"{tag}-" if tag else ""
+    return _NormalToolPressureConfig(
+        tool_count=max(1, min(16, int(match.group(1)))),
+        delay_ms=max(0, min(2_000, int(match.group(2)))),
+        tool_call_prefix=f"call-normal-tool-pressure-{prefix_tag}",
+    )
+
+
+def _build_tool_pressure_shell_command(*, index: int, delay_ms: int) -> str:
+    sleep_seconds = max(0.0, min(2.0, delay_ms / 1000))
+    script = (
+        f"import time; time.sleep({sleep_seconds:.3f}); print('tool-pressure-{index}')"
+    )
+    if sys.platform.startswith("win"):
+        return f'& "{sys.executable}" -c "{script}"'
+    return f'"{sys.executable}" -c "{script}"'
+
+
+def _orch_tool_pressure_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[orch-tool-pressure")
+
+
+def _plan_orch_tool_pressure_response(messages: list[object]) -> dict[str, object]:
+    config = _extract_orch_tool_pressure_config(messages)
+    task_ids = _extract_task_ids_from_tool_result(
+        messages,
+        tool_call_id="call-orch-tool-pressure-create",
+    )
+    dispatched_call_ids = _extract_tool_call_ids(
+        messages,
+        prefix="call-orch-tool-pressure-dispatch-",
+    )
+    cleared_todos = bool(
+        _extract_tool_call_ids(
+            messages,
+            prefix="call-orch-tool-pressure-clear-todos",
+        )
+    )
+    if not task_ids:
+        return {
+            "kind": "tool_call",
+            "tool_name": "orch_create_tasks",
+            "tool_call_id": "call-orch-tool-pressure-create",
+            "arguments": {
+                "tasks": [
+                    {
+                        "title": f"tool pressure worker {index + 1}",
+                        "objective": (
+                            f"[normal-tool-pressure count={config.tool_count} "
+                            f"delay={config.delay_ms} tag=orch{index + 1}] "
+                            f"complete tool pressure worker {index + 1}."
+                        ),
+                    }
+                    for index in range(config.task_count)
+                ]
+            },
+        }
+    if len(dispatched_call_ids) >= len(task_ids) and not cleared_todos:
+        return {
+            "kind": "tool_call",
+            "tool_name": "todo_write",
+            "tool_call_id": "call-orch-tool-pressure-clear-todos",
+            "arguments": {"items": []},
+        }
+    if len(dispatched_call_ids) >= len(task_ids):
+        return {
+            "kind": "text",
+            "content": (
+                "[fake-llm] orchestration tool pressure completed "
+                f"{len(task_ids)} tasks."
+            ),
+        }
+    return {
+        "kind": "tool_calls",
+        "tool_calls": [
+            {
+                "tool_name": "orch_dispatch_task",
+                "tool_call_id": f"call-orch-tool-pressure-dispatch-{index + 1}",
+                "arguments": {
+                    "task_id": task_id,
+                    "role_id": "Crafter",
+                    "prompt": (
+                        f"[normal-tool-pressure count={config.tool_count} "
+                        f"delay={config.delay_ms} tag=orch{index + 1}] "
+                        f"complete dispatched tool pressure worker {index + 1}."
+                    ),
+                },
+            }
+            for index, task_id in enumerate(task_ids)
+        ],
+    }
+
+
+class _OrchToolPressureConfig:
+    def __init__(self, *, task_count: int, tool_count: int, delay_ms: int) -> None:
+        self.task_count = task_count
+        self.tool_count = tool_count
+        self.delay_ms = delay_ms
+
+
+def _extract_orch_tool_pressure_config(
+    messages: list[object],
+) -> _OrchToolPressureConfig:
+    user_text = _extract_last_user_text(messages)
+    match = re.search(
+        r"\[orch-tool-pressure\s+count=(\d+)\s+tools=(\d+)\s+delay=(\d+)\]",
+        user_text,
+    )
+    if match is None:
+        return _OrchToolPressureConfig(task_count=3, tool_count=3, delay_ms=100)
+    return _OrchToolPressureConfig(
+        task_count=max(1, min(8, int(match.group(1)))),
+        tool_count=max(1, min(8, int(match.group(2)))),
+        delay_ms=max(0, min(2_000, int(match.group(3)))),
+    )
 
 
 def _rolling_summary_compaction_mode(messages: list[object]) -> bool:

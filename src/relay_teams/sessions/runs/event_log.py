@@ -15,6 +15,8 @@ from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.agents.tasks.events import EventEnvelope
 
+_SQLITE_SAFE_VARIABLE_LIMIT = 900
+
 
 class EventLog(SharedSqliteRepository):
     """Append-only business event log backed by SQLite."""
@@ -47,6 +49,12 @@ class EventLog(SharedSqliteRepository):
             )
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_session_id_trace ON events(session_id, id, trace_id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_event_type_id ON events(session_id, event_type, id)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_trace_event_id ON events(session_id, trace_id, event_type, id)"
             )
 
         self._run_write(
@@ -82,6 +90,14 @@ class EventLog(SharedSqliteRepository):
             await cursor.close()
             cursor = await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_session_id_trace ON events(session_id, id, trace_id)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_event_type_id ON events(session_id, event_type, id)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session_trace_event_id ON events(session_id, trace_id, event_type, id)"
             )
             await cursor.close()
 
@@ -266,6 +282,88 @@ class EventLog(SharedSqliteRepository):
                 (session_id,),
             ).fetchall()
         return tuple(self._row_to_dict(row) for row in rows)
+
+    def list_by_session_event_types(
+        self,
+        session_id: str,
+        event_types: tuple[str, ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        normalized_event_types = tuple(
+            dict.fromkeys(
+                event_type.strip() for event_type in event_types if event_type.strip()
+            )
+        )
+        if not normalized_event_types:
+            return ()
+        placeholders = ", ".join("?" for _ in normalized_event_types)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                f"FROM events WHERE session_id=? AND event_type IN ({placeholders}) ORDER BY id ASC",
+                (session_id, *normalized_event_types),
+            ).fetchall()
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    async def list_by_session_event_types_async(
+        self,
+        session_id: str,
+        event_types: tuple[str, ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        return await self._call_sync_async(
+            self.list_by_session_event_types,
+            session_id,
+            event_types,
+        )
+
+    def list_by_session_run_ids_event_types(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+        event_types: tuple[str, ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
+        )
+        normalized_event_types = tuple(
+            dict.fromkeys(
+                event_type.strip() for event_type in event_types if event_type.strip()
+            )
+        )
+        if not normalized_run_ids or not normalized_event_types:
+            return ()
+        event_placeholders = ", ".join("?" for _ in normalized_event_types)
+        chunk_size = max(
+            1,
+            _SQLITE_SAFE_VARIABLE_LIMIT - len(normalized_event_types) - 1,
+        )
+        rows: list[sqlite3.Row] = []
+        with self._lock:
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                run_placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows.extend(
+                    self._conn.execute(
+                        "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                        f"FROM events WHERE session_id=? AND trace_id IN ({run_placeholders}) "
+                        f"AND event_type IN ({event_placeholders}) ORDER BY id ASC",
+                        (session_id, *run_id_chunk, *normalized_event_types),
+                    ).fetchall()
+                )
+        rows.sort(key=lambda row: int(row["id"]) if isinstance(row["id"], int) else 0)
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    async def list_by_session_run_ids_event_types_async(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+        event_types: tuple[str, ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        return await self._call_sync_async(
+            self.list_by_session_run_ids_event_types,
+            session_id,
+            run_ids,
+            event_types,
+        )
 
     async def list_by_session_async(
         self, session_id: str

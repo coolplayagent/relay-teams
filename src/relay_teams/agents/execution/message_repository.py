@@ -118,6 +118,9 @@ class MessageRepository(SharedSqliteRepository):
                 "CREATE INDEX IF NOT EXISTS idx_messages_session_role_id ON messages(session_id, role, id)"
             )
             self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_session_trace_id ON messages(session_id, trace_id, id)"
+            )
+            self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id)"
             )
             self._conn.execute(
@@ -263,6 +266,55 @@ class MessageRepository(SharedSqliteRepository):
             )
         return _dedupe_duplicate_objective_messages(results)
 
+    def get_messages_by_session_run_ids(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
+        )
+        if not normalized_run_ids:
+            return []
+        rows: list[sqlite3.Row] = []
+        chunk_size = _SQLITE_SAFE_VARIABLE_LIMIT - 1
+        with self._lock:
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows.extend(
+                    self._conn.execute(
+                        "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
+                        f"FROM messages WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY id ASC",
+                        (session_id, *run_id_chunk),
+                    ).fetchall()
+                )
+        rows.sort(key=lambda row: int(row["id"]) if isinstance(row["id"], int) else 0)
+        return self._project_message_rows(
+            rows,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
+    async def get_messages_by_session_run_ids_async(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        return await self._call_sync_async(
+            self.get_messages_by_session_run_ids,
+            session_id,
+            run_ids,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
     def first_user_messages_by_session_ids(
         self,
         session_ids: tuple[str, ...],
@@ -364,6 +416,45 @@ class MessageRepository(SharedSqliteRepository):
 
         results: list[dict[str, JsonValue]] = []
         for row in rows:
+            msg_list = _load_message_list(str(row["message_json"]))
+            msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
+            if _is_system_reminder_projection_message(msg):
+                continue
+            results.append(
+                {
+                    "conversation_id": str(row["conversation_id"] or ""),
+                    "agent_role_id": str(row["agent_role_id"] or ""),
+                    "instance_id": str(row["instance_id"]),
+                    "task_id": str(row["task_id"]),
+                    "trace_id": str(row["trace_id"]),
+                    "role": str(row["role"]),
+                    "created_at": str(row["created_at"]),
+                    "hidden_from_context": bool(int(row["hidden_from_context"] or 0)),
+                    "hidden_reason": str(row["hidden_reason"] or ""),
+                    "hidden_at": str(row["hidden_at"] or ""),
+                    "hidden_marker_id": str(row["hidden_marker_id"] or ""),
+                    "message": msg,
+                }
+            )
+        return _dedupe_duplicate_objective_messages(results)
+
+    def _project_message_rows(
+        self,
+        rows: Sequence[sqlite3.Row],
+        *,
+        include_cleared: bool,
+        include_hidden_from_context: bool,
+    ) -> list[dict[str, JsonValue]]:
+        filtered_rows = self._filter_rows_for_read(
+            rows,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+        if not include_hidden_from_context:
+            filtered_rows = _truncate_message_rows_to_safe_boundary(filtered_rows)
+
+        results: list[dict[str, JsonValue]] = []
+        for row in filtered_rows:
             msg_list = _load_message_list(str(row["message_json"]))
             msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
             if _is_system_reminder_projection_message(msg):

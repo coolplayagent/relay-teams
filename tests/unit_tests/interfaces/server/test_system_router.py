@@ -1115,16 +1115,22 @@ def test_probe_ssh_profile_connectivity_runs_service_call_in_threadpool(
     calls: list[SshProfileConnectivityProbeRequest] = []
 
     async def fake_to_thread(
+        operation: str,
         func: Callable[
             [SshProfileConnectivityProbeRequest],
             SshProfileConnectivityProbeResult,
         ],
         request: SshProfileConnectivityProbeRequest,
     ) -> SshProfileConnectivityProbeResult:
+        assert operation == "ssh.probe_connectivity"
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
+    monkeypatch.setattr(
+        system,
+        "call_maybe_async_in_network_probe_thread",
+        fake_to_thread,
+    )
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -2326,16 +2332,22 @@ def test_probe_model_connectivity_runs_service_call_in_threadpool(
     calls: list[ModelConnectivityProbeRequest] = []
 
     async def fake_to_thread(
+        operation: str,
         func: Callable[
             [ModelConnectivityProbeRequest],
             ModelConnectivityProbeResult,
         ],
         request: ModelConnectivityProbeRequest,
     ) -> ModelConnectivityProbeResult:
+        assert operation == "model.probe_connectivity"
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
+    monkeypatch.setattr(
+        system,
+        "call_maybe_async_in_network_probe_thread",
+        fake_to_thread,
+    )
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(
@@ -2373,13 +2385,19 @@ def test_discover_model_catalog_runs_service_call_in_threadpool(
     calls: list[ModelDiscoveryRequest] = []
 
     async def fake_to_thread(
+        operation: str,
         func: Callable[[ModelDiscoveryRequest], ModelDiscoveryResult],
         request: ModelDiscoveryRequest,
     ) -> ModelDiscoveryResult:
+        assert operation == "model.discover_models"
         calls.append(request)
         return func(request)
 
-    monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
+    monkeypatch.setattr(
+        system,
+        "call_maybe_async_in_network_probe_thread",
+        fake_to_thread,
+    )
     client = _create_test_client(_FakeSystemService())
 
     response = client.post(

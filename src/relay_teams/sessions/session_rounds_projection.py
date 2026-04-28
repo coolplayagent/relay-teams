@@ -26,6 +26,18 @@ from relay_teams.sessions.session_history_marker_models import (
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.workspace import build_conversation_id
 
+ROUND_PROJECTION_EVENT_TYPES = (
+    RunEventType.LLM_RETRY_SCHEDULED.value,
+    RunEventType.LLM_RETRY_EXHAUSTED.value,
+    RunEventType.LLM_FALLBACK_ACTIVATED.value,
+    RunEventType.LLM_FALLBACK_EXHAUSTED.value,
+    RunEventType.MODEL_STEP_STARTED.value,
+    RunEventType.MODEL_STEP_FINISHED.value,
+    RunEventType.RUN_COMPLETED.value,
+    RunEventType.RUN_FAILED.value,
+    RunEventType.RUN_STOPPED.value,
+)
+
 
 def build_session_rounds(
     *,
@@ -39,9 +51,14 @@ def build_session_rounds(
     get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
     get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
     excluded_run_ids: set[str] | None = None,
+    included_run_ids: set[str] | None = None,
     run_runtime_by_run: dict[str, RunRuntimeRecord] | None = None,
 ) -> list[dict[str, object]]:
-    session_tasks = task_repo.list_by_session(session_id)
+    session_tasks = (
+        task_repo.list_by_session_run_ids(session_id, tuple(included_run_ids))
+        if included_run_ids is not None
+        else task_repo.list_by_session(session_id)
+    )
     session_agents = agent_repo.list_session_role_instances(session_id)
     session_messages = get_session_messages(session_id)
     session_markers = (
@@ -250,6 +267,8 @@ def build_session_rounds(
     run_ids.update(run_runtime.keys())
     if excluded_run_ids:
         run_ids.difference_update(excluded_run_ids)
+    if included_run_ids is not None:
+        run_ids.intersection_update(included_run_ids)
 
     rounds: list[dict[str, object]] = []
     for run_id in run_ids:
@@ -344,9 +363,14 @@ def build_session_timeline_rounds(
     get_session_history_markers: Callable[[str], list[dict[str, object]]] | None = None,
     get_session_events: Callable[[str], list[dict[str, object]]] | None = None,
     excluded_run_ids: set[str] | None = None,
+    included_run_ids: set[str] | None = None,
     run_runtime_by_run: dict[str, RunRuntimeRecord] | None = None,
 ) -> list[dict[str, object]]:
-    session_tasks = task_repo.list_by_session(session_id)
+    session_tasks = (
+        task_repo.list_by_session_run_ids(session_id, tuple(included_run_ids))
+        if included_run_ids is not None
+        else task_repo.list_by_session(session_id)
+    )
     session_messages = get_session_user_messages(session_id)
     session_markers = (
         get_session_history_markers(session_id) if get_session_history_markers else []
@@ -388,6 +412,8 @@ def build_session_timeline_rounds(
     run_ids.update(run_runtime.keys())
     if excluded_run_ids:
         run_ids.difference_update(excluded_run_ids)
+    if included_run_ids is not None:
+        run_ids.intersection_update(included_run_ids)
 
     rounds: list[dict[str, object]] = []
     for run_id in run_ids:

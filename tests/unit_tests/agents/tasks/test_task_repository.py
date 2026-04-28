@@ -9,13 +9,19 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 
 
-def _create_task(repo: TaskRepository, task_id: str = "task-1") -> None:
+def _create_task(
+    repo: TaskRepository,
+    task_id: str = "task-1",
+    *,
+    session_id: str = "session-1",
+    trace_id: str = "run-1",
+) -> None:
     _ = repo.create(
         TaskEnvelope(
             task_id=task_id,
-            session_id="session-1",
+            session_id=session_id,
             parent_task_id=None,
-            trace_id="run-1",
+            trace_id=trace_id,
             objective="demo",
             verification=VerificationPlan(checklist=("non_empty_response",)),
         )
@@ -99,6 +105,29 @@ async def test_async_task_repository_methods_share_persisted_state(
     assert fetched.status == TaskStatus.COMPLETED
     assert fetched.assigned_instance_id == "inst-1"
     assert fetched.result == "done"
+
+
+@pytest.mark.asyncio
+async def test_task_repository_lists_session_run_ids(tmp_path: Path) -> None:
+    repo = TaskRepository(tmp_path / "task_repo_session_run_ids.db")
+    _create_task(repo, "task-run-2", trace_id="run-2")
+    _create_task(repo, "task-run-1", trace_id="run-1")
+    _create_task(repo, "task-other-session", session_id="session-2", trace_id="run-1")
+
+    try:
+        empty_records = repo.list_by_session_run_ids("session-1", ("", "   "))
+        records = await repo.list_by_session_run_ids_async(
+            "session-1",
+            ("run-1", "run-2", "run-1"),
+        )
+    finally:
+        await repo.close_async()
+
+    assert empty_records == ()
+    assert tuple(record.envelope.task_id for record in records) == (
+        "task-run-2",
+        "task-run-1",
+    )
 
 
 @pytest.mark.asyncio
