@@ -16,6 +16,8 @@ Current scope:
 - Xiaoluban IM forwarding for the current token owner
 - inbound WeLink messages forwarded through Xiaoluban's manual forwarding mode
 - Xiaoluban-triggered Relay task execution with a final-result reply
+- interactive session management via `/new`, `/resume`, `/help` commands
+- instant acknowledgement on every received message
 
 Current non-goals for this phase:
 
@@ -94,16 +96,29 @@ The IM settings are separate from notification delivery settings.
 The first version exposes:
 
 - IM workspace, required for inbound IM-triggered tasks
-- read-only forwarding command, for example `http://10.88.1.23:9009/{account_id}?auth=... g`
+- read-only forwarding command, for example `http://10.88.1.23:9009/{account_id} g`
 
 Forwarding uses the dedicated Xiaoluban IM listener, not the main Relay Teams
 web port. The listener binds to `0.0.0.0:9009` by default and generates a
-forwarding URL with the machine's detected local IPv4 address and a per-account
-auth token, for example `http://10.88.1.23:9009/{account_id}?auth=...`. The user sends
-`http://10.88.1.23:9009/{account_id}?auth=... g` to Xiaoluban in WeLink to enter
+forwarding URL with the machine's detected local IPv4 address, for example
+`http://10.88.1.23:9009/{account_id}`. The user sends
+`http://10.88.1.23:9009/{account_id} g` to Xiaoluban in WeLink to enter
 message forwarding mode, and sends `q` to exit that mode. The default
 `relay-teams server start` command remains loopback-only for the main web UI and
 still shows `http://127.0.0.1:8000`.
+
+Once in forwarding mode, the following interactive commands are available:
+
+- `/new` -- create a new session (becomes the active session for the IM conversation)
+- `/new <task>` -- create a new session and immediately submit a task
+- `/resume` -- list up to 15 most recently active sessions in the workspace, with session IDs, relative timestamps, and titles
+- `/resume {session_id}` -- switch to a previously created session (supports exact ID, prefix match, or list index)
+- `/resume {index}` -- switch to a session by its list index (e.g. `/resume 3`)
+- `/help` -- display available commands
+
+Every non-command message receives an instant acknowledgement ("收到，正在处理中...")
+before the task runs, confirming the connection is alive. The session ID shown in
+the acknowledgement header matches the `internal_session_id` used by `/resume`.
 
 The listener can be adjusted with:
 
@@ -163,7 +178,7 @@ Workspace completion behavior:
 Xiaoluban calls the dedicated IM listener callback at:
 
 ```text
-POST http://{detected-local-ip}:9009/{account_id}?auth=...
+POST http://{detected-local-ip}:9009/{account_id}
 ```
 
 The route returns immediately with:
@@ -175,13 +190,43 @@ The route returns immediately with:
 Processing continues in the background:
 
 - the account must exist and be enabled
-- the request must include the account-specific auth token in the callback URL
 - the IM workspace must exist
 - the stored personal token is reused for Xiaoluban replies
 - `keep_alive` is attempted when a Xiaoluban `session_id` is present
 - empty content sends a short usage hint through the shared Xiaoluban notification formatter
-- gateway sessions use the Xiaoluban channel and an external key of `xiaoluban:{account_id}:{session_id}` when a session id is present
+
+### Message Routing
+
+Normal messages (not starting with `/`) are routed to the active session for the
+IM conversation. By default, the first message in an IM conversation creates a
+gateway session keyed by `xiaoluban:{account_id}:{workspace_id}:{session_id}`.
+When the user switches sessions via `/new` or `/resume`, subsequent messages are
+routed to the chosen session through an in-memory active-session mapping.
+
+### Session Management
+
+An in-memory mapping tracks which gateway session is active for each IM
+conversation. The mapping is keyed by `{account_id}:{xiaoluban_session_id}`.
+
+| Command | Behaviour |
+|---------|-----------|
+| `/new` | Creates a new gateway session (external key suffixed with a UUID), sets it as active for this IM conversation, and replies with the created `internal_session_id`. |
+| `/new <task>` | Same as `/new` but also submits the given task text immediately in the new session. |
+| `/resume` | Lists up to 15 most recently active sessions in the workspace. Each entry shows `internal_session_id`, relative timestamp, and the session title (auto-generated from the first user message, or `新会话`). Over 15 sessions, a `...(N more)` line is appended. |
+| `/resume {id}` | Switches the IM conversation's active session to the matched one. Matching order: exact `internal_session_id`, prefix match, list index. If the target session has no gateway session record yet (e.g. a web-created session), one is created on the fly. |
+| `/help` | Displays available commands. |
+
+### Acknowledgement
+
+Every non-command message that successfully starts a run receives an instant
+acknowledgement (`收到，正在处理中...`). Busy sessions are rejected before the
+acknowledgement, so the user does not receive a misleading "processing" message.
+
+### Run Execution
+
+- gateway sessions use the Xiaoluban channel and an external key of `xiaoluban:{account_id}:{workspace_id}:{session_id}` when a session id is present
 - if no `session_id` is present, the key falls back to `xiaoluban:{account_id}:{sender}:{receiver}`
+- sessions created by `/new` append an additional `:{uuid_suffix}` to the external key
 - busy sessions are rejected with a short "try again later" message through the shared Xiaoluban notification formatter
 - the task runs through the shared gateway session ingress path
 - only the terminal result is sent back to Xiaoluban through the shared Xiaoluban notification formatter
