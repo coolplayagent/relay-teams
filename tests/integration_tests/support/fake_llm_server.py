@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import json
 import re
 import sys
+from threading import Lock
 import time
 
 from fastapi import FastAPI, Request
@@ -13,6 +14,9 @@ app = FastAPI(title="Fake OpenAI-Compatible LLM")
 
 _chat_completions_calls = 0
 _scenario_attempts: dict[str, int] = {}
+_active_chat_completions = 0
+_max_active_chat_completions = 0
+_metrics_lock = Lock()
 
 
 @app.get("/health")
@@ -22,17 +26,24 @@ def health() -> dict[str, str]:
 
 @app.get("/metrics")
 def metrics() -> dict[str, object]:
-    return {
-        "chat_completions_calls": _chat_completions_calls,
-        "scenario_attempts": dict(_scenario_attempts),
-    }
+    with _metrics_lock:
+        return {
+            "chat_completions_calls": _chat_completions_calls,
+            "active_chat_completions": _active_chat_completions,
+            "max_active_chat_completions": _max_active_chat_completions,
+            "scenario_attempts": dict(_scenario_attempts),
+        }
 
 
 @app.post("/admin/reset")
 def reset() -> dict[str, str]:
-    global _chat_completions_calls
-    _chat_completions_calls = 0
-    _scenario_attempts.clear()
+    global _active_chat_completions, _chat_completions_calls
+    global _max_active_chat_completions
+    with _metrics_lock:
+        _chat_completions_calls = 0
+        _active_chat_completions = 0
+        _max_active_chat_completions = 0
+        _scenario_attempts.clear()
     return {"status": "ok"}
 
 
@@ -53,20 +64,22 @@ def list_models() -> dict[str, object]:
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    global _chat_completions_calls
-    _chat_completions_calls += 1
     payload = await request.json()
+    _begin_chat_completion()
     model = str(payload.get("model") or "fake-chat-model")
     response_spec = plan_fake_response(payload)
     stream = bool(payload.get("stream"))
     if str(response_spec.get("kind") or "") == "error_status":
-        _sleep_ms(response_spec.get("delay_before_ms"))
-        return JSONResponse(
-            status_code=_coerce_int(response_spec.get("status_code"), default=500),
-            content=response_spec.get("body")
-            or {"error": {"code": "fake_error", "message": "fake error"}},
-            headers=_normalize_headers(response_spec.get("headers")),
-        )
+        try:
+            _sleep_ms(response_spec.get("delay_before_ms"))
+            return JSONResponse(
+                status_code=_coerce_int(response_spec.get("status_code"), default=500),
+                content=response_spec.get("body")
+                or {"error": {"code": "fake_error", "message": "fake error"}},
+                headers=_normalize_headers(response_spec.get("headers")),
+            )
+        finally:
+            _end_chat_completion()
 
     if stream:
         return StreamingResponse(
@@ -74,9 +87,30 @@ async def chat_completions(request: Request):
             media_type="text/event-stream",
         )
 
-    return JSONResponse(
-        build_chat_completion_response(model=model, response_spec=response_spec)
-    )
+    try:
+        return JSONResponse(
+            build_chat_completion_response(model=model, response_spec=response_spec)
+        )
+    finally:
+        _end_chat_completion()
+
+
+def _begin_chat_completion() -> None:
+    global _active_chat_completions, _chat_completions_calls
+    global _max_active_chat_completions
+    with _metrics_lock:
+        _chat_completions_calls += 1
+        _active_chat_completions += 1
+        _max_active_chat_completions = max(
+            _max_active_chat_completions,
+            _active_chat_completions,
+        )
+
+
+def _end_chat_completion() -> None:
+    global _active_chat_completions
+    with _metrics_lock:
+        _active_chat_completions = max(0, _active_chat_completions - 1)
 
 
 def stream_chat_completions(
@@ -84,87 +118,93 @@ def stream_chat_completions(
     model: str,
     response_spec: dict[str, object],
 ) -> Iterator[bytes]:
-    created = int(time.time())
-    completion_id = f"chatcmpl-{_chat_completions_calls}"
-    _sleep_ms(response_spec.get("delay_before_ms"))
+    try:
+        created = int(time.time())
+        completion_id = f"chatcmpl-{_chat_completions_calls}"
+        _sleep_ms(response_spec.get("delay_before_ms"))
 
-    response_kind = str(response_spec.get("kind") or "")
-    if response_kind in {"tool_call", "invalid_tool_call", "tool_calls"}:
-        tool_calls: list[dict[str, object]] = []
-        for index, call_spec in enumerate(_response_tool_call_specs(response_spec)):
-            tool_calls.append(
-                {
-                    "index": index,
-                    "id": str(call_spec.get("tool_call_id") or ""),
-                    "type": "function",
-                    "function": {
-                        "name": str(call_spec.get("tool_name") or ""),
-                        "arguments": _response_tool_call_arguments(
-                            response_kind=response_kind,
-                            response_spec=response_spec,
-                            call_spec=call_spec,
-                        ),
-                    },
-                }
+        response_kind = str(response_spec.get("kind") or "")
+        if response_kind in {"tool_call", "invalid_tool_call", "tool_calls"}:
+            tool_calls: list[dict[str, object]] = []
+            for index, call_spec in enumerate(_response_tool_call_specs(response_spec)):
+                tool_calls.append(
+                    {
+                        "index": index,
+                        "id": str(call_spec.get("tool_call_id") or ""),
+                        "type": "function",
+                        "function": {
+                            "name": str(call_spec.get("tool_name") or ""),
+                            "arguments": _response_tool_call_arguments(
+                                response_kind=response_kind,
+                                response_spec=response_spec,
+                                call_spec=call_spec,
+                            ),
+                        },
+                    }
+                )
+            chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": tool_calls,
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+            _maybe_abort_stream(response_spec, emitted_chunk_count=1)
+            _sleep_ms(response_spec.get("delay_between_chunks_ms"))
+            final_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            }
+            yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode(
+                "utf-8"
             )
-        chunk = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {
-                        "role": "assistant",
-                        "tool_calls": tool_calls,
-                    },
-                    "finish_reason": None,
-                }
-            ],
-        }
-        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-        _maybe_abort_stream(response_spec, emitted_chunk_count=1)
-        _sleep_ms(response_spec.get("delay_between_chunks_ms"))
+            yield b"data: [DONE]\n\n"
+            return
+
+        content = str(response_spec.get("content") or "")
+        chunk_size = max(1, _coerce_int(response_spec.get("chunk_size"), default=12))
+        chunks = split_text(content, size=chunk_size)
+
+        for index, part in enumerate(chunks):
+            delta: dict[str, str] = {"content": part}
+            if index == 0:
+                delta["role"] = "assistant"
+            chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
+            _maybe_abort_stream(response_spec, emitted_chunk_count=index + 1)
+            _sleep_ms(response_spec.get("delay_between_chunks_ms"))
+
+        _sleep_ms(response_spec.get("delay_after_content_ms"))
         final_chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
             "model": model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
         }
         yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"
-        return
-
-    content = str(response_spec.get("content") or "")
-    chunk_size = max(1, _coerce_int(response_spec.get("chunk_size"), default=12))
-    chunks = split_text(content, size=chunk_size)
-
-    for index, part in enumerate(chunks):
-        delta: dict[str, str] = {"content": part}
-        if index == 0:
-            delta["role"] = "assistant"
-        chunk = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
-        }
-        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-        _maybe_abort_stream(response_spec, emitted_chunk_count=index + 1)
-        _sleep_ms(response_spec.get("delay_between_chunks_ms"))
-
-    final_chunk = {
-        "id": completion_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-    }
-    yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-    yield b"data: [DONE]\n\n"
+    finally:
+        _end_chat_completion()
 
 
 def build_chat_completion_response(
@@ -297,6 +337,8 @@ def plan_fake_response(payload: object) -> dict[str, object]:
         return _plan_rate_limit_retry_response(messages)
     if _stream_drop_retry_mode(messages):
         return _plan_stream_drop_retry_response(messages)
+    if _slow_stream_hold_mode(messages):
+        return _plan_slow_stream_hold_response(messages)
     if _slow_stream_mode(messages):
         return _plan_slow_stream_response()
     if _webfetch_approval_validation_mode(messages):
@@ -1130,6 +1172,22 @@ def _plan_stream_drop_retry_response(messages: list[object]) -> dict[str, object
 
 def _slow_stream_mode(messages: list[object]) -> bool:
     return _messages_contain_user_text(messages, "[slow-stream]")
+
+
+def _slow_stream_hold_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[slow-stream-hold")
+
+
+def _plan_slow_stream_hold_response(messages: list[object]) -> dict[str, object]:
+    user_text = _extract_last_user_text(messages)
+    match = re.search(r"\[slow-stream-hold\s+ms=(\d+)\]", user_text)
+    hold_ms = int(match.group(1)) if match is not None else 5_000
+    return {
+        "kind": "text",
+        "content": "[fake-llm] Holding slow stream for concurrency validation.",
+        "delay_before_ms": 100,
+        "delay_after_content_ms": max(0, min(15_000, hold_ms)),
+    }
 
 
 def _plan_slow_stream_response() -> dict[str, object]:

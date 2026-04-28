@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import time
 
@@ -13,6 +14,7 @@ from integration_tests.support.api_helpers import (
     new_session_id,
     stream_run_until_terminal,
 )
+from integration_tests.support.environment import IntegrationEnvironment
 
 
 class _BenchmarkResult(BaseModel):
@@ -39,6 +41,48 @@ def test_orchestration_parallel_same_role_clone_completes_via_api(
     assert "[fake-llm] orchestration clone benchmark completed" in str(
         result.output_text
     )
+
+
+@pytest.mark.timeout(120)
+def test_concurrent_sessions_share_llm_http_concurrency_budget(
+    api_client: httpx.Client,
+    integration_env: IntegrationEnvironment,
+) -> None:
+    slow_session_id = create_session(
+        api_client,
+        session_id=new_session_id("concurrent-slow-session"),
+    )
+    slow_run_id = create_run(
+        api_client,
+        session_id=slow_session_id,
+        execution_mode="ai",
+        intent="[slow-stream-hold ms=10000] keep one primary run active.",
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        slow_future = executor.submit(
+            _stream_run_with_new_client,
+            integration_env.api_base_url,
+            slow_run_id,
+        )
+        _wait_for_fake_llm_active(integration_env, minimum_active=1)
+        result = _run_orchestration_clone_benchmark(
+            api_client,
+            mode="parallel",
+            task_count=5,
+            delay_ms=900,
+        )
+        slow_events = slow_future.result(timeout=60.0)
+
+    health_response = api_client.get("/api/system/health")
+    health_response.raise_for_status()
+    metrics = _get_fake_llm_metrics(integration_env)
+    max_active = _metric_int(metrics, "max_active_chat_completions")
+
+    assert result.terminal_event_type == "run_completed"
+    assert result.completed_tasks == 5
+    assert str(slow_events[-1].get("event_type") or "") == "run_completed"
+    assert max_active == 4
 
 
 @pytest.mark.timeout(90)
@@ -128,3 +172,55 @@ def _text_output(events: list[dict[str, object]]) -> str:
         payload = json.loads(str(event.get("payload_json") or "{}"))
         parts.append(str(payload.get("text") or ""))
     return "".join(parts)
+
+
+def _stream_run_with_new_client(
+    base_url: str,
+    run_id: str,
+) -> list[dict[str, object]]:
+    with httpx.Client(base_url=base_url, timeout=120.0, trust_env=False) as client:
+        return stream_run_until_terminal(
+            client,
+            run_id=run_id,
+            timeout_seconds=120.0,
+        )
+
+
+def _wait_for_fake_llm_active(
+    integration_env: IntegrationEnvironment,
+    *,
+    minimum_active: int,
+    timeout_seconds: float = 15.0,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        metrics = _get_fake_llm_metrics(integration_env)
+        active = _metric_int(metrics, "active_chat_completions")
+        if active >= minimum_active:
+            return
+        time.sleep(0.05)
+    raise AssertionError("Timed out waiting for fake LLM active request")
+
+
+def _get_fake_llm_metrics(
+    integration_env: IntegrationEnvironment,
+) -> dict[str, object]:
+    response = httpx.get(
+        f"{integration_env.fake_llm_admin_url}/metrics",
+        timeout=5.0,
+        trust_env=False,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict):
+        raise AssertionError(f"Invalid fake LLM metrics response: {body}")
+    return body
+
+
+def _metric_int(metrics: dict[str, object], key: str) -> int:
+    value = metrics.get(key)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        return int(value)
+    raise AssertionError(f"Invalid fake LLM metric {key}: {value}")

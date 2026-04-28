@@ -1,9 +1,24 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from typing import Protocol
+
 import httpx
 
 from relay_teams.env.proxy_env import ProxyEnvConfig, proxy_applies_to_url
+
+
+class AsyncRequestLimitLease(Protocol):
+    def release(self) -> None:
+        """Release an acquired request slot."""
+        raise NotImplementedError  # pragma: no cover
+
+
+class AsyncRequestLimiter(Protocol):
+    async def acquire(self, url: str) -> AsyncRequestLimitLease:
+        """Acquire a request slot for the target URL."""
+        raise NotImplementedError  # pragma: no cover
 
 
 class SyncProxyRoutingTransport(httpx.BaseTransport):
@@ -60,8 +75,10 @@ class AsyncProxyRoutingTransport(httpx.AsyncBaseTransport):
         proxy_config: ProxyEnvConfig,
         *,
         ssl_verify: bool,
+        request_limiter: AsyncRequestLimiter | None = None,
     ) -> None:
         self._proxy_config = proxy_config
+        self._request_limiter = request_limiter
         self._direct_transport = httpx.AsyncHTTPTransport(
             trust_env=False,
             verify=ssl_verify,
@@ -80,7 +97,28 @@ class AsyncProxyRoutingTransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         transport = self._select_transport(str(request.url))
-        return await transport.handle_async_request(request)
+        if self._request_limiter is None:
+            return await transport.handle_async_request(request)
+        lease = await self._request_limiter.acquire(str(request.url))
+        try:
+            response = await transport.handle_async_request(request)
+        except BaseException:
+            lease.release()
+            raise
+        stream = response.stream
+        if not isinstance(stream, httpx.AsyncByteStream):
+            lease.release()
+            raise TypeError(
+                "Async proxy transport received a non-async response stream"
+            )
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=_ReleasingAsyncByteStream(stream, lease),
+            request=request,
+            extensions=response.extensions,
+            default_encoding=response.default_encoding,
+        )
 
     async def aclose(self) -> None:
         await self._direct_transport.aclose()
@@ -130,3 +168,33 @@ def _build_async_proxy_transport(
         trust_env=False,
         verify=ssl_verify,
     )
+
+
+class _ReleasingAsyncByteStream(httpx.AsyncByteStream):
+    def __init__(
+        self,
+        stream: httpx.AsyncByteStream,
+        lease: AsyncRequestLimitLease,
+    ) -> None:
+        self._stream = stream
+        self._lease = lease
+        self._released = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        finally:
+            self._release()
+
+    async def aclose(self) -> None:
+        try:
+            await self._stream.aclose()
+        finally:
+            self._release()
+
+    def _release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._lease.release()

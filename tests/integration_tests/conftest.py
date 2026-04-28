@@ -105,6 +105,7 @@ def integration_env(
         python_paths.append(existing_pythonpath)
     shared_env["PYTHONPATH"] = os.pathsep.join(python_paths)
     shared_env["AGENT_TEAMS_COMPUTER_RUNTIME"] = "fake"
+    shared_env["RELAY_TEAMS_LLM_HTTP_MAX_CONCURRENCY"] = "4"
 
     fake_llm_log_file = runtime_root / "fake-llm.log"
     backend_log_file = runtime_root / "backend.log"
