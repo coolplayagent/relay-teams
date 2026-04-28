@@ -519,6 +519,257 @@ console.log(JSON.stringify({
     assert config["read_timeout"] == 300
 
 
+def test_mcp_editor_populates_fields_from_mcp_servers_json(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source=r"""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'mcp-server-json-input',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+
+bindSystemStatusHandlers();
+document.getElementById('add-mcp-server-btn').onclick();
+
+document.getElementById('mcp-server-json-input').value = JSON.stringify({
+    mcpServers: {
+        playwright: {
+            command: 'npx',
+            args: ['@playwright/mcp@latest'],
+            env: { DEBUG: 'pw:mcp' },
+        },
+    },
+});
+document.getElementById('mcp-server-json-input').oninput();
+await document.getElementById('save-mcp-server-btn').onclick();
+
+console.log(JSON.stringify({
+    name: document.getElementById('mcp-server-name-input').value,
+    transport: document.getElementById('mcp-server-transport-input').value,
+    command: document.getElementById('mcp-server-command-input').value,
+    args: document.getElementById('mcp-server-args-input').value,
+    extra: document.getElementById('mcp-server-extra-input').value,
+    addCalls: globalThis.__addMcpServerCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["name"] == "playwright"
+    assert payload["transport"] == "stdio"
+    assert payload["command"] == "npx"
+    assert payload["args"] == "@playwright/mcp@latest"
+    assert payload["extra"] == "DEBUG=pw:mcp"
+    add_calls = cast(list[dict[str, JsonValue]], payload["addCalls"])
+    assert add_calls == [
+        {
+            "name": "playwright",
+            "config": {
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["@playwright/mcp@latest"],
+                "env": {"DEBUG": "pw:mcp"},
+            },
+            "overwrite": False,
+        }
+    ]
+
+
+def test_mcp_editor_populates_remote_fields_from_json_config(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source=r"""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'mcp-server-json-input',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+
+bindSystemStatusHandlers();
+document.getElementById('add-mcp-server-btn').onclick();
+
+document.getElementById('mcp-server-json-input').value = JSON.stringify({
+    mcpServers: {
+        docs: {
+            type: 'streamablehttp',
+            url: 'https://example.com/mcp',
+            headers: { Authorization: 'Bearer token' },
+        },
+    },
+});
+document.getElementById('mcp-server-json-input').oninput();
+await document.getElementById('save-mcp-server-btn').onclick();
+
+console.log(JSON.stringify({
+    name: document.getElementById('mcp-server-name-input').value,
+    transport: document.getElementById('mcp-server-transport-input').value,
+    url: document.getElementById('mcp-server-url-input').value,
+    extra: document.getElementById('mcp-server-extra-input').value,
+    addCalls: globalThis.__addMcpServerCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["name"] == "docs"
+    assert payload["transport"] == "streamable-http"
+    assert payload["url"] == "https://example.com/mcp"
+    assert payload["extra"] == "Authorization=Bearer token"
+    add_calls = cast(list[dict[str, JsonValue]], payload["addCalls"])
+    config = cast(dict[str, JsonValue], add_calls[0]["config"])
+    assert config == {
+        "transport": "streamable-http",
+        "url": "https://example.com/mcp",
+        "headers": {"Authorization": "Bearer token"},
+    }
+
+
+def test_mcp_editor_maps_local_and_remote_json_types_to_transports(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source=r"""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'mcp-server-json-input',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+
+bindSystemStatusHandlers();
+document.getElementById('add-mcp-server-btn').onclick();
+
+document.getElementById('mcp-server-json-input').value = JSON.stringify({
+    mcpServers: {
+        localDocs: {
+            type: 'local',
+            command: 'npx',
+            args: ['docs-mcp'],
+        },
+    },
+});
+document.getElementById('mcp-server-json-input').oninput();
+const localTransport = document.getElementById('mcp-server-transport-input').value;
+
+document.getElementById('mcp-server-json-input').value = JSON.stringify({
+    mcpServers: {
+        remoteDocs: {
+            type: 'remote',
+            url: 'https://example.com/sse',
+        },
+    },
+});
+document.getElementById('mcp-server-json-input').oninput();
+const remoteTransport = document.getElementById('mcp-server-transport-input').value;
+
+console.log(JSON.stringify({
+    localTransport,
+    remoteTransport,
+    name: document.getElementById('mcp-server-name-input').value,
+    url: document.getElementById('mcp-server-url-input').value,
+}));
+""".strip(),
+    )
+
+    assert payload["localTransport"] == "stdio"
+    assert payload["remoteTransport"] == "sse"
+    assert payload["name"] == "remoteDocs"
+    assert payload["url"] == "https://example.com/sse"
+
+
+def test_mcp_editor_splits_array_command_from_json_config(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source=r"""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'mcp-server-json-input',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+
+bindSystemStatusHandlers();
+document.getElementById('add-mcp-server-btn').onclick();
+
+document.getElementById('mcp-server-json-input').value = JSON.stringify({
+    mcpServers: {
+        docs: {
+            type: 'local',
+            command: ['npx', '-y', 'docs-mcp'],
+        },
+    },
+});
+document.getElementById('mcp-server-json-input').oninput();
+await document.getElementById('save-mcp-server-btn').onclick();
+
+console.log(JSON.stringify({
+    command: document.getElementById('mcp-server-command-input').value,
+    args: document.getElementById('mcp-server-args-input').value,
+    addCalls: globalThis.__addMcpServerCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["command"] == "npx"
+    assert payload["args"] == "-y\ndocs-mcp"
+    add_calls = cast(list[dict[str, JsonValue]], payload["addCalls"])
+    config = cast(dict[str, JsonValue], add_calls[0]["config"])
+    assert config["command"] == "npx"
+    assert config["args"] == ["-y", "docs-mcp"]
+
+
 def test_skills_status_panel_accepts_new_source_field_and_bare_refs(
     tmp_path: Path,
 ) -> None:
@@ -595,6 +846,7 @@ def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     assert ".mcp-tools-error {" in components_css
     assert ".status-list-copy {" in components_css
     assert ".status-list-description {" in components_css
+    assert ".mcp-editor-json-textarea {" in components_css
 
 
 def _run_system_status_script(
@@ -661,6 +913,8 @@ const translations = {
     "settings.system.server_count_loading": "{count} servers, {loading} loading.",
     "settings.system.server_count_loaded": "{count} servers loaded.",
     "settings.mcp.testing": "Testing...",
+    "settings.mcp.json_config": "JSON config",
+    "settings.mcp.json_placeholder": "{}",
     "settings.mcp.test_ok": "Connection succeeded. {count} tools loaded.",
     "settings.mcp.test_failed_message": "Connection test failed.",
     "settings.mcp.disabled_state": "This MCP server is disabled.",

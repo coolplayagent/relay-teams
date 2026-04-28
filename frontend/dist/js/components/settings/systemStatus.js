@@ -557,6 +557,10 @@ function renderMcpEditor() {
     return `
         <section class="mcp-editor-panel">
             <div class="mcp-editor-grid">
+                <div class="form-group form-group-span-2">
+                    <label for="mcp-server-json-input">${escapeHtml(t('settings.mcp.json_config'))}</label>
+                    <textarea id="mcp-server-json-input" class="config-textarea mcp-editor-textarea mcp-editor-json-textarea" placeholder="${escapeHtml(t('settings.mcp.json_placeholder'))}" spellcheck="false"></textarea>
+                </div>
                 <div class="form-group">
                     <label for="mcp-server-name-input">${escapeHtml(t('settings.mcp.name'))}</label>
                     <input type="text" id="mcp-server-name-input" placeholder="${escapeHtml(t('settings.mcp.name_placeholder'))}" autocomplete="off" value="${escapeHtml(name)}" ${mcpEditorMode === 'edit' ? 'disabled' : ''}>
@@ -601,6 +605,13 @@ function bindMcpEditorHandlers() {
     if (transportInput) {
         transportInput.onchange = syncMcpEditorTransportFields;
         syncMcpEditorTransportFields();
+    }
+    const jsonInput = safeGetElementById('mcp-server-json-input');
+    if (jsonInput) {
+        jsonInput.oninput = applyMcpJsonConfigFromInput;
+        jsonInput.onpaste = () => {
+            setTimeout(applyMcpJsonConfigFromInput, 0);
+        };
     }
 }
 
@@ -671,27 +682,125 @@ function buildMcpServerPayloadFromForm() {
     };
 }
 
+function applyMcpJsonConfigFromInput() {
+    const parsed = parseMcpJsonConfig(getInputValue('mcp-server-json-input'));
+    if (!parsed) {
+        return;
+    }
+    const config = normalizeEditableMcpConfig(parsed.config);
+    setInputValue('mcp-server-name-input', parsed.name, { overwriteDisabled: false });
+    setInputValue('mcp-server-transport-input', normalizeEditableTransport(config));
+    syncMcpEditorTransportFields();
+    setInputValue('mcp-server-command-input', config.command || '');
+    setInputValue('mcp-server-args-input', formatLineList(config.args));
+    setInputValue('mcp-server-url-input', config.url || '');
+    const extra = normalizeEditableTransport(config) === 'stdio'
+        ? formatKeyValueLines(config.env)
+        : formatKeyValueLines(config.headers);
+    setInputValue('mcp-server-extra-input', extra);
+}
+
+function parseMcpJsonConfig(raw) {
+    const text = String(raw || '').trim();
+    if (!text) {
+        return null;
+    }
+    let payload;
+    try {
+        payload = JSON.parse(text);
+    } catch (_) {
+        return null;
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+        return null;
+    }
+
+    const mcpServers = payload.mcpServers;
+    if (mcpServers && typeof mcpServers === 'object' && !Array.isArray(mcpServers)) {
+        const firstServer = Object.entries(mcpServers).find(([, config]) => (
+            config && typeof config === 'object' && !Array.isArray(config)
+        ));
+        if (firstServer) {
+            return {
+                name: String(firstServer[0] || ''),
+                config: { ...firstServer[1] },
+            };
+        }
+    }
+
+    if (typeof payload.name === 'string' && payload.config && typeof payload.config === 'object' && !Array.isArray(payload.config)) {
+        return {
+            name: payload.name,
+            config: { ...payload.config },
+        };
+    }
+
+    return null;
+}
+
 function normalizeEditableMcpConfig(config) {
     const normalized = { ...config };
     normalized.transport = normalizeEditableTransport(normalized);
+    if (Array.isArray(normalized.command)) {
+        const commandParts = normalized.command
+            .map(item => String(item).trim())
+            .filter(Boolean);
+        if (commandParts.length > 0) {
+            normalized.command = commandParts[0];
+            if (!Array.isArray(normalized.args)) {
+                normalized.args = commandParts.slice(1);
+            }
+        }
+    }
     return normalized;
 }
 
 function normalizeEditableTransport(config) {
     const rawTransport = String(config?.transport || '').trim();
-    if (rawTransport) {
-        return rawTransport;
+    const transport = normalizeMcpTransportValue(rawTransport);
+    if (transport) {
+        return transport;
+    }
+    const rawType = String(config?.type || '').trim();
+    const configType = normalizeMcpTransportValue(rawType);
+    if (configType === 'local') {
+        return 'stdio';
+    }
+    if (configType === 'remote') {
+        return detectRemoteMcpTransport(config);
+    }
+    if (configType) {
+        return configType;
     }
     if (typeof config?.command === 'string' && config.command.trim()) {
         return 'stdio';
     }
-    if (typeof config?.url === 'string' && config.url.includes('/sse')) {
-        return 'sse';
-    }
     if (typeof config?.url === 'string' && config.url.trim()) {
-        return 'http';
+        return detectRemoteMcpTransport(config);
     }
     return 'stdio';
+}
+
+function normalizeMcpTransportValue(value) {
+    const normalized = String(value || '').trim().toLowerCase().replaceAll('_', '-');
+    if (!normalized) {
+        return '';
+    }
+    if (normalized === 'streamablehttp' || normalized === 'streamable-http') {
+        return 'streamable-http';
+    }
+    if (normalized === 'stdio' || normalized === 'http' || normalized === 'sse') {
+        return normalized;
+    }
+    if (normalized === 'local' || normalized === 'remote') {
+        return normalized;
+    }
+    return normalized;
+}
+
+function detectRemoteMcpTransport(config) {
+    const url = typeof config?.url === 'string' ? config.url : '';
+    return url.includes('/sse') ? 'sse' : 'http';
 }
 
 function formatLineList(value) {
@@ -713,6 +822,14 @@ function formatKeyValueLines(value) {
 function getInputValue(id) {
     const input = safeGetElementById(id);
     return input ? input.value || '' : '';
+}
+
+function setInputValue(id, value, options = {}) {
+    const input = safeGetElementById(id);
+    if (!input || (input.disabled && options.overwriteDisabled !== true)) {
+        return;
+    }
+    input.value = String(value || '');
 }
 
 function setActionDisplay(id, visible) {

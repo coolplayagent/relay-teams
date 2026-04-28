@@ -1513,6 +1513,11 @@
     min-height: 92px;
 }
 
+.mcp-editor-json-textarea {
+    min-height: 132px;
+    font-family: var(--font-mono);
+}
+
 .mcp-overwrite-toggle {
     grid-column: 1 / -1;
 }
