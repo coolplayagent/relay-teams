@@ -33,6 +33,7 @@ from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.session_models import SessionRecord
 
 
 class _ResolvedGatewaySessionCall(BaseModel):
@@ -440,8 +441,11 @@ class _FakeGatewaySessionService:
     def __init__(self) -> None:
         self.last_external_session_id = ""
         self.resolved_calls: list[_ResolvedGatewaySessionCall] = []
+        self.bound_internal_calls: list[_ResolvedGatewaySessionCall] = []
         self._internal_session_ids: dict[str, str] = {}
         self.bound_runs: list[tuple[str, str | None]] = []
+        self._records: dict[str, GatewaySessionRecord] = {}
+        self.internal_sessions: list[SessionRecord] = []
 
     def resolve_or_create_session(
         self,
@@ -467,6 +471,19 @@ class _FakeGatewaySessionService:
             kwargs,
         )
         self.last_external_session_id = external_session_id
+        for record in self._records.values():
+            if (
+                record.channel_type == channel_type
+                and record.external_session_id == external_session_id
+            ):
+                self.resolved_calls.append(
+                    _ResolvedGatewaySessionCall(
+                        external_session_id=external_session_id,
+                        workspace_id=workspace_id,
+                        internal_session_id=record.internal_session_id,
+                    )
+                )
+                return record
         internal_session_id = self._internal_session_ids.setdefault(
             external_session_id,
             f"session-{len(self._internal_session_ids) + 1}",
@@ -478,13 +495,73 @@ class _FakeGatewaySessionService:
                 internal_session_id=internal_session_id,
             )
         )
-        return GatewaySessionRecord(
+        record = GatewaySessionRecord(
             gateway_session_id=f"gws-{internal_session_id}",
             channel_type=channel_type,
             external_session_id=external_session_id,
             internal_session_id=internal_session_id,
             cwd=None,
         )
+        self._records[record.gateway_session_id] = record
+        if not any(
+            session.session_id == internal_session_id
+            for session in self.internal_sessions
+        ):
+            self.internal_sessions.append(
+                SessionRecord(
+                    session_id=internal_session_id,
+                    workspace_id=workspace_id,
+                )
+            )
+        return record
+
+    def resolve_or_bind_internal_session(
+        self,
+        *,
+        channel_type: GatewayChannelType,
+        external_session_id: str,
+        internal_session_id: str,
+        workspace_id: str,
+        capabilities: dict[str, JsonValue] | None = None,
+        channel_state: dict[str, JsonValue] | None = None,
+        peer_user_id: str | None = None,
+        peer_chat_id: str | None = None,
+    ) -> GatewaySessionRecord:
+        _ = (capabilities, channel_state, peer_user_id, peer_chat_id)
+        session = next(
+            (
+                item
+                for item in self.internal_sessions
+                if item.session_id == internal_session_id
+            ),
+            None,
+        )
+        if session is None:
+            raise KeyError(f"Unknown session_id: {internal_session_id}")
+        if session.workspace_id != workspace_id:
+            raise ValueError("internal session does not belong to workspace")
+        for record in self._records.values():
+            if (
+                record.channel_type == channel_type
+                and record.external_session_id == external_session_id
+            ):
+                return record
+        self.bound_internal_calls.append(
+            _ResolvedGatewaySessionCall(
+                external_session_id=external_session_id,
+                workspace_id=workspace_id,
+                internal_session_id=internal_session_id,
+            )
+        )
+        record = GatewaySessionRecord(
+            gateway_session_id=f"gws-bound-{internal_session_id}",
+            channel_type=channel_type,
+            external_session_id=external_session_id,
+            internal_session_id=internal_session_id,
+            cwd=None,
+        )
+        self._records[record.gateway_session_id] = record
+        return record
 
     def bind_active_run(
         self,
@@ -497,6 +574,32 @@ class _FakeGatewaySessionService:
             channel_type=GatewayChannelType.XIAOLUBAN,
             external_session_id="external-1",
             internal_session_id="session-1",
+        )
+
+    def get_session(self, gateway_session_id: str) -> GatewaySessionRecord:
+        record = self._records.get(gateway_session_id)
+        if record is None:
+            raise KeyError(f"Unknown gateway_session_id: {gateway_session_id}")
+        return record
+
+    def get_by_internal_session_id(
+        self, internal_session_id: str
+    ) -> GatewaySessionRecord | None:
+        for record in self._records.values():
+            if record.internal_session_id == internal_session_id:
+                return record
+        return None
+
+    def list_all(self) -> tuple[GatewaySessionRecord, ...]:
+        return tuple(self._records.values())
+
+    def list_internal_by_workspace(
+        self, workspace_id: str
+    ) -> tuple[SessionRecord, ...]:
+        return tuple(
+            session
+            for session in self.internal_sessions
+            if session.workspace_id == workspace_id
         )
 
 
@@ -961,6 +1064,647 @@ def test_start_im_run_via_create_detached_run(tmp_path: Path) -> None:
     )
 
     assert run_service.detached_run_calls == 1
+
+
+# ---------------------------------------------------------------------------
+# 命令处理 & 会话切换 测试
+# ---------------------------------------------------------------------------
+
+
+def test_command_new_creates_session_and_sends_reply(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert fake_ingress.requests == []
+    assert fake_client.sent_messages[-1][1] == "uidself"
+    assert "已创建新会话" in fake_client.sent_messages[-1][0]
+    resolved_ids = [c.external_session_id for c in fake_gateway_sessions.resolved_calls]
+    assert len(resolved_ids) == 1
+    base_id = f"xiaoluban:{account.account_id}:im-workspace:welink-session-1"
+    assert resolved_ids[0].startswith(base_id + ":")
+
+
+def test_command_new_with_task_creates_session_and_starts_run(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new 帮我看一下这个项目",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert len(fake_ingress.requests) == 1
+    assert fake_ingress.requests[0].intent.intent == "帮我看一下这个项目"
+    assert len(fake_client.sent_messages) >= 1
+    assert "处理中" in fake_client.sent_messages[0][0]
+    resolved_ids = [c.external_session_id for c in fake_gateway_sessions.resolved_calls]
+    base_id = f"xiaoluban:{account.account_id}:im-workspace:welink-session-1"
+    assert resolved_ids[0].startswith(base_id + ":")
+
+
+def test_command_new_routes_subsequent_messages(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="继续做任务",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    resolved_ids = [c.external_session_id for c in fake_gateway_sessions.resolved_calls]
+    assert len(resolved_ids) == 2
+    base_id = f"xiaoluban:{account.account_id}:im-workspace:welink-session-1"
+    new_session_id = resolved_ids[0]
+    assert new_session_id.startswith(base_id + ":")
+    assert resolved_ids[1] == new_session_id
+    assert fake_ingress.requests[0].intent.intent == "继续做任务"
+
+
+def test_command_resume_lists_sessions(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    list_message = fake_client.sent_messages[-1][0]
+    assert "会话列表" in list_message
+    assert "/resume" in list_message
+
+
+def test_command_resume_by_session_id_switches_session(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+    new_call = fake_gateway_sessions.resolved_calls[0]
+    target_internal_id = new_call.internal_session_id
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content=f"/resume {target_internal_id}",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    switch_reply = fake_client.sent_messages[-1][0]
+    assert "已切换到会话" in switch_reply
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="在旧会话继续",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+    assert fake_ingress.requests[0].intent.session_id == target_internal_id
+
+
+def test_command_resume_by_index_switches_session(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume 1",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert "已切换到会话" in fake_client.sent_messages[-1][0]
+
+
+def test_command_resume_binds_existing_internal_session(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_gateway_sessions.internal_sessions.append(
+        SessionRecord(
+            session_id="session-existing",
+            workspace_id="im-workspace",
+            metadata={"title": "Existing session"},
+        )
+    )
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume session-existing",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="继续这个会话",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert fake_gateway_sessions.bound_internal_calls == [
+        _ResolvedGatewaySessionCall(
+            external_session_id=(
+                f"xiaoluban:{account.account_id}:im-workspace:internal:session-existing"
+            ),
+            workspace_id="im-workspace",
+            internal_session_id="session-existing",
+        )
+    ]
+    assert fake_ingress.requests[0].intent.session_id == "session-existing"
+
+
+def test_command_resume_ignores_stale_gateway_session(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+    fake_gateway_sessions._records["gws-stale"] = GatewaySessionRecord(
+        gateway_session_id="gws-stale",
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id=(
+            f"xiaoluban:{account.account_id}:im-workspace:internal:session-stale"
+        ),
+        internal_session_id="session-stale",
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume session-stale",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert "未找到会话" in fake_client.sent_messages[-1][0]
+    assert fake_gateway_sessions.bound_internal_calls == []
+
+
+def test_command_resume_rejects_stale_existing_gateway_binding(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+    fake_gateway_sessions._records["gws-stale"] = GatewaySessionRecord(
+        gateway_session_id="gws-stale",
+        channel_type=GatewayChannelType.XIAOLUBAN,
+        external_session_id=(
+            f"xiaoluban:{account.account_id}:im-workspace:internal:session-stale"
+        ),
+        internal_session_id="session-stale",
+    )
+
+    result = service._ensure_gateway_session_for_internal_id(
+        "session-stale",
+        account_id=account.account_id,
+        workspace_id="im-workspace",
+        message=XiaolubanInboundMessage(
+            content="/resume session-stale",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert result is None
+
+
+def test_command_resume_invalid_session_shows_error(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume nonexistent",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert "未找到会话" in fake_client.sent_messages[-1][0]
+
+
+def test_command_help_shows_help_text(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/help",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    help_message = fake_client.sent_messages[-1][0]
+    assert "/new" in help_message
+    assert "/resume" in help_message
+    assert "/help" in help_message
+
+
+def test_normal_message_sends_ack_after_run_submit(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="帮我分析一下",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert len(fake_client.sent_messages) >= 1
+    ack_message = fake_client.sent_messages[0][0]
+    assert "处理中" in ack_message
+    assert len(fake_ingress.requests) == 1
+
+
+def test_submit_rejection_sends_busy_without_processing_ack(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService(reject_submit=True)
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="帮我分析一下",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert len(fake_ingress.requests) == 1
+    assert len(fake_client.sent_messages) == 1
+    assert "当前会话已有任务运行" in fake_client.sent_messages[-1][0]
+    assert "处理中" not in fake_client.sent_messages[-1][0]
+
+
+def test_non_slash_text_not_treated_as_command(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="用 /new 语法 ...",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert len(fake_ingress.requests) == 1
+    assert fake_ingress.requests[0].intent.intent == "用 /new 语法 ..."
+    base_id = f"xiaoluban:{account.account_id}:im-workspace:welink-session-1"
+    assert fake_gateway_sessions.resolved_calls[0].external_session_id == base_id
+
+
+def test_command_new_without_platform_session_id_isolated_by_peer(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="recv_uid",
+            sender="sender-a",
+            session_id="",
+        ),
+    )
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="sender b task",
+            receiver="recv_uid",
+            sender="sender-b",
+            session_id="",
+        ),
+    )
+
+    base_a = f"xiaoluban:{account.account_id}:im-workspace:sender-a:recv_uid"
+    base_b = f"xiaoluban:{account.account_id}:im-workspace:sender-b:recv_uid"
+    assert fake_gateway_sessions.resolved_calls[0].external_session_id.startswith(
+        base_a + ":"
+    )
+    assert fake_gateway_sessions.resolved_calls[1].external_session_id == base_b
+    assert fake_ingress.requests[0].intent.intent == "sender b task"
+
+
+def test_command_resume_without_existing_sessions(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert "会话列表" in fake_client.sent_messages[-1][0]
+
+
+def test_command_resume_by_prefix_match(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+    target_internal_id = fake_gateway_sessions.resolved_calls[0].internal_session_id
+    prefix = target_internal_id[:6]
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content=f"/resume {prefix}",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert "已切换到会话" in fake_client.sent_messages[-1][0]
+
+
+def test_handle_im_inbound_unknown_command_routes_as_task(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService()
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/some-unknown-command 参数",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert len(fake_ingress.requests) == 1
+    assert fake_ingress.requests[0].intent.intent == "/some-unknown-command 参数"
+
+
+def test_handle_im_inbound_busy_does_not_send_ack(tmp_path: Path) -> None:
+    fake_client = _FakeXiaolubanClient()
+    fake_gateway_sessions = _FakeGatewaySessionService()
+    fake_ingress = _FakeIngressService(active_run_id="run-active")
+    service, account = _build_ready_im_service(
+        tmp_path,
+        client=fake_client,
+        gateway_session_service=fake_gateway_sessions,
+        session_ingress_service=fake_ingress,
+    )
+
+    service.handle_im_inbound(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="帮我分析一下",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+    )
+
+    assert len(fake_client.sent_messages) == 1
+    assert (
+        "繁忙" in fake_client.sent_messages[-1][0]
+        or "任务" in fake_client.sent_messages[-1][0]
+    )
+    assert "处理中" not in fake_client.sent_messages[-1][0]
 
 
 class _FakeRunService:

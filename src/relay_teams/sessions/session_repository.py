@@ -612,6 +612,39 @@ class SessionRepository(SharedSqliteRepository):
                 _log_invalid_session_row(row=row, error=exc)
         return tuple(records)
 
+    def list_by_workspace(self, workspace_id: str) -> tuple[SessionRecord, ...]:
+        rows = self._run_read(
+            lambda: self._conn.execute(
+                "SELECT * FROM sessions WHERE workspace_id=? ORDER BY created_at DESC",
+                (workspace_id,),
+            ).fetchall()
+        )
+        records: list[SessionRecord] = []
+        for row in rows:
+            try:
+                records.append(self._to_record(row))
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_session_row(row=row, error=exc)
+        return tuple(records)
+
+    async def list_by_workspace_async(
+        self, workspace_id: str
+    ) -> tuple[SessionRecord, ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT * FROM sessions WHERE workspace_id=? ORDER BY created_at DESC",
+                (workspace_id,),
+            )
+        )
+        records: list[SessionRecord] = []
+        for row in rows:
+            try:
+                records.append(self._to_record(row))
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_session_row(row=row, error=exc)
+        return tuple(records)
+
     async def list_all_async(self) -> tuple[SessionRecord, ...]:
         rows = await self._run_async_read(
             lambda conn: async_fetchall(

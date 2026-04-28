@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import NamedTuple, Optional, Protocol, Tuple, cast
 from uuid import uuid4
 
-from relay_teams.gateway.gateway_models import GatewayChannelType
+from pydantic import JsonValue
+
+from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressBusyPolicy,
@@ -31,7 +33,11 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanSecretStatus,
 )
 from relay_teams.gateway.xiaoluban.notification_format import (
+    format_help_text,
+    format_im_command_reply,
+    format_session_list_text,
     format_xiaoluban_notification_text,
+    make_session_list_item,
 )
 from relay_teams.gateway.xiaoluban.secret_store import (
     XiaolubanSecretStore,
@@ -51,6 +57,7 @@ from relay_teams.sessions.runs.terminal_payload import (
     extract_terminal_output,
     parse_terminal_payload_json,
 )
+from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.validation import require_force_delete
 
 LOGGER = get_logger(__name__)
@@ -92,6 +99,8 @@ class XiaolubanGatewayService:
         self._pending_im_replies: dict[str, _IMReplyContext] = {}
         self._pending_im_replies_lock = threading.Lock()
         self._im_poller_started = False
+        self._im_active_session: dict[str, str] = {}
+        self._im_active_session_lock = threading.Lock()
 
     def list_accounts(self) -> Tuple[XiaolubanAccountRecord, ...]:
         return tuple(
@@ -430,6 +439,384 @@ class XiaolubanGatewayService:
         self._validate_im_workspace(workspace_id)
         return request_im_config.model_copy(update={"workspace_id": workspace_id})
 
+    @staticmethod
+    def _im_conversation_key(
+        *,
+        account_id: str,
+        workspace_id: str,
+        message: XiaolubanInboundMessage,
+    ) -> str:
+        return _external_session_id(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+
+    def _resolve_effective_external_session_id(
+        self,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        workspace_id: str,
+    ) -> str:
+        conversation_key = self._im_conversation_key(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+        with self._im_active_session_lock:
+            active_gws_id = self._im_active_session.get(conversation_key)
+        if active_gws_id and self._gateway_session_service is not None:
+            try:
+                mapped = self._gateway_session_service.get_session(active_gws_id)
+                return mapped.external_session_id
+            except KeyError:
+                with self._im_active_session_lock:
+                    self._im_active_session.pop(conversation_key, None)
+        return _external_session_id(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+
+    def _try_handle_command(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        text: str,
+        workspace_id: str,
+        reply_target: str,
+    ) -> str | None:
+        command_text = text.lstrip("/").split(None, 1)
+        command = command_text[0].lower()
+        arg = command_text[1] if len(command_text) > 1 else ""
+        if command == "new":
+            return self._handle_new_command(
+                account_id=account_id,
+                message=message,
+                workspace_id=workspace_id,
+                reply_target=reply_target,
+                task_text=arg,
+            )
+        if command == "resume":
+            return self._handle_resume_command(
+                account_id=account_id,
+                message=message,
+                workspace_id=workspace_id,
+                reply_target=reply_target,
+                arg=arg,
+            )
+        if command == "help":
+            self._handle_help_command(
+                account_id=account_id,
+                message=message,
+                reply_target=reply_target,
+            )
+            return None
+        return text
+
+    def _handle_new_command(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        workspace_id: str,
+        reply_target: str,
+        task_text: str,
+    ) -> str | None:
+        if self._gateway_session_service is None:
+            self._send_im_reply(
+                account_id=account_id,
+                message=message,
+                reply_target=reply_target,
+                text="服务暂不可用，请稍后重试",
+            )
+            return None
+        new_external_id = (
+            _external_session_id(
+                account_id=account_id,
+                workspace_id=workspace_id,
+                message=message,
+            )
+            + f":{uuid4().hex[:8]}"
+        )
+        gateway_session = self._gateway_session_service.resolve_or_create_session(
+            channel_type=GatewayChannelType.XIAOLUBAN,
+            external_session_id=new_external_id,
+            workspace_id=workspace_id,
+            metadata={
+                "source_provider": XIAOLUBAN_PLATFORM,
+                "source_kind": "im",
+                "xiaoluban_account_id": account_id,
+            },
+            cwd=None,
+            capabilities={},
+            channel_state={
+                "account_id": account_id,
+                "receiver": message.receiver,
+                "sender": message.sender,
+                "xiaoluban_session_id": message.session_id,
+            },
+            peer_user_id=message.sender or None,
+            peer_chat_id=message.receiver or None,
+        )
+        conversation_key = self._im_conversation_key(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+        with self._im_active_session_lock:
+            self._im_active_session[conversation_key] = (
+                gateway_session.gateway_session_id
+            )
+        short_id = gateway_session.internal_session_id
+        if task_text:
+            return task_text
+        self._send_im_reply(
+            account_id=account_id,
+            message=message,
+            reply_target=reply_target,
+            text=f"已创建新会话: {short_id}",
+            session_id=gateway_session.internal_session_id,
+        )
+        return None
+
+    def _handle_resume_command(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        workspace_id: str,
+        reply_target: str,
+        arg: str,
+    ) -> str | None:
+        if self._gateway_session_service is None:
+            self._send_im_reply(
+                account_id=account_id,
+                message=message,
+                reply_target=reply_target,
+                text="服务暂不可用，请稍后重试",
+            )
+            return None
+        gateway_sessions, internal_sessions = self._list_workspace_sessions(
+            account_id, workspace_id
+        )
+        if not arg:
+            combined = _merge_and_sort_session_list(gateway_sessions, internal_sessions)
+            items = tuple(
+                make_session_list_item(
+                    internal_session_id=s_id,
+                    last_active_at=ts,
+                    title=title,
+                )
+                for s_id, ts, title in combined
+            )
+            body = format_session_list_text(
+                sessions=items,
+                total_count=len(items),
+            )
+            self._send_im_reply(
+                account_id=account_id,
+                message=message,
+                reply_target=reply_target,
+                text=body,
+            )
+            return None
+        matched = self._find_session_for_resume(
+            arg,
+            gateway_sessions,
+            internal_sessions,
+            account_id=account_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+        if matched is None:
+            self._send_im_reply(
+                account_id=account_id,
+                message=message,
+                reply_target=reply_target,
+                text=f"未找到会话: {arg}",
+            )
+            return None
+        conversation_key = self._im_conversation_key(
+            account_id=account_id,
+            workspace_id=workspace_id,
+            message=message,
+        )
+        with self._im_active_session_lock:
+            self._im_active_session[conversation_key] = matched.gateway_session_id
+        self._send_im_reply(
+            account_id=account_id,
+            message=message,
+            reply_target=reply_target,
+            text=f"已切换到会话: {matched.internal_session_id}",
+            session_id=matched.internal_session_id,
+        )
+        return None
+
+    def _handle_help_command(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        reply_target: str,
+    ) -> None:
+        self._send_im_reply(
+            account_id=account_id,
+            message=message,
+            reply_target=reply_target,
+            text=format_help_text(),
+        )
+
+    def _find_session_for_resume(
+        self,
+        arg: str,
+        gateway_sessions: tuple[GatewaySessionRecord, ...],
+        internal_sessions: tuple[SessionRecord, ...],
+        *,
+        account_id: str,
+        workspace_id: str,
+        message: XiaolubanInboundMessage,
+    ) -> GatewaySessionRecord | None:
+        if not arg:
+            return None
+        sorted_tuples = _merge_and_sort_session_list(
+            gateway_sessions, internal_sessions
+        )
+        sorted_ids: list[str] = [s_id for s_id, _c, _t in sorted_tuples]
+        try:
+            idx = int(arg)
+            if 1 <= idx <= len(sorted_ids):
+                target_id = sorted_ids[idx - 1]
+                return self._ensure_gateway_session_for_internal_id(
+                    target_id,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
+                    message=message,
+                )
+        except ValueError:
+            # Non-integer input is valid; fall through to id and prefix matching.
+            pass
+        for session_id in sorted_ids:
+            if session_id == arg:
+                return self._ensure_gateway_session_for_internal_id(
+                    session_id,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
+                    message=message,
+                )
+        for session_id in sorted_ids:
+            if session_id.startswith(arg):
+                return self._ensure_gateway_session_for_internal_id(
+                    session_id,
+                    account_id=account_id,
+                    workspace_id=workspace_id,
+                    message=message,
+                )
+        return None
+
+    def _ensure_gateway_session_for_internal_id(
+        self,
+        internal_session_id: str,
+        *,
+        account_id: str,
+        workspace_id: str,
+        message: XiaolubanInboundMessage,
+    ) -> GatewaySessionRecord | None:
+        if self._gateway_session_service is None:
+            raise RuntimeError("xiaoluban_im_runtime_unavailable")
+        existing = self._gateway_session_service.get_by_internal_session_id(
+            internal_session_id
+        )
+        xlb_prefix = f"xiaoluban:{account_id}:{workspace_id}:"
+        channel_state: dict[str, JsonValue] = {
+            "account_id": account_id,
+            "receiver": message.receiver,
+            "sender": message.sender,
+            "xiaoluban_session_id": message.session_id,
+        }
+        if (
+            existing is not None
+            and existing.channel_type == GatewayChannelType.XIAOLUBAN
+        ):
+            if existing.external_session_id.startswith(xlb_prefix):
+                try:
+                    return (
+                        self._gateway_session_service.resolve_or_bind_internal_session(
+                            channel_type=GatewayChannelType.XIAOLUBAN,
+                            external_session_id=existing.external_session_id,
+                            internal_session_id=internal_session_id,
+                            workspace_id=workspace_id,
+                            channel_state=channel_state,
+                            capabilities={},
+                            peer_user_id=message.sender or None,
+                            peer_chat_id=message.receiver or None,
+                        )
+                    )
+                except (KeyError, ValueError):
+                    return None
+        external_id = f"{xlb_prefix}internal:{internal_session_id}"
+        return self._gateway_session_service.resolve_or_bind_internal_session(
+            channel_type=GatewayChannelType.XIAOLUBAN,
+            external_session_id=external_id,
+            internal_session_id=internal_session_id,
+            workspace_id=workspace_id,
+            channel_state=channel_state,
+            capabilities={},
+            peer_user_id=message.sender or None,
+            peer_chat_id=message.receiver or None,
+        )
+
+    def _list_workspace_sessions(
+        self,
+        account_id: str,
+        workspace_id: str,
+    ) -> tuple[
+        tuple[GatewaySessionRecord, ...],
+        tuple[SessionRecord, ...],
+    ]:
+        internal_sessions: tuple[SessionRecord, ...] = ()
+        internal_session_ids: set[str] = set()
+        if self._gateway_session_service is not None:
+            internal_sessions = (
+                self._gateway_session_service.list_internal_by_workspace(workspace_id)
+            )
+            internal_session_ids = {s.session_id for s in internal_sessions}
+
+        gateway_sessions: list[GatewaySessionRecord] = []
+        if self._gateway_session_service is not None:
+            xlb_prefix = f"xiaoluban:{account_id}:{workspace_id}:"
+            for s in self._gateway_session_service.list_all():
+                if s.channel_type != GatewayChannelType.XIAOLUBAN:
+                    continue
+                if not s.external_session_id.startswith(xlb_prefix):
+                    continue
+                if s.internal_session_id not in internal_session_ids:
+                    continue
+                gateway_sessions.append(s)
+            gateway_sessions.sort(key=lambda item: item.created_at, reverse=True)
+
+        return tuple(gateway_sessions), internal_sessions
+
+    def _send_im_reply(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        reply_target: str,
+        text: str,
+        session_id: str = "",
+    ) -> None:
+        effective_session_id = str(session_id or "").strip() or message.session_id
+        self.send_text_message(
+            account_id=account_id,
+            text=format_im_command_reply(
+                body=text,
+                session_id=effective_session_id,
+            ),
+            receiver_uid=reply_target,
+        )
+
     def _handle_im_inbound(
         self,
         account_id: str,
@@ -467,10 +854,21 @@ class XiaolubanGatewayService:
                 receiver_uid=reply_target,
             )
             return
-        external_session_id = _external_session_id(
+        if text.startswith("/"):
+            result = self._try_handle_command(
+                account_id=account_id,
+                message=message,
+                text=text,
+                workspace_id=workspace_id,
+                reply_target=reply_target,
+            )
+            if result is None:
+                return
+            text = result
+        external_session_id = self._resolve_effective_external_session_id(
             account_id=account_id,
-            workspace_id=workspace_id,
             message=message,
+            workspace_id=workspace_id,
         )
         log_event(
             LOGGER,
@@ -554,6 +952,13 @@ class XiaolubanGatewayService:
                 receiver_uid=reply_target,
             )
             return
+        self._send_im_reply(
+            account_id=account_id,
+            message=message,
+            reply_target=reply_target,
+            text="收到，正在处理中...",
+            session_id=gateway_session.internal_session_id,
+        )
         self._mark_im_terminal_notification_suppressed(run_id)
         self._gateway_session_service.bind_active_run(
             gateway_session.gateway_session_id,
@@ -820,6 +1225,30 @@ def _normalize_base_url(value: Optional[str]) -> str:
     if not normalized:
         return DEFAULT_XIAOLUBAN_BASE_URL
     return normalized
+
+
+def _merge_and_sort_session_list(
+    gateway_sessions: tuple[GatewaySessionRecord, ...],
+    internal_sessions: tuple[SessionRecord, ...],
+) -> list[tuple[str, datetime, str]]:
+    isess_by_id: dict[str, SessionRecord] = {s.session_id: s for s in internal_sessions}
+    seen: set[str] = set()
+    result: list[tuple[str, datetime, str]] = []
+    for gws in gateway_sessions:
+        if gws.internal_session_id not in seen:
+            seen.add(gws.internal_session_id)
+            matched = isess_by_id.get(gws.internal_session_id)
+            last_active = matched.updated_at if matched is not None else gws.updated_at
+            title = ""
+            if matched is not None:
+                title = (matched.metadata or {}).get("title", "")
+            result.append((gws.internal_session_id, last_active, title))
+    for isess in internal_sessions:
+        if isess.session_id not in seen:
+            title = (isess.metadata or {}).get("title", "")
+            result.append((isess.session_id, isess.updated_at, title))
+    result.sort(key=lambda item: item[1], reverse=True)
+    return result
 
 
 def _validate_token(token: str) -> str:

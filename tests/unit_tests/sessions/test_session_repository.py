@@ -128,6 +128,44 @@ def test_list_all_skips_rows_with_blank_session_id(tmp_path: Path) -> None:
     assert [record.session_id for record in records] == ["session-valid"]
 
 
+def test_list_by_workspace_filters_sessions(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_list_by_workspace.db"
+    repository = SessionRepository(db_path)
+    repository.create(
+        session_id="session-workspace-1",
+        workspace_id="workspace-1",
+        metadata={"title": "Workspace 1"},
+    )
+    repository.create(
+        session_id="session-workspace-2",
+        workspace_id="workspace-2",
+    )
+
+    records = repository.list_by_workspace("workspace-1")
+
+    assert [record.session_id for record in records] == ["session-workspace-1"]
+    assert records[0].metadata == {"title": "Workspace 1"}
+
+
+def test_list_by_workspace_skips_invalid_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_list_by_workspace_invalid.db"
+    repository = SessionRepository(db_path)
+    _insert_session_row(
+        db_path,
+        session_id="session-valid",
+        metadata_json="{}",
+    )
+    _insert_session_row(
+        db_path,
+        session_id="",
+        metadata_json="{}",
+    )
+
+    records = repository.list_by_workspace("default")
+
+    assert [record.session_id for record in records] == ["session-valid"]
+
+
 @pytest.mark.parametrize("session_id", ["None", "null"])
 def test_list_all_skips_rows_with_none_like_session_id(
     tmp_path: Path,
@@ -198,6 +236,46 @@ async def test_list_all_async_skips_rows_with_blank_session_id(
     )
 
     records = await repository.list_all_async()
+
+    assert [record.session_id for record in records] == ["session-valid"]
+
+
+@pytest.mark.asyncio
+async def test_list_by_workspace_async_filters_sessions(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_list_by_workspace_async.db"
+    repository = SessionRepository(db_path)
+    await repository.create_async(
+        session_id="session-workspace-1",
+        workspace_id="workspace-1",
+        metadata={"title": "Workspace 1"},
+    )
+    await repository.create_async(
+        session_id="session-workspace-2",
+        workspace_id="workspace-2",
+    )
+
+    records = await repository.list_by_workspace_async("workspace-1")
+
+    assert [record.session_id for record in records] == ["session-workspace-1"]
+    assert records[0].metadata == {"title": "Workspace 1"}
+
+
+@pytest.mark.asyncio
+async def test_list_by_workspace_async_skips_invalid_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "session_repository_list_by_workspace_async_invalid.db"
+    repository = SessionRepository(db_path)
+    _insert_session_row(
+        db_path,
+        session_id="session-valid",
+        metadata_json="{}",
+    )
+    _insert_session_row(
+        db_path,
+        session_id="",
+        metadata_json="{}",
+    )
+
+    records = await repository.list_by_workspace_async("default")
 
     assert [record.session_id for record in records] == ["session-valid"]
 
