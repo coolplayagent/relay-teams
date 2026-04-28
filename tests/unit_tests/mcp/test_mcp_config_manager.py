@@ -646,6 +646,42 @@ def test_load_registry_syncs_app_environment_for_stdio_mcp(tmp_path: Path) -> No
     assert server.env[env_key] == "from-app"
 
 
+def test_stdio_mcp_env_templates_resolve_from_app_environment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    env_key = "MCP_APP_ENV_TEMPLATE_TEST"
+    monkeypatch.delenv(env_key, raising=False)
+    (app_config_dir / ".env").write_text(f"{env_key}=from-app\n", encoding="utf-8")
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "time-mcp": {
+                        "command": "npx",
+                        "args": ["-y", "@upstash/context7-mcp"],
+                        "env": {
+                            env_key: f"{{{{{env_key}}}}}",
+                        },
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+    server = build_mcp_server(registry.get_spec("time-mcp"))
+
+    assert isinstance(server, MCPServerStdio)
+    assert server.env is not None
+    assert os.environ[env_key] == "from-app"
+    assert server.env[env_key] == "from-app"
+
+
 def test_get_mcp_file_paths_follow_scope_conventions(
     monkeypatch,
 ) -> None:

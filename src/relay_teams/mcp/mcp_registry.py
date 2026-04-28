@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import logging
 import os
+import re
 from typing import Protocol, cast
 
 from pydantic import JsonValue
@@ -21,6 +22,12 @@ from relay_teams.trace import trace_span
 LOGGER = get_logger(__name__)
 _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS = 15.0
 _CAPABILITY_WILDCARD = "*"
+_ENV_REFERENCE_PATTERN = re.compile(
+    r"\{\{(?P<template>[A-Za-z_][A-Za-z0-9_]*)}}"
+    r"|\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)}"
+    r"|\$(?P<plain>[A-Za-z_][A-Za-z0-9_]*)"
+    r"|%(?P<windows>[^%\s]+)%"
+)
 
 
 class _ListedMcpTool(Protocol):
@@ -314,5 +321,24 @@ def _string_dict(value: JsonValue) -> dict[str, str] | None:
 def _build_stdio_env(server_config: Mapping[str, JsonValue]) -> dict[str, str]:
     merged_env = dict(os.environ)
     explicit_env = _string_dict(server_config.get("env")) or {}
+    explicit_env = {
+        key: _expand_env_references(value, merged_env)
+        for key, value in explicit_env.items()
+    }
     merged_env.update(explicit_env)
     return merged_env
+
+
+def _expand_env_references(value: str, env_values: Mapping[str, str]) -> str:
+    def replace_match(match: re.Match[str]) -> str:
+        env_key = (
+            match.group("template")
+            or match.group("braced")
+            or match.group("plain")
+            or match.group("windows")
+        )
+        if env_key is None:
+            return match.group(0)
+        return env_values.get(env_key, match.group(0))
+
+    return _ENV_REFERENCE_PATTERN.sub(replace_match, value)
