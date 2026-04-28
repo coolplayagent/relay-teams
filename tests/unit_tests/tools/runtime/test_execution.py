@@ -103,8 +103,19 @@ class _FakeInjectionManager:
         *,
         source: InjectionSource,
         content: UserPromptContent,
+        visibility: str = "public",
+        internal_kind: str = "",
+        internal_delivery_mode: str = "",
+        internal_issue_key: str = "",
     ) -> _FakeInjectionRecord:
-        _ = (run_id, recipient_instance_id)
+        _ = (
+            run_id,
+            recipient_instance_id,
+            visibility,
+            internal_kind,
+            internal_delivery_mode,
+            internal_issue_key,
+        )
         record = _FakeInjectionRecord(source=source, content=content)
         self.records.append(record)
         return record

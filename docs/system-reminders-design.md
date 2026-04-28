@@ -71,7 +71,7 @@ Tool failure:
 
 Read-only streak:
 
-- triggered after five consecutive known read-only tools
+- triggered after fifty consecutive known read-only tools
 - unknown tools are neutral and do not count
 - `shell` is not considered read-only in v1
 

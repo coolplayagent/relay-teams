@@ -172,6 +172,10 @@ class InjectionMessage(BaseModel):
     run_id: RequiredIdentifierStr
     recipient_instance_id: RequiredIdentifierStr
     source: InjectionSource
+    visibility: Literal["public", "internal"] = "public"
+    internal_kind: str = ""
+    internal_delivery_mode: str = ""
+    internal_issue_key: str = ""
     # noinspection PyTypeHints
     content: UserPromptContent
     sender_instance_id: OptionalIdentifierStr = None

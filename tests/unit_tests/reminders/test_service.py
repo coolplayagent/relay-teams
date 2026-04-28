@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import cast
@@ -127,6 +128,7 @@ def test_service_enqueues_tool_failure_reminder_once(tmp_path: Path) -> None:
     assert len(sink.enqueued) == 1
     assert "<system-reminder>" in sink.enqueued[0]
     assert "No such file" in sink.enqueued[0]
+    assert service._state_locks.active_lock_count == 0
 
 
 def test_service_appends_completion_retry_reminder(tmp_path: Path) -> None:
@@ -311,6 +313,72 @@ def test_service_preserves_completion_retry_limit_when_state_load_fails() -> Non
     assert second.fail_completion is True
     assert len(sink.appended) == 1
     assert [state.completion_retry_count for state in repository.saved_states] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_service_async_serializes_concurrent_tool_result_reminders(
+    tmp_path: Path,
+) -> None:
+    sink = _CapturingSink()
+    service = _service(
+        tmp_path,
+        sink,
+        policy=SystemReminderPolicy(ReminderPolicyConfig(read_only_streak_threshold=1)),
+    )
+    observation = ToolResultObservation(
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="run-1",
+        task_id="task-1",
+        instance_id="inst-1",
+        role_id="role-1",
+        tool_name="read",
+        tool_call_id="call-1",
+        ok=True,
+    )
+
+    first, second = await asyncio.gather(
+        service.observe_tool_result_async(observation),
+        service.observe_tool_result_async(observation),
+    )
+
+    assert [first.issue, second.issue].count(True) == 1
+    assert len(sink.enqueued) == 1
+    assert service._async_state_locks.active_lock_count == 0
+
+
+@pytest.mark.asyncio
+async def test_service_async_lock_releases_reference_when_waiter_is_cancelled(
+    tmp_path: Path,
+) -> None:
+    sink = _CapturingSink()
+    service = _service(tmp_path, sink)
+
+    async def wait_for_lock() -> None:
+        async with service._async_state_locks.hold(
+            session_id="session-1",
+            run_id="run-1",
+        ):
+            pass
+
+    async with service._async_state_locks.hold(
+        session_id="session-1",
+        run_id="run-1",
+    ):
+        task = asyncio.create_task(wait_for_lock())
+        for _ in range(10):
+            if service._async_state_locks.active_reference_count == 2:
+                break
+            await asyncio.sleep(0)
+        assert service._async_state_locks.active_reference_count == 2
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError) as exc_info:
+            await task
+        assert isinstance(exc_info.value, asyncio.CancelledError)
+        assert service._async_state_locks.active_reference_count == 1
+
+    assert service._async_state_locks.active_lock_count == 0
 
 
 @pytest.mark.asyncio

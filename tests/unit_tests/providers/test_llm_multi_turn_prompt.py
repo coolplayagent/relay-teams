@@ -69,9 +69,10 @@ from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.runs.assistant_errors import AssistantRunError
+from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
@@ -1042,23 +1043,26 @@ async def test_generate_recomputes_budget_after_injection_restart(
     provider._config_ref = updated_config
     provider._session._config = updated_config
 
-    class _InjectedMessage:
-        def __init__(self, content: str) -> None:
-            self.content = content
-
-        def model_dump_json(self) -> str:
-            return json.dumps({"content": self.content})
-
     class _OneShotInjectionManager:
         def __init__(self) -> None:
             self._drained = False
 
-        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+        def drain_at_boundary(
+            self, run_id: str, instance_id: str
+        ) -> list[InjectionMessage]:
             _ = (run_id, instance_id)
             if self._drained:
                 return []
             self._drained = True
-            return [_InjectedMessage("y" * 124_200)]
+            return [
+                InjectionMessage(
+                    run_id=run_id,
+                    recipient_instance_id=instance_id,
+                    source=InjectionSource.SYSTEM,
+                    content="y" * 124_200,
+                    priority=0,
+                )
+            ]
 
     provider._session._injection_manager = cast(
         RunInjectionManager,
@@ -1225,22 +1229,24 @@ async def test_generate_defers_injection_restart_until_pending_tool_call_complet
         fake_hub,
     )
 
-    class _InjectedMessage:
-        def __init__(self, content: str) -> None:
-            self.content = content
-
-        def model_dump_json(self) -> str:
-            return json.dumps({"content": self.content})
-
     class _DeferredInjectionManager:
         def __init__(self) -> None:
             self.calls = 0
 
-        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
-            _ = (run_id, instance_id)
+        def drain_at_boundary(
+            self, run_id: str, instance_id: str
+        ) -> list[InjectionMessage]:
             self.calls += 1
             if self.calls == 1:
-                return [_InjectedMessage("background follow-up")]
+                return [
+                    InjectionMessage(
+                        run_id=run_id,
+                        recipient_instance_id=instance_id,
+                        source=InjectionSource.SYSTEM,
+                        content="background follow-up",
+                        priority=0,
+                    )
+                ]
             return []
 
     injection_manager = _DeferredInjectionManager()
@@ -1396,6 +1402,215 @@ async def test_generate_defers_injection_restart_until_pending_tool_call_complet
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_generate_discards_guidance_reminder_after_final_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "final_answer_guidance_reminder.db",
+        fake_hub,
+    )
+
+    class _FinalAnswerReminderManager:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def drain_at_boundary(
+            self, run_id: str, recipient_instance_id: str
+        ) -> tuple[InjectionMessage, ...]:
+            self.calls += 1
+            if self.calls != 1:
+                return ()
+            return (
+                InjectionMessage(
+                    run_id=run_id,
+                    recipient_instance_id=recipient_instance_id,
+                    source=InjectionSource.SYSTEM,
+                    visibility="internal",
+                    internal_kind="read_only_streak",
+                    internal_delivery_mode=SystemReminderDeliveryMode.GUIDANCE.value,
+                    internal_issue_key="read_only_streak",
+                    content=render_system_reminder("Stop inspecting and answer."),
+                    priority=0,
+                ),
+            )
+
+    injection_manager = _FinalAnswerReminderManager()
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, injection_manager),
+    )
+
+    final_response = ModelResponse(parts=[TextPart(content="done")])
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=0,
+                        )
+                    )
+                ],
+                messages_by_step=[[final_response]],
+                result=_ScriptedResult(
+                    response=final_response, messages=[final_response]
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-final-guidance",
+        trace_id="run-final-guidance",
+        task_id="task-final-guidance",
+        session_id="session-final-guidance",
+        workspace_id="default",
+        conversation_id=build_conversation_id("session-final-guidance", "Coordinator"),
+        instance_id="inst-final-guidance",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="answer",
+    )
+
+    response = await provider.generate(request)
+    history = message_repo.get_history_for_conversation(request.conversation_id or "")
+
+    assert response == "done"
+    assert injection_manager.calls == 1
+    assert len(scripted_agent.histories) == 1
+    assert RunEventType.INJECTION_APPLIED not in [
+        event.event_type for event in fake_hub.events
+    ]
+    assert "<system-reminder>" not in "\n".join(str(item) for item in history)
+
+
+@pytest.mark.asyncio
+async def test_generate_applies_completion_guard_reminder_after_final_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "final_answer_completion_guard.db",
+        fake_hub,
+    )
+
+    class _CompletionGuardReminderManager:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def drain_at_boundary(
+            self, run_id: str, recipient_instance_id: str
+        ) -> tuple[InjectionMessage, ...]:
+            self.calls += 1
+            if self.calls != 1:
+                return ()
+            return (
+                InjectionMessage(
+                    run_id=run_id,
+                    recipient_instance_id=recipient_instance_id,
+                    source=InjectionSource.SYSTEM,
+                    visibility="internal",
+                    internal_kind="incomplete_todos",
+                    internal_delivery_mode=(
+                        SystemReminderDeliveryMode.COMPLETION_GUARD.value
+                    ),
+                    internal_issue_key="incomplete_todos:retry:1",
+                    content=render_system_reminder("Finish the pending todo first."),
+                    priority=0,
+                ),
+            )
+
+    injection_manager = _CompletionGuardReminderManager()
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, injection_manager),
+    )
+
+    first_response = ModelResponse(parts=[TextPart(content="premature done")])
+    second_response = ModelResponse(parts=[TextPart(content="done")])
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=0,
+                        )
+                    )
+                ],
+                messages_by_step=[[first_response]],
+                result=_ScriptedResult(
+                    response=first_response,
+                    messages=[first_response],
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=second_response,
+                    messages=[second_response],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-final-completion-guard",
+        trace_id="run-final-completion-guard",
+        task_id="task-final-completion-guard",
+        session_id="session-final-completion-guard",
+        workspace_id="default",
+        conversation_id=build_conversation_id(
+            "session-final-completion-guard",
+            "Coordinator",
+        ),
+        instance_id="inst-final-completion-guard",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="answer",
+    )
+
+    response = await provider.generate(request)
+    history = message_repo.get_history_for_conversation(request.conversation_id or "")
+
+    assert response == "done"
+    assert len(scripted_agent.histories) == 2
+    applied_events = [
+        event
+        for event in fake_hub.events
+        if event.event_type == RunEventType.INJECTION_APPLIED
+    ]
+    assert applied_events
+    assert "Finish the pending todo first" not in applied_events[0].payload_json
+    assert "<system-reminder>" not in applied_events[0].payload_json
+    assert any("<system-reminder>" in str(message) for message in history)
 
 
 @pytest.mark.asyncio
@@ -1558,23 +1773,26 @@ async def test_generate_rebuilds_agent_when_restart_updates_compaction_summary(
         fake_hub,
     )
 
-    class _InjectedMessage:
-        def __init__(self, content: str) -> None:
-            self.content = content
-
-        def model_dump_json(self) -> str:
-            return json.dumps({"content": self.content})
-
     class _OneShotInjectionManager:
         def __init__(self) -> None:
             self._drained = False
 
-        def drain_at_boundary(self, run_id: str, instance_id: str) -> list[object]:
+        def drain_at_boundary(
+            self, run_id: str, instance_id: str
+        ) -> list[InjectionMessage]:
             _ = (run_id, instance_id)
             if self._drained:
                 return []
             self._drained = True
-            return [_InjectedMessage("restart with compaction summary")]
+            return [
+                InjectionMessage(
+                    run_id=run_id,
+                    recipient_instance_id=instance_id,
+                    source=InjectionSource.SYSTEM,
+                    content="restart with compaction summary",
+                    priority=0,
+                )
+            ]
 
     provider._session._injection_manager = cast(
         RunInjectionManager,
