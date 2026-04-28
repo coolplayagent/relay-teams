@@ -183,6 +183,7 @@ const PROMPT_PLACEHOLDERS = {
 
 let latestRuntimeView = null;
 let editorGroups = [];
+let lastSavedEditorGroups = [];
 let latestLoadErrorMessage = '';
 let latestRuntimeLoadErrorMessage = '';
 let latestConfigMessage = '';
@@ -193,9 +194,12 @@ let activeHooksLoadRequestId = 0;
 let nextGroupId = 1;
 let nextHandlerId = 1;
 let editingGroupId = null;
+let hooksConfigDirty = false;
 let groupEditSnapshots = new Map();
+let hooksPersistenceChain = Promise.resolve();
 const collapsedHandlerEditors = new Map();
 let agentRoleOptions = [];
+let pendingStaleDeleteSuccesses = [];
 
 export function bindHooksSettingsHandlers() {
     if (handlersBound || typeof document?.addEventListener !== 'function') {
@@ -213,6 +217,8 @@ export function bindHooksSettingsHandlers() {
             const group = createDefaultGroup();
             editorGroups = [...editorGroups, group];
             editingGroupId = group.id;
+            hooksConfigDirty = true;
+            latestLoadErrorMessage = '';
             latestConfigMessage = '';
             renderHooksPanel();
         });
@@ -232,12 +238,24 @@ export function bindHooksSettingsHandlers() {
     handlersBound = true;
 }
 
+export function syncHooksSettingsActions() {
+    if (!isHooksPanelActive()) {
+        return;
+    }
+    setActionDisplay('add-hook-btn', true);
+    const hasEditableHooks = !loadInFlight
+        && (editorGroups.length > 0 || editingGroupId !== null || hooksConfigDirty);
+    setActionDisplay('validate-hooks-btn', hasEditableHooks);
+    setActionDisplay('save-hooks-btn', hasEditableHooks);
+}
+
 export async function loadHooksSettingsPanel() {
     const requestId = ++activeHooksLoadRequestId;
     loadInFlight = true;
     latestLoadErrorMessage = '';
     latestRuntimeLoadErrorMessage = '';
     latestConfigMessage = '';
+    hooksConfigDirty = false;
     renderHooksPanel();
     const configPromise = fetchHooksConfig();
     const runtimeViewPromise = fetchHookRuntimeView();
@@ -248,6 +266,7 @@ export async function loadHooksSettingsPanel() {
             return;
         }
         editorGroups = deserializeHooksConfig(config);
+        lastSavedEditorGroups = cloneGroups(editorGroups);
         try {
             agentRoleOptions = normalizeAgentRoleOptions(await roleOptionsPromise);
         } catch (e) {
@@ -260,6 +279,7 @@ export async function loadHooksSettingsPanel() {
         }
         latestRuntimeLoadErrorMessage = '';
         editingGroupId = null;
+        hooksConfigDirty = false;
         groupEditSnapshots = new Map();
         collapsedHandlerEditors.clear();
         try {
@@ -291,7 +311,9 @@ export async function loadHooksSettingsPanel() {
         latestRuntimeLoadErrorMessage = '';
         latestRuntimeView = null;
         editorGroups = [];
+        lastSavedEditorGroups = [];
         editingGroupId = null;
+        hooksConfigDirty = false;
         groupEditSnapshots = new Map();
         collapsedHandlerEditors.clear();
         logError(
@@ -304,6 +326,7 @@ export async function loadHooksSettingsPanel() {
             return;
         }
         loadInFlight = false;
+        applyPendingStaleDeleteSuccesses();
         renderHooksPanel();
     }
 }
@@ -337,6 +360,7 @@ async function handleHooksClick(event) {
     }
     if (action === 'remove-group') {
         const groupId = Number(actionTarget.dataset.groupId || '0');
+        const deletedSavedGroups = lastSavedEditorGroups.filter(group => group.id === groupId);
         editorGroups = editorGroups.filter(group => group.id !== groupId);
         if (editingGroupId === groupId) {
             editingGroupId = null;
@@ -345,6 +369,10 @@ async function handleHooksClick(event) {
         clearCollapsedHandlersForGroup(groupId);
         latestConfigMessage = '';
         renderHooksPanel();
+        await queuePersistHooksAfterDelete({
+            deletedSavedGroups: cloneGroups(deletedSavedGroups),
+            requestId: activeHooksLoadRequestId,
+        });
         return;
     }
     if (action === 'add-handler') {
@@ -361,6 +389,7 @@ async function handleHooksClick(event) {
             };
         });
         collapsedHandlerEditors.set(getHandlerEditorKey(groupId, nextHandler.id), true);
+        hooksConfigDirty = true;
         latestConfigMessage = '';
         renderHooksPanel();
         return;
@@ -391,6 +420,7 @@ async function handleHooksClick(event) {
             };
         });
         collapsedHandlerEditors.delete(getHandlerEditorKey(groupId, handlerId));
+        hooksConfigDirty = true;
         latestConfigMessage = '';
         renderHooksPanel();
         return;
@@ -416,6 +446,7 @@ function handleHooksInput(event) {
     const groupId = Number(target.dataset.groupId || '0');
     const handlerId = Number(target.dataset.handlerId || '0');
     latestConfigMessage = '';
+    hooksConfigDirty = true;
     if (handlerId) {
         updateHandlerField(groupId, handlerId, field, readInputValue(target));
     } else {
@@ -459,16 +490,49 @@ async function validateCurrentHooksConfig() {
 }
 
 async function saveCurrentHooksConfig() {
+    let saveSnapshot;
     try {
-        const payload = serializeHooksConfig(editorGroups);
+        saveSnapshot = createHooksSaveSnapshot();
+    } catch (e) {
+        await handleHooksSaveFailure(e);
+        renderHooksPanel();
+        return;
+    }
+    hooksPersistenceChain = hooksPersistenceChain.then(() =>
+        persistCurrentHooksConfig(saveSnapshot),
+    );
+    await hooksPersistenceChain;
+}
+
+function createHooksSaveSnapshot() {
+    const groupsSnapshot = cloneGroups(editorGroups);
+    return {
+        requestId: activeHooksLoadRequestId,
+        previousSavedEditorGroups: cloneGroups(lastSavedEditorGroups),
+        savedEditorGroups: markGroupsSaved(groupsSnapshot),
+        payload: serializeHooksConfig(groupsSnapshot),
+    };
+}
+
+async function persistCurrentHooksConfig(saveSnapshot) {
+    const { payload, requestId, savedEditorGroups } = saveSnapshot;
+    try {
         validateHooksPayloadForEditor(payload);
         await validateHooksConfig(payload);
         await saveHooksConfig(payload);
+        if (requestId !== activeHooksLoadRequestId) {
+            reconcileStaleManualSaveSuccess(saveSnapshot);
+            return;
+        }
         latestConfigMessageTone = 'success';
         latestConfigMessage = t('settings.hooks.save_success');
-        editorGroups = editorGroups.map(group => ({ ...group, isNew: false }));
-        editingGroupId = null;
-        groupEditSnapshots = new Map();
+        editorGroups = mergeSavedStateIntoEditorGroups(editorGroups, savedEditorGroups);
+        lastSavedEditorGroups = savedEditorGroups;
+        reconcileHooksDirtyState();
+        if (!hooksConfigDirty) {
+            editingGroupId = null;
+            groupEditSnapshots = new Map();
+        }
         try {
             latestRuntimeView = await fetchHookRuntimeView();
             latestRuntimeLoadErrorMessage = '';
@@ -488,18 +552,195 @@ async function saveCurrentHooksConfig() {
             tone: 'success',
         });
     } catch (e) {
+        await handleHooksSaveFailure(e);
+    }
+    renderHooksPanel();
+}
+
+async function handleHooksSaveFailure(error) {
+    latestConfigMessageTone = 'error';
+    const errorReason = resolveHooksErrorReason(error);
+    latestConfigMessage = errorReason
+        ? formatMessage('settings.hooks.save_failed_detail', { error: errorReason })
+        : t('settings.hooks.save_failed');
+    logError(
+        'frontend.hooks_settings.save_failed',
+        'Failed to save hooks config',
+        errorToPayload(error),
+    );
+    await showAlertDialog({
+        title: t('settings.hooks.save_result_title'),
+        message: latestConfigMessage,
+        tone: 'error',
+    });
+}
+
+function reconcileStaleManualSaveSuccess(saveSnapshot) {
+    const currentSavedBaseline = cloneGroups(lastSavedEditorGroups);
+    lastSavedEditorGroups = mergeStaleManualSaveGroups(
+        lastSavedEditorGroups,
+        currentSavedBaseline,
+        saveSnapshot.previousSavedEditorGroups,
+        saveSnapshot.savedEditorGroups,
+        false,
+    );
+    editorGroups = mergeStaleManualSaveGroups(
+        editorGroups,
+        currentSavedBaseline,
+        saveSnapshot.previousSavedEditorGroups,
+        saveSnapshot.savedEditorGroups,
+        true,
+    );
+    clearRemovedGroupEditState(editorGroups);
+    reconcileHooksDirtyState();
+    renderHooksPanel();
+}
+
+function mergeStaleManualSaveGroups(
+    currentGroups,
+    currentSavedBaseline,
+    previousSavedGroups,
+    savedGroups,
+    preserveDirtyGroups,
+) {
+    const savedGroupsById = new Map(savedGroups.map(group => [group.id, group]));
+    const previousIds = new Set(previousSavedGroups.map(group => group.id));
+    const previousPairs = previousSavedGroups.map(previousGroup => ({
+        previousGroup,
+        savedGroup: savedGroupsById.get(previousGroup.id) || null,
+        used: false,
+    }));
+    const mergedGroups = [];
+    currentGroups.forEach(currentGroup => {
+        const previousPair = previousPairs.find(pair =>
+            !pair.used && groupsHaveSameSavedIdentity(currentGroup, pair.previousGroup),
+        );
+        if (!previousPair) {
+            mergedGroups.push(cloneGroup(currentGroup));
+            return;
+        }
+        previousPair.used = true;
+        if (
+            preserveDirtyGroups
+            && !groupMatchesCurrentSavedBaseline(currentGroup, currentSavedBaseline)
+        ) {
+            mergedGroups.push(cloneGroup(currentGroup));
+            return;
+        }
+        if (previousPair.savedGroup) {
+            mergedGroups.push(applySavedGroupToCurrentIds(currentGroup, previousPair.savedGroup));
+        }
+    });
+    savedGroups.forEach(savedGroup => {
+        if (!previousIds.has(savedGroup.id)) {
+            mergedGroups.push(assignFreshIdsToSavedGroup(savedGroup));
+        }
+    });
+    return mergedGroups;
+}
+
+function groupMatchesCurrentSavedBaseline(group, currentSavedBaseline) {
+    const savedGroup = currentSavedBaseline.find(candidate => candidate.id === group.id);
+    return savedGroup ? groupsHaveSameSerializedConfig([group], [savedGroup]) : false;
+}
+
+function applySavedGroupToCurrentIds(currentGroup, savedGroup) {
+    const nextGroup = cloneGroup(savedGroup);
+    return {
+        ...nextGroup,
+        id: currentGroup.id,
+        handlers: nextGroup.handlers.map((handler, index) => ({
+            ...handler,
+            id: currentGroup.handlers[index]?.id || handler.id,
+        })),
+    };
+}
+
+function assignFreshIdsToSavedGroup(savedGroup) {
+    const nextGroup = cloneGroup(savedGroup);
+    return {
+        ...nextGroup,
+        id: nextGroupId++,
+        handlers: nextGroup.handlers.map(handler => ({
+            ...handler,
+            id: nextHandlerId++,
+        })),
+    };
+}
+
+async function queuePersistHooksAfterDelete(deleteSnapshot) {
+    hooksPersistenceChain = hooksPersistenceChain.then(() =>
+        persistHooksAfterDelete(deleteSnapshot),
+    );
+    await hooksPersistenceChain;
+}
+
+async function persistHooksAfterDelete(deleteSnapshot) {
+    const { deletedSavedGroups, requestId } = deleteSnapshot;
+    const requestIsCurrent = requestId === activeHooksLoadRequestId;
+    const persistedGroups = removeDeletedSavedGroupsOnce(
+        lastSavedEditorGroups,
+        deletedSavedGroups,
+        requestIsCurrent,
+    );
+    if (persistedGroups.length === lastSavedEditorGroups.length) {
+        if (requestId !== activeHooksLoadRequestId) {
+            return;
+        }
+        reconcileHooksDirtyState();
+        renderHooksPanel();
+        return;
+    }
+    try {
+        const payload = serializeHooksConfig(persistedGroups);
+        validateHooksPayloadForEditor(payload);
+        await validateHooksConfig(payload);
+        await saveHooksConfig(payload);
+        if (requestId !== activeHooksLoadRequestId) {
+            handleStaleDeleteSuccess(deletedSavedGroups, persistedGroups);
+            return;
+        }
+        lastSavedEditorGroups = cloneGroups(persistedGroups);
+        reconcileHooksDirtyState();
+        latestConfigMessageTone = 'info';
+        latestConfigMessage = '';
+        try {
+            const runtimeView = await fetchHookRuntimeView();
+            if (requestId !== activeHooksLoadRequestId) {
+                return;
+            }
+            latestRuntimeView = runtimeView;
+            latestRuntimeLoadErrorMessage = '';
+        } catch (e) {
+            if (requestId !== activeHooksLoadRequestId) {
+                return;
+            }
+            latestRuntimeView = null;
+            latestRuntimeLoadErrorMessage =
+                e?.message || t('settings.hooks.runtime_load_failed');
+            logError(
+                'frontend.hooks_settings.runtime_load_failed',
+                'Failed to refresh hooks runtime view after delete',
+                errorToPayload(e),
+            );
+        }
+    } catch (e) {
+        if (requestId !== activeHooksLoadRequestId) {
+            return;
+        }
+        hooksConfigDirty = true;
         latestConfigMessageTone = 'error';
         const errorReason = resolveHooksErrorReason(e);
         latestConfigMessage = errorReason
-            ? formatMessage('settings.hooks.save_failed_detail', { error: errorReason })
-            : t('settings.hooks.save_failed');
+            ? formatMessage('settings.hooks.delete_failed_detail', { error: errorReason })
+            : t('settings.hooks.delete_failed');
         logError(
-            'frontend.hooks_settings.save_failed',
-            'Failed to save hooks config',
+            'frontend.hooks_settings.delete_save_failed',
+            'Failed to save hooks config after deleting hook group',
             errorToPayload(e),
         );
         await showAlertDialog({
-            title: t('settings.hooks.save_result_title'),
+            title: t('settings.hooks.delete_result_title'),
             message: latestConfigMessage,
             tone: 'error',
         });
@@ -507,7 +748,178 @@ async function saveCurrentHooksConfig() {
     renderHooksPanel();
 }
 
+function matchesDeletedSavedGroup(group, deletedSavedGroups, requestIsCurrent) {
+    return deletedSavedGroups.some(deletedGroup => {
+        if (requestIsCurrent) {
+            return group.id === deletedGroup.id;
+        }
+        return groupsHaveSameSavedIdentity(group, deletedGroup);
+    });
+}
+
+function removeDeletedSavedGroupsOnce(groups, deletedSavedGroups, requestIsCurrent) {
+    const remainingDeletedGroups = [...deletedSavedGroups];
+    return groups.filter(group => {
+        const deletedIndex = remainingDeletedGroups.findIndex(deletedGroup =>
+            matchesDeletedSavedGroup(group, [deletedGroup], requestIsCurrent),
+        );
+        if (deletedIndex < 0) {
+            return true;
+        }
+        remainingDeletedGroups.splice(deletedIndex, 1);
+        return false;
+    });
+}
+
+function handleStaleDeleteSuccess(deletedSavedGroups, persistedGroups) {
+    if (loadInFlight) {
+        pendingStaleDeleteSuccesses = [
+            ...pendingStaleDeleteSuccesses,
+            {
+                deletedSavedGroups: cloneGroups(deletedSavedGroups),
+                persistedGroups: cloneGroups(persistedGroups),
+            },
+        ];
+        return;
+    }
+    reconcileStaleDeleteSuccess(deletedSavedGroups, persistedGroups);
+}
+
+function applyPendingStaleDeleteSuccesses() {
+    if (pendingStaleDeleteSuccesses.length === 0) {
+        return;
+    }
+    const pendingSuccesses = pendingStaleDeleteSuccesses.map(success => ({
+        deletedSavedGroups: cloneGroups(success.deletedSavedGroups),
+        persistedGroups: cloneGroups(success.persistedGroups),
+    }));
+    pendingStaleDeleteSuccesses = [];
+    pendingSuccesses.forEach(success => {
+        reconcileStaleDeleteSuccess(success.deletedSavedGroups, success.persistedGroups);
+    });
+}
+
+function groupsHaveSameSavedIdentity(group, deletedGroup) {
+    const groupSavedIdentity = getGroupSavedIdentity(group);
+    const deletedGroupSavedIdentity = getGroupSavedIdentity(deletedGroup);
+    if (groupSavedIdentity && deletedGroupSavedIdentity) {
+        return groupSavedIdentity === deletedGroupSavedIdentity;
+    }
+    return group.event_name === deletedGroup.event_name
+        && group.name === deletedGroup.name
+        && group.matcher === deletedGroup.matcher
+        && JSON.stringify(group.role_ids) === JSON.stringify(deletedGroup.role_ids)
+        && JSON.stringify(group.session_modes) === JSON.stringify(deletedGroup.session_modes)
+        && JSON.stringify(group.run_kinds) === JSON.stringify(deletedGroup.run_kinds)
+        && JSON.stringify(normalizeHandlersForSavedIdentity(group.handlers))
+            === JSON.stringify(normalizeHandlersForSavedIdentity(deletedGroup.handlers));
+}
+
+function normalizeHandlersForSavedIdentity(handlers) {
+    if (!Array.isArray(handlers)) {
+        return [];
+    }
+    return handlers.map(handler => {
+        const savedFields = { ...(handler || {}) };
+        delete savedFields.id;
+        return savedFields;
+    });
+}
+
+function markGroupsSaved(groups) {
+    return cloneGroups(groups).map(group => {
+        const savedGroup = { ...group, isNew: false };
+        return {
+            ...savedGroup,
+            saved_identity: buildGroupSavedIdentity(savedGroup),
+        };
+    });
+}
+
+function mergeSavedStateIntoEditorGroups(groups, savedGroups) {
+    const savedGroupsById = new Map(savedGroups.map(group => [group.id, group]));
+    return cloneGroups(groups).map(group => {
+        const savedGroup = savedGroupsById.get(group.id);
+        if (!savedGroup) {
+            return group;
+        }
+        return {
+            ...group,
+            isNew: false,
+            saved_identity: savedGroup.saved_identity,
+        };
+    });
+}
+
+function getGroupSavedIdentity(group) {
+    if (typeof group?.saved_identity === 'string' && group.saved_identity) {
+        return group.saved_identity;
+    }
+    return buildGroupSavedIdentity(group);
+}
+
+function buildGroupSavedIdentity(group) {
+    return JSON.stringify({
+        event_name: group?.event_name,
+        name: group?.name,
+        matcher: group?.matcher,
+        role_ids: Array.isArray(group?.role_ids) ? group.role_ids : [],
+        session_modes: Array.isArray(group?.session_modes) ? group.session_modes : [],
+        run_kinds: Array.isArray(group?.run_kinds) ? group.run_kinds : [],
+        handlers: normalizeHandlersForSavedIdentity(group?.handlers),
+    });
+}
+
+function reconcileStaleDeleteSuccess(deletedSavedGroups, persistedGroups) {
+    if (groupsHaveSameSerializedConfig(lastSavedEditorGroups, persistedGroups)) {
+        return;
+    }
+    const nextLastSavedEditorGroups = removeDeletedSavedGroupsOnce(
+        lastSavedEditorGroups,
+        deletedSavedGroups,
+        false,
+    );
+    const nextEditorGroups = removeDeletedSavedGroupsOnce(
+        editorGroups,
+        deletedSavedGroups,
+        false,
+    );
+    const removedSavedGroup = nextLastSavedEditorGroups.length !== lastSavedEditorGroups.length;
+    const removedEditorGroup = nextEditorGroups.length !== editorGroups.length;
+    if (!removedSavedGroup && !removedEditorGroup) {
+        return;
+    }
+    lastSavedEditorGroups = cloneGroups(nextLastSavedEditorGroups);
+    editorGroups = cloneGroups(nextEditorGroups);
+    clearRemovedGroupEditState(editorGroups);
+    reconcileHooksDirtyState();
+    renderHooksPanel();
+}
+
+function groupsHaveSameSerializedConfig(groups, otherGroups) {
+    try {
+        return JSON.stringify(serializeHooksConfig(groups))
+            === JSON.stringify(serializeHooksConfig(otherGroups));
+    } catch {
+        return false;
+    }
+}
+
+function clearRemovedGroupEditState(groups) {
+    const retainedGroupIds = new Set(groups.map(group => group.id));
+    if (editingGroupId !== null && !retainedGroupIds.has(editingGroupId)) {
+        editingGroupId = null;
+    }
+    Array.from(groupEditSnapshots.keys()).forEach(groupId => {
+        if (!retainedGroupIds.has(groupId)) {
+            groupEditSnapshots.delete(groupId);
+            clearCollapsedHandlersForGroup(groupId);
+        }
+    });
+}
+
 function renderHooksPanel() {
+    syncHooksSettingsActions();
     const host = document.getElementById('hooks-runtime-status');
     if (!host) {
         return;
@@ -526,6 +938,18 @@ function renderHooksPanel() {
         return;
     }
     host.innerHTML = renderMergedHooksShell();
+}
+
+function isHooksPanelActive() {
+    const panel = document.getElementById('hooks-panel');
+    return !panel || panel.style.display !== 'none';
+}
+
+function setActionDisplay(id, visible) {
+    const element = document.getElementById(id);
+    if (element?.style) {
+        element.style.display = visible ? 'inline-flex' : 'none';
+    }
 }
 
 function startEditingGroup(groupId) {
@@ -549,6 +973,20 @@ function cancelEditingGroup(groupId) {
     if (editingGroupId === groupId) {
         editingGroupId = null;
     }
+    reconcileHooksDirtyState();
+}
+
+function reconcileHooksDirtyState() {
+    try {
+        hooksConfigDirty = JSON.stringify(serializeHooksConfig(editorGroups))
+            !== JSON.stringify(serializeHooksConfig(lastSavedEditorGroups));
+    } catch {
+        hooksConfigDirty = true;
+    }
+}
+
+function cloneGroups(groups) {
+    return groups.map(group => cloneGroup(group));
 }
 
 function renderMergedHooksShell() {
@@ -1143,7 +1581,7 @@ function deserializeHooksConfig(config) {
                 continue;
             }
             const handlers = Array.isArray(rawGroup.hooks) ? rawGroup.hooks : [];
-            groups.push({
+            const group = {
                 id: nextGroupId++,
                 isNew: false,
                 name: normalizeString(rawGroup.name),
@@ -1169,6 +1607,10 @@ function deserializeHooksConfig(config) {
                     model: normalizeString(rawHandler?.model),
                     role_id: normalizeString(rawHandler?.role_id),
                 })),
+            };
+            groups.push({
+                ...group,
+                saved_identity: buildGroupSavedIdentity(group),
             });
         }
     }
@@ -1392,6 +1834,7 @@ function createDefaultGroup() {
     return {
         id: nextGroupId++,
         isNew: true,
+        saved_identity: '',
         name: '',
         event_name: 'PreToolUse',
         matcher: '',

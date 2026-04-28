@@ -18,6 +18,12 @@
     padding: 2rem;
     background: var(--settings-overlay-bg);
     backdrop-filter: blur(8px);
+    --settings-action-btn-height: 36px;
+    --settings-action-btn-padding-x: 0.85rem;
+    --settings-action-btn-min-width: 88px;
+    --settings-list-action-height: 30px;
+    --settings-list-action-padding-x: 0.62rem;
+    --settings-list-action-min-width: 84px;
 }
 
 .modal-content {
@@ -298,10 +304,16 @@
 }
 
 .section-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     width: auto;
-    min-width: 0;
-    padding: 0.55rem 0.85rem;
+    height: var(--settings-action-btn-height);
+    min-height: var(--settings-action-btn-height);
+    min-width: var(--settings-action-btn-min-width);
+    padding: 0 var(--settings-action-btn-padding-x);
     font-size: 0.84rem;
+    line-height: 1;
     white-space: nowrap;
 }
 
@@ -655,8 +667,10 @@
 }
 
 .command-row-action {
-    min-height: 30px;
-    padding: 0.38rem 0.6rem;
+    height: var(--settings-action-btn-height);
+    min-height: var(--settings-action-btn-height);
+    min-width: var(--settings-action-btn-min-width);
+    padding: 0 var(--settings-action-btn-padding-x);
 }
 
 .commands-group-summary {
@@ -2963,6 +2977,7 @@
 
 .proxy-inline-test-btn {
     min-width: 128px;
+    height: var(--settings-action-btn-height);
     min-height: 42px;
     width: 100%;
     white-space: nowrap;
@@ -3413,12 +3428,18 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 .secondary-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background-color: var(--settings-secondary-btn-bg);
     color: var(--text-primary);
     border: 1px solid var(--settings-border-default);
     border-radius: 6px;
-    padding: 0.65rem 1rem;
+    padding: 0 var(--settings-action-btn-padding-x);
+    min-height: var(--settings-action-btn-height);
+    min-width: var(--settings-action-btn-min-width);
     font-size: 0.875rem;
+    line-height: 1;
     font-weight: 500;
     cursor: pointer;
     transition: background-color 0.16s ease, border-color 0.16s ease;
@@ -3430,6 +3451,9 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 .settings-inline-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: none;
     border: 1px solid transparent;
     color: var(--text-secondary);
@@ -3452,15 +3476,17 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 }
 
 .settings-list-action {
-    min-height: auto;
+    height: var(--settings-list-action-height);
+    min-height: var(--settings-list-action-height);
+    min-width: var(--settings-list-action-min-width);
     background: var(--button-secondary-bg);
     border-color: color-mix(in srgb, var(--settings-border-default) 82%, transparent);
     color: var(--text-secondary);
     border-radius: 6px;
-    padding: 0.28rem 0.58rem;
+    padding: 0 var(--settings-list-action-padding-x);
     font-size: 0.76rem;
     font-weight: 500;
-    line-height: 1.2;
+    line-height: 1;
 }
 
 .settings-list-action.codeagent-sso-login-btn {

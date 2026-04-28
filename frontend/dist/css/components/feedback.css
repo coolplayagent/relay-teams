@@ -236,8 +236,12 @@
 }
 
 .feedback-action-btn {
-    width: auto;
+    width: 88px;
     min-width: 88px;
+    min-height: 36px;
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
+    white-space: nowrap;
 }
 
 .feedback-tone-success {
@@ -250,4 +254,16 @@
 
 .feedback-tone-danger {
     border-color: color-mix(in srgb, var(--danger) 40%, var(--border-color));
+}
+
+@media (max-width: 480px) {
+    .feedback-dialog-actions {
+        justify-content: stretch;
+    }
+
+    .feedback-action-btn {
+        flex: 1 1 0;
+        width: auto;
+        min-width: 0;
+    }
 }
