@@ -1795,6 +1795,7 @@ Request:
 Behavior:
 - Creates delegated task contracts only.
 - Role binding happens later during dispatch.
+- If a task contract sets `lifecycle.timeout_seconds`, the timeout is progress-sensitive rather than a strict wall clock cap. The dispatch starts with one timeout window, and each persisted model/tool message for the same task and assigned instance extends the deadline by another full window. If no new task message is persisted before the current deadline, the worker is cancelled and `lifecycle.on_timeout` is applied. Task status heartbeats only keep the running row fresh; they do not extend the lifecycle timeout by themselves.
 
 Response:
 

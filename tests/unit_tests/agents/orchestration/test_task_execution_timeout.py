@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from pydantic import JsonValue
+from pydantic_ai.messages import ModelResponse, TextPart
 
 from relay_teams.agents.orchestration import (
     task_execution_service as task_execution_module,
@@ -140,6 +141,51 @@ async def test_execute_marks_task_timeout_and_persists_handoff(
     assert not any(
         event["event_type"] == EventType.TASK_FAILED.value for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_timeout_wait_extends_after_persisted_progress(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, agent_repo, message_repo = _build_service(
+        tmp_path / "task_execution_timeout_progress.db",
+        _SlowProvider(),
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+    instance = agent_repo.get_instance(instance_id)
+
+    async def _worker() -> TaskExecutionResult:
+        await asyncio.sleep(0.04)
+        await message_repo.append_async(
+            session_id="session-1",
+            workspace_id="default",
+            conversation_id=instance.conversation_id,
+            agent_role_id="time",
+            instance_id=instance_id,
+            task_id=task.task_id,
+            trace_id=task.trace_id,
+            messages=[ModelResponse(parts=[TextPart(content="progress")])],
+        )
+        await asyncio.sleep(0.04)
+        return TaskExecutionResult(output="done")
+
+    worker = asyncio.create_task(_worker())
+
+    completed = await service._wait_for_worker_with_progress_timeout_async(
+        task=task,
+        instance_id=instance_id,
+        role_id="time",
+        worker=worker,
+        timeout_seconds=0.06,
+    )
+    result = await worker
+
+    assert completed is True
+    assert result.output == "done"
 
 
 @pytest.mark.asyncio

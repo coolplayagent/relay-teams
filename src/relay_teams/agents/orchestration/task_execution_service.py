@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,8 @@ from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 LOGGER = get_logger(__name__)
 TaskResultT = TypeVar("TaskResultT")
 TIMEOUT_WORKER_CANCEL_GRACE_SECONDS = 5.0
+TASK_TIMEOUT_PROGRESS_POLL_MAX_SECONDS = 1.0
+TASK_TIMEOUT_PROGRESS_POLL_MIN_SECONDS = 0.001
 __all__ = [
     "TASK_MEMORY_RESULT_EXCERPT_CHARS",
     "TaskExecutionService",
@@ -156,10 +159,14 @@ class TaskExecutionService(BaseModel):
             timeout_seconds = task.lifecycle.timeout_seconds
             if timeout_seconds is None:
                 return await worker
-            completed, _ = await asyncio.wait((worker,), timeout=timeout_seconds)
-            if worker in completed:
-                return await worker
-            if worker.done():
+            completed = await self._wait_for_worker_with_progress_timeout_async(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+                worker=worker,
+                timeout_seconds=timeout_seconds,
+            )
+            if completed:
                 return await worker
             timeout_finalizer = asyncio.create_task(
                 self._complete_timeout_after_worker_cancel_async(
@@ -204,6 +211,59 @@ class TaskExecutionService(BaseModel):
                 self.run_control_manager.unregister_instance_task(
                     run_id=task.trace_id,
                     instance_id=instance_id,
+                )
+
+    async def _wait_for_worker_with_progress_timeout_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        worker: asyncio.Task[TaskExecutionResult],
+        timeout_seconds: float,
+    ) -> bool:
+        latest_message_id = await self.message_repo.get_latest_task_message_id_async(
+            task_id=task.task_id,
+            instance_id=instance_id,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        poll_seconds = _timeout_progress_poll_seconds(timeout_seconds)
+        while True:
+            if worker.done():
+                return True
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                return False
+            completed, _ = await asyncio.wait(
+                (worker,),
+                timeout=min(remaining_seconds, poll_seconds),
+            )
+            if worker in completed or worker.done():
+                return True
+            current_message_id = (
+                await self.message_repo.get_latest_task_message_id_async(
+                    task_id=task.task_id,
+                    instance_id=instance_id,
+                )
+            )
+            if current_message_id <= latest_message_id:
+                continue
+            latest_message_id = current_message_id
+            previous_deadline = deadline
+            deadline = max(deadline, time.monotonic() + timeout_seconds)
+            if deadline > previous_deadline:
+                log_event(
+                    LOGGER,
+                    logging.DEBUG,
+                    event="task.execution.timeout_extended",
+                    message="Task timeout extended after persisted progress",
+                    payload={
+                        "task_id": task.task_id,
+                        "instance_id": instance_id,
+                        "role_id": role_id,
+                        "timeout_seconds": timeout_seconds,
+                        "latest_message_id": current_message_id,
+                    },
                 )
 
     async def _execute_inner(
@@ -1743,6 +1803,13 @@ def _timeout_runtime_phase(action: TaskTimeoutAction) -> RunRuntimePhase:
     if action == TaskTimeoutAction.RETRY:
         return RunRuntimePhase.AWAITING_RECOVERY
     return RunRuntimePhase.IDLE
+
+
+def _timeout_progress_poll_seconds(timeout_seconds: float) -> float:
+    return min(
+        TASK_TIMEOUT_PROGRESS_POLL_MAX_SECONDS,
+        max(TASK_TIMEOUT_PROGRESS_POLL_MIN_SECONDS, timeout_seconds / 10.0),
+    )
 
 
 def _timeout_handoff(*, task: TaskEnvelope, timeout_seconds: float) -> TaskHandoff:

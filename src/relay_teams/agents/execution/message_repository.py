@@ -567,6 +567,41 @@ class MessageRepository(SharedSqliteRepository):
             include_hidden_from_context=include_hidden_from_context,
         )
 
+    def get_latest_task_message_id(
+        self,
+        *,
+        task_id: str,
+        instance_id: str | None = None,
+    ) -> int:
+        with self._lock:
+            if instance_id is None:
+                row = self._conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS latest_id "
+                    "FROM messages WHERE task_id=?",
+                    (task_id,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS latest_id "
+                    "FROM messages WHERE task_id=? AND instance_id=?",
+                    (task_id, instance_id),
+                ).fetchone()
+        if row is None:
+            return 0
+        return int(row["latest_id"] or 0)
+
+    async def get_latest_task_message_id_async(
+        self,
+        *,
+        task_id: str,
+        instance_id: str | None = None,
+    ) -> int:
+        return await self._call_sync_async(
+            self.get_latest_task_message_id,
+            task_id=task_id,
+            instance_id=instance_id,
+        )
+
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,
