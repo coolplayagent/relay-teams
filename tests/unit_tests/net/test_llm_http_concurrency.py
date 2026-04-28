@@ -105,6 +105,14 @@ def test_resolve_llm_http_max_concurrency_allows_disable(
     assert resolve_llm_http_max_concurrency() is None
 
 
+def test_resolve_llm_http_max_concurrency_defaults_when_negative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(LLM_HTTP_MAX_CONCURRENCY_ENV, "-1")
+
+    assert resolve_llm_http_max_concurrency() == DEFAULT_LLM_HTTP_MAX_CONCURRENCY
+
+
 def test_resolve_llm_http_max_concurrency_uses_positive_env_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

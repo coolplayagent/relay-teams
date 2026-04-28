@@ -64,8 +64,17 @@ def resolve_llm_http_max_concurrency() -> int | None:
             payload={LLM_HTTP_MAX_CONCURRENCY_ENV: raw_value},
         )
         return DEFAULT_LLM_HTTP_MAX_CONCURRENCY
-    if resolved <= 0:
+    if resolved == 0:
         return None
+    if resolved < 0:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.http_concurrency.invalid_env",
+            message="Ignoring invalid LLM HTTP concurrency limit",
+            payload={LLM_HTTP_MAX_CONCURRENCY_ENV: raw_value},
+        )
+        return DEFAULT_LLM_HTTP_MAX_CONCURRENCY
     return resolved
 
 

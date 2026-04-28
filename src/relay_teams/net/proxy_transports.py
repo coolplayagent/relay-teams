@@ -10,11 +10,15 @@ from relay_teams.env.proxy_env import ProxyEnvConfig, proxy_applies_to_url
 
 
 class AsyncRequestLimitLease(Protocol):
-    def release(self) -> None: ...
+    def release(self) -> None:
+        """Release an acquired request slot."""
+        raise NotImplementedError  # pragma: no cover
 
 
 class AsyncRequestLimiter(Protocol):
-    async def acquire(self, url: str) -> AsyncRequestLimitLease: ...
+    async def acquire(self, url: str) -> AsyncRequestLimitLease:
+        """Acquire a request slot for the target URL."""
+        raise NotImplementedError  # pragma: no cover
 
 
 class SyncProxyRoutingTransport(httpx.BaseTransport):
