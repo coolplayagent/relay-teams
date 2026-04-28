@@ -117,6 +117,12 @@ export function clearTimelineRun(runId) {
     seenEventsByRun.delete(safeRunId);
 }
 
+export function clearTimelineRunEventDedupe(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) return;
+    seenEventsByRun.delete(safeRunId);
+}
+
 export function clearTimelineState(options = {}) {
     streams.clear();
     if (options.preserveEventIds !== true) {
@@ -137,6 +143,7 @@ export function subscribeTimeline(listener) {
 if (typeof globalThis !== 'undefined') {
     globalThis.__relayTeamsMessageTimelineApplyAction = applyTimelineAction;
     globalThis.__relayTeamsMessageTimelineClearRun = clearTimelineRun;
+    globalThis.__relayTeamsMessageTimelineClearRunEventDedupe = clearTimelineRunEventDedupe;
     globalThis.__relayTeamsMessageTimelineClearState = clearTimelineState;
     globalThis.__relayTeamsMessageTimelineGetRunSnapshot = getRunTimelineSnapshot;
 }

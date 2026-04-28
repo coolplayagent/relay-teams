@@ -9,10 +9,12 @@ import {
     isRunPrimaryRoleId,
     state,
 } from '../../core/state.js';
-import { fetchRunTokenUsage } from '../../core/api.js';
+import { fetchRunTokenUsage, fetchSessionRound } from '../../core/api.js';
 import { setRoundPendingApprovals } from '../agentPanel.js';
 import {
     clearAllStreamState,
+    clearRunStreamState,
+    reconcileTerminalRunStreamState,
     getCoordinatorStreamOverlay,
     renderHistoricalMessageList,
 } from '../messageRenderer.js';
@@ -53,6 +55,7 @@ let retryTimelineTimerId = 0;
 const expandedHistorySegments = new Set();
 const roundIntentOpenState = new Map();
 const liveRoundsBySession = new Map();
+const terminalRoundRefreshes = new Map();
 const ROUND_PROGRAMMATIC_SCROLL_LOCK_MS = 450;
 const ROUND_ACTIVE_LOCK_MS = 900;
 const ROUND_HISTORY_LOAD_INTENT_DEBOUNCE_MS = 120;
@@ -62,6 +65,9 @@ const ROUND_SCROLL_ANIMATION_MAX_MS = 650;
 const ROUND_TIMELINE_SCROLL_ANIMATION_MIN_MS = 520;
 const ROUND_TIMELINE_SCROLL_ANIMATION_MAX_MS = 2400;
 const ROUND_SCROLL_BOTTOM_THRESHOLD_PX = 96;
+const TERMINAL_ROUND_REFRESH_DELAYS_MS = [0, 80, 140, 240, 380, 560];
+const TERMINAL_ROUND_REFRESH_FOLLOWUP_DELAY_MS = 900;
+const TERMINAL_ROUND_REFRESH_MAX_FOLLOWUPS = 3;
 let olderRoundLoadFailed = false;
 let olderRoundLoadIntentTimer = 0;
 let olderRoundPagingIntentBound = false;
@@ -102,11 +108,12 @@ export async function loadSessionRounds(sessionId, options = {}) {
     const renderPlan = captureRoundRenderPlan(options);
     const signal = options.signal || null;
     throwIfAborted(signal);
-    const timelinePageResult = fetchTimelineRoundsPage(sessionId, { signal })
+    const priority = String(options.priority || '').trim();
+    const timelinePageResult = fetchTimelineRoundsPage(sessionId, { priority, signal })
         .then(value => ({ status: 'fulfilled', value }))
         .catch(reason => ({ status: 'rejected', reason }));
     try {
-        const page = await fetchInitialRoundsPage(sessionId, { signal });
+        const page = await fetchInitialRoundsPage(sessionId, { priority, signal });
         throwIfAborted(signal);
         if (!isSessionLoadCurrent(sessionId)) {
             return;
@@ -116,6 +123,7 @@ export async function loadSessionRounds(sessionId, options = {}) {
             mergeExisting: renderPlan.preserveLoadedRounds,
         });
         applyTimelineRoundPage(page);
+        reconcileTerminalRoundStreamState(page);
         mergeLiveRoundsForSession(sessionId);
         syncExportedState();
         if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {
@@ -134,6 +142,7 @@ export async function loadSessionRounds(sessionId, options = {}) {
         }
         if (timelineResult.status === 'fulfilled') {
             applyTimelineRoundPage(timelineResult.value);
+            reconcileTerminalRoundStreamState(timelineResult.value);
             mergeLiveRoundsForSession(sessionId);
             syncExportedState();
             renderNavigatorForTimeline({ layoutReason: renderPlan.navigatorLayoutReason });
@@ -156,6 +165,291 @@ export async function loadSessionRounds(sessionId, options = {}) {
     }
 }
 
+function reconcileTerminalRoundStreamState(page) {
+    const rawItems = Array.isArray(page?.items) ? page.items : [];
+    rawItems.forEach(round => {
+        const runId = String(round?.run_id || '').trim();
+        if (!runId || !isTerminalRoundStatus(round?.run_status)) {
+            return;
+        }
+        reconcileTerminalRunStreamState(runId);
+    });
+}
+
+export async function refreshTerminalRoundFromHistory(sessionId, runId, options = {}) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    if (!safeSessionId || !safeRunId) {
+        return null;
+    }
+    const expectedToolCallIds = normalizeExpectedToolCallIds(options.expectedToolCallIds);
+    if (expectedToolCallIds.size === 0) {
+        collectOverlayToolCallIds(safeRunId).forEach(toolCallId => {
+            expectedToolCallIds.add(toolCallId);
+        });
+    }
+    const refreshKey = `${safeSessionId}:${safeRunId}`;
+    const existing = terminalRoundRefreshes.get(refreshKey);
+    if (existing) {
+        expectedToolCallIds.forEach(toolCallId => {
+            existing.expectedToolCallIds.add(toolCallId);
+        });
+        return existing.promise;
+    }
+    const refreshEntry = {
+        expectedToolCallIds,
+        promise: null,
+    };
+    const refreshPromise = runTerminalRoundHistoryRefresh(safeSessionId, safeRunId, {
+        ...options,
+        expectedToolCallIds,
+    })
+        .finally(() => {
+            terminalRoundRefreshes.delete(refreshKey);
+        });
+    refreshEntry.promise = refreshPromise;
+    terminalRoundRefreshes.set(refreshKey, refreshEntry);
+    return refreshPromise;
+}
+
+async function runTerminalRoundHistoryRefresh(sessionId, runId, options = {}) {
+    const expectedToolCallIds = options.expectedToolCallIds instanceof Set
+        ? options.expectedToolCallIds
+        : normalizeExpectedToolCallIds(options.expectedToolCallIds);
+    const refreshFollowups = Number.isFinite(Number(options.refreshFollowups))
+        ? Math.max(0, Math.floor(Number(options.refreshFollowups)))
+        : 0;
+    let fetchedRound = null;
+    let hasCompleteRound = false;
+    for (let attempt = 0; attempt < TERMINAL_ROUND_REFRESH_DELAYS_MS.length; attempt += 1) {
+        const delayMs = TERMINAL_ROUND_REFRESH_DELAYS_MS[attempt];
+        if (delayMs > 0) {
+            await delay(delayMs);
+        }
+        try {
+            fetchedRound = await fetchSessionRound(sessionId, runId, {
+                signal: options.signal,
+            });
+        } catch (error) {
+            if (error?.name === 'AbortError' || options.signal?.aborted) {
+                return null;
+            }
+            if (!isTerminalRoundRefreshRetryableError(error)) {
+                throw error;
+            }
+            continue;
+        }
+        if (isRoundHistoryComplete(fetchedRound, expectedToolCallIds)) {
+            hasCompleteRound = true;
+            break;
+        }
+    }
+    if (!fetchedRound || String(fetchedRound.run_id || '').trim() !== runId) {
+        scheduleTerminalRoundHistoryFollowup(
+            sessionId,
+            runId,
+            options,
+            expectedToolCallIds,
+            refreshFollowups,
+        );
+        return null;
+    }
+    if (!hasCompleteRound) {
+        scheduleTerminalRoundHistoryFollowup(
+            sessionId,
+            runId,
+            options,
+            expectedToolCallIds,
+            refreshFollowups,
+        );
+        return null;
+    }
+    applyTerminalHistoryRound(sessionId, runId, fetchedRound, options);
+    return fetchedRound;
+}
+
+function scheduleTerminalRoundHistoryFollowup(
+    sessionId,
+    runId,
+    options,
+    expectedToolCallIds,
+    refreshFollowups,
+) {
+    if (
+        refreshFollowups >= TERMINAL_ROUND_REFRESH_MAX_FOLLOWUPS
+        || options.signal?.aborted
+        || !isSessionLoadCurrent(sessionId)
+    ) {
+        return;
+    }
+    globalThis.setTimeout?.(() => {
+        void refreshTerminalRoundFromHistory(sessionId, runId, {
+            ...options,
+            expectedToolCallIds: Array.from(expectedToolCallIds),
+            refreshFollowups: refreshFollowups + 1,
+        });
+    }, TERMINAL_ROUND_REFRESH_FOLLOWUP_DELAY_MS);
+}
+
+function isTerminalRoundRefreshRetryableError(error) {
+    const status = Number(error?.status || error?.response?.status || 0);
+    return status === 404 || status === 408 || status === 409 || status === 425
+        || status === 429 || status >= 500;
+}
+
+function applyTerminalHistoryRound(sessionId, runId, round, options = {}) {
+    if (!isSessionLoadCurrent(sessionId)) {
+        return;
+    }
+    clearRunStreamState(runId);
+    forgetLiveRoundForSession(sessionId, runId);
+    const persistedRound = {
+        ...round,
+        __liveOnly: false,
+    };
+    roundsState.currentRounds = upsertRound(
+        roundsState.currentRounds,
+        runId,
+        () => persistedRound,
+        () => persistedRound,
+    );
+    roundsState.timelineRounds = upsertRound(
+        roundsState.timelineRounds,
+        runId,
+        () => persistedRound,
+        () => persistedRound,
+    );
+    if (roundsState.currentRound?.run_id === runId) {
+        roundsState.currentRound = persistedRound;
+    }
+    syncExportedState();
+    if (options.render === false) {
+        return;
+    }
+    if (!shouldPreserveSubagentView(sessionId)) {
+        renderSessionTimeline(roundsState.currentRounds, {
+            scrollPolicy: options.scrollPolicy || 'completion-auto',
+            navigatorLayoutReason: options.navigatorLayoutReason || 'terminal-history',
+        });
+        return;
+    }
+    renderNavigatorForTimeline({
+        layoutReason: options.navigatorLayoutReason || 'terminal-history',
+    });
+}
+
+function collectOverlayToolCallIds(runId) {
+    const overlay = getCoordinatorStreamOverlay(runId);
+    const ids = new Set();
+    if (!overlay || typeof overlay !== 'object') {
+        return ids;
+    }
+    const parts = Array.isArray(overlay.parts) ? overlay.parts : [];
+    parts.forEach(part => {
+        if (String(part?.kind || '').trim() !== 'tool') {
+            return;
+        }
+        const toolCallId = String(part.tool_call_id || part.toolCallId || part.id || '').trim();
+        if (toolCallId) {
+            ids.add(toolCallId);
+        }
+    });
+    return ids;
+}
+
+function normalizeExpectedToolCallIds(value) {
+    const ids = new Set();
+    const rawValues = value instanceof Set
+        ? Array.from(value)
+        : Array.isArray(value)
+            ? value
+            : [];
+    rawValues.forEach(item => {
+        const toolCallId = String(item || '').trim();
+        if (toolCallId) {
+            ids.add(toolCallId);
+        }
+    });
+    return ids;
+}
+
+function isRoundHistoryComplete(round, expectedToolCallIds) {
+    if (!round || typeof round !== 'object') {
+        return false;
+    }
+    if (!isTerminalRoundStatus(round.run_status)) {
+        return false;
+    }
+    if (!expectedToolCallIds || expectedToolCallIds.size === 0) {
+        return true;
+    }
+    const actualToolCallIds = collectRoundToolCallIds(round);
+    for (const expectedId of expectedToolCallIds) {
+        if (!actualToolCallIds.has(expectedId)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function collectRoundToolCallIds(round) {
+    const ids = new Set();
+    const messages = Array.isArray(round?.coordinator_messages)
+        ? round.coordinator_messages
+        : [];
+    messages.forEach(message => {
+        const parts = Array.isArray(message?.parts)
+            ? message.parts
+            : Array.isArray(message?.message?.parts)
+                ? message.message.parts
+                : [];
+        parts.forEach(part => {
+            const kind = String(part?.kind || part?.part_kind || part?.type || '').trim();
+            if (kind !== 'tool-call') {
+                return;
+            }
+            const toolCallId = String(part.tool_call_id || part.toolCallId || part.id || '').trim();
+            if (toolCallId) {
+                ids.add(toolCallId);
+            }
+        });
+    });
+    return ids;
+}
+
+function forgetLiveRoundForSession(sessionId, runId) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    if (!safeSessionId || !safeRunId) {
+        return;
+    }
+    const sessionRounds = liveRoundsBySession.get(safeSessionId);
+    if (!sessionRounds) {
+        return;
+    }
+    sessionRounds.delete(safeRunId);
+    if (sessionRounds.size === 0) {
+        liveRoundsBySession.delete(safeSessionId);
+    }
+}
+
+function delay(ms) {
+    return new Promise(resolve => {
+        setTimeout(resolve, Math.max(0, ms));
+    });
+}
+
+function isTerminalRoundStatus(status) {
+    return [
+        'completed',
+        'failed',
+        'stopped',
+        'cancelled',
+        'canceled',
+        'terminal',
+    ].includes(String(status || '').trim().toLowerCase());
+}
+
 function throwIfAborted(signal) {
     if (signal?.aborted) {
         throw new DOMException('The operation was aborted.', 'AbortError');
@@ -171,6 +465,7 @@ function isSessionLoadCurrent(sessionId) {
 export function createLiveRound(runId, intentText, intentParts = null) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    clearPendingRunStartPlaceholder();
     const normalizedIntent = normalizeRoundIntentText(intentText);
     const normalizedIntentParts = normalizeRoundIntentParts(intentParts);
     const createdAt = new Date().toISOString();
@@ -231,6 +526,44 @@ export function createLiveRound(runId, intentText, intentParts = null) {
         lockProgrammaticRoundScroll(650);
         void scrollRoundIntoViewWithContext(section);
     }
+}
+
+export function showPendingRunStartPlaceholder(sessionId, intentText, intentParts = null) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || safeSessionId !== String(state.currentSessionId || '').trim()) {
+        return;
+    }
+    const container = els.chatMessages;
+    if (!container) {
+        return;
+    }
+    const normalizedIntent = normalizeRoundIntentText(intentText)
+        || buildRoundIntentPreviewText(intentParts)
+        || '';
+    let placeholder = container.querySelector?.('.session-run-start-placeholder') || null;
+    if (!placeholder) {
+        placeholder = document.createElement('section');
+        placeholder.className = 'session-run-start-placeholder';
+        placeholder.setAttribute('aria-live', 'polite');
+        placeholder.innerHTML = `
+            <div class="session-run-start-spinner" aria-hidden="true"></div>
+            <div class="session-run-start-body">
+                <div class="session-run-start-title">${esc(t('session.starting'))}</div>
+                <div class="session-run-start-intent"></div>
+            </div>
+        `;
+        container.appendChild(placeholder);
+    }
+    const intentEl = placeholder.querySelector?.('.session-run-start-intent') || null;
+    if (intentEl) {
+        intentEl.textContent = normalizedIntent;
+        intentEl.hidden = !normalizedIntent;
+    }
+    container.scrollTop = container.scrollHeight;
+}
+
+export function clearPendingRunStartPlaceholder() {
+    els.chatMessages?.querySelector?.('.session-run-start-placeholder')?.remove?.();
 }
 
 function shouldPreserveSubagentView(sessionId) {

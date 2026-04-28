@@ -594,7 +594,16 @@ function syncDraftMentionHintVisibility() {
         return;
     }
     const hasText = String(els.promptInput?.value || '').trim().length > 0;
-    hint.classList.toggle('is-hidden', hasText);
+    const hasAttachments = Boolean(
+        els.promptAttachments
+        && els.promptAttachments.hidden !== true
+        && Number(els.promptAttachments.children?.length || 0) > 0,
+    );
+    hint.classList.toggle('is-hidden', hasText || hasAttachments);
+}
+
+export function syncNewSessionDraftMentionHintVisibility() {
+    syncDraftMentionHintVisibility();
 }
 
 function renderDraftComposerActionRowContent() {

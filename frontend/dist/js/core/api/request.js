@@ -5,21 +5,27 @@
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const BACKEND_STATUS_HINT_EVENT = 'agent-teams-backend-status-hint';
+const BACKEND_STATUS_HINT_REPEAT_MS = 30000;
 const COALESCED_CACHE = new Map();
 const COALESCED_IN_FLIGHT = new Map();
 const COALESCED_GENERATIONS = new Map();
 const REQUEST_LIMITS = {
+    critical: 4,
     normal: 6,
     heavy: 2,
 };
 const REQUEST_ACTIVE_COUNTS = {
+    critical: 0,
     normal: 0,
     heavy: 0,
 };
 const REQUEST_QUEUES = {
+    critical: [],
     normal: [],
     heavy: [],
 };
+let lastBackendStatusHint = '';
+let lastBackendStatusHintAt = 0;
 
 export async function requestJson(url, options, errorMessage) {
     const method = String(options?.method || 'GET').toUpperCase();
@@ -80,6 +86,15 @@ function emitBackendStatusHint(status) {
     if (!safeStatus) {
         return;
     }
+    const now = Date.now();
+    if (
+        safeStatus === lastBackendStatusHint
+        && now - lastBackendStatusHintAt < BACKEND_STATUS_HINT_REPEAT_MS
+    ) {
+        return;
+    }
+    lastBackendStatusHint = safeStatus;
+    lastBackendStatusHintAt = now;
     const target = typeof window !== 'undefined' && typeof window.dispatchEvent === 'function'
         ? window
         : typeof globalThis.dispatchEvent === 'function'
@@ -111,10 +126,11 @@ export function requestJsonManaged(
     url,
     options,
     errorMessage,
-    { ttlMs = 600, lane = 'normal' } = {},
+    { ttlMs = 600, lane = 'normal', priority = 'normal' } = {},
 ) {
     const requestKey = String(key || url || '').trim();
-    const safeLane = lane === 'heavy' ? 'heavy' : 'normal';
+    const safeLane = normalizeRequestLane(lane);
+    const highPriority = String(priority || '').trim() === 'high';
     const signal = options?.signal || null;
     const method = String(options?.method || 'GET').toUpperCase();
     if (!requestKey || method !== 'GET') {
@@ -160,7 +176,7 @@ export function requestJsonManaged(
             throw buildAbortError();
         }
         return requestJson(url, effectiveOptions, errorMessage);
-    }, entry)
+    }, entry, { priority: highPriority ? 'high' : 'normal' })
         .then(value => {
             if (
                 COALESCED_IN_FLIGHT.get(requestKey) === entry
@@ -202,6 +218,14 @@ export function invalidateManagedRequests(prefix = '') {
     }
 }
 
+function normalizeRequestLane(lane) {
+    const safeLane = String(lane || '').trim();
+    if (Object.prototype.hasOwnProperty.call(REQUEST_LIMITS, safeLane)) {
+        return safeLane;
+    }
+    return 'normal';
+}
+
 function pruneExpiredManagedCache(now = Date.now()) {
     for (const [key, cached] of COALESCED_CACHE.entries()) {
         if (!cached || cached.expiresAt <= now) {
@@ -230,7 +254,7 @@ function pruneManagedRequestGeneration(key) {
     COALESCED_GENERATIONS.delete(key);
 }
 
-function runLimitedRequest(lane, operation, entry = null) {
+function runLimitedRequest(lane, operation, entry = null, options = {}) {
     if (REQUEST_ACTIVE_COUNTS[lane] < REQUEST_LIMITS[lane]) {
         return startLimitedRequest(lane, operation);
     }
@@ -253,7 +277,11 @@ function runLimitedRequest(lane, operation, entry = null) {
         if (entry) {
             entry.queueItem = queueItem;
         }
-        REQUEST_QUEUES[lane].push(queueItem);
+        if (String(options.priority || '').trim() === 'high') {
+            REQUEST_QUEUES[lane].unshift(queueItem);
+        } else {
+            REQUEST_QUEUES[lane].push(queueItem);
+        }
     });
 }
 

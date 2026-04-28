@@ -24,6 +24,7 @@ import { state } from '../core/state.js';
 import {
     closeNormalModeSubagentStream,
     detachActiveStreamForSessionSwitch,
+    detachNormalModeSubagentStreamsForSessionSwitch,
 } from '../core/stream.js';
 import { detachForegroundSubmission } from '../core/submission.js';
 import { clearSessionRecovery, stopSessionContinuity } from '../app/recovery.js';
@@ -47,6 +48,7 @@ import {
 import {
     buildSubagentSessionLabel,
     getActiveSubagentSession,
+    ensureSessionSubagents,
     removeSessionSubagent,
     getSessionSubagentSessions,
     hasLoadedSessionSubagents,
@@ -59,6 +61,14 @@ import {
     openSessionSearch,
     setSessionSearchEntries,
 } from './sessionSearch.js';
+import {
+    getSidebarDataSnapshot,
+    hasSidebarDataSnapshot,
+    mergeOptimisticSessions,
+    rememberSidebarDataSnapshot,
+    updateOptimisticSessionTitle,
+    upsertOptimisticSession,
+} from './sessionSidebarStore.js';
 import { syncSessionDebugBadge } from './sessionDebugBadge.js';
 
 const DEFAULT_VISIBLE_SESSION_COUNT = 10;
@@ -87,19 +97,19 @@ let sessionSearchConfigured = false;
 let pendingSessionAnimation = null;
 let pendingSessionVisibilityAnimation = null;
 let loadProjectsRequestId = 0;
+let loadProjectsController = null;
 let lastProjectsRenderSignature = '';
 let sidebarSelectionToken = 0;
 let sessionAnimationTokenSeed = 0;
 const sessionAnimationTokens = new WeakMap();
-let projectBodyAnimationTokenSeed = 0;
 const projectBodyAnimationTokens = new WeakMap();
-let subagentListAnimationTokenSeed = 0;
 const subagentListAnimationTokens = new WeakMap();
+let sidebarCollapsibleAnimationTokenSeed = 0;
+let subagentListVisualSyncToken = 0;
 const SIDEBAR_INTERACTION_REFRESH_DELAY_MS = 240;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
-const SESSION_ANIMATION_ACTIVATE_MS = 140;
 const SESSION_VISIBILITY_ANIMATION_MS = 160;
 const PROJECT_BODY_ANIMATION_MS = 160;
 const SUBAGENT_LIST_ANIMATION_MS = 160;
@@ -140,6 +150,7 @@ function clearActiveSessionView() {
     detachActiveStreamForSessionSwitch({ focusPrompt: false });
     if (sessionId) {
         stopSessionContinuity(sessionId);
+        detachNormalModeSubagentStreamsForSessionSwitch(sessionId);
     }
     state.currentSessionId = null;
     syncSessionDebugBadge('');
@@ -154,17 +165,69 @@ function clearActiveSessionView() {
     }
 }
 
+function cancelPendingSessionSelection(reason) {
+    nextSidebarSelectionToken();
+    if (
+        typeof CustomEvent === 'function'
+        && typeof globalThis.document?.dispatchEvent === 'function'
+    ) {
+        globalThis.document.dispatchEvent(new CustomEvent('agent-teams-session-selection-cancelled', {
+            detail: { reason },
+        }));
+    }
+}
+
 function openNewSessionDraftFromSidebar(workspaceId) {
+    cancelPendingSessionSelection('new-session-draft');
     if (state.currentSessionId || state.pendingNewSessionActive || state.activeEventSource) {
         clearActiveSessionView();
     }
     if (state.currentMainView === 'project' || state.currentFeatureViewId) {
         hideProjectView();
     }
-    document.querySelectorAll('.home-feature-item.is-active').forEach(item => {
-        item.classList.remove('is-active');
-    });
+    clearFeatureNavigationState();
+    clearProjectNavigationState();
     openNewSessionDraft(workspaceId);
+}
+
+function clearFeatureNavigationState() {
+    syncFeatureNavigationState('');
+}
+
+function syncFeatureNavigationState(featureId) {
+    const activeFeatureId = String(featureId || '').trim();
+    const documentRef = globalThis.document;
+    const featureItems = Array.from(
+        els.projectsList?.querySelectorAll?.('.home-feature-item')
+        || documentRef?.querySelectorAll?.('.home-feature-item')
+        || [],
+    );
+    for (const item of featureItems) {
+        const itemFeatureId = String(item?.getAttribute?.('data-feature-id') || '').trim();
+        const active = !!activeFeatureId && itemFeatureId === activeFeatureId;
+        setElementClassFlag(item, 'is-active', active);
+        item.setAttribute?.('aria-current', active ? 'page' : 'false');
+    }
+}
+
+function clearProjectNavigationState() {
+    if (!els.projectsList?.querySelectorAll) {
+        return;
+    }
+    for (const item of Array.from(els.projectsList.querySelectorAll('.project-title-btn'))) {
+        setElementClassFlag(item, 'is-active', false);
+        item.setAttribute?.('aria-current', 'false');
+    }
+}
+
+function clearSessionNavigationState() {
+    if (!els.projectsList?.querySelectorAll) {
+        return;
+    }
+    clearSessionActivationAnimations();
+    for (const item of Array.from(els.projectsList.querySelectorAll('.session-item'))) {
+        setElementClassFlag(item, 'active', false);
+    }
 }
 
 function escapeHtml(value) {
@@ -404,11 +467,7 @@ function renderSubagentChildren(session) {
         return '';
     }
     const expanded = isSubagentSessionListExpanded(sessionId);
-    const listWasExpanded = renderedSubagentListExpandedState.has(sessionId)
-        ? renderedSubagentListExpandedState.get(sessionId)
-        : expanded;
-    const hasChildren = hasLoadedSessionSubagents(sessionId)
-        && getSessionSubagentSessions(sessionId).length > 0;
+    const listWasExpanded = expanded;
     const loading = isSubagentSessionListLoading(sessionId);
     const children = getSessionSubagentSessions(sessionId);
     const listClass = listWasExpanded ? 'is-expanded' : 'is-collapsed';
@@ -421,98 +480,139 @@ function renderSubagentChildren(session) {
                 data-session-id="${escapeHtml(sessionId)}"
                 aria-hidden="${expanded ? 'false' : 'true'}"
             >
-                <div class="session-subagent-empty">${escapeHtml(t('sidebar.subagent_sessions_loading'))}</div>
+                ${renderSubagentListContents(sessionId, listItemTabIndex)}
             </div>
         `;
     }
-    if (!hasChildren) {
+    if (!hasLoadedSessionSubagents(sessionId) || children.length === 0) {
         return '';
     }
-    const activeSubagent = getActiveSubagentSession();
     return `
         <div
             class="session-subagent-list ${listClass}"
             data-session-id="${escapeHtml(sessionId)}"
             aria-hidden="${expanded ? 'false' : 'true'}"
         >
-            ${children.map(child => {
-                const active = !!(
-                    activeSubagent
-                    && activeSubagent.sessionId === sessionId
-                    && activeSubagent.instanceId === child.instanceId
-                );
-                const childLabel = buildSubagentSessionLabel(child);
-                return `
-                    <div
-                        class="session-item session-subagent-item${active ? ' active' : ''}"
-                        tabindex="${listItemTabIndex}"
-                        role="button"
-                        data-session-id="${escapeHtml(sessionId)}"
-                        data-subagent-instance-id="${escapeHtml(child.instanceId)}"
-                        data-subagent-role-id="${escapeHtml(child.roleId)}"
-                        data-subagent-run-id="${escapeHtml(child.runId)}"
-                        data-subagent-title="${escapeHtml(child.title || '')}"
-                    >
-                        <span class="session-main">
-                            <span class="session-id">
-                                <span class="session-label-text" title="${escapeHtml(childLabel)}">${escapeHtml(childLabel)}</span>
-                            </span>
-                        </span>
-                        <span class="session-meta">
-                            <span class="session-time">${escapeHtml(formatRelativeTime(child.updatedAt || child.createdAt || ''))}</span>
-                            <span class="session-actions">
-                                <button
-                                    class="session-delete-btn session-subagent-delete-btn"
-                                    type="button"
-                                    tabindex="${listItemTabIndex}"
-                                    data-session-id="${escapeHtml(sessionId)}"
-                                    data-subagent-instance-id="${escapeHtml(child.instanceId)}"
-                                    data-subagent-run-id="${escapeHtml(child.runId)}"
-                                    data-subagent-label="${escapeHtml(childLabel)}"
-                                    title="${escapeHtml(t('sidebar.delete_subagent'))}"
-                                    aria-label="${escapeHtml(t('sidebar.delete_subagent'))}"
-                                >
-                                    <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
-                                        <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                                    </svg>
-                                </button>
-                            </span>
-                        </span>
-                    </div>
-                `;
-            }).join('')}
+            ${renderSubagentListContents(sessionId, listItemTabIndex)}
         </div>
     `;
 }
 
-function syncSubagentSessionListVisualState() {
+function renderSubagentListContents(sessionId, listItemTabIndex = '0') {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return '';
+    }
+    const children = getSessionSubagentSessions(safeSessionId);
+    if (children.length === 0) {
+        const label = isSubagentSessionListLoading(safeSessionId)
+            ? t('sidebar.subagent_sessions_loading')
+            : t('sidebar.no_sessions');
+        return `<div class="session-subagent-empty">${escapeHtml(label)}</div>`;
+    }
+    const activeSubagent = getActiveSubagentSession();
+    return children.map(child => {
+        const active = !!(
+            activeSubagent
+            && activeSubagent.sessionId === safeSessionId
+            && activeSubagent.instanceId === child.instanceId
+        );
+        const childLabel = buildSubagentSessionLabel(child);
+        return `
+            <div
+                class="session-item session-subagent-item${active ? ' active' : ''}"
+                tabindex="${listItemTabIndex}"
+                role="button"
+                data-session-id="${escapeHtml(safeSessionId)}"
+                data-subagent-instance-id="${escapeHtml(child.instanceId)}"
+                data-subagent-role-id="${escapeHtml(child.roleId)}"
+                data-subagent-run-id="${escapeHtml(child.runId)}"
+                data-subagent-title="${escapeHtml(child.title || '')}"
+            >
+                <span class="session-main">
+                    <span class="session-id">
+                        <span class="session-label-text" title="${escapeHtml(childLabel)}">${escapeHtml(childLabel)}</span>
+                    </span>
+                </span>
+                <span class="session-meta">
+                    <span class="session-time">${escapeHtml(formatRelativeTime(child.updatedAt || child.createdAt || ''))}</span>
+                    <span class="session-actions">
+                        <button
+                            class="session-delete-btn session-subagent-delete-btn"
+                            type="button"
+                            tabindex="${listItemTabIndex}"
+                            data-session-id="${escapeHtml(safeSessionId)}"
+                            data-subagent-instance-id="${escapeHtml(child.instanceId)}"
+                            data-subagent-run-id="${escapeHtml(child.runId)}"
+                            data-subagent-label="${escapeHtml(childLabel)}"
+                            title="${escapeHtml(t('sidebar.delete_subagent'))}"
+                            aria-label="${escapeHtml(t('sidebar.delete_subagent'))}"
+                        >
+                            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                                <path d="M5 7h14M9 7V5.8A1.8 1.8 0 0 1 10.8 4h2.4A1.8 1.8 0 0 1 15 5.8V7m-8 0v10.2A1.8 1.8 0 0 0 8.8 19h6.4A1.8 1.8 0 0 0 17 17.2V7M10 10.2v5.6M14 10.2v5.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </span>
+                </span>
+            </div>
+        `;
+    }).join('');
+}
+
+function syncSubagentSessionListVisualState({
+    animateSessionId = '',
+    ensureListSessionId = '',
+    refreshSessionId = '',
+} = {}) {
     if (!els.projectsList || typeof els.projectsList.querySelectorAll !== 'function') {
         return;
     }
+    const safeEnsureSessionId = String(ensureListSessionId || '').trim();
+    const safeRefreshSessionId = String(refreshSessionId || safeEnsureSessionId || '').trim();
+    if (safeEnsureSessionId || safeRefreshSessionId) {
+        syncSubagentToggleVisualState(safeEnsureSessionId || safeRefreshSessionId);
+    }
+    if (safeEnsureSessionId) {
+        ensureRenderedSubagentList(safeEnsureSessionId);
+    }
     const nextRenderedSessionIds = new Set();
-    const lists = Array.from(els.projectsList.querySelectorAll('.session-subagent-list[data-session-id]'));
+    const lists = Array.from(els.projectsList.querySelectorAll('.session-subagent-list'));
     if (!lists.length) {
         return;
     }
+    const visualSyncToken = ++subagentListVisualSyncToken;
 
     const applyState = () => {
+        if (visualSyncToken !== subagentListVisualSyncToken) {
+            return;
+        }
         for (const list of lists) {
             const sessionId = String(list?.getAttribute?.('data-session-id') || '').trim();
             if (!sessionId) {
                 continue;
             }
+            if (safeRefreshSessionId && sessionId === safeRefreshSessionId) {
+                const listItemTabIndex = isSubagentSessionListExpanded(sessionId) ? '0' : '-1';
+                list.innerHTML = renderSubagentListContents(sessionId, listItemTabIndex);
+                bindSubagentSessionItems(list);
+                bindSubagentDeleteButtons(list);
+            }
             nextRenderedSessionIds.add(sessionId);
             const expanded = isSubagentSessionListExpanded(sessionId);
-            setSubagentListExpandedState(list, expanded);
+            setSubagentListExpandedState(list, expanded, {
+                animate: String(animateSessionId || '').trim() === sessionId,
+            });
             list.setAttribute('aria-hidden', expanded ? 'false' : 'true');
             const shouldExpand = !!expanded;
-            list.style.pointerEvents = expanded ? '' : 'none';
+            if (list.style) {
+                list.style.pointerEvents = expanded ? '' : 'none';
+            }
             const listItemTabIndex = shouldExpand ? '0' : '-1';
-            for (const item of Array.from(list.querySelectorAll('.session-subagent-item'))) {
+            for (const item of Array.from(list.querySelectorAll?.('.session-subagent-item') || [])) {
                 item.setAttribute('tabindex', listItemTabIndex);
             }
             for (const deleteButton of Array.from(
-                list.querySelectorAll('.session-subagent-delete-btn'),
+                list.querySelectorAll?.('.session-subagent-delete-btn') || [],
             )) {
                 deleteButton.setAttribute('tabindex', listItemTabIndex);
             }
@@ -530,6 +630,63 @@ function syncSubagentSessionListVisualState() {
         return;
     }
     applyState();
+}
+
+function syncSubagentToggleVisualState(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !els.projectsList?.querySelectorAll) {
+        return;
+    }
+    const expanded = isSubagentSessionListExpanded(safeSessionId);
+    for (const toggle of Array.from(els.projectsList.querySelectorAll('.session-subagents-toggle'))) {
+        if (String(toggle?.getAttribute?.('data-session-id') || '').trim() !== safeSessionId) {
+            continue;
+        }
+        toggle.setAttribute?.('aria-expanded', expanded ? 'true' : 'false');
+        const icon = toggle.querySelector?.('.session-subagents-toggle-icon') || null;
+        if (icon) {
+            icon.innerHTML = expanded ? '&#9662;' : '&#9656;';
+        }
+    }
+}
+
+function ensureRenderedSubagentList(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    const documentRef = globalThis.document;
+    if (!safeSessionId || !els.projectsList?.querySelectorAll || !documentRef?.createElement) {
+        return null;
+    }
+    const existing = Array.from(els.projectsList.querySelectorAll('.session-subagent-list')).find(
+        list => String(list?.getAttribute?.('data-session-id') || '').trim() === safeSessionId,
+    );
+    if (existing) {
+        return existing;
+    }
+    const parentSessionItem = findMainSessionItem(safeSessionId);
+    const entry = parentSessionItem?.closest?.('.session-entry') || parentSessionItem?.parentElement || null;
+    if (!entry?.appendChild) {
+        return null;
+    }
+    const list = documentRef.createElement('div');
+    list.className = 'session-subagent-list is-collapsed';
+    list.setAttribute('data-session-id', safeSessionId);
+    list.setAttribute('aria-hidden', 'true');
+    list.style.pointerEvents = 'none';
+    setSubagentListHeight(list, '0px');
+    list.innerHTML = renderSubagentListContents(safeSessionId, '-1');
+    entry.appendChild(list);
+    return list;
+}
+
+function findMainSessionItem(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !els.projectsList?.querySelectorAll) {
+        return null;
+    }
+    return Array.from(els.projectsList.querySelectorAll('.session-item')).find(item => (
+        !item.classList?.contains?.('session-subagent-item')
+        && String(item?.getAttribute?.('data-session-id') || '').trim() === safeSessionId
+    )) || null;
 }
 
 function resolveStableSubagentCount({ loaded, loading, children, summaryCount, cachedCount }) {
@@ -552,47 +709,39 @@ function resolveStableSubagentCount({ loaded, loading, children, summaryCount, c
     return cachedCount;
 }
 
-function setSubagentListExpandedState(list, expanded) {
+function setSubagentListHeight(list, value) {
+    if (!list?.style) {
+        return;
+    }
+    if (typeof list.style.setProperty === 'function') {
+        list.style.setProperty('--session-subagent-list-height', value);
+        return;
+    }
+    list.style['--session-subagent-list-height'] = value;
+}
+
+function clearSubagentListHeight(list) {
+    if (!list?.style) {
+        return;
+    }
+    if (typeof list.style.removeProperty === 'function') {
+        list.style.removeProperty('--session-subagent-list-height');
+        return;
+    }
+    list.style['--session-subagent-list-height'] = '';
+}
+
+function setSubagentListExpandedState(list, expanded, { animate = false } = {}) {
     if (!list?.classList) {
         return;
     }
-    const shouldExpand = expanded === true;
-    const alreadyExpanded = list.classList.contains('is-expanded');
-    const alreadyCollapsed = list.classList.contains('is-collapsed');
-    if (
-        (shouldExpand && alreadyExpanded)
-        || (!shouldExpand && alreadyCollapsed)
-    ) {
-        list.classList.toggle('is-expanded', shouldExpand);
-        list.classList.toggle('is-collapsed', !shouldExpand);
-        list.style.setProperty(
-            '--session-subagent-list-height',
-            shouldExpand ? `${list.scrollHeight}px` : '0px',
-        );
-        return;
-    }
-    const animationToken = ++subagentListAnimationTokenSeed;
-    subagentListAnimationTokens.set(list, animationToken);
-    const currentHeight = measureElementHeight(list);
-    list.classList.add('is-animating');
-    list.style.setProperty('--session-subagent-list-height', `${currentHeight}px`);
-    void list.offsetHeight;
-    list.classList.toggle('is-expanded', shouldExpand);
-    list.classList.toggle('is-collapsed', !shouldExpand);
-    list.style.setProperty(
-        '--session-subagent-list-height',
-        shouldExpand ? `${list.scrollHeight}px` : '0px',
-    );
-    globalThis.setTimeout(() => {
-        if (subagentListAnimationTokens.get(list) !== animationToken) {
-            return;
-        }
-        if (shouldExpand) {
-            list.style.setProperty('--session-subagent-list-height', `${list.scrollHeight}px`);
-        }
-        list.classList.remove('is-animating');
-        subagentListAnimationTokens.delete(list);
-    }, SUBAGENT_LIST_ANIMATION_MS);
+    setSidebarCollapsibleExpandedState(list, expanded, {
+        animate,
+        animationTokens: subagentListAnimationTokens,
+        clearExpandedHeight: clearSubagentListHeight,
+        durationMs: SUBAGENT_LIST_ANIMATION_MS,
+        setHeight: setSubagentListHeight,
+    });
 }
 
 function timestampValue(value) {
@@ -887,6 +1036,108 @@ function renderNodeSignature(node) {
     return `${className}::${serializedContent}::${childSignature}`;
 }
 
+function buildProjectsRenderSignature(groups, automationProjects) {
+    const activeSubagent = getActiveSubagentSession();
+    const visibleState = groups.map(group => {
+        const groupKeyValue = String(group?.key || '').trim();
+        const sessionsExpanded = expandedProjectSessionIds.has(groupKeyValue);
+        const visibleSessions = visibleSessionsForGroup(group, {
+            sessionsExpanded,
+        });
+        return {
+            key: groupKeyValue,
+            id: String(group?.id || '').trim(),
+            kind: String(group?.kind || '').trim(),
+            label: formatProjectLabel(group),
+            path: String(group?.pathHint || group?.workspace?.root_path || '').trim(),
+            expanded: expandedProjectIds.has(groupKeyValue),
+            sessionsExpanded,
+            menuOpen: openProjectMenuId === groupKeyValue,
+            projectActive: (
+                state.currentMainView === 'project'
+                && state.currentProjectViewWorkspaceId === group?.id
+            ),
+            totalSessions: Array.isArray(group?.sessions) ? group.sessions.length : 0,
+            visibleSessions: visibleSessions.map(session => {
+                const sessionId = String(session?.session_id || '').trim();
+                return {
+                    id: sessionId,
+                    workspaceId: String(session?.workspace_id || '').trim(),
+                    label: formatSessionLabel(session),
+                    updatedAt: String(session?.updated_at || '').trim(),
+                    mode: String(session?.session_mode || '').trim(),
+                    source: getSessionSourceClassName(session),
+                    indicator: getSessionRunIndicatorType(session),
+                    active: isCurrentMainSession(session),
+                    subagentCount: resolveSignatureSubagentCount(session),
+                    subagentsExpanded: isSubagentSessionListExpanded(sessionId),
+                    subagentChildren: getSignatureSubagentChildren(sessionId),
+                };
+            }),
+        };
+    });
+    return JSON.stringify({
+        locale: typeof document !== 'undefined' ? document.documentElement?.lang || '' : '',
+        sortMode: projectSortMode,
+        activeSessionId: String(state.currentSessionId || '').trim(),
+        activeFeatureId: getActiveFeatureId(),
+        activeSubagentInstanceId: String(activeSubagent?.instanceId || '').trim(),
+        openProjectMenuId,
+        pendingAnimation: pendingSessionAnimation,
+        pendingVisibilityAnimation: pendingSessionVisibilityAnimation,
+        automationBindings: buildAutomationBindingSignature(automationProjects),
+        groups: visibleState,
+    });
+}
+
+function buildAutomationBindingSignature(automationProjects) {
+    return (Array.isArray(automationProjects) ? automationProjects : [])
+        .map(project => {
+            const binding = project?.delivery_binding && typeof project.delivery_binding === 'object'
+                ? project.delivery_binding
+                : null;
+            return [
+                String(project?.automation_project_id || project?.id || '').trim(),
+                String(binding?.session_id || '').trim(),
+            ].join(':');
+        })
+        .sort();
+}
+
+function resolveSignatureSubagentCount(session) {
+    const sessionId = String(session?.session_id || '').trim();
+    if (!sessionId || !shouldRenderSubagentChildren(session)) {
+        return 0;
+    }
+    const children = getSessionSubagentSessions(sessionId);
+    const loaded = hasLoadedSessionSubagents(sessionId);
+    const loading = isSubagentSessionListLoading(sessionId);
+    const summaryCount = normalizeSubagentSessionCount(session?.subagent_session_count);
+    const cachedCount = normalSubagentCountBySessionId.get(sessionId) || 0;
+    return resolveStableSubagentCount({
+        loaded,
+        loading,
+        children,
+        summaryCount,
+        cachedCount,
+    });
+}
+
+function getSignatureSubagentChildren(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !isSubagentSessionListExpanded(safeSessionId)) {
+        return [];
+    }
+    return getSessionSubagentSessions(safeSessionId).map(child => ({
+        instanceId: String(child?.instanceId || '').trim(),
+        roleId: String(child?.roleId || '').trim(),
+        runId: String(child?.runId || '').trim(),
+        title: String(child?.title || '').trim(),
+        status: String(child?.status || '').trim(),
+        updatedAt: String(child?.updatedAt || child?.createdAt || '').trim(),
+    }));
+}
+
 function getActiveFeatureId() {
     return String(state.currentFeatureViewId || '').trim();
 }
@@ -963,10 +1214,15 @@ function renderFeatureNav() {
 }
 
 async function handlePrimaryNewSessionClick() {
+    cancelPendingSessionSelection('new-session-draft');
+    const draftSelectionToken = sidebarSelectionToken;
+    const currentWorkspaceId = String(state.currentWorkspaceId || '').trim();
     try {
         const fetchedWorkspaces = await fetchWorkspaces();
+        if (!isLatestSidebarSelection(draftSelectionToken)) {
+            return;
+        }
         const workspaces = Array.isArray(fetchedWorkspaces) ? fetchedWorkspaces : [];
-        const currentWorkspaceId = String(state.currentWorkspaceId || '').trim();
         const matchingWorkspace = workspaces.find(workspace => String(workspace?.workspace_id || '').trim() === currentWorkspaceId) || null;
         if (matchingWorkspace) {
             openNewSessionDraftFromSidebar(currentWorkspaceId);
@@ -983,14 +1239,31 @@ async function handlePrimaryNewSessionClick() {
 }
 
 async function openFeatureView(featureId) {
-    if (featureId === FEATURE_IDS.skills) {
+    const safeFeatureId = String(featureId || '').trim();
+    if (!safeFeatureId) {
+        return;
+    }
+    cancelPendingSessionSelection(`feature:${safeFeatureId}`);
+    clearPendingSidebarAnimations();
+    if (state.currentSessionId || state.pendingNewSessionActive || state.activeEventSource) {
+        clearActiveSessionView();
+    }
+    state.activeSubagentSession = null;
+    state.currentFeatureViewId = safeFeatureId;
+    syncSessionDebugBadge('');
+    clearSessionNavigationState();
+    clearProjectNavigationState();
+    syncFeatureNavigationState(safeFeatureId);
+    if (safeFeatureId === FEATURE_IDS.skills) {
         await openSkillsFeatureView();
-    } else if (featureId === FEATURE_IDS.automation) {
+    } else if (safeFeatureId === FEATURE_IDS.automation) {
         await openAutomationHomeView();
-    } else if (featureId === FEATURE_IDS.gateway) {
+    } else if (safeFeatureId === FEATURE_IDS.gateway) {
         await openImFeatureView();
     }
-    await loadProjects();
+    if (state.currentFeatureViewId === safeFeatureId) {
+        syncFeatureNavigationState(safeFeatureId);
+    }
 }
 
 function isNativeDirectoryPickerUnavailable(error) {
@@ -1044,7 +1317,7 @@ async function handleSessionSearchSelection(result) {
         expandedProjectIds.add(groupKeyValue);
         expandedProjectSessionIds.add(groupKeyValue);
     }
-    await loadProjects();
+    void loadProjects();
     if (!isLatestSidebarSelection(selectionToken)) {
         return;
     }
@@ -1105,6 +1378,11 @@ function consumePendingSessionVisibilityAnimation(groupKeyValue) {
     return pending;
 }
 
+function clearPendingSidebarAnimations() {
+    pendingSessionAnimation = null;
+    pendingSessionVisibilityAnimation = null;
+}
+
 function findSessionItem(sessionId) {
     const safeSessionId = String(sessionId || '').trim();
     if (!safeSessionId || !els.projectsList) return null;
@@ -1142,15 +1420,10 @@ function clearSessionUnreadIndicator(sessionId, preferredItem = null) {
         if (item.classList?.contains?.('session-subagent-item')) {
             continue;
         }
-        const classNames = String(item.className || '').split(/\s+/);
-        const hasTerminalIndicator = classNames.some(className => (
-            className === 'has-run-indicator-unread'
-            || className === 'has-run-indicator-failed'
-            || className === 'has-run-indicator-stopped'
-        ));
-        if (!hasTerminalIndicator) {
+        if (!hasSessionTerminalIndicator(item)) {
             continue;
         }
+        const classNames = String(item.className || '').split(/\s+/);
         const hasRunningIndicator = classNames.includes('has-run-indicator-running');
         setElementClassFlag(item, 'has-run-indicator-unread', false);
         setElementClassFlag(item, 'has-run-indicator-failed', false);
@@ -1164,6 +1437,15 @@ function clearSessionUnreadIndicator(sessionId, preferredItem = null) {
             setElementClassFlag(item, 'session-run-indicator-clearing', false);
         }, SESSION_ANIMATION_REMOVE_MS);
     }
+}
+
+function hasSessionTerminalIndicator(item) {
+    const classNames = String(item?.className || '').split(/\s+/);
+    return classNames.some(className => (
+        className === 'has-run-indicator-unread'
+        || className === 'has-run-indicator-failed'
+        || className === 'has-run-indicator-stopped'
+    ));
 }
 
 function syncActiveSessionItem(sessionId) {
@@ -1186,16 +1468,19 @@ function syncActiveSessionItem(sessionId) {
 
 function optimisticActivateSession(
     sessionId,
-    { scroll = false, animate = true, item: preferredItem = null, updateState = true } = {},
+    { scroll = false, animate = false, item: preferredItem = null, updateState = true } = {},
 ) {
     const safeSessionId = String(sessionId || '').trim();
     if (!safeSessionId) return null;
     if (updateState) {
         state.currentSessionId = safeSessionId;
     }
-    state.activeSubagentSession = null;
-    clearSessionActivationAnimations();
-    const item = preferredItem || syncActiveSessionItem(safeSessionId) || findSessionItem(safeSessionId);
+    state.currentFeatureViewId = null;
+    clearFeatureNavigationState();
+    clearProjectNavigationState();
+    const candidateItem = preferredItem || findSessionItem(safeSessionId);
+    const wasActive = candidateItem?.classList?.contains?.('active') === true;
+    const item = preferredItem || syncActiveSessionItem(safeSessionId) || candidateItem;
     if (preferredItem) {
         syncActiveSessionItem(safeSessionId);
         setElementClassFlag(preferredItem, 'active', true);
@@ -1204,7 +1489,7 @@ function optimisticActivateSession(
     if (scroll) {
         item?.scrollIntoView?.({ block: 'nearest' });
     }
-    if (animate) {
+    if (animate === true && !wasActive) {
         animateSessionItem(item, 'activating');
     }
     return item;
@@ -1214,7 +1499,8 @@ function clearSessionActivationAnimations() {
     if (!els.projectsList?.querySelectorAll) {
         return;
     }
-    els.projectsList.querySelectorAll('.session-item-activating').forEach(item => {
+    els.projectsList.querySelectorAll('.session-item-switch-target, .session-item-activating').forEach(item => {
+        item.classList?.remove?.('session-item-switch-target');
         item.classList?.remove?.('session-item-activating');
         sessionAnimationTokens.delete(item);
     });
@@ -1230,33 +1516,51 @@ function syncSubagentSessionFromEvent(event) {
     const sessionId = String(event?.detail?.sessionId || '').trim();
     const instanceId = String(event?.detail?.instanceId || '').trim();
     if (!sessionId || !instanceId || !els.projectsList) return;
+    state.currentFeatureViewId = null;
+    clearFeatureNavigationState();
+    clearProjectNavigationState();
+    let parentItem = null;
+    let activeSubagentItem = null;
     for (const item of Array.from(els.projectsList.querySelectorAll('.session-item'))) {
         const itemSessionId = String(item?.getAttribute?.('data-session-id') || '').trim();
         const itemInstanceId = String(item?.getAttribute?.('data-subagent-instance-id') || '').trim();
+        if (itemSessionId === sessionId && !itemInstanceId) {
+            parentItem = item;
+        }
+        if (itemSessionId === sessionId && itemInstanceId === instanceId) {
+            activeSubagentItem = item;
+        }
         setElementClassFlag(
             item,
             'active',
             itemSessionId === sessionId && itemInstanceId === instanceId,
         );
     }
+    activeSubagentItem?.scrollIntoView?.({ block: 'nearest' });
+    parentItem?.scrollIntoView?.({ block: 'nearest' });
 }
 
 function animateSessionItem(item, animation) {
     if (!item) return;
     const safeAnimation = String(animation || '').trim();
     if (!safeAnimation) return;
-    const animationClass = `session-item-${safeAnimation}`;
+    const animationClass = safeAnimation === 'activating'
+        ? 'session-item-switch-target'
+        : `session-item-${safeAnimation}`;
     const animationToken = ++sessionAnimationTokenSeed;
+    if (safeAnimation === 'activating') {
+        clearSessionActivationAnimations();
+    }
     sessionAnimationTokens.set(item, animationToken);
     setElementClassFlag(item, 'session-item-entering', false);
     setElementClassFlag(item, 'session-item-removing', false);
-    setElementClassFlag(item, 'session-item-activating', false);
+    setElementClassFlag(item, 'session-item-switch-target', false);
     setElementClassFlag(item, animationClass, true);
-    const duration = safeAnimation === 'removing'
+    const duration = safeAnimation === 'activating'
+        ? 180
+        : safeAnimation === 'removing'
         ? SESSION_ANIMATION_REMOVE_MS
-        : safeAnimation === 'entering'
-            ? SESSION_ANIMATION_ENTER_MS
-            : SESSION_ANIMATION_ACTIVATE_MS;
+        : SESSION_ANIMATION_ENTER_MS;
     globalThis.setTimeout(() => {
         if (sessionAnimationTokens.get(item) !== animationToken) {
             return;
@@ -1355,6 +1659,95 @@ function measureCollapsedSessionListHeight(list) {
     return 0;
 }
 
+function bindSubagentSessionItems(root) {
+    if (!root?.querySelectorAll) {
+        return;
+    }
+    root.querySelectorAll('.session-subagent-item').forEach(button => {
+        const selectChild = () => {
+            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+            const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
+            const roleId = String(button.getAttribute('data-subagent-role-id') || '').trim();
+            const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
+            const title = String(button.getAttribute('data-subagent-title') || '').trim();
+            if (!sessionId || !instanceId) return;
+            globalThis.document?.dispatchEvent?.(
+                new CustomEvent('agent-teams-select-subagent-session', {
+                    detail: {
+                        sessionId,
+                        subagent: {
+                            instanceId,
+                            roleId,
+                            runId,
+                            title,
+                        },
+                    },
+                }),
+            );
+        };
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            selectChild();
+        });
+        button.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                selectChild();
+            }
+        });
+    });
+}
+
+function bindSubagentDeleteButtons(root) {
+    if (!root?.querySelectorAll) {
+        return;
+    }
+    root.querySelectorAll('.session-subagent-delete-btn').forEach(button => {
+        button.addEventListener('click', async event => {
+            event.stopPropagation();
+            const sessionId = String(button.getAttribute('data-session-id') || '').trim();
+            const instanceId = String(button.getAttribute('data-subagent-instance-id') || '').trim();
+            const runId = String(button.getAttribute('data-subagent-run-id') || '').trim();
+            const subagentLabel = String(button.getAttribute('data-subagent-label') || '').trim() || instanceId;
+            if (!sessionId || !instanceId) return;
+            const shouldDelete = await showConfirmDialog({
+                title: t('sidebar.delete_subagent_title'),
+                message: formatMessage('sidebar.delete_subagent_message', { subagent: subagentLabel }),
+                tone: 'warning',
+                confirmLabel: t('settings.action.delete'),
+                cancelLabel: t('settings.action.cancel'),
+            });
+            if (!shouldDelete) return;
+            const subagentItem = button.closest?.('.session-subagent-item') || null;
+            animateSessionItem(subagentItem, 'removing');
+            await new Promise(resolve => globalThis.setTimeout(resolve, SESSION_ANIMATION_REMOVE_MS));
+            try {
+                await deleteSessionSubagent(sessionId, instanceId);
+            } catch (error) {
+                sysLog(
+                    formatMessage('sidebar.error.deleting_subagent', {
+                        error: error?.message || String(error),
+                    }),
+                    'log-error',
+                );
+                await loadProjects();
+                return;
+            }
+            const removed = removeSessionSubagent(sessionId, instanceId);
+            if (runId) {
+                closeNormalModeSubagentStream(runId);
+            } else if (removed?.runId) {
+                closeNormalModeSubagentStream(removed.runId);
+            }
+            if (state.currentSessionId === sessionId && !state.activeSubagentSession && typeof selectSessionHandler === 'function') {
+                await selectSessionHandler(sessionId);
+            }
+            await loadProjects();
+        });
+    });
+}
+
 function bindProjectCard(card, group) {
     const projectId = group.id;
     const groupKeyValue = group.key;
@@ -1364,6 +1757,14 @@ function bindProjectCard(card, group) {
     });
     card.querySelector('.project-title-btn')?.addEventListener('click', async event => {
         event?.stopPropagation?.();
+        cancelPendingSessionSelection(`workspace:${projectId}`);
+        if (state.currentSessionId || state.pendingNewSessionActive || state.activeEventSource) {
+            clearActiveSessionView();
+        }
+        state.currentFeatureViewId = null;
+        state.activeSubagentSession = null;
+        clearFeatureNavigationState();
+        clearSessionNavigationState();
         await openWorkspaceProjectView(group.workspace);
         await loadProjects();
     });
@@ -1422,7 +1823,28 @@ function bindProjectCard(card, group) {
             event.stopPropagation();
             const sessionId = String(button.getAttribute('data-session-id') || '').trim();
             if (!sessionId) return;
-            toggleSubagentSessionList(sessionId);
+            const willExpand = !isSubagentSessionListExpanded(sessionId);
+            let subagentsLoadPromise = null;
+            toggleSubagentSessionList(sessionId, { emitChange: false, load: false });
+            if (willExpand && !hasLoadedSessionSubagents(sessionId)) {
+                subagentsLoadPromise = ensureSessionSubagents(sessionId, {
+                    emitLoadingEvents: false,
+                    force: false,
+                });
+            }
+            syncSubagentSessionListVisualState({
+                animateSessionId: sessionId,
+                ensureListSessionId: sessionId,
+                refreshSessionId: sessionId,
+            });
+            if (subagentsLoadPromise) {
+                void subagentsLoadPromise.then(() => {
+                    syncSubagentSessionListVisualState({
+                        ensureListSessionId: sessionId,
+                        refreshSessionId: sessionId,
+                    });
+                });
+            }
         });
     });
 
@@ -1589,29 +2011,78 @@ function setProjectBodyExpandedState(body, expanded) {
     if (!body?.classList) {
         return;
     }
-    const animationToken = ++projectBodyAnimationTokenSeed;
-    projectBodyAnimationTokens.set(body, animationToken);
+    setSidebarCollapsibleExpandedState(body, expanded, {
+        animate: true,
+        animationTokens: projectBodyAnimationTokens,
+        clearExpandedHeight: clearProjectBodyHeight,
+        durationMs: PROJECT_BODY_ANIMATION_MS,
+        setHeight: setProjectBodyHeight,
+    });
+}
+
+function setSidebarCollapsibleExpandedState(
+    element,
+    expanded,
+    { animate = true, animationTokens, clearExpandedHeight, durationMs, setHeight },
+) {
+    if (!element?.classList) {
+        return;
+    }
     const shouldExpand = expanded === true;
-    const currentHeight = measureElementHeight(body);
-    body.classList.add('is-animating');
-    body.style.setProperty('--project-body-height', `${currentHeight}px`);
-    void body.offsetHeight;
-    body.classList.toggle('is-expanded', shouldExpand);
-    body.classList.toggle('is-collapsed', !shouldExpand);
-    body.style.setProperty(
-        '--project-body-height',
-        shouldExpand ? `${body.scrollHeight}px` : '0px',
-    );
+    const alreadyExpanded = element.classList.contains('is-expanded');
+    const alreadyCollapsed = element.classList.contains('is-collapsed');
+    if ((shouldExpand && alreadyExpanded) || (!shouldExpand && alreadyCollapsed)) {
+        element.classList.toggle('is-expanded', shouldExpand);
+        element.classList.toggle('is-collapsed', !shouldExpand);
+        if (shouldExpand) {
+            clearExpandedHeight(element);
+        } else {
+            setHeight(element, '0px');
+        }
+        return;
+    }
+    if (animate !== true) {
+        animationTokens.delete(element);
+        setElementClassFlag(element, 'is-animating', false);
+        element.classList.toggle('is-expanded', shouldExpand);
+        element.classList.toggle('is-collapsed', !shouldExpand);
+        if (shouldExpand) {
+            clearExpandedHeight(element);
+        } else {
+            setHeight(element, '0px');
+        }
+        return;
+    }
+
+    const animationToken = ++sidebarCollapsibleAnimationTokenSeed;
+    animationTokens.set(element, animationToken);
+    const currentHeight = measureElementHeight(element);
+    setElementClassFlag(element, 'is-animating', true);
+    setHeight(element, `${currentHeight}px`);
+    void element.offsetHeight;
+    element.classList.toggle('is-expanded', shouldExpand);
+    element.classList.toggle('is-collapsed', !shouldExpand);
+    setHeight(element, shouldExpand ? `${element.scrollHeight}px` : '0px');
     globalThis.setTimeout(() => {
-        if (projectBodyAnimationTokens.get(body) !== animationToken) {
+        if (animationTokens.get(element) !== animationToken) {
             return;
         }
         if (shouldExpand) {
-            body.style.removeProperty('--project-body-height');
+            clearExpandedHeight(element);
+        } else {
+            setHeight(element, '0px');
         }
-        body.classList.remove('is-animating');
-        projectBodyAnimationTokens.delete(body);
-    }, PROJECT_BODY_ANIMATION_MS);
+        setElementClassFlag(element, 'is-animating', false);
+        animationTokens.delete(element);
+    }, durationMs);
+}
+
+function setProjectBodyHeight(body, value) {
+    body?.style?.setProperty?.('--project-body-height', value);
+}
+
+function clearProjectBodyHeight(body) {
+    body?.style?.removeProperty?.('--project-body-height');
 }
 
 function bindProjectPathHint(card) {
@@ -1774,6 +2245,131 @@ function visibleSessionsForGroup(group, { sessionsExpanded = false } = {}) {
     return nextVisibleSessions;
 }
 
+function renderProjectsFromSnapshot({ syncStreams = false } = {}) {
+    if (!hasSidebarDataSnapshot() || !els.projectsList) {
+        return false;
+    }
+    const snapshotData = getSidebarDataSnapshot();
+    renderProjectSidebarData(
+        snapshotData.workspaces,
+        snapshotData.sessions,
+        snapshotData.automationProjects,
+        { syncStreams },
+    );
+    return true;
+}
+
+function renderProjectSidebarData(
+    workspaces,
+    sessions,
+    automationProjects,
+    { syncStreams = true } = {},
+) {
+    automationBoundSessionIds.clear();
+    (Array.isArray(automationProjects) ? automationProjects : []).forEach(project => {
+        const binding = project?.delivery_binding && typeof project.delivery_binding === 'object'
+            ? project.delivery_binding
+            : null;
+        const sessionId = String(binding?.session_id || '').trim();
+        if (sessionId) {
+            automationBoundSessionIds.add(sessionId);
+        }
+    });
+    if (syncStreams) {
+        void maybeSyncBackgroundStreams(sessions);
+    }
+    const groups = buildProjectGroups(
+        Array.isArray(workspaces) ? workspaces : [],
+        Array.isArray(sessions) ? mergeOptimisticSessions(sessions) : [],
+    );
+    setSessionSearchEntries(buildSessionSearchEntries(groups));
+    const nextSignature = buildProjectsRenderSignature(groups, automationProjects);
+    if (nextSignature === lastProjectsRenderSignature) {
+        syncProjectSortButton();
+        syncSubagentSessionListVisualState();
+        playPendingSessionAnimation();
+        return;
+    }
+    const featureNode = renderFeatureNav();
+    const toolbarNode = renderProjectsToolbar();
+    const workspaceContentNodes = [];
+    if (groups.length === 0) {
+        openProjectMenuId = null;
+        workspaceContentNodes.push(renderEmptyProjectsState());
+        const nextNodes = [
+            featureNode,
+            renderProjectsWorkspaceShell(toolbarNode, workspaceContentNodes),
+        ];
+        lastProjectsRenderSignature = nextSignature;
+        els.projectsList.innerHTML = '';
+        nextNodes.forEach(node => els.projectsList.appendChild(node));
+        return;
+    }
+    if (!groups.some(group => group.key === openProjectMenuId)) {
+        openProjectMenuId = null;
+    }
+    groups.forEach(group => workspaceContentNodes.push(renderProjectCard(group)));
+    const nextNodes = [
+        featureNode,
+        renderProjectsWorkspaceShell(toolbarNode, workspaceContentNodes),
+    ];
+    lastProjectsRenderSignature = nextSignature;
+    els.projectsList.innerHTML = '';
+    nextNodes.forEach(node => els.projectsList.appendChild(node));
+    syncProjectSortButton();
+    syncSubagentSessionListVisualState();
+    playPendingSessionAnimation();
+}
+
+function handleNewSessionDraftCreated(event) {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+    if (detail.detached === true) {
+        scheduleSessionsRefresh(900, { forceRefresh: true });
+        return;
+    }
+    const sessionId = String(detail.sessionId || detail.session?.session_id || '').trim();
+    const workspaceId = String(detail.workspaceId || detail.session?.workspace_id || state.currentWorkspaceId || '').trim();
+    if (!sessionId || !workspaceId) {
+        scheduleSessionsRefresh(320, { forceRefresh: true });
+        return;
+    }
+    const now = new Date().toISOString();
+    const session = detail.session && typeof detail.session === 'object'
+        ? detail.session
+        : {};
+    upsertOptimisticSession({
+        ...session,
+        session_id: sessionId,
+        workspace_id: workspaceId,
+        metadata: session.metadata && typeof session.metadata === 'object'
+            ? session.metadata
+            : {},
+        session_mode: String(session.session_mode || state.currentSessionMode || 'normal').trim() || 'normal',
+        created_at: session.created_at || now,
+        updated_at: now,
+    });
+    setPendingSessionAnimation(sessionId, 'entering');
+    if (!renderProjectsFromSnapshot({ syncStreams: false })) {
+        scheduleSessionsRefresh(120, { forceRefresh: true });
+        return;
+    }
+    scheduleSessionsRefresh(900, { forceRefresh: true });
+}
+
+function handleSessionUpserted(event) {
+    handleNewSessionDraftCreated(event);
+}
+
+function handleSessionTitlePreviewed(event) {
+    const sessionId = String(event?.detail?.sessionId || '').trim();
+    const title = String(event?.detail?.title || '').trim();
+    if (!sessionId || !title) {
+        return;
+    }
+    updateOptimisticSessionTitle(sessionId, title);
+    renderProjectsFromSnapshot({ syncStreams: false });
+}
+
 export async function loadProjects({ forceRefresh = false } = {}) {
     if (!els.projectsList) return;
     ensureSessionSearchConfigured();
@@ -1785,86 +2381,94 @@ export async function loadProjects({ forceRefresh = false } = {}) {
             const forceRefresh = detail && typeof detail === 'object' && 'forceRefresh' in detail
                 ? detail.forceRefresh === true
                 : false;
-            scheduleSessionsRefresh(90, {
-                forceRefresh,
+            const reason = detail && typeof detail === 'object'
+                ? String(detail.reason || '').trim()
+                : '';
+            const sessionId = detail && typeof detail === 'object'
+                ? String(detail.sessionId || '').trim()
+                : '';
+            if (!forceRefresh && reason !== 'structure') {
+                syncSubagentSessionListVisualState({
+                    ensureListSessionId: reason === 'loading' || reason === 'visibility' ? sessionId : '',
+                    refreshSessionId: sessionId,
+                });
+                return;
+            }
+            if (sessionId) {
+                syncSubagentSessionListVisualState({
+                    ensureListSessionId: sessionId,
+                    refreshSessionId: sessionId,
+                });
+            }
+            if (forceRefresh) {
+                scheduleSessionsRefresh(90, { forceRefresh: true });
+                return;
+            }
+            if (!renderProjectsFromSnapshot({ syncStreams: false })) {
+                scheduleSessionsRefresh(180, { forceRefresh: false });
+            }
+        });
+        document.addEventListener('agent-teams-subagent-session-status-changed', event => {
+            const sessionId = String(event?.detail?.sessionId || '').trim();
+            syncSubagentSessionListVisualState({
+                refreshSessionId: sessionId,
             });
         });
         document.addEventListener('agent-teams-session-activated', syncActivatedSessionFromEvent);
         document.addEventListener('agent-teams-session-selected', syncActivatedSessionFromEvent);
         document.addEventListener('agent-teams-subagent-session-selected', syncSubagentSessionFromEvent);
-        document.addEventListener('agent-teams-new-session-draft-created', () => void loadProjects());
+        document.addEventListener('agent-teams-new-session-draft-created', event => {
+            handleNewSessionDraftCreated(event);
+        });
+        document.addEventListener('agent-teams-session-upserted', event => {
+            handleSessionUpserted(event);
+        });
+        document.addEventListener('agent-teams-session-title-previewed', event => {
+            handleSessionTitlePreviewed(event);
+        });
         document.addEventListener('agent-teams-draft-workspace-added', () => void loadProjects());
         languageRefreshBound = true;
     }
     const requestId = ++loadProjectsRequestId;
+    if (loadProjectsController) {
+        loadProjectsController.abort();
+    }
+    const controller = typeof AbortController === 'function'
+        ? new AbortController()
+        : null;
+    loadProjectsController = controller;
     try {
         ensureProjectMenuDismissBinding();
         const [workspaces, sessions, automationProjects] = await Promise.all([
-            fetchWorkspaces(),
-            fetchSessions({ forceRefresh: forceRefresh === true }),
-            fetchAutomationProjects(),
+            fetchWorkspaces({ signal: controller?.signal }),
+            fetchSessions({
+                forceRefresh: forceRefresh === true,
+                signal: controller?.signal,
+            }),
+            fetchAutomationProjects({ signal: controller?.signal }),
         ]);
         if (requestId !== loadProjectsRequestId) {
             return;
         }
-        automationBoundSessionIds.clear();
-        (Array.isArray(automationProjects) ? automationProjects : []).forEach(project => {
-            const binding = project?.delivery_binding && typeof project.delivery_binding === 'object'
-                ? project.delivery_binding
-                : null;
-            const sessionId = String(binding?.session_id || '').trim();
-            if (sessionId) {
-                automationBoundSessionIds.add(sessionId);
-            }
-        });
-        void maybeSyncBackgroundStreams(sessions);
-        const groups = buildProjectGroups(
-            Array.isArray(workspaces) ? workspaces : [],
-            Array.isArray(sessions) ? sessions : [],
+        rememberSidebarDataSnapshot({ workspaces, sessions, automationProjects });
+        const snapshotData = getSidebarDataSnapshot();
+        renderProjectSidebarData(
+            snapshotData.workspaces,
+            snapshotData.sessions,
+            snapshotData.automationProjects,
         );
-        setSessionSearchEntries(buildSessionSearchEntries(groups));
-        const featureNode = renderFeatureNav();
-        const toolbarNode = renderProjectsToolbar();
-        const workspaceContentNodes = [];
-        if (groups.length === 0) {
-            openProjectMenuId = null;
-            workspaceContentNodes.push(renderEmptyProjectsState());
-            const nextNodes = [
-                featureNode,
-                renderProjectsWorkspaceShell(toolbarNode, workspaceContentNodes),
-            ];
-            const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
-            if (nextSignature === lastProjectsRenderSignature) {
-                return;
-            }
-            lastProjectsRenderSignature = nextSignature;
-            els.projectsList.innerHTML = '';
-            nextNodes.forEach(node => els.projectsList.appendChild(node));
-            return;
-        }
-        if (!groups.some(group => group.key === openProjectMenuId)) {
-            openProjectMenuId = null;
-        }
-        groups.forEach(group => workspaceContentNodes.push(renderProjectCard(group)));
-        const nextNodes = [
-            featureNode,
-            renderProjectsWorkspaceShell(toolbarNode, workspaceContentNodes),
-        ];
-        const nextSignature = nextNodes.map(renderNodeSignature).join('\n');
-        if (nextSignature === lastProjectsRenderSignature) {
-            return;
-        }
-        lastProjectsRenderSignature = nextSignature;
-        els.projectsList.innerHTML = '';
-        nextNodes.forEach(node => els.projectsList.appendChild(node));
-        syncProjectSortButton();
-        syncSubagentSessionListVisualState();
-        playPendingSessionAnimation();
     } catch (error) {
         if (requestId !== loadProjectsRequestId) {
             return;
         }
+        if (error?.name === 'AbortError') {
+            return;
+        }
         sysLog(formatMessage('sidebar.error.loading_projects', { error: error.message }), 'log-error');
+    } finally {
+        if (loadProjectsController === controller) {
+            loadProjectsController = null;
+        }
     }
 }
 

@@ -8,8 +8,8 @@ export async function fetchRoleConfigs() {
     return requestJson('/api/roles/configs', undefined, 'Failed to fetch role configs');
 }
 
-export async function fetchRoleConfigOptions() {
-    return requestJson('/api/roles:options', undefined, 'Failed to fetch role options');
+export async function fetchRoleConfigOptions(options = {}) {
+    return requestJson('/api/roles:options', { signal: options.signal }, 'Failed to fetch role options');
 }
 
 export async function fetchRoleConfig(roleId) {

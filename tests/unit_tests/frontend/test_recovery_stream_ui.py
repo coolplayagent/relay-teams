@@ -81,7 +81,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     )
     assert "t('stream.approval_required')" in recovery_script
     assert (
-        "const activeBackgroundTasks = backgroundTasks.filter(task => isBackgroundTaskActive(task));"
+        "isDisplayableBackgroundTask(task) && isBackgroundTaskActive(task)"
         in recovery_script
     )
     assert (

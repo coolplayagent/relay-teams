@@ -2,7 +2,12 @@
  * core/eventRouter/index.js
  * Event switchboard for SSE RunEventType payloads.
  */
-import { scheduleRecoveryContinuityRefresh } from '../../app/recovery.js';
+import {
+    applyBackgroundTaskEvent,
+    isDisplayableBackgroundTaskPayload,
+    scheduleRecoveryContinuityRefresh,
+} from '../../app/recovery.js';
+import { rememberNormalModeSubagentFromBackgroundTask } from '../../components/subagentSessions.js';
 import {
     syncRoundTodoVisibility,
     updateRoundTodo,
@@ -44,7 +49,8 @@ import {
 } from './humanEvents.js';
 import { handleNotificationRequested } from './notificationEvents.js';
 
-const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 250;
+const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 650;
+const BACKGROUND_TASK_STATUS_REFRESH_DELAY_MS = 350;
 const seenEventIdsByRun = new Map();
 const MAX_SEEN_EVENT_IDS_PER_RUN = 2000;
 
@@ -54,6 +60,9 @@ export function routeEvent(evType, payload, eventMeta) {
         return;
     }
     const isSubagentRun = eventRunId.startsWith('subagent_run_');
+    const backgroundTaskEvent = isBackgroundTaskEventType(evType);
+    const displayableBackgroundTaskEvent = backgroundTaskEvent
+        && isDisplayableBackgroundTaskPayload(payload);
     if (isSubagentRun && evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: true });
     }
@@ -66,7 +75,9 @@ export function routeEvent(evType, payload, eventMeta) {
     if (!isSubagentRun) {
         if (eventMeta?.run_id) state.activeRunId = eventMeta.run_id;
         if (eventMeta?.trace_id && !state.activeRunId) state.activeRunId = eventMeta.trace_id;
-        scheduleContinuityRefreshForEvent(evType);
+        if (!backgroundTaskEvent || displayableBackgroundTaskEvent) {
+            scheduleContinuityRefreshForEvent(evType);
+        }
     }
 
     const instanceId = payload?.instance_id || eventMeta?.instance_id || null;
@@ -183,12 +194,10 @@ export function routeEvent(evType, payload, eventMeta) {
         handleSubagentResumed(payload);
     } else if (evType === 'gate_resolved') {
         handleGateResolved(payload, instanceId);
-    } else if (
-        evType === 'background_task_started'
-        || evType === 'background_task_updated'
-        || evType === 'background_task_completed'
-        || evType === 'background_task_stopped'
-    ) {
+    } else if (backgroundTaskEvent) {
+        if (displayableBackgroundTaskEvent) {
+            handleBackgroundTaskEvent(evType, payload, eventMeta);
+        }
         return;
     } else if (evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: true });
@@ -201,6 +210,22 @@ export function routeEvent(evType, payload, eventMeta) {
         sysLog(`[evt] ${evType}`, 'log-info');
     }
     clearSeenRunEventsForTerminal(evType, eventRunId);
+}
+
+function handleBackgroundTaskEvent(evType, payload, eventMeta) {
+    const sessionId = String(
+        payload?.session_id
+        || payload?.sessionId
+        || eventMeta?.session_id
+        || eventMeta?.sessionId
+        || state.currentSessionId
+        || '',
+    ).trim();
+    if (!sessionId) {
+        return;
+    }
+    rememberNormalModeSubagentFromBackgroundTask(sessionId, payload, evType);
+    applyBackgroundTaskEvent(payload, eventMeta, evType);
 }
 
 function isDuplicateRunEvent(runId, eventId) {
@@ -233,6 +258,15 @@ function clearSeenRunEventsForTerminal(evType, runId) {
 
 function isTerminalRunEvent(evType) {
     return evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped';
+}
+
+function isBackgroundTaskEventType(evType) {
+    return (
+        evType === 'background_task_started'
+        || evType === 'background_task_updated'
+        || evType === 'background_task_completed'
+        || evType === 'background_task_stopped'
+    );
 }
 
 function scheduleContinuityRefreshForEvent(evType) {
@@ -289,15 +323,28 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'user_question_answered'
         || evType === 'subagent_stopped'
         || evType === 'subagent_resumed'
-        || evType === 'background_task_started'
-        || evType === 'background_task_completed'
-        || evType === 'background_task_stopped'
         || evType === 'notification_requested'
         || evType === 'gate_resolved'
     ) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
             delayMs: 0,
+            forceRefresh: true,
+            includeRounds: false,
+            quiet: true,
+            reason: evType,
+        });
+        return;
+    }
+
+    if (
+        evType === 'background_task_started'
+        || evType === 'background_task_completed'
+        || evType === 'background_task_stopped'
+    ) {
+        scheduleRecoveryContinuityRefresh({
+            sessionId,
+            delayMs: BACKGROUND_TASK_STATUS_REFRESH_DELAY_MS,
             forceRefresh: true,
             includeRounds: false,
             quiet: true,

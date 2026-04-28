@@ -44,6 +44,7 @@ import {
     finalizeThinking,
     finalizeStream,
     getOrCreateStreamBlock,
+    reconcileTerminalRunStreamState,
     startThinkingBlock,
 } from '../../components/messageRenderer.js';
 import {
@@ -435,6 +436,7 @@ export function handleSubagentRunTerminal(instanceId, status, eventMeta = null, 
     const roleId = String(roleIdOverride || state.instanceRoleMap?.[safeInstanceId] || '').trim();
     const runId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
     finalizeStream(safeInstanceId, roleId, { runId });
+    reconcileTerminalRunStreamState(runId);
     updateNormalModeSubagentSessionStatus(state.currentSessionId, safeInstanceId, status);
     markSubagentStatus(safeInstanceId, status);
     if (getActiveSubagentSession()?.instanceId === safeInstanceId) {
@@ -472,6 +474,7 @@ export function handleRunCompleted(eventMeta) {
         }
     }
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
+    reconcileTerminalRunStreamState(runId);
     clearRunPrimaryRole(runId);
     markCurrentSessionTerminalViewed(eventMeta);
 }
@@ -506,6 +509,7 @@ export function handleRunStopped(eventMeta, payload) {
         }
     }
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
+    reconcileTerminalRunStreamState(runId);
     clearRunPrimaryRole(runId);
     markCurrentSessionTerminalViewed(eventMeta);
 }
@@ -534,6 +538,7 @@ export function handleRunFailed(eventMeta, payload) {
     }
     if (els.promptInput) els.promptInput.disabled = !!state.activeSubagentSession;
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
+    reconcileTerminalRunStreamState(runId);
     clearRunPrimaryRole(runId);
     markCurrentSessionTerminalViewed(eventMeta);
 }

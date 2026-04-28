@@ -337,6 +337,268 @@ console.log(JSON.stringify({
     }
 
 
+def test_terminal_round_refresh_waits_for_expected_tool_calls_from_history(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.document = { getElementById: () => null };
+globalThis.__sessionRoundResponses = [
+    {
+        run_id: 'run-1',
+        created_at: '2026-04-25T11:01:00',
+        run_status: 'completed',
+        coordinator_messages: [
+            {
+                message: {
+                    parts: [
+                        { part_kind: 'tool-call', tool_call_id: 'call-1', tool_name: 'spawn_subagent' },
+                    ],
+                },
+            },
+        ],
+    },
+    {
+        run_id: 'run-1',
+        created_at: '2026-04-25T11:01:00',
+        run_status: 'completed',
+        coordinator_messages: [
+            {
+                message: {
+                    parts: [
+                        { part_kind: 'tool-call', tool_call_id: 'call-1', tool_name: 'spawn_subagent' },
+                        { part_kind: 'tool-call', tool_call_id: 'call-2', tool_name: 'spawn_subagent' },
+                        { part_kind: 'tool-call', tool_call_id: 'call-3', tool_name: 'spawn_subagent' },
+                    ],
+                },
+            },
+        ],
+    },
+];
+
+const { state } = await import('./mockState.mjs');
+const { createLiveRound, refreshTerminalRoundFromHistory } = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeSubagentSession = { sessionId: 'session-1' };
+createLiveRound('run-1', 'live run');
+
+await refreshTerminalRoundFromHistory('session-1', 'run-1', {
+    expectedToolCallIds: ['call-1', 'call-2', 'call-3'],
+    render: false,
+});
+
+const persistedRound = roundsState.currentRounds.find(round => round.run_id === 'run-1');
+const toolCallIds = persistedRound.coordinator_messages.flatMap(message =>
+    message.message.parts.filter(part => part.part_kind === 'tool-call').map(part => part.tool_call_id)
+);
+
+console.log(JSON.stringify({
+    fetchAttempts: globalThis.__sessionRoundFetches,
+    clearedRuns: globalThis.__clearedRuns,
+    liveOnly: persistedRound.__liveOnly === true,
+    runStatus: persistedRound.run_status,
+    toolCallIds,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "fetchAttempts": 2,
+        "clearedRuns": ["run-1"],
+        "liveOnly": False,
+        "runStatus": "completed",
+        "toolCallIds": ["call-1", "call-2", "call-3"],
+    }
+
+
+def test_terminal_round_refresh_retries_transient_fetch_errors(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.document = { getElementById: () => null };
+globalThis.__sessionRoundResponses = [
+    { errorStatus: 404 },
+    { errorStatus: 503 },
+    {
+        run_id: 'run-1',
+        created_at: '2026-04-25T11:01:00',
+        run_status: 'completed',
+        coordinator_messages: [
+            {
+                message: {
+                    parts: [
+                        { part_kind: 'tool-call', tool_call_id: 'call-1', tool_name: 'spawn_subagent' },
+                        { part_kind: 'tool-call', tool_call_id: 'call-2', tool_name: 'spawn_subagent' },
+                    ],
+                },
+            },
+        ],
+    },
+];
+
+const { state } = await import('./mockState.mjs');
+const { refreshTerminalRoundFromHistory } = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+state.currentSessionId = 'session-1';
+await refreshTerminalRoundFromHistory('session-1', 'run-1', {
+    expectedToolCallIds: ['call-1', 'call-2'],
+    render: false,
+});
+
+const persistedRound = roundsState.currentRounds.find(round => round.run_id === 'run-1');
+const toolCallIds = persistedRound.coordinator_messages.flatMap(message =>
+    message.message.parts.filter(part => part.part_kind === 'tool-call').map(part => part.tool_call_id)
+);
+
+console.log(JSON.stringify({
+    fetchAttempts: globalThis.__sessionRoundFetches,
+    clearedRuns: globalThis.__clearedRuns,
+    runStatus: persistedRound.run_status,
+    toolCallIds,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "fetchAttempts": 3,
+        "clearedRuns": ["run-1"],
+        "runStatus": "completed",
+        "toolCallIds": ["call-1", "call-2"],
+    }
+
+
+def test_terminal_round_refresh_does_not_merge_after_session_switch(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.document = { getElementById: () => null };
+let resolveRound;
+globalThis.__sessionRoundResponses = [
+    new Promise(resolve => {
+        resolveRound = resolve;
+    }),
+];
+
+const { state } = await import('./mockState.mjs');
+const { refreshTerminalRoundFromHistory } = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+state.currentSessionId = 'session-1';
+const refreshPromise = refreshTerminalRoundFromHistory('session-1', 'run-1', {
+    expectedToolCallIds: ['call-1', 'call-2'],
+});
+await Promise.resolve();
+
+state.currentSessionId = 'session-2';
+roundsState.currentRounds = [
+    { run_id: 'run-2', created_at: '2026-04-25T11:02:00', coordinator_messages: [] },
+];
+roundsState.timelineRounds = roundsState.currentRounds;
+
+resolveRound({
+    run_id: 'run-1',
+    created_at: '2026-04-25T11:01:00',
+    run_status: 'completed',
+    coordinator_messages: [
+        {
+            message: {
+                parts: [
+                    { part_kind: 'tool-call', tool_call_id: 'call-1', tool_name: 'spawn_subagent' },
+                    { part_kind: 'tool-call', tool_call_id: 'call-2', tool_name: 'spawn_subagent' },
+                ],
+            },
+        },
+    ],
+});
+await refreshPromise;
+
+console.log(JSON.stringify({
+    fetchAttempts: globalThis.__sessionRoundFetches,
+    clearedRuns: globalThis.__clearedRuns || [],
+    currentRunIds: roundsState.currentRounds.map(round => round.run_id),
+    timelineRunIds: roundsState.timelineRounds.map(round => round.run_id),
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "fetchAttempts": 1,
+        "clearedRuns": [],
+        "currentRunIds": ["run-2"],
+        "timelineRunIds": ["run-2"],
+    }
+
+
+def test_terminal_round_refresh_caps_incomplete_history_followups(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.document = { getElementById: () => null };
+globalThis.__followupTimers = 0;
+globalThis.__followupCallbacks = [];
+globalThis.setTimeout = (callback, delayMs) => {
+    if (delayMs === 900) {
+        globalThis.__followupTimers += 1;
+        globalThis.__followupCallbacks.push(callback);
+        return globalThis.__followupTimers;
+    }
+    Promise.resolve().then(callback);
+    return globalThis.__followupTimers;
+};
+globalThis.__sessionRoundResponses = Array.from({ length: 40 }, () => ({
+    run_id: 'run-1',
+    created_at: '2026-04-25T11:01:00',
+    run_status: 'completed',
+    coordinator_messages: [
+        {
+            message: {
+                parts: [
+                    { part_kind: 'tool-call', tool_call_id: 'call-1', tool_name: 'spawn_subagent' },
+                ],
+            },
+        },
+    ],
+}));
+
+const { refreshTerminalRoundFromHistory } = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+await refreshTerminalRoundFromHistory('session-1', 'run-1', {
+    expectedToolCallIds: ['call-1', 'call-2'],
+});
+while (globalThis.__followupCallbacks.length > 0) {
+    const callback = globalThis.__followupCallbacks.shift();
+    callback();
+    for (let index = 0; index < 20; index += 1) {
+        await Promise.resolve();
+    }
+}
+
+console.log(JSON.stringify({
+    fetchAttempts: globalThis.__sessionRoundFetches,
+    followupTimers: globalThis.__followupTimers,
+    currentRounds: roundsState.currentRounds.length,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "fetchAttempts": 24,
+        "followupTimers": 3,
+        "currentRounds": 0,
+    }
+
+
 def _run_round_timeline_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -410,6 +672,20 @@ export function isRunPrimaryRoleId() {
 export async function fetchRunTokenUsage() {
     return {};
 }
+
+export async function fetchSessionRound() {
+    globalThis.__sessionRoundFetches = (globalThis.__sessionRoundFetches || 0) + 1;
+    if (Array.isArray(globalThis.__sessionRoundResponses)) {
+        const response = globalThis.__sessionRoundResponses.shift() || null;
+        if (response?.errorStatus) {
+            const error = new Error('transient fetch error');
+            error.status = response.errorStatus;
+            throw error;
+        }
+        return response;
+    }
+    return globalThis.__sessionRound || null;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -427,12 +703,24 @@ export function clearAllStreamState() {
     return undefined;
 }
 
+export function clearRunStreamState() {
+    if (!Array.isArray(globalThis.__clearedRuns)) {
+        globalThis.__clearedRuns = [];
+    }
+    globalThis.__clearedRuns.push(arguments[0]);
+    return undefined;
+}
+
 export function getCoordinatorStreamOverlay() {
     return null;
 }
 
 export function renderHistoricalMessageList() {
     return undefined;
+}
+
+export function reconcileTerminalRunStreamState(runId) {
+    globalThis.__reconciledTerminalRuns.push(runId);
 }
 
 export function getOrCreateStreamBlock() {
@@ -619,6 +907,7 @@ export function errorToPayload() {
 }
 
 globalThis.__loggedErrors = [];
+globalThis.__reconciledTerminalRuns = [];
 
 export function logError(code, message, payload) {
     globalThis.__loggedErrors.push({ code, message, payload });

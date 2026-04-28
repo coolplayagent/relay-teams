@@ -25,6 +25,7 @@ export {
     finalizeStream,
     clearStreamState,
     clearRunStreamState,
+    reconcileTerminalRunStreamState,
     clearStreamOverlayEntry,
     clearRunRenderedStreamState,
     clearAllStreamState,

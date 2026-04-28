@@ -249,13 +249,16 @@ export async function renderInstanceHistoryInto(container, options = {}) {
                 deferred: true,
             };
         }
-        container.innerHTML = '';
+        const renderTarget = shouldReplaceHistoryWhenReady(options)
+            ? createHistoryRenderTarget(container)
+            : container;
         if (
             messages.length === 0
             && pendingToolApprovals.length === 0
             && !streamOverlayEntry
         ) {
-            container.innerHTML = `<div class="panel-empty">${escapeHtml(emptyLabel)}</div>`;
+            renderTarget.innerHTML = `<div class="panel-empty">${escapeHtml(emptyLabel)}</div>`;
+            replaceHistoryContainerWhenReady(container, renderTarget);
             return {
                 messages,
                 streamOverlayEntry,
@@ -276,7 +279,8 @@ export async function renderInstanceHistoryInto(container, options = {}) {
                 ? 'normal-child-session'
                 : 'orchestration-panel';
         }
-        renderHistoricalMessageList(container, messages, renderOptions);
+        renderHistoricalMessageList(renderTarget, messages, renderOptions);
+        replaceHistoryContainerWhenReady(container, renderTarget);
         if (overlayMode === 'bind' && messages.length > 0 && streamOverlayEntry) {
             bindStreamOverlayToContainer(container, {
                 instanceId,
@@ -297,6 +301,40 @@ export async function renderInstanceHistoryInto(container, options = {}) {
             `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(loadFailedLabel)}</div>`;
         throw e;
     }
+}
+
+function shouldReplaceHistoryWhenReady(options = {}) {
+    return options.replaceWhenReady === true;
+}
+
+function createHistoryRenderTarget(container) {
+    if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+        container.innerHTML = '';
+        return container;
+    }
+    const target = document.createElement('div');
+    if (container?.dataset && target.dataset) {
+        Object.entries(container.dataset).forEach(([key, value]) => {
+            target.dataset[key] = value;
+        });
+    }
+    return target;
+}
+
+function replaceHistoryContainerWhenReady(container, renderTarget) {
+    if (!container || renderTarget === container) {
+        return;
+    }
+    if (container.dataset && renderTarget.dataset) {
+        Object.entries(renderTarget.dataset).forEach(([key, value]) => {
+            container.dataset[key] = value;
+        });
+    }
+    if (typeof container.replaceChildren === 'function') {
+        container.replaceChildren(...Array.from(renderTarget.childNodes || []));
+        return;
+    }
+    container.innerHTML = renderTarget.innerHTML || '';
 }
 
 function shouldRenderLiveOverlay(options = {}, streamOverlayEntry = null) {

@@ -187,10 +187,6 @@ console.log(JSON.stringify({
             },
             {
                 "type": "agent-teams-backend-status-hint",
-                "status": "online",
-            },
-            {
-                "type": "agent-teams-backend-status-hint",
                 "status": "offline",
             },
         ],
@@ -1209,5 +1205,129 @@ console.log(JSON.stringify({
         "staleState": "AbortError",
         "fetchCalls": 3,
         "freshResult": {"url": "/api/sessions/1", "fetchCalls": 3},
+        "logErrorCalls": 0,
+    }
+
+
+def test_request_json_managed_critical_lane_bypasses_heavy_queue(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
+    module_under_test_path = tmp_path / "request.mjs"
+    runner_path = tmp_path / "runner-request-critical-lane.mjs"
+    logger_path = tmp_path / "mockLogger.mjs"
+
+    source_text = source_path.read_text(encoding="utf-8").replace(
+        "../../utils/logger.js",
+        "./mockLogger.mjs",
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+    logger_path.write_text(
+        """
+export function errorToPayload(error, context = {}) {
+    return { name: error?.name || '', ...context };
+}
+
+export function logError(...args) {
+    globalThis.__logErrorCalls.push(args);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    runner_path.write_text(
+        """
+globalThis.__logErrorCalls = [];
+const started = [];
+const releases = new Map();
+
+async function waitForStarted(url) {
+    while (!started.includes(url)) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+}
+
+globalThis.fetch = async (url) => {
+    started.push(url);
+    return await new Promise(resolve => {
+        releases.set(url, () => resolve({
+            ok: true,
+            json: async () => ({ url }),
+        }));
+    });
+};
+
+const { requestJsonManaged } = await import('./request.mjs');
+const blockers = [
+    requestJsonManaged('heavy:1', '/api/heavy-1', undefined, 'failed', { lane: 'heavy', ttlMs: 0 }),
+    requestJsonManaged('heavy:2', '/api/heavy-2', undefined, 'failed', { lane: 'heavy', ttlMs: 0 }),
+];
+await waitForStarted('/api/heavy-1');
+await waitForStarted('/api/heavy-2');
+
+const queuedHeavy = requestJsonManaged(
+    'heavy:queued',
+    '/api/heavy-queued',
+    undefined,
+    'failed',
+    { lane: 'heavy', ttlMs: 0 },
+);
+const critical = requestJsonManaged(
+    'session:critical',
+    '/api/session-critical',
+    undefined,
+    'failed',
+    { lane: 'critical', priority: 'high', ttlMs: 0 },
+);
+await waitForStarted('/api/session-critical');
+const startedBeforeRelease = [...started];
+releases.get('/api/session-critical')();
+const criticalResult = await critical;
+
+releases.get('/api/heavy-1')();
+releases.get('/api/heavy-2')();
+await waitForStarted('/api/heavy-queued');
+releases.get('/api/heavy-queued')();
+await Promise.all([...blockers, queuedHeavy]);
+
+console.log(JSON.stringify({
+    startedBeforeRelease,
+    finalStarted: started,
+    criticalResult,
+    logErrorCalls: globalThis.__logErrorCalls.length,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert json.loads(completed.stdout) == {
+        "startedBeforeRelease": [
+            "/api/heavy-1",
+            "/api/heavy-2",
+            "/api/session-critical",
+        ],
+        "finalStarted": [
+            "/api/heavy-1",
+            "/api/heavy-2",
+            "/api/session-critical",
+            "/api/heavy-queued",
+        ],
+        "criticalResult": {"url": "/api/session-critical"},
         "logErrorCalls": 0,
     }

@@ -112,6 +112,146 @@ console.log(JSON.stringify({
     assert payload["sortedFirstProjectTitle"] == "Alpha Project"
 
 
+def test_new_session_draft_event_renders_sidebar_session_without_refetch(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadProjects } from "./sidebar.mjs";
+
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || null;
+    }
+};
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const fetchCountAfterInitialLoad = globalThis.__fetchSessionsCalls;
+
+document.dispatchEvent(new CustomEvent("agent-teams-new-session-draft-created", {
+    detail: {
+        sessionId: "session-immediate",
+        workspaceId: "alpha-project",
+        session: {
+            session_id: "session-immediate",
+            workspace_id: "alpha-project",
+            updated_at: "2026-03-14T12:00:00Z",
+            metadata: {},
+        },
+    },
+}));
+await flushTasks();
+
+document.dispatchEvent(new CustomEvent("agent-teams-session-title-previewed", {
+    detail: {
+        sessionId: "session-immediate",
+        title: "你好",
+    },
+}));
+await flushTasks();
+
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const labels = firstProject.querySelectorAll(".session-id").map(node => node.textContent);
+
+console.log(JSON.stringify({
+    fetchCountAfterInitialLoad,
+    fetchCountAfterDraftEvent: globalThis.__fetchSessionsCalls,
+    firstLabel: labels[0],
+    labels,
+}));
+process.exit(0);
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: { file_scope: { backend: "project" } },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-old",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:00:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Old conversation" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    globalThis.__fetchSessionsCalls = (globalThis.__fetchSessionsCalls || 0) + 1;
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function deleteSession() {
+    return { status: "ok" };
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function forkWorkspace() {
+    return {};
+}
+
+export async function pickWorkspace() {
+    return { workspace: workspaces[0] };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["fetchCountAfterInitialLoad"] == 1
+    assert payload["fetchCountAfterDraftEvent"] == 1
+    assert payload["firstLabel"] == "你好"
+
+
 def test_projects_sidebar_renders_session_run_status_indicators(
     tmp_path: Path,
 ) -> None:
@@ -485,10 +625,12 @@ const unreadItem = firstProject.querySelectorAll(".session-item")
 
 unreadItem.onclick();
 const immediateClassName = unreadItem.className;
+await flushTasks();
 
 console.log(JSON.stringify({
     immediateClassName,
     selectedSessionIds: globalThis.__selectedSessionIds,
+    terminalViewCalls: globalThis.__terminalViewCalls,
 }));
 """.strip(),
     )
@@ -498,6 +640,7 @@ console.log(JSON.stringify({
     assert "has-run-indicator-unread" not in class_name
     assert "session-run-indicator-viewed" in class_name
     assert payload["selectedSessionIds"] == ["session-unread"]
+    assert payload["terminalViewCalls"] == []
 
 
 def test_projects_sidebar_keeps_latest_rapid_session_click_active(
@@ -552,7 +695,53 @@ console.log(JSON.stringify({
     assert payload["currentSessionId"] == "session-10"
 
 
-def test_projects_sidebar_session_activation_animation_ignores_old_timeout(
+def test_projects_sidebar_parent_session_click_preserves_active_subagent_until_handler(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+state.currentSessionId = "session-11";
+state.activeSubagentSession = {
+    sessionId: "session-11",
+    instanceId: "inst-sub-1",
+};
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+    globalThis.__activeSubagentAtSelect = state.activeSubagentSession;
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const parentItem = firstProject.querySelectorAll(".session-item")
+    .find(item => item.getAttribute("data-session-id") === "session-11");
+
+parentItem.onclick();
+await flushTasks();
+
+console.log(JSON.stringify({
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    activeSubagentAtSelect: globalThis.__activeSubagentAtSelect,
+}));
+""".strip(),
+    )
+
+    assert payload["selectedSessionIds"] == ["session-11"]
+    assert payload["activeSubagentAtSelect"] == {
+        "sessionId": "session-11",
+        "instanceId": "inst-sub-1",
+    }
+
+
+def test_projects_sidebar_session_click_does_not_add_activation_animation(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -583,28 +772,23 @@ item.onclick();
 const afterFirstClick = item.className;
 item.onclick();
 const afterSecondClick = item.className;
-scheduledTimeouts[0].callback();
-const afterOldTimeout = item.className;
-scheduledTimeouts[1].callback();
-const afterNewTimeout = item.className;
+const afterScheduledTimeouts = scheduledTimeouts.length;
 globalThis.setTimeout = originalSetTimeout;
 
 console.log(JSON.stringify({
     afterFirstClick,
     afterSecondClick,
-    afterOldTimeout,
-    afterNewTimeout,
+    afterScheduledTimeouts,
     timeoutDelays: scheduledTimeouts.map(item => item.delay),
 }));
 """.strip(),
     )
 
-    assert "session-item-activating" in str(payload["afterFirstClick"]).split()
-    assert "session-item-activating" in str(payload["afterSecondClick"]).split()
-    assert "session-item-activating" in str(payload["afterOldTimeout"]).split()
-    assert "session-item-activating" not in str(payload["afterNewTimeout"]).split()
+    assert "session-item-activating" not in str(payload["afterFirstClick"]).split()
+    assert "session-item-activating" not in str(payload["afterSecondClick"]).split()
+    assert payload["afterScheduledTimeouts"] == 1
     timeout_delays = cast(list[int], payload["timeoutDelays"])
-    assert timeout_delays[-2:] == [140, 140]
+    assert timeout_delays == [180]
 
 
 def test_projects_sidebar_new_session_keeps_session_visibility_collapsed_and_declares_animations(
@@ -673,7 +857,17 @@ console.log(JSON.stringify({
     )
     assert "let pendingSessionAnimation = null;" in sidebar_script
     assert "function animateSessionItem(item, animation) {" in sidebar_script
+    assert "function cancelPendingSessionSelection(reason) {" in sidebar_script
+    assert (
+        "if (currentWorkspaceId) {\n        openNewSessionDraftFromSidebar(currentWorkspaceId);"
+        not in sidebar_script
+    )
     assert "openNewSessionDraftFromSidebar(projectId);" in sidebar_script
+    assert (
+        "cancelPendingSessionSelection(`feature:${safeFeatureId}`);" in sidebar_script
+    )
+    assert "agent-teams-session-selection-cancelled" in sidebar_script
+    assert "if (state.currentFeatureViewId === safeFeatureId) {" in sidebar_script
     assert "animateSessionItem(sessionItem, 'removing');" in sidebar_script
     assert (
         "optimisticActivateSession(sessionId, { animate: true, item: button, updateState: false });"
@@ -689,15 +883,22 @@ console.log(JSON.stringify({
         not in sidebar_script
     )
     assert "agent-teams-session-activated" in sidebar_script
-    assert "void markSelectedSessionTerminalViewed(sessionId, selectionSignal);" in (
+    session_script = (
         repo_root / "frontend" / "dist" / "js" / "app" / "session.js"
     ).read_text(encoding="utf-8")
+    assert "selectedSessionNeedsTerminalView" in session_script
+    assert "sessionRecordNeedsTerminalView(sessionRecord)" in session_script
+    assert "if (sessionNeedsTerminalView)" in session_script
+    assert (
+        "void markSelectedSessionTerminalViewed(safeSessionId, selectionSignal);"
+        in session_script
+    )
     assert ".session-item-entering {" in components_base_css
     assert ".session-item-removing {" in components_base_css
-    assert ".session-item-activating {" in components_base_css
+    assert ".session-item-switch-target {" in components_base_css
     assert "@keyframes sessionItemEnter {" in components_base_css
     assert "@keyframes sessionItemRemove {" in components_base_css
-    assert "@keyframes sessionItemActivate {" in components_base_css
+    assert "@keyframes sessionItemActivate {" not in components_base_css
     assert "pendingSessionVisibilityAnimation" in sidebar_script
     assert "SESSION_VISIBILITY_ANIMATED_ITEM_LIMIT = 24" in sidebar_script
     assert "session-entry-visible-entering" in sidebar_script
@@ -705,6 +906,12 @@ console.log(JSON.stringify({
     assert "button.scrollIntoView?.({ block: 'nearest' });" in (
         repo_root / "frontend" / "dist" / "js" / "components" / "sessionSearch.js"
     ).read_text(encoding="utf-8")
+    assert "parentItem?.scrollIntoView?.({ block: 'nearest' });" in sidebar_script
+    assert (
+        "activeSubagentItem?.scrollIntoView?.({ block: 'nearest' });" in sidebar_script
+    )
+    assert "function handleSessionUpserted(event) {" in sidebar_script
+    assert "agent-teams-session-upserted" in sidebar_script
     assert (
         "function renderProjectsWorkspaceShell(toolbar, contentNodes)" in sidebar_script
     )
@@ -1274,7 +1481,16 @@ export async function runAutomationProject() {
     assert payload["collapsedChildCount"] == 2
     assert ".session-subagent-list.is-collapsed" in components_css
     assert ".session-subagent-list.is-expanded" in components_css
+    assert ".projects-list .session-subagent-list.is-animating {" in components_css
+    assert (
+        ".projects-list .session-subagent-list.is-animating::before {"
+        not in components_css
+    )
+    assert "function setSidebarCollapsibleExpandedState" in sidebar_script
+    assert "setSidebarCollapsibleExpandedState(list, expanded," in sidebar_script
+    assert "setSidebarCollapsibleExpandedState(body, expanded," in sidebar_script
     assert "function syncSubagentSessionListVisualState" in sidebar_script
+    assert "subagentListVisualSyncToken" in sidebar_script
 
 
 def test_projects_sidebar_uses_session_summary_for_subagent_toggle_without_prefetch(
@@ -2442,6 +2658,9 @@ console.log(JSON.stringify({
     openedSkillsFeatureCount: globalThis.__openedSkillsFeatureCount || 0,
     openedAutomationProjectIds: globalThis.__openedAutomationProjectIds,
     openedGatewayFeatureCount: globalThis.__openedGatewayFeatureCount || 0,
+    fetchWorkspacesCalls: globalThis.__fetchWorkspacesCalls || 0,
+    fetchSessionsCalls: globalThis.__fetchSessionsCalls || 0,
+    fetchAutomationProjectsCalls: globalThis.__fetchAutomationProjectsCalls || 0,
 }));
 """.strip(),
         mock_api_source="""
@@ -2459,10 +2678,17 @@ const workspaces = [
 ];
 
 export async function fetchWorkspaces() {
+    globalThis.__fetchWorkspacesCalls = (globalThis.__fetchWorkspacesCalls || 0) + 1;
     return workspaces;
 }
 
 export async function fetchSessions() {
+    globalThis.__fetchSessionsCalls = (globalThis.__fetchSessionsCalls || 0) + 1;
+    return [];
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchAutomationProjectsCalls = (globalThis.__fetchAutomationProjectsCalls || 0) + 1;
     return [];
 }
 
@@ -2515,6 +2741,56 @@ export async function enableAutomationProject() {
     assert payload["openedSkillsFeatureCount"] == 1
     assert payload["openedAutomationProjectIds"] == [""]
     assert payload["openedGatewayFeatureCount"] == 1
+    assert payload["fetchWorkspacesCalls"] == 1
+    assert payload["fetchSessionsCalls"] == 1
+    assert payload["fetchAutomationProjectsCalls"] == 1
+
+
+def test_projects_sidebar_detaches_active_stream_before_opening_feature_view(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+state.currentSessionId = "session-running";
+state.activeEventSource = { readyState: 1 };
+
+await loadProjects();
+const featureSection = document.getElementById("projects-list").children[0];
+const featureItems = featureSection.querySelectorAll(".home-feature-item");
+featureItems[0]?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    currentSessionId: state.currentSessionId,
+    activeEventSource: state.activeEventSource,
+    currentFeatureViewId: state.currentFeatureViewId,
+    detachStreamCalls: globalThis.__detachStreamCalls || 0,
+    detachSubagentStreamCalls: globalThis.__detachSubagentStreamCalls || 0,
+    detachForegroundSubmissionCalls: globalThis.__detachForegroundSubmissionCalls || 0,
+    stoppedSessionContinuity: globalThis.__stoppedSessionContinuity || [],
+    clearSessionTimelineCalls: globalThis.__clearSessionTimelineCalls || 0,
+    openedSkillsFeatureCount: globalThis.__openedSkillsFeatureCount || 0,
+}));
+""".strip(),
+    )
+
+    assert payload["currentSessionId"] is None
+    assert payload["activeEventSource"] is None
+    assert payload["currentFeatureViewId"] == "skills"
+    assert payload["detachStreamCalls"] == 1
+    assert payload["detachSubagentStreamCalls"] == 1
+    assert payload["detachForegroundSubmissionCalls"] == 1
+    assert payload["stoppedSessionContinuity"] == ["session-running"]
+    assert payload["clearSessionTimelineCalls"] == 1
+    assert payload["openedSkillsFeatureCount"] == 1
 
 
 def test_projects_sidebar_primary_new_session_opens_draft_for_multiple_workspaces(
@@ -2555,6 +2831,138 @@ console.log(JSON.stringify({
     assert payload["openedNewSessionDraftWorkspaceIds"] == [""]
     assert payload["selectedSessionIds"] == []
     assert payload["showFormDialogTitles"] == []
+
+
+def test_projects_sidebar_primary_new_session_does_not_override_later_session_selection(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: { file_scope: { backend: "project" } },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-11",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+    },
+];
+
+let fetchWorkspaceCalls = 0;
+
+export async function fetchWorkspaces() {
+    fetchWorkspaceCalls += 1;
+    globalThis.__fetchWorkspacesCalls = fetchWorkspaceCalls;
+    if (fetchWorkspaceCalls === 1) {
+        return workspaces;
+    }
+    return new Promise(resolve => {
+        globalThis.__resolveNewSessionWorkspaces = () => resolve(workspaces);
+    });
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+state.currentWorkspaceId = "alpha-project";
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const featureSection = projectsList.children[0];
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+const sessionItem = firstProject.querySelectorAll(".session-item")[0];
+
+featureSection.querySelector(".home-new-session-btn").onclick();
+await flushTasks();
+sessionItem.onclick();
+globalThis.__resolveNewSessionWorkspaces();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    fetchWorkspacesCalls: globalThis.__fetchWorkspacesCalls,
+    openedNewSessionDraftWorkspaceIds: globalThis.__openedNewSessionDraftWorkspaceIds,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+    currentSessionId: state.currentSessionId,
+    currentMainView: state.currentMainView,
+}));
+""".strip(),
+    )
+
+    assert payload["fetchWorkspacesCalls"] == 2
+    assert payload["openedNewSessionDraftWorkspaceIds"] == []
+    assert payload["selectedSessionIds"] == ["session-11"]
+    assert payload["currentSessionId"] == "session-11"
+    assert payload["currentMainView"] == "session"
 
 
 def test_projects_sidebar_new_session_detaches_active_stream_without_session(
@@ -2933,7 +3341,56 @@ console.log(JSON.stringify({
 
     assert "is-active" in str(payload["className"])
     assert payload["ariaCurrent"] == "page"
-    assert payload["activeSessionCount"] == 1
+    assert payload["activeSessionCount"] == 0
+
+
+def test_projects_sidebar_cancels_pending_session_switch_before_workspace_view(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+} from "./sidebar.mjs";
+import { state } from "./mockState.mjs";
+
+installGlobals(createDomEnvironment());
+state.currentSessionId = "session-running";
+state.activeEventSource = { readyState: 1 };
+
+await loadProjects();
+const projectsList = document.getElementById("projects-list");
+const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
+firstProject.querySelector(".project-title-btn").onclick({ stopPropagation() {} });
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    currentSessionId: state.currentSessionId,
+    activeEventSource: state.activeEventSource,
+    openedWorkspaceIds: globalThis.__openedWorkspaceIds,
+    detachStreamCalls: globalThis.__detachStreamCalls || 0,
+    detachForegroundSubmissionCalls: globalThis.__detachForegroundSubmissionCalls || 0,
+    stoppedSessionContinuity: globalThis.__stoppedSessionContinuity || [],
+    selectionCancelEvents: globalThis.__documentDispatches
+        .filter(event => event.type === "agent-teams-session-selection-cancelled"),
+}));
+""".strip(),
+    )
+
+    assert payload["currentSessionId"] is None
+    assert payload["activeEventSource"] is None
+    assert payload["openedWorkspaceIds"] == ["alpha-project"]
+    assert payload["detachStreamCalls"] == 1
+    assert payload["detachForegroundSubmissionCalls"] == 1
+    assert payload["stoppedSessionContinuity"] == ["session-running"]
+    assert payload["selectionCancelEvents"] == [
+        {
+            "type": "agent-teams-session-selection-cancelled",
+            "detail": {"reason": "workspace:alpha-project"},
+        }
+    ]
 
 
 def test_projects_sidebar_defers_passive_refresh_while_hovering(
@@ -3620,9 +4077,13 @@ def _run_sidebar_script(
     session_search_source_path = (
         repo_root / "frontend" / "dist" / "js" / "components" / "sessionSearch.js"
     )
+    session_sidebar_store_source_path = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "sessionSidebarStore.js"
+    )
 
     module_under_test_path = tmp_path / "sidebar.mjs"
     session_search_module_path = tmp_path / "sessionSearch.mjs"
+    session_sidebar_store_module_path = tmp_path / "sessionSidebarStore.mjs"
     mock_dom_path = tmp_path / "mockDom.mjs"
     mock_feedback_path = tmp_path / "mockFeedback.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
@@ -4289,6 +4750,17 @@ export async function runAutomationProject() {
             '    return { status: "ok" };\n'
             "}\n"
         )
+    if (
+        "export async function markSessionTerminalRunViewed("
+        not in resolved_mock_api_source
+    ):
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function markSessionTerminalRunViewed(sessionId) {\n"
+            "    globalThis.__terminalViewCalls.push(sessionId);\n"
+            '    return { status: "ok" };\n'
+            "}\n"
+        )
     mock_api_path.write_text(
         resolved_mock_api_source,
         encoding="utf-8",
@@ -4561,9 +5033,14 @@ export function syncSessionDebugBadge() {
         .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
         .replace("./rounds/timeline.js", "./mockRoundsTimeline.mjs")
         .replace("./sessionSearch.js", "./sessionSearch.mjs")
+        .replace("./sessionSidebarStore.js", "./sessionSidebarStore.mjs")
         .replace("./sessionDebugBadge.js", "./mockSessionDebugBadge.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    session_sidebar_store_module_path.write_text(
+        session_sidebar_store_source_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     session_search_module_path.write_text(
         session_search_source_path.read_text(encoding="utf-8").replace(
             "../utils/i18n.js",
@@ -4586,6 +5063,7 @@ globalThis.__deleteWorkspaceCalls = [];
 globalThis.__forkCalls = [];
 globalThis.__renameCalls = [];
 globalThis.__selectedSessionIds = [];
+globalThis.__terminalViewCalls = [];
 globalThis.__openedWorkspaceIds = [];
 globalThis.__openedAutomationProjectIds = [];
 globalThis.__hideProjectViewCalls = 0;

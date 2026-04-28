@@ -101,6 +101,9 @@ let currentSnapshot = null;
 let currentSnapshotWorkspaceId = null;
 let currentMountName = null;
 let currentLoadToken = 0;
+let currentFeatureRequestToken = 0;
+let currentFeatureRequestController = null;
+let currentFeatureLoadingTimer = null;
 let languageBound = false;
 let gatewayModalRoot = null;
 let automationEditorModalRoot = null;
@@ -116,6 +119,7 @@ const FEATURE_VIEW_IDS = Object.freeze({
     automation: 'automation',
     gateway: 'gateway',
 });
+const FEATURE_LOADING_DELAY_MS = 120;
 const FEATURE_CLAWHUB_FIELD_IDS = Object.freeze({
     saveButtonId: 'feature-save-clawhub-token-btn',
     probeButtonId: 'feature-test-clawhub-btn',
@@ -817,9 +821,12 @@ function formatAutomationRunLogMessage(result) {
     return formatMessage('sidebar.log.started_automation_run', { session_id: sessionId });
 }
 
-async function fetchAutomationSessionConfigDependencies(context) {
+async function fetchAutomationSessionConfigDependencies(context, options = {}) {
     const [roleOptions, orchestrationConfig] = await Promise.all([
-        fetchRoleConfigOptions().catch(error => {
+        fetchRoleConfigOptions({ signal: options.signal }).catch(error => {
+            if (isAbortError(error)) {
+                throw error;
+            }
             logWarn(
                 'frontend.automation.role_options_failed',
                 'Failed to fetch automation role options',
@@ -830,7 +837,10 @@ async function fetchAutomationSessionConfigDependencies(context) {
             );
             return { normal_mode_roles: [] };
         }),
-        fetchOrchestrationConfig().catch(error => {
+        fetchOrchestrationConfig({ signal: options.signal }).catch(error => {
+            if (isAbortError(error)) {
+                throw error;
+            }
             logWarn(
                 'frontend.automation.orchestration_config_failed',
                 'Failed to fetch automation orchestration config',
@@ -2019,6 +2029,8 @@ function openFeatureShell(featureId) {
     currentProjectViewMode = 'feature';
     currentFeatureViewId = featureId;
     state.currentFeatureViewId = featureId;
+    state.activeSubagentSession = null;
+    state.activeView = 'main';
     currentWorkspace = null;
     currentAutomationProject = null;
     currentSnapshot = null;
@@ -2036,18 +2048,98 @@ function openFeatureShell(featureId) {
     setProjectViewVisible(true);
 }
 
-function renderFeatureLoadingState(title, summary) {
-    renderToolbar(null, {
-        title,
-        mode: 'feature',
-        summary,
-    });
-    if (els.projectViewContent) {
-        els.projectViewContent.innerHTML = renderInlineState(summary || t('workspace_view.loading'));
+function beginFeatureRequest(featureId) {
+    abortCurrentFeatureRequest();
+    currentFeatureRequestToken += 1;
+    const token = currentFeatureRequestToken;
+    const controller = typeof AbortController === 'function'
+        ? new AbortController()
+        : null;
+    currentFeatureRequestController = controller;
+    openFeatureShell(featureId);
+    return {
+        token,
+        signal: controller?.signal || null,
+        controller,
+    };
+}
+
+function abortCurrentFeatureRequest() {
+    clearFeatureLoadingTimer();
+    if (currentFeatureRequestController) {
+        currentFeatureRequestController.abort();
+        currentFeatureRequestController = null;
     }
 }
 
-async function loadAutomationHomeDetail(projectId) {
+function isCurrentFeatureRequest(featureId, token) {
+    return (
+        token === currentFeatureRequestToken
+        && currentProjectViewMode === 'feature'
+        && currentFeatureViewId === featureId
+        && String(state.currentFeatureViewId || '').trim() === featureId
+    );
+}
+
+function finishFeatureRequest(controller) {
+    if (currentFeatureRequestController === controller) {
+        clearFeatureLoadingTimer();
+        currentFeatureRequestController = null;
+    }
+}
+
+function isAbortError(error) {
+    return error?.name === 'AbortError';
+}
+
+function clearFeatureLoadingTimer() {
+    if (!currentFeatureLoadingTimer) {
+        return;
+    }
+    globalThis.clearTimeout(currentFeatureLoadingTimer);
+    currentFeatureLoadingTimer = null;
+}
+
+function renderFeaturePendingState(featureId, title, loadingSummary, request) {
+    renderToolbar(null, {
+        title,
+        mode: 'feature',
+        summary: '',
+    });
+    clearFeatureLoadingTimer();
+    currentFeatureLoadingTimer = globalThis.setTimeout(() => {
+        currentFeatureLoadingTimer = null;
+        if (!isCurrentFeatureRequest(featureId, request.token)) {
+            return;
+        }
+        renderToolbar(null, {
+            title,
+            mode: 'feature',
+            summary: loadingSummary,
+        });
+        if (els.projectViewContent) {
+            els.projectViewContent.innerHTML = renderInlineState(
+                loadingSummary,
+                'is-feature-loading-state',
+            );
+        }
+    }, FEATURE_LOADING_DELAY_MS);
+}
+
+function getFeatureLoadingSummary(featureId) {
+    if (featureId === FEATURE_VIEW_IDS.skills) {
+        return t('feature.skills.loading');
+    }
+    if (featureId === FEATURE_VIEW_IDS.automation) {
+        return t('feature.automation.loading');
+    }
+    if (featureId === FEATURE_VIEW_IDS.gateway) {
+        return t('feature.gateway.loading');
+    }
+    return t('feature.loading');
+}
+
+async function loadAutomationHomeDetail(projectId, options = {}) {
     const normalizedProjectId = String(projectId || '').trim();
     if (!normalizedProjectId) {
         currentAutomationHomeDetail = createInitialAutomationHomeDetail();
@@ -2055,11 +2147,11 @@ async function loadAutomationHomeDetail(projectId) {
         return;
     }
     const [project, sessions, workspaces, deliveryBindings, sessionConfigDependencies] = await Promise.all([
-        fetchAutomationProject(normalizedProjectId),
-        fetchAutomationProjectSessions(normalizedProjectId),
-        fetchWorkspaces(),
-        fetchAutomationFeishuBindings(),
-        fetchAutomationSessionConfigDependencies('detail'),
+        fetchAutomationProject(normalizedProjectId, { signal: options.signal }),
+        fetchAutomationProjectSessions(normalizedProjectId, { signal: options.signal }),
+        fetchWorkspaces({ signal: options.signal }),
+        fetchAutomationFeishuBindings({ signal: options.signal }),
+        fetchAutomationSessionConfigDependencies('detail', { signal: options.signal }),
     ]);
     currentAutomationHomeDetail = {
         project,
@@ -2076,12 +2168,12 @@ async function loadAutomationHomeDetail(projectId) {
     currentAutomationProject = project;
 }
 
-async function loadGitHubFeatureState() {
+async function loadGitHubFeatureState(options = {}) {
     const [accounts, repos, rules, workspaces] = await Promise.all([
-        fetchGitHubTriggerAccounts(),
-        fetchGitHubRepoSubscriptions(),
-        fetchGitHubTriggerRules(),
-        fetchWorkspaces(),
+        fetchGitHubTriggerAccounts({ signal: options.signal }),
+        fetchGitHubRepoSubscriptions({ signal: options.signal }),
+        fetchGitHubTriggerRules({ signal: options.signal }),
+        fetchWorkspaces({ signal: options.signal }),
     ]);
     currentGitHubFeatureState = {
         accounts: Array.isArray(accounts) ? accounts : [],
@@ -3210,6 +3302,8 @@ export async function openWorkspaceProjectView(workspace) {
         return;
     }
 
+    abortCurrentFeatureRequest();
+    currentFeatureRequestToken += 1;
     cacheProjectViewState();
     currentProjectViewMode = 'workspace';
     currentAutomationProject = null;
@@ -3257,14 +3351,27 @@ export async function openAutomationProjectView(project) {
 }
 
 export async function openSkillsFeatureView() {
-    openFeatureShell(FEATURE_VIEW_IDS.skills);
-    renderFeatureLoadingState(t('feature.skills.title'), t('workspace_view.loading'));
+    const request = beginFeatureRequest(FEATURE_VIEW_IDS.skills);
+    renderFeaturePendingState(
+        FEATURE_VIEW_IDS.skills,
+        t('feature.skills.title'),
+        getFeatureLoadingSummary(FEATURE_VIEW_IDS.skills),
+        request,
+    );
     try {
-        currentSkillsStatus = await fetchConfigStatus();
+        currentSkillsStatus = await fetchConfigStatus({ signal: request.signal });
+        if (!isCurrentFeatureRequest(FEATURE_VIEW_IDS.skills, request.token)) {
+            return;
+        }
         renderSkillsFeatureView();
     } catch (error) {
+        if (isAbortError(error) || !isCurrentFeatureRequest(FEATURE_VIEW_IDS.skills, request.token)) {
+            return;
+        }
         renderFeatureErrorState(t('feature.skills.title'), error);
         sysLog(`Failed to load skills feature: ${error?.message || error}`, 'log-error');
+    } finally {
+        finishFeatureRequest(request.controller);
     }
 }
 
@@ -3275,18 +3382,23 @@ async function openAutomationFeatureView(
         nodeKey = '',
     } = {},
 ) {
-    openFeatureShell(FEATURE_VIEW_IDS.automation);
+    const request = beginFeatureRequest(FEATURE_VIEW_IDS.automation);
     currentAutomationFeatureSection = section === 'github' ? 'github' : 'schedules';
     selectedAutomationHomeProjectId = String(projectId || '').trim();
     if (nodeKey) {
         currentGitHubFeatureNodeKey = String(nodeKey).trim() || 'access';
     }
-    renderFeatureLoadingState(t('feature.automation.title'), t('workspace_view.loading'));
+    renderFeaturePendingState(
+        FEATURE_VIEW_IDS.automation,
+        t('feature.automation.title'),
+        getFeatureLoadingSummary(FEATURE_VIEW_IDS.automation),
+        request,
+    );
     try {
         if (currentAutomationFeatureSection === 'github') {
-            await loadGitHubFeatureState();
+            await loadGitHubFeatureState({ signal: request.signal });
         } else {
-            const projects = await fetchAutomationProjects();
+            const projects = await fetchAutomationProjects({ signal: request.signal });
             currentAutomationProjects = Array.isArray(projects) ? projects : [];
             if (!selectedAutomationHomeProjectId && currentAutomationProjects.length > 0) {
                 selectedAutomationHomeProjectId = String(
@@ -3294,16 +3406,26 @@ async function openAutomationFeatureView(
                 ).trim();
             }
             if (selectedAutomationHomeProjectId) {
-                await loadAutomationHomeDetail(selectedAutomationHomeProjectId);
+                await loadAutomationHomeDetail(selectedAutomationHomeProjectId, {
+                    signal: request.signal,
+                });
             } else {
                 currentAutomationHomeDetail = createInitialAutomationHomeDetail();
                 currentAutomationProject = null;
             }
         }
+        if (!isCurrentFeatureRequest(FEATURE_VIEW_IDS.automation, request.token)) {
+            return;
+        }
         renderAutomationHomeView();
     } catch (error) {
+        if (isAbortError(error) || !isCurrentFeatureRequest(FEATURE_VIEW_IDS.automation, request.token)) {
+            return;
+        }
         renderFeatureErrorState(t('feature.automation.title'), error);
         sysLog(`Failed to load automation feature: ${error?.message || error}`, 'log-error');
+    } finally {
+        finishFeatureRequest(request.controller);
     }
 }
 
@@ -3316,17 +3438,25 @@ export async function openAutomationGitHubView(nodeKey = 'access') {
 }
 
 export async function openImFeatureView() {
-    openFeatureShell(FEATURE_VIEW_IDS.gateway);
-    renderFeatureLoadingState(t('feature.gateway.title'), t('workspace_view.loading'));
+    const request = beginFeatureRequest(FEATURE_VIEW_IDS.gateway);
+    renderFeaturePendingState(
+        FEATURE_VIEW_IDS.gateway,
+        t('feature.gateway.title'),
+        getFeatureLoadingSummary(FEATURE_VIEW_IDS.gateway),
+        request,
+    );
     try {
         const [triggers, xiaolubanAccounts, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
-            fetchTriggers(),
-            fetchXiaolubanGatewayAccounts(),
-            fetchWeChatGatewayAccounts(),
-            fetchWorkspaces(),
-            fetchRoleConfigOptions(),
-            fetchOrchestrationConfig(),
+            fetchTriggers({ signal: request.signal }),
+            fetchXiaolubanGatewayAccounts({ signal: request.signal }),
+            fetchWeChatGatewayAccounts({ signal: request.signal }),
+            fetchWorkspaces({ signal: request.signal }),
+            fetchRoleConfigOptions({ signal: request.signal }),
+            fetchOrchestrationConfig({ signal: request.signal }),
         ]);
+        if (!isCurrentFeatureRequest(FEATURE_VIEW_IDS.gateway, request.token)) {
+            return;
+        }
         currentGatewayFeatureState = {
             ...currentGatewayFeatureState,
             feishuTriggers: normalizeFeishuTriggers(triggers),
@@ -3340,8 +3470,13 @@ export async function openImFeatureView() {
         };
         renderGatewayFeatureView();
     } catch (error) {
+        if (isAbortError(error) || !isCurrentFeatureRequest(FEATURE_VIEW_IDS.gateway, request.token)) {
+            return;
+        }
         renderFeatureErrorState(t('feature.gateway.title'), error);
         sysLog(`Failed to load IM feature: ${error?.message || error}`, 'log-error');
+    } finally {
+        finishFeatureRequest(request.controller);
     }
 }
 
@@ -3378,6 +3513,8 @@ export async function refreshProjectView() {
 }
 
 export function hideProjectView() {
+    abortCurrentFeatureRequest();
+    currentFeatureRequestToken += 1;
     cacheProjectViewState();
     currentWorkspace = null;
     currentAutomationProject = null;
@@ -5246,8 +5383,37 @@ async function handleAutomationRunFeatureProject() {
     const projectId = String(project?.automation_project_id || '').trim();
     const result = await runAutomationProject(String(project?.automation_project_id || ''));
     sysLog(formatAutomationRunLogMessage(result));
+    dispatchAutomationRunSessionUpsert(project, result);
     document.dispatchEvent(new CustomEvent('agent-teams-projects-changed'));
     await openAutomationHomeView(projectId);
+}
+
+function dispatchAutomationRunSessionUpsert(project, result) {
+    const sessionId = String(result?.session_id || '').trim();
+    if (!sessionId) {
+        return;
+    }
+    const workspaceId = String(project?.workspace_id || '').trim();
+    const projectId = String(project?.automation_project_id || '').trim();
+    const title = String(
+        project?.display_name
+        || project?.name
+        || project?.prompt
+        || sessionId,
+    ).trim();
+    document.dispatchEvent(new CustomEvent('agent-teams-session-upserted', {
+        detail: {
+            sessionId,
+            workspaceId,
+            session: {
+                session_id: sessionId,
+                workspace_id: workspaceId,
+                project_kind: 'automation',
+                project_id: projectId,
+                metadata: title ? { title } : {},
+            },
+        },
+    }));
 }
 
 async function handleAutomationToggleFeatureProject() {

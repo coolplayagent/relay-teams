@@ -8,6 +8,7 @@ export {
     startNewSession,
     fetchSessionHistory,
     fetchSessionRecovery,
+    fetchSessionRound,
     fetchSessionRounds,
     fetchSessionAgents,
     fetchSessionSubagents,

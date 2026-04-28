@@ -7,12 +7,15 @@ import { clearContextIndicators, scheduleCoordinatorContextPreview } from '../co
 import { clearAllStreamState } from '../components/messageRenderer.js';
 import { clearSessionTokenUsage, scheduleSessionTokenUsageRefresh } from '../components/sessionTokenUsage.js';
 import { syncSessionDebugBadge } from '../components/sessionDebugBadge.js';
+import { markSidebarSessionTerminalViewed } from '../components/sessionSidebarStore.js';
 import { hideProjectView } from '../components/projectView.js';
 import { clearNewSessionDraft } from '../components/newSessionDraft.js';
+import { markSubagentRailLoading } from '../components/subagentRail.js';
 import { setRoundsMode } from '../components/sidebar.js';
 import {
     clearActiveSubagentSession,
     ensureSessionSubagents,
+    getSessionSubagentSessions,
     openSubagentSession,
 } from '../components/subagentSessions.js';
 import { fetchSessionHistory, markSessionTerminalRunViewed } from '../core/api.js';
@@ -25,6 +28,7 @@ import { applyCurrentSessionRecord, resetCurrentSessionTopology, state } from '.
 import {
     detachActiveStreamForSessionSwitch,
     detachNormalModeSubagentStreamsForSessionSwitch,
+    prepareStreamsForForegroundNavigation,
 } from '../core/stream.js';
 import { detachForegroundSubmission } from '../core/submission.js';
 import { els } from '../utils/dom.js';
@@ -34,25 +38,41 @@ import { refreshSessionTopologyControls } from './prompt.js';
 
 let sessionSelectionToken = 0;
 let sessionSelectionController = null;
+let sessionSelectionTargetId = '';
 let sessionSwitchLoadingTimer = null;
 let sessionSwitchReadyTimer = null;
+let sessionSelectionCancellationBound = false;
 const SESSION_SWITCH_LOADING_DELAY_MS = 80;
 const SESSION_SWITCH_READY_MS = 140;
 const TERMINAL_VIEW_RETRY_DELAY_MS = 250;
 const TERMINAL_VIEW_MAX_ATTEMPTS = 3;
+
+bindSessionSelectionCancellation();
 
 function isLatestSessionSelection(token, sessionId) {
     return token === sessionSelectionToken && state.currentSessionId === sessionId;
 }
 
 export async function selectSession(sessionId) {
+    bindSessionSelectionCancellation();
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
     const selectionToken = ++sessionSelectionToken;
     const selectionController = resetSessionSelectionController();
+    sessionSelectionTargetId = safeSessionId;
     const selectionSignal = selectionController.signal;
-    const isSameSession = state.currentSessionId === sessionId && !state.activeSubagentSession;
+    const hadActiveSubagentSession = !!state.activeSubagentSession;
+    const isSameSession = state.currentSessionId === safeSessionId && !hadActiveSubagentSession;
     const previousSessionId = state.currentSessionId;
     const selectedSessionEl = document.querySelector(
-        `.session-item[data-session-id="${sessionId}"]`,
+        `.session-item[data-session-id="${safeSessionId}"]`,
+    );
+    const selectedSessionNeedsTerminalView = (
+        selectedSessionEl?.classList?.contains?.('has-run-indicator-unread') === true
+        || selectedSessionEl?.classList?.contains?.('has-run-indicator-failed') === true
+        || selectedSessionEl?.classList?.contains?.('has-run-indicator-stopped') === true
     );
     const selectedWorkspaceId = String(
         selectedSessionEl?.getAttribute('data-workspace-id') || '',
@@ -62,7 +82,7 @@ export async function selectSession(sessionId) {
     }
     if (isSameSession && (state.isGenerating || state.activeEventSource)) {
         try {
-            await hydrateSessionView(sessionId, {
+            await hydrateSessionView(safeSessionId, {
                 includeRounds: false,
                 quiet: true,
                 signal: selectionSignal,
@@ -75,11 +95,14 @@ export async function selectSession(sessionId) {
         } finally {
             clearSessionSelectionController(selectionController);
         }
-        if (!isLatestSessionSelection(selectionToken, sessionId)) {
+        if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
             return;
         }
+        if (selectedSessionNeedsTerminalView) {
+            void markSelectedSessionTerminalViewed(safeSessionId, selectionSignal);
+        }
         scheduleSessionTokenUsageRefresh({ immediate: true });
-        sysLog(`Synced live session: ${sessionId}`);
+        sysLog(`Synced live session: ${safeSessionId}`);
         return;
     }
     if (!isSameSession) {
@@ -90,8 +113,11 @@ export async function selectSession(sessionId) {
         stopSessionContinuity(previousSessionId);
         detachNormalModeSubagentStreamsForSessionSwitch(previousSessionId);
     }
-    state.currentSessionId = sessionId;
-    syncSessionDebugBadge(sessionId);
+    state.currentSessionId = safeSessionId;
+    if (!isSameSession) {
+        prepareStreamsForForegroundNavigation(safeSessionId);
+    }
+    syncSessionDebugBadge(safeSessionId);
     clearNewSessionDraft();
     state.instanceRoleMap = {};
     state.roleInstanceMap = {};
@@ -104,17 +130,18 @@ export async function selectSession(sessionId) {
     state.sessionAgents = [];
     state.sessionTasks = [];
     state.selectedRoleId = null;
+    markSubagentRailLoading(safeSessionId);
     clearActiveSubagentSession();
     resetCurrentSessionTopology();
     clearSessionRecovery();
 
     document.querySelectorAll('.session-item').forEach(el => {
-        const isActive = el.getAttribute('data-session-id') === sessionId;
+        const isActive = el.getAttribute('data-session-id') === safeSessionId;
         el.classList.toggle('active', isActive);
     });
     document.dispatchEvent(
         new CustomEvent('agent-teams-session-activated', {
-            detail: { sessionId },
+            detail: { sessionId: safeSessionId },
         }),
     );
 
@@ -127,24 +154,35 @@ export async function selectSession(sessionId) {
     clearSessionTokenUsage({ preserveDisplay: true });
     clearAllStreamState({ preserveOverlay: true });
     refreshSessionTopologyControls();
-    beginSessionSwitchLoading(selectionToken, sessionId);
+    beginSessionSwitchLoading(selectionToken, safeSessionId);
 
     try {
-        const sessionRecord = await fetchSessionHistory(sessionId, {
+        const sessionRecordPromise = fetchSessionHistory(safeSessionId, {
+            priority: 'high',
             signal: selectionSignal,
         });
-        if (!isLatestSessionSelection(selectionToken, sessionId)) {
-            return;
-        }
-        applyCurrentSessionRecord(sessionRecord);
-        refreshSessionTopologyControls();
-        await hydrateSessionView(sessionId, {
+        sessionRecordPromise.catch(() => null);
+        const hydratePromise = hydrateSessionView(safeSessionId, {
             includeRounds: true,
+            priority: 'high',
             quiet: true,
             signal: selectionSignal,
         });
-        if (!isLatestSessionSelection(selectionToken, sessionId)) {
+        hydratePromise.catch(() => null);
+        const sessionRecord = await sessionRecordPromise;
+        if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
             return;
+        }
+        const sessionNeedsTerminalView = selectedSessionNeedsTerminalView
+            || sessionRecordNeedsTerminalView(sessionRecord);
+        applyCurrentSessionRecord(sessionRecord);
+        refreshSessionTopologyControls();
+        await hydratePromise;
+        if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
+            return;
+        }
+        if (sessionNeedsTerminalView) {
+            void markSelectedSessionTerminalViewed(safeSessionId, selectionSignal);
         }
     } catch (error) {
         if (error?.name === 'AbortError') {
@@ -152,24 +190,36 @@ export async function selectSession(sessionId) {
         }
         throw error;
     } finally {
-        finishSessionSwitchLoading(selectionToken, sessionId);
+        finishSessionSwitchLoading(selectionToken, safeSessionId);
         clearSessionSelectionController(selectionController);
     }
-    void markSelectedSessionTerminalViewed(sessionId, selectionSignal);
     scheduleCoordinatorContextPreview({ immediate: true });
     scheduleSessionTokenUsageRefresh({ immediate: true });
-    void ensureSessionSubagents(sessionId, {
+    void ensureSessionSubagents(safeSessionId, {
         force: true,
         signal: selectionSignal,
     });
     document.dispatchEvent(
         new CustomEvent('agent-teams-session-selected', {
-            detail: { sessionId },
+            detail: { sessionId: safeSessionId },
         }),
     );
     sysLog(formatMessage(isSameSession ? 'session.reloaded' : 'session.switched', {
-        session_id: sessionId,
+        session_id: safeSessionId,
     }));
+}
+
+function sessionRecordNeedsTerminalView(sessionRecord) {
+    if (!sessionRecord || typeof sessionRecord !== 'object') {
+        return false;
+    }
+    if (sessionRecord.has_unread_terminal_run === true) {
+        return true;
+    }
+    const status = String(
+        sessionRecord.latest_terminal_run_status || sessionRecord.latestTerminalRunStatus || '',
+    ).trim().toLowerCase();
+    return status === 'failed' || status === 'stopped';
 }
 
 function resetSessionSelectionController() {
@@ -183,6 +233,7 @@ function resetSessionSelectionController() {
 function clearSessionSelectionController(controller) {
     if (sessionSelectionController === controller) {
         sessionSelectionController = null;
+        sessionSelectionTargetId = '';
     }
 }
 
@@ -241,6 +292,41 @@ function ensureSessionSwitchLoadingNode(chatContainer) {
     chatContainer.appendChild?.(loadingNode);
 }
 
+function bindSessionSelectionCancellation() {
+    if (
+        sessionSelectionCancellationBound
+        || typeof document === 'undefined'
+        || typeof document.addEventListener !== 'function'
+    ) {
+        return;
+    }
+    sessionSelectionCancellationBound = true;
+    document.addEventListener('agent-teams-session-selection-cancelled', () => {
+        cancelActiveSessionSelection();
+    });
+}
+
+function cancelActiveSessionSelection() {
+    sessionSelectionToken += 1;
+    if (sessionSelectionController) {
+        sessionSelectionController.abort();
+        sessionSelectionController = null;
+    }
+    sessionSelectionTargetId = '';
+    clearSessionSwitchLoading();
+}
+
+function clearSessionSwitchLoading() {
+    clearTimeout(sessionSwitchLoadingTimer);
+    clearTimeout(sessionSwitchReadyTimer);
+    const chatContainer = els.chatContainer || els.chatMessages?.parentElement || null;
+    chatContainer?.classList?.remove?.(
+        'is-session-switch-pending',
+        'is-session-switching',
+        'is-session-switch-ready',
+    );
+}
+
 async function markSelectedSessionTerminalViewed(sessionId, signal = null) {
     try {
         for (let attempt = 1; attempt <= TERMINAL_VIEW_MAX_ATTEMPTS; attempt += 1) {
@@ -264,6 +350,9 @@ async function markSelectedSessionTerminalViewed(sessionId, signal = null) {
                 continue;
             }
             if (response?.status !== 'deferred') {
+                if (!signal?.aborted) {
+                    markSidebarSessionTerminalViewed(sessionId);
+                }
                 return;
             }
             if (attempt < TERMINAL_VIEW_MAX_ATTEMPTS) {
@@ -312,25 +401,43 @@ export async function selectSubagentSession(sessionId, subagent) {
     if (!safeSessionId || !safeInstanceId) {
         return;
     }
+    const isParentSelectionPending = (
+        sessionSelectionController
+        && sessionSelectionTargetId === safeSessionId
+    );
+    if (isParentSelectionPending) {
+        cancelActiveSessionSelection();
+        state.currentSessionId = safeSessionId;
+        syncSessionDebugBadge(safeSessionId);
+    }
     if (state.currentSessionId !== safeSessionId) {
         await selectSession(safeSessionId);
         if (state.currentSessionId !== safeSessionId) {
             return;
         }
     }
-    const records = await ensureSessionSubagents(safeSessionId, { force: false });
-    const resolved = records.find(item => item.instanceId === safeInstanceId)
-        || {
-            sessionId: safeSessionId,
-            instanceId: safeInstanceId,
-            roleId: String(subagent?.roleId || subagent?.role_id || '').trim(),
-            runId: String(subagent?.runId || subagent?.run_id || '').trim(),
-            title: String(subagent?.title || '').trim(),
-            status: String(subagent?.status || 'idle').trim() || 'idle',
-        };
+    cancelActiveSessionSelection();
+    const fallback = {
+        sessionId: safeSessionId,
+        instanceId: safeInstanceId,
+        roleId: String(subagent?.roleId || subagent?.role_id || '').trim(),
+        runId: String(subagent?.runId || subagent?.run_id || '').trim(),
+        title: String(subagent?.title || '').trim(),
+        status: String(subagent?.status || 'idle').trim() || 'idle',
+    };
+    const cachedRecords = getSessionSubagentSessions(safeSessionId);
+    const resolved = cachedRecords.find(item => item.instanceId === safeInstanceId) || fallback;
     hideProjectView();
     setRoundsMode();
-    await openSubagentSession(safeSessionId, resolved);
+    void openSubagentSession(safeSessionId, resolved);
+    void ensureSessionSubagents(safeSessionId, { force: false }).catch(error => {
+        if (error?.name === 'AbortError') {
+            return;
+        }
+        sysLog(formatMessage('sidebar.error.selecting_session', {
+            error: error?.message || String(error),
+        }), 'log-error');
+    });
     document.dispatchEvent(
         new CustomEvent('agent-teams-subagent-session-selected', {
             detail: {

@@ -449,6 +449,39 @@ console.log(JSON.stringify({
     ]
 
 
+def test_route_event_ignores_foreground_command_background_task_events(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('background_task_started', {
+    background_task_id: 'foreground-1',
+    run_id: 'run-1',
+    session_id: 'session-1',
+    kind: 'command',
+    execution_mode: 'foreground',
+    command: 'python script.py',
+    status: 'running',
+}, { run_id: 'run-1', trace_id: 'run-1', session_id: 'session-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    backgroundCalls: globalThis.__applyBackgroundTaskEventCalls,
+    subagentCalls: globalThis.__normalModeSubagentEvents,
+}));
+""".strip(),
+    )
+
+    assert payload["recoveryCalls"] == []
+    assert payload["backgroundCalls"] == []
+    assert payload["subagentCalls"] == []
+
+
 def test_handle_subagent_run_terminal_finalizes_with_run_id(
     tmp_path: Path,
 ) -> None:
@@ -724,6 +757,10 @@ export function markRunStreamConnected() {
 export function markRunTerminalState() {
     return undefined;
 }
+
+export function applyBackgroundTaskEvent() {
+    return undefined;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -845,6 +882,10 @@ export function finalizeStream(instanceId, roleId = '', options = null) {
     globalThis.__finalizeStreamCalls.push({ instanceId, roleId, options });
 }
 
+export function reconcileTerminalRunStreamState(runId) {
+    globalThis.__reconcileTerminalRunStreamStateCalls.push(runId);
+}
+
 export function getOrCreateStreamBlock() {
     return undefined;
 }
@@ -907,6 +948,7 @@ globalThis.__rememberNormalModeSubagentSessionCalls = [];
 globalThis.__renderActiveSubagentSessionCalls = [];
 globalThis.__updateNormalModeSubagentSessionStatusCalls = [];
 globalThis.__finalizeStreamCalls = [];
+globalThis.__reconcileTerminalRunStreamStateCalls = [];
 globalThis.__settleActiveSubagentSessionAfterTerminalCalls = [];
 globalThis.__sysLogCalls = [];
 globalThis.__activeSubagentSession = null;
@@ -953,6 +995,7 @@ def _run_event_router_script(tmp_path: Path, runner_source: str) -> dict[str, ob
         "../../components/rounds.js": "./mockRounds.mjs",
         "../../components/rounds/timeline.js": "./mockRounds.mjs",
         "../../components/sessionTokenUsage.js": "./mockSessionTokenUsage.mjs",
+        "../../components/subagentSessions.js": "./mockSubagentSessions.mjs",
         "../state.js": "./mockState.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "./runEvents.js": "./mockRunEvents.mjs",
@@ -981,6 +1024,14 @@ export const state = {
 export function scheduleRecoveryContinuityRefresh(options) {
     globalThis.__scheduleRecoveryContinuityRefreshCalls.push(options);
 }
+
+export function applyBackgroundTaskEvent(payload, eventMeta = null, eventType = '') {
+    globalThis.__applyBackgroundTaskEventCalls.push({ payload, eventMeta, eventType });
+}
+
+export function isDisplayableBackgroundTaskPayload(payload) {
+    return payload?.execution_mode === 'background' || payload?.kind === 'subagent';
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -988,6 +1039,14 @@ export function scheduleRecoveryContinuityRefresh(options) {
         """
 export function scheduleSessionTokenUsageRefresh(options) {
     globalThis.__scheduleSessionTokenUsageRefreshCalls.push(options);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSubagentSessions.mjs").write_text(
+        """
+export function rememberNormalModeSubagentFromBackgroundTask(sessionId, payload, eventType) {
+    globalThis.__normalModeSubagentEvents.push({ sessionId, payload, eventType });
 }
 """.strip(),
         encoding="utf-8",
@@ -1071,6 +1130,8 @@ export function handleNotificationRequested() { return undefined; }
 globalThis.__scheduleRecoveryContinuityRefreshCalls = [];
 globalThis.__scheduleSessionTokenUsageRefreshCalls = [];
 globalThis.__runEventCalls = [];
+globalThis.__normalModeSubagentEvents = [];
+globalThis.__applyBackgroundTaskEventCalls = [];
 
 {runner_source}
 """.strip(),

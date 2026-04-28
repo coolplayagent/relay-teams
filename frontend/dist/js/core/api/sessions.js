@@ -37,7 +37,11 @@ export async function fetchSessionHistory(sessionId, options = {}) {
         `/api/sessions/${sessionId}`,
         { signal: options.signal },
         'Failed to fetch session history',
-        { ttlMs: 300 },
+        {
+            lane: requestLaneForPriority(options.priority),
+            priority: options.priority,
+            ttlMs: 300,
+        },
     );
 }
 
@@ -84,7 +88,10 @@ export async function updateSessionTopology(sessionId, payload) {
     return result;
 }
 
-export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = null, timeline = false, signal = undefined } = {}) {
+export async function fetchSessionRounds(
+    sessionId,
+    { limit = 8, cursorRunId = null, priority = '', timeline = false, signal = undefined } = {},
+) {
     const params = new URLSearchParams();
     if (timeline) {
         params.set('timeline', 'true');
@@ -98,7 +105,11 @@ export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = n
         `/api/sessions/${sessionId}/rounds?${query}`,
         { signal },
         'Failed to fetch session rounds',
-        { ttlMs: 300, lane: 'heavy' },
+        {
+            lane: requestLaneForPriority(priority) || 'heavy',
+            priority,
+            ttlMs: 300,
+        },
     );
     if (Array.isArray(data)) {
         return {
@@ -110,13 +121,27 @@ export async function fetchSessionRounds(sessionId, { limit = 8, cursorRunId = n
     return data;
 }
 
+export async function fetchSessionRound(sessionId, runId, options = {}) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    return requestJson(
+        `/api/sessions/${safeSessionId}/rounds/${safeRunId}`,
+        { signal: options.signal },
+        'Failed to fetch session round',
+    );
+}
+
 export async function fetchSessionRecovery(sessionId, options = {}) {
     return requestJsonManaged(
         `sessions:${sessionId}:recovery`,
         `/api/sessions/${sessionId}/recovery`,
         { signal: options.signal },
         'Failed to fetch session recovery state',
-        { ttlMs: 350, lane: 'heavy' },
+        {
+            lane: requestLaneForPriority(options.priority) || 'heavy',
+            priority: options.priority,
+            ttlMs: 350,
+        },
     );
 }
 
@@ -132,7 +157,11 @@ export async function fetchSessionAgents(sessionId, options = {}) {
         `/api/sessions/${sessionId}/agents`,
         { signal: options.signal },
         'Failed to fetch session agents',
-        { ttlMs: 500, lane: 'heavy' },
+        {
+            lane: requestLaneForPriority(options.priority) || 'heavy',
+            priority: options.priority,
+            ttlMs: 500,
+        },
     );
 }
 
@@ -142,7 +171,11 @@ export async function fetchSessionSubagents(sessionId, options = {}) {
         `/api/sessions/${sessionId}/subagents`,
         { signal: options.signal },
         'Failed to fetch session subagents',
-        { ttlMs: 500, lane: 'heavy' },
+        {
+            lane: requestLaneForPriority(options.priority) || 'heavy',
+            priority: options.priority,
+            ttlMs: 500,
+        },
     );
 }
 
@@ -152,8 +185,16 @@ export async function fetchSessionTasks(sessionId, options = {}) {
         `/api/sessions/${sessionId}/tasks`,
         { signal: options.signal },
         'Failed to fetch session tasks',
-        { ttlMs: 500, lane: 'heavy' },
+        {
+            lane: requestLaneForPriority(options.priority) || 'heavy',
+            priority: options.priority,
+            ttlMs: 500,
+        },
     );
+}
+
+function requestLaneForPriority(priority) {
+    return String(priority || '').trim() === 'high' ? 'critical' : '';
 }
 
 export async function fetchAgentMessages(sessionId, instanceId, options = {}) {

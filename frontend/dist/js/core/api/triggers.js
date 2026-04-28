@@ -4,10 +4,10 @@
  */
 import { requestJson } from './request.js';
 
-export async function fetchTriggers() {
+export async function fetchTriggers(options = {}) {
     const accounts = await requestJson(
         '/api/gateway/feishu/accounts',
-        undefined,
+        { signal: options.signal },
         'Failed to fetch Feishu gateway accounts',
     );
     const rows = Array.isArray(accounts) ? accounts : [];
@@ -74,8 +74,12 @@ export async function rotateTriggerToken(triggerId) {
     );
 }
 
-export async function fetchGitHubTriggerAccounts() {
-    return requestJson('/api/triggers/github/accounts', undefined, 'Failed to fetch GitHub trigger accounts');
+export async function fetchGitHubTriggerAccounts(options = {}) {
+    return requestJson(
+        '/api/triggers/github/accounts',
+        { signal: options.signal },
+        'Failed to fetch GitHub trigger accounts',
+    );
 }
 
 export async function createGitHubTriggerAccount(payload) {
@@ -126,11 +130,15 @@ export async function disableGitHubTriggerAccount(accountId) {
     );
 }
 
-export async function fetchGitHubRepoSubscriptions() {
-    return requestJson('/api/triggers/github/repos', undefined, 'Failed to fetch GitHub repo subscriptions');
+export async function fetchGitHubRepoSubscriptions(options = {}) {
+    return requestJson(
+        '/api/triggers/github/repos',
+        { signal: options.signal },
+        'Failed to fetch GitHub repo subscriptions',
+    );
 }
 
-export async function fetchGitHubAccountRepositories(accountId, query = '') {
+export async function fetchGitHubAccountRepositories(accountId, query = '', options = {}) {
     const params = new URLSearchParams();
     const normalizedQuery = String(query || '').trim();
     if (normalizedQuery) {
@@ -139,7 +147,7 @@ export async function fetchGitHubAccountRepositories(accountId, query = '') {
     const suffix = params.size > 0 ? `?${params.toString()}` : '';
     return requestJson(
         `/api/triggers/github/accounts/${encodeURIComponent(accountId)}/repositories${suffix}`,
-        undefined,
+        { signal: options.signal },
         'Failed to fetch GitHub repositories',
     );
 }
@@ -192,8 +200,12 @@ export async function disableGitHubRepoSubscription(repoSubscriptionId) {
     );
 }
 
-export async function fetchGitHubTriggerRules() {
-    return requestJson('/api/triggers/github/rules', undefined, 'Failed to fetch GitHub trigger rules');
+export async function fetchGitHubTriggerRules(options = {}) {
+    return requestJson(
+        '/api/triggers/github/rules',
+        { signal: options.signal },
+        'Failed to fetch GitHub trigger rules',
+    );
 }
 
 export async function createGitHubTriggerRule(payload) {

@@ -15,6 +15,7 @@ import { sysLog } from '../utils/logger.js';
 
 const RIGHT_RAIL_COLLAPSED_KEY = 'agent_teams_right_rail_collapsed';
 let languageRefreshBound = false;
+let subagentRailLoadingSessionId = '';
 
 function isPrimaryOrReservedRoleId(roleId) {
     return isPrimaryRoleId(roleId) || isReservedSystemRoleId(roleId);
@@ -40,16 +41,22 @@ export function initializeSubagentRail() {
         languageRefreshBound = true;
         document.addEventListener('agent-teams-language-changed', () => {
             clearAllPanels();
-            renderSubagentRail({ preserveSelection: true });
+            renderSubagentRail({ preserveSelection: true, syncPanel: false });
         });
     }
 
     renderSubagentRail();
 }
 
+export function markSubagentRailLoading(sessionId = state.currentSessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    subagentRailLoadingSessionId = safeSessionId;
+    renderSubagentRail({ preserveSelection: true, syncPanel: false });
+}
+
 export async function refreshSubagentRail(
     sessionId = state.currentSessionId,
-    { preserveSelection = true, signal = null } = {},
+    { preserveSelection = true, priority = '', signal = null } = {},
 ) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) {
@@ -60,20 +67,32 @@ export async function refreshSubagentRail(
         return;
     }
 
+    subagentRailLoadingSessionId = safeSessionId;
+    renderSubagentRail({ preserveSelection, syncPanel: false });
+
     try {
         const [agentsPayload, tasksPayload] = await Promise.all([
-            fetchSessionAgents(safeSessionId, { signal }),
-            fetchSessionTasks(safeSessionId, { signal }),
+            fetchSessionAgents(safeSessionId, { priority, signal }),
+            fetchSessionTasks(safeSessionId, { priority, signal }),
         ]);
         if (signal?.aborted) return;
         if (state.currentSessionId !== safeSessionId) return;
 
         state.sessionAgents = normalizeSessionAgents(agentsPayload);
         state.sessionTasks = normalizeSessionTasks(tasksPayload);
-        renderSubagentRail({ preserveSelection });
+        subagentRailLoadingSessionId = '';
+        renderSubagentRail({ preserveSelection, syncPanel: preserveSelection });
     } catch (e) {
         if (e?.name === 'AbortError') return;
+        if (state.currentSessionId === safeSessionId) {
+            subagentRailLoadingSessionId = '';
+            renderSubagentRail({ preserveSelection: true, syncPanel: false });
+        }
         sysLog(`Failed to load subagent rail: ${e.message || e}`, 'log-error');
+    } finally {
+        if (subagentRailLoadingSessionId === safeSessionId && signal?.aborted) {
+            subagentRailLoadingSessionId = '';
+        }
     }
 }
 
@@ -105,7 +124,7 @@ export function rememberLiveSubagent(instanceId, roleId) {
         nextAgents.push(nextRecord);
     }
     state.sessionAgents = normalizeSessionAgents(nextAgents);
-    renderSubagentRail({ preserveSelection: true });
+    renderSubagentRail({ preserveSelection: true, syncPanel: false });
 }
 
 export function markSubagentStatus(instanceId, status) {
@@ -120,7 +139,7 @@ export function markSubagentStatus(instanceId, status) {
             }
             : agent,
     );
-    renderSubagentRail({ preserveSelection: true });
+    renderSubagentRail({ preserveSelection: true, syncPanel: false });
 }
 
 export function selectSubagentRole(
@@ -130,11 +149,11 @@ export function selectSubagentRole(
     const selected = findAgentByRole(roleId);
     if (!selected) {
         state.selectedRoleId = null;
-        renderSubagentRail({ preserveSelection: false });
+        renderSubagentRail({ preserveSelection: false, syncPanel: false });
         return;
     }
     state.selectedRoleId = selected.role_id;
-    renderSubagentRail({ preserveSelection: true });
+    renderSubagentRail({ preserveSelection: true, syncPanel: false });
     openAgentPanel(selected.instance_id, selected.role_id, {
         reveal,
         forceRefresh,
@@ -176,17 +195,23 @@ export function setSubagentRailExpanded(expanded) {
     updateSubagentSummary();
 }
 
-function renderSubagentRail({ preserveSelection = true } = {}) {
+function renderSubagentRail({ preserveSelection = true, syncPanel = true } = {}) {
     updateSubagentSummary();
     renderRoleSelector({ preserveSelection });
     renderSelectedRoleMeta();
-    ensureSelectedPanel({ preserveSelection });
+    if (syncPanel) {
+        ensureSelectedPanel({ preserveSelection });
+    }
 }
 
 function updateSubagentSummary() {
     const roles = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
+    const isLoading = subagentRailLoadingSessionId
+        && subagentRailLoadingSessionId === String(state.currentSessionId || '').trim();
     const runningCount = roles.filter(agent => String(agent.status || '') === 'running').length;
-    const summary = roles.length === 0
+    const summary = isLoading && roles.length === 0
+        ? t('settings.system.loading_state')
+        : roles.length === 0
         ? t('subagent.summary_idle').replace('{roles}', '0')
         : t('subagent.summary_running')
             .replace('{running}', String(runningCount))
@@ -208,9 +233,12 @@ function renderRoleSelector({ preserveSelection = true } = {}) {
 
     const roles = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
     const selectedRoleId = preserveSelection ? resolveSelectedRoleId() : resolveDefaultRoleId();
+    const isLoading = subagentRailLoadingSessionId
+        && subagentRailLoadingSessionId === String(state.currentSessionId || '').trim();
 
     if (roles.length === 0) {
-        select.innerHTML = `<option value="">${escapeHtml(t('subagent.none'))}</option>`;
+        const label = isLoading ? t('settings.system.loading_state') : t('subagent.none');
+        select.innerHTML = `<option value="">${escapeHtml(label)}</option>`;
         select.disabled = true;
         state.selectedRoleId = null;
         return;

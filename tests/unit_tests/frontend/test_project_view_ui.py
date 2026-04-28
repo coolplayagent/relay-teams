@@ -1010,6 +1010,9 @@ export async function runAutomationProject() {
 }
 
 export async function fetchConfigStatus() {
+    if (globalThis.__deferredConfigStatusPromise) {
+        return await globalThis.__deferredConfigStatusPromise;
+    }
     return { skills: { skills: [] } };
 }
 
@@ -3618,7 +3621,21 @@ export async function updateAutomationProject() {
     )
 
     assert payload["dispatchedEvents"] == [
-        {"type": "agent-teams-projects-changed", "detail": None}
+        {
+            "type": "agent-teams-session-upserted",
+            "detail": {
+                "sessionId": "session-im-1",
+                "workspaceId": "alpha-project",
+                "session": {
+                    "session_id": "session-im-1",
+                    "workspace_id": "alpha-project",
+                    "project_kind": "automation",
+                    "project_id": "aut_1",
+                    "metadata": {"title": "Daily Briefing"},
+                },
+            },
+        },
+        {"type": "agent-teams-projects-changed", "detail": None},
     ]
     assert payload["logs"] == [
         "Started automation run in bound IM session: session-im-1"
@@ -3830,6 +3847,7 @@ export async function updateAutomationProject() {
     dispatched_event_types = [str(entry["type"]) for entry in dispatched_events]
 
     assert "agent-teams-projects-changed" in dispatched_event_types
+    assert "agent-teams-session-upserted" in dispatched_event_types
     assert "agent-teams-select-session" not in dispatched_event_types
     assert payload["projectViewTitle"] == "Automation"
     assert "Manual Run" in str(payload["contentHtml"])
@@ -4450,6 +4468,10 @@ export async function fetchAutomationProjectSessions() {
 }
 
 export async function fetchAutomationProjects() {
+    globalThis.__fetchAutomationProjectsCalls = (globalThis.__fetchAutomationProjectsCalls || 0) + 1;
+    if (globalThis.__deferredAutomationProjectsPromise) {
+        return await globalThis.__deferredAutomationProjectsPromise;
+    }
     return [];
 }
 
@@ -4567,6 +4589,165 @@ export async function updateAutomationProject() {
     assert "<h3>Skills</h3>" not in str(payload["contentHtml"])
 
 
+def test_project_view_ignores_stale_feature_response_after_fast_switch(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+initializeProjectView();
+let resolveAutomationProjects = null;
+globalThis.__deferredAutomationProjectsPromise = new Promise(resolve => {
+    resolveAutomationProjects = resolve;
+});
+
+const automationPromise = openAutomationHomeView();
+await flushTasks();
+const gatewayPromise = openImFeatureView();
+await flushTasks();
+resolveAutomationProjects([
+    {
+        automation_project_id: "aut_1",
+        display_name: "Delayed automation",
+        workspace_id: "workspace_1",
+        enabled: true,
+    },
+]);
+await Promise.allSettled([automationPromise, gatewayPromise]);
+await flushTasks();
+
+console.log(JSON.stringify({
+    title: els.projectViewTitle.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+    currentFeatureViewId: state.currentFeatureViewId,
+    logs: globalThis.__logs,
+}));
+""".strip(),
+    )
+
+    assert payload["title"] == "IM Gateway"
+    assert payload["currentFeatureViewId"] == "gateway"
+    assert "Delayed automation" not in str(payload["contentHtml"])
+    assert payload["logs"] == []
+
+
+def test_project_view_delays_feature_loading_state_and_uses_feature_copy(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openSkillsFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+let resolveConfigStatus = null;
+globalThis.__deferredConfigStatusPromise = new Promise(resolve => {
+    resolveConfigStatus = resolve;
+});
+
+const openPromise = openSkillsFeatureView();
+await flushTasks();
+const beforeDelay = {
+    summary: els.projectViewSummary.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+};
+await new Promise(resolve => setTimeout(resolve, 170));
+const afterDelay = {
+    summary: els.projectViewSummary.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+};
+resolveConfigStatus({
+    skills: {
+        skills: [
+            {
+                name: "review",
+                description: "Review changes.",
+                ref: "review",
+                path: "/skills/review",
+                scope: "builtin",
+            },
+        ],
+    },
+});
+await openPromise;
+await flushTasks();
+
+console.log(JSON.stringify({
+    beforeDelay,
+    afterDelay,
+    finalSummary: els.projectViewSummary.textContent,
+    finalContentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+    )
+
+    before_delay = cast(dict[str, object], payload["beforeDelay"])
+    after_delay = cast(dict[str, object], payload["afterDelay"])
+    assert before_delay["summary"] == ""
+    assert "Loading project snapshot" not in str(before_delay["contentHtml"])
+    assert after_delay["summary"] == "Loading skills..."
+    assert "Loading skills..." in str(after_delay["contentHtml"])
+    assert "Loading project snapshot" not in str(after_delay["contentHtml"])
+    assert payload["finalSummary"] == "1 skills available"
+    assert "review" in str(payload["finalContentHtml"])
+
+
+def test_project_view_replaces_existing_feature_content_while_slow_feature_loads(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationHomeView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+els.projectViewContent.innerHTML = '<div class="feature-page">Previous feature content</div>';
+let resolveAutomationProjects = null;
+globalThis.__deferredAutomationProjectsPromise = new Promise(resolve => {
+    resolveAutomationProjects = resolve;
+});
+
+const openPromise = openAutomationHomeView();
+await flushTasks();
+await new Promise(resolve => setTimeout(resolve, 170));
+const duringLoad = {
+    summary: els.projectViewSummary.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+};
+resolveAutomationProjects([]);
+await openPromise;
+await flushTasks();
+
+console.log(JSON.stringify({
+    duringLoad,
+    finalContentHtml: els.projectViewContent.innerHTML,
+}));
+""".strip(),
+    )
+
+    during_load = cast(dict[str, object], payload["duringLoad"])
+    assert during_load["summary"] == "Loading automation..."
+    assert "Previous feature content" not in str(during_load["contentHtml"])
+    assert "Loading automation" in str(during_load["contentHtml"])
+    assert "Previous feature content" not in str(payload["finalContentHtml"])
+
+
 def test_project_view_opens_robot_dialog_in_gateway_feature(
     tmp_path: Path,
 ) -> None:
@@ -4626,6 +4807,9 @@ export async function fetchAutomationProjectSessions() {
 }
 
 export async function fetchAutomationProjects() {
+    if (globalThis.__deferredAutomationProjectsPromise) {
+        return await globalThis.__deferredAutomationProjectsPromise;
+    }
     return [];
 }
 
@@ -4654,6 +4838,9 @@ export async function runAutomationProject() {
 }
 
 export async function fetchConfigStatus() {
+    if (globalThis.__deferredConfigStatusPromise) {
+        return await globalThis.__deferredConfigStatusPromise;
+    }
     return { skills: { skills: [] } };
 }
 
@@ -4795,6 +4982,9 @@ export async function fetchAutomationProjectSessions() {
 }
 
 export async function fetchAutomationProjects() {
+    if (globalThis.__deferredAutomationProjectsPromise) {
+        return await globalThis.__deferredAutomationProjectsPromise;
+    }
     return [];
 }
 
@@ -4823,6 +5013,9 @@ export async function runAutomationProject() {
 }
 
 export async function fetchConfigStatus() {
+    if (globalThis.__deferredConfigStatusPromise) {
+        return await globalThis.__deferredConfigStatusPromise;
+    }
     return { skills: { skills: [] } };
 }
 
@@ -5861,6 +6054,9 @@ export async function fetchAutomationProject() {
 }
 
 export async function fetchAutomationProjects() {
+    if (globalThis.__deferredAutomationProjectsPromise) {
+        return await globalThis.__deferredAutomationProjectsPromise;
+    }
     return [];
 }
 
@@ -5877,6 +6073,9 @@ export async function fetchWorkspaces() {
 }
 
 export async function fetchConfigStatus() {
+    if (globalThis.__deferredConfigStatusPromise) {
+        return await globalThis.__deferredConfigStatusPromise;
+    }
     return { skills: { skills: [] } };
 }
 
@@ -6523,6 +6722,7 @@ export const state = {
         "settings.gateway.deleted_message": "WeChat account deleted.",
         "settings.gateway.xiaoluban_deleted_message": "Xiaoluban account deleted.",
         "feature.skills.title": "Skills",
+        "feature.skills.loading": "Loading skills...",
         "feature.skills.directory_title": "Installed Skills",
         "feature.skills.summary": "{count} skills available",
         "feature.skills.empty": "No skills loaded",
@@ -6532,6 +6732,7 @@ export const state = {
         "feature.skills.scope_app": "App",
         "feature.skills.scope_unknown": "Skill",
         "feature.automation.title": "Automation",
+        "feature.automation.loading": "Loading automation...",
         "feature.automation.summary": "{count} schedules",
         "feature.automation.empty": "No automation projects",
         "feature.automation.empty_copy": "Create a scheduled project.",
@@ -6601,6 +6802,7 @@ export const state = {
         "feature.automation.github_failed_title": "Save failed",
         "feature.automation.github_deleted_title": "Deleted",
         "feature.gateway.title": "IM Gateway",
+        "feature.gateway.loading": "Loading IM integrations...",
         "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat · {xiaoluban} Xiaoluban",
         "feature.gateway.add_feishu": "Add Robot",
         "feature.gateway.add_xiaoluban": "Add Xiaoluban",
