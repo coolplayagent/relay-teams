@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
@@ -52,6 +52,24 @@ def record_file_read(
     return state
 
 
+async def record_file_read_async(
+    *,
+    shared_store: SharedStateRepository,
+    session_id: str,
+    conversation_id: str,
+    path: Path,
+) -> FileReadState:
+    state = fingerprint_file(path)
+    await shared_store.manage_state_async(
+        StateMutation(
+            scope=_session_scope(session_id),
+            key=_state_key(conversation_id=conversation_id, path=path),
+            value_json=state.model_dump_json(),
+        )
+    )
+    return state
+
+
 def load_file_read_state(
     *,
     shared_store: SharedStateRepository,
@@ -73,7 +91,7 @@ def load_file_read_state(
         return None
     try:
         return FileReadState.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return None
 
 

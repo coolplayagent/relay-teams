@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pydantic import JsonValue
-
 import re
 from pathlib import Path
 from typing import Generator
 
+from pydantic import JsonValue
 from pydantic_ai import Agent
 
 from relay_teams.paths import open_text_file, path_exists, path_is_dir
@@ -505,7 +504,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         new_string: str,
         replace_all: bool = False,
     ) -> dict[str, JsonValue]:
-        async def _action(
+        def _action(
             path: str,
             old_string: str,
             new_string: str,

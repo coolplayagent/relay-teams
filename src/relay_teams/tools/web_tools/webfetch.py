@@ -1408,7 +1408,7 @@ async def download_binary_response(
                 probe=active_probe,
             )
         ):
-            save_binary_download_manifest(
+            await save_binary_download_manifest_async(
                 manifest=manifest,
                 manifest_path=manifest_path,
                 shared_store=shared_store,
@@ -1437,7 +1437,7 @@ async def download_binary_response(
                 probe=active_probe,
                 download_dir=download_dir,
             )
-            save_binary_download_manifest(
+            await save_binary_download_manifest_async(
                 manifest=manifest,
                 manifest_path=manifest_path,
                 shared_store=shared_store,
@@ -1498,7 +1498,7 @@ async def download_binary_response(
                     probe=active_probe,
                     download_dir=download_dir,
                 )
-                save_binary_download_manifest(
+                await save_binary_download_manifest_async(
                     manifest=active_manifest,
                     manifest_path=manifest_path,
                     shared_store=shared_store,
@@ -1725,7 +1725,7 @@ async def save_non_resumable_binary_response(
             size_bytes=bytes_written,
         )
         finalize_binary_temp_file(temp_path, Path(finalized_manifest.saved_path))
-        save_binary_download_manifest(
+        await save_binary_download_manifest_async(
             manifest=finalized_manifest,
             manifest_path=manifest_path,
             shared_store=shared_store,
@@ -1779,7 +1779,7 @@ async def download_binary_with_ranges(
             segment.downloaded_bytes = downloaded_bytes
             segment.complete = complete
             manifest.completed = all(current.complete for current in manifest.segments)
-            save_binary_download_manifest(
+            await save_binary_download_manifest_async(
                 manifest=manifest,
                 manifest_path=manifest_path,
                 shared_store=shared_store,
@@ -1847,7 +1847,7 @@ async def download_binary_with_ranges(
         probe=probe,
         download_dir=download_dir,
     )
-    save_binary_download_manifest(
+    await save_binary_download_manifest_async(
         manifest=finalized_manifest,
         manifest_path=manifest_path,
         shared_store=shared_store,
@@ -2318,6 +2318,25 @@ def save_binary_download_manifest(
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(manifest_path, manifest.model_dump_json(indent=2))
     shared_store.manage_state(
+        StateMutation(
+            scope=ScopeRef(scope_type=ScopeType.WORKSPACE, scope_id=workspace_id),
+            key=f"{WEBFETCH_DOWNLOAD_PREFIX}:{download_key}",
+            value_json=manifest.model_dump_json(),
+        )
+    )
+
+
+async def save_binary_download_manifest_async(
+    *,
+    manifest: BinaryDownloadManifest,
+    manifest_path: Path,
+    shared_store: SharedStateRepository,
+    workspace_id: str,
+    download_key: str,
+) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(manifest_path, manifest.model_dump_json(indent=2))
+    await shared_store.manage_state_async(
         StateMutation(
             scope=ScopeRef(scope_type=ScopeType.WORKSPACE, scope_id=workspace_id),
             key=f"{WEBFETCH_DOWNLOAD_PREFIX}:{download_key}",

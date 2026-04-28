@@ -32,7 +32,7 @@ from relay_teams.tools.runtime.context import (
 )
 from relay_teams.tools.runtime.execution import execute_tool_call
 from relay_teams.tools.runtime.models import ToolResultProjection
-from relay_teams.tools.workspace_tools.edit_state import record_file_read
+from relay_teams.tools.workspace_tools.edit_state import record_file_read_async
 from relay_teams.tools.workspace_tools.notebook import (
     read_notebook_for_tool,
 )
@@ -255,7 +255,7 @@ def _image_support(ctx: ToolContext) -> bool | None:
     return ctx.deps.model_capabilities.input.image
 
 
-def _project_image_read_result(
+async def _project_image_read_result(
     *,
     ctx: ToolContext,
     file_path: Path,
@@ -291,7 +291,7 @@ def _project_image_read_result(
     )
     media_content_part = media_asset_service.to_content_part(record)
     media_part = media_content_part.model_dump(mode="json")
-    record_file_read(
+    await record_file_read_async(
         shared_store=ctx.deps.shared_store,
         session_id=ctx.deps.session_id,
         conversation_id=ctx.deps.conversation_id,
@@ -405,7 +405,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     include_outputs=include_outputs,
                 )
                 output = _inject_instruction_sections(output, instruction_sections)
-                record_file_read(
+                await record_file_read_async(
                     shared_store=ctx.deps.shared_store,
                     session_id=ctx.deps.session_id,
                     conversation_id=ctx.deps.conversation_id,
@@ -428,7 +428,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             if is_binary_file(file_path, file_size):
                 image_mime_type = _detect_image_mime_type(file_path)
                 if image_mime_type is not None:
-                    return _project_image_read_result(
+                    return await _project_image_read_result(
                         ctx=ctx,
                         file_path=file_path,
                         path=path,
@@ -481,7 +481,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output.append(f"\n\n(End of file - total {total_lines} lines)")
 
             output.append("</content>")
-            record_file_read(
+            await record_file_read_async(
                 shared_store=ctx.deps.shared_store,
                 session_id=ctx.deps.session_id,
                 conversation_id=ctx.deps.conversation_id,

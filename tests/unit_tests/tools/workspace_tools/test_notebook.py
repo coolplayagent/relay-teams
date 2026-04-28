@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pydantic import JsonValue
+from pydantic_ai import Agent
 
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.tools.runtime.context import ToolContext, ToolDeps
+from relay_teams.tools.runtime.models import ToolResultProjection
+from relay_teams.tools.workspace_tools import register_notebook_edit
 from relay_teams.tools.workspace_tools.edit_state import record_file_read
 from relay_teams.tools.workspace_tools.notebook import (
     apply_notebook_edit,
@@ -53,6 +61,33 @@ def _write_notebook(path: Path, notebook: dict[str, object] | None = None) -> No
         json.dumps(_notebook() if notebook is None else notebook, indent=1),
         encoding="utf-8",
     )
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self,
+        *,
+        description: str,
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        del description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
+
+
+class _FakeWorkspace:
+    def __init__(self, root: Path) -> None:
+        self.scope_root = root
+
+    def resolve_path(self, relative_path: str, *, write: bool = False) -> Path:
+        _ = write
+        return (self.scope_root / relative_path).resolve()
 
 
 def test_project_notebook_projects_cells_and_outputs(tmp_path: Path) -> None:
@@ -244,6 +279,67 @@ def test_notebook_edit_file_writes_cell_and_preserves_notebook_metadata(
     assert updated["metadata"] == {"language_info": {"name": "python"}}
     assert updated["cells"][1]["source"] == "print(2)\n"
     assert updated["cells"][1]["outputs"] == []
+
+
+@pytest.mark.asyncio
+async def test_notebook_edit_tool_runs_registered_sync_action(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from relay_teams.tools.workspace_tools import notebook_edit as notebook_edit_module
+
+    file_path = tmp_path / "demo.ipynb"
+    _write_notebook(file_path)
+    shared_store = SharedStateRepository(tmp_path / "state.db")
+    record_file_read(
+        shared_store=shared_store,
+        session_id="session-1",
+        conversation_id="conversation-1",
+        path=file_path,
+    )
+    fake_agent = _FakeAgent()
+    register_notebook_edit(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, JsonValue]]],
+        fake_agent.tools["notebook_edit"],
+    )
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(
+            workspace=_FakeWorkspace(tmp_path),
+            shared_store=shared_store,
+            session_id="session-1",
+            conversation_id="conversation-1",
+        )
+    )
+
+    async def _fake_execute_tool(
+        ctx: ToolContext,
+        *,
+        tool_name: str,
+        args_summary: dict[str, JsonValue],
+        action: Callable[[], ToolResultProjection | Awaitable[ToolResultProjection]],
+        **kwargs: object,
+    ) -> dict[str, JsonValue]:
+        del ctx, tool_name, args_summary, kwargs
+        maybe_projection = action()
+        if inspect.isawaitable(maybe_projection):
+            projection = await maybe_projection
+        else:
+            projection = maybe_projection
+        return cast(dict[str, JsonValue], projection.internal_data)
+
+    monkeypatch.setattr(notebook_edit_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(
+        cast(ToolContext, cast(object, ctx)),
+        path="demo.ipynb",
+        cell_id="calc",
+        new_source="print(2)\n",
+    )
+
+    updated = json.loads(file_path.read_text(encoding="utf-8"))
+    assert "Notebook edit applied successfully" in cast(str, result["output"])
+    assert updated["cells"][1]["source"] == "print(2)\n"
 
 
 def test_load_notebook_empty_file_reports_empty_notebook(tmp_path: Path) -> None:

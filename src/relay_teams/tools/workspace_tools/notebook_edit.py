@@ -41,7 +41,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         """Edit a Jupyter notebook cell without editing raw JSON."""
 
-        async def _action() -> ToolResultProjection:
+        def _action() -> ToolResultProjection:
             file_path = ctx.deps.workspace.resolve_path(path, write=True)
             result = notebook_edit_file_with_guard(
                 shared_store=ctx.deps.shared_store,

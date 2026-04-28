@@ -20,7 +20,7 @@ from relay_teams.tools.runtime.context import (
 )
 from relay_teams.tools.runtime.execution import execute_tool_call
 from relay_teams.tools.runtime.models import ToolResultProjection
-from relay_teams.tools.workspace_tools.edit_state import record_file_read
+from relay_teams.tools.workspace_tools.edit_state import record_file_read_async
 from relay_teams.tools.workspace_tools.read_support import (
     DEFAULT_READ_LIMIT,
     MAX_BYTES_LABEL,
@@ -182,7 +182,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 output.append(f"\n\n(End of file - total {total_lines} lines)")
 
             output.append("</content>")
-            record_file_read(
+            await record_file_read_async(
                 shared_store=ctx.deps.shared_store,
                 session_id=ctx.deps.session_id,
                 conversation_id=ctx.deps.conversation_id,
