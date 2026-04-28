@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, cast
+from typing import Protocol
 
 import httpx
 
@@ -101,13 +101,16 @@ class AsyncProxyRoutingTransport(httpx.AsyncBaseTransport):
         except BaseException:
             lease.release()
             raise
+        stream = response.stream
+        if not isinstance(stream, httpx.AsyncByteStream):
+            lease.release()
+            raise TypeError(
+                "Async proxy transport received a non-async response stream"
+            )
         return httpx.Response(
             response.status_code,
             headers=response.headers,
-            stream=_ReleasingAsyncByteStream(
-                cast(httpx.AsyncByteStream, response.stream),
-                lease,
-            ),
+            stream=_ReleasingAsyncByteStream(stream, lease),
             request=request,
             extensions=response.extensions,
             default_encoding=response.default_encoding,
