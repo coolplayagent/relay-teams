@@ -79,9 +79,14 @@ Incomplete todos:
 
 - evaluated only for root task completion attempts
 - pending or in-progress todos block successful completion
-- the reminder is appended to history and the agent gets another turn
-- after three reminder retries, the task returns an assistant error instead of being
-  marked complete
+- the reminder is appended to history and the agent gets another turn to reconcile
+  persisted todo state with actual progress
+- if the work is already complete, the agent should update the run-scoped todo list
+  with `todo_write` before finalizing, not repeat completed work just to satisfy the
+  guard
+- after three reminder retries, the task returns a completion-guard assistant error
+  instead of being marked complete; this reflects persisted todo state, not a
+  provider/API execution failure
 
 Context pressure:
 

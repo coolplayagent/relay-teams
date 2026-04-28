@@ -108,6 +108,15 @@ def build_assistant_error_message(
     recovery_guidance = _build_recovery_guidance_message(code, detail=detail)
     if recovery_guidance is not None:
         return recovery_guidance
+    if code == "incomplete_todos":
+        return _append_error_detail(
+            "The previous request could not be marked complete because "
+            "run-scoped todos are still incomplete. Continue from the latest "
+            "successful conversation state already persisted. Do not repeat "
+            "already successful tool calls. Reconcile the persisted todo list "
+            "with actual progress before finalizing.",
+            detail,
+        )
     lowered = detail.lower()
     if "prompt is too long" in lowered:
         return (

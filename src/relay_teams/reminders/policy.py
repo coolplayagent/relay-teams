@@ -119,8 +119,12 @@ class SystemReminderPolicy:
         content = (
             "You attempted to finish while run-scoped todos are still incomplete.\n\n"
             f"{formatted_todos}\n\n"
-            "Before completing, either finish the pending work or update the todo list "
-            "to accurately reflect what remains."
+            "Before completing, reconcile the persisted todo list with the work "
+            "already done. If these items are already complete, call `todo_write` "
+            "to mark them completed or clear the list, then provide the final "
+            "answer. If work remains, continue the remaining work and update the "
+            "todo list accurately. Do not repeat completed work only to satisfy "
+            "this reminder."
         )
         if retry_count > self._config.completion_max_retries:
             return (

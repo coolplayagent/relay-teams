@@ -116,7 +116,12 @@ def test_policy_fails_completion_after_retry_limit() -> None:
     )
 
     assert first.retry_completion is True
+    assert "`todo_write`" in first.content
+    assert "reconcile the persisted todo list" in first.content
+    assert "Do not repeat completed work" in first.content
     assert second.fail_completion is True
+    assert "`todo_write`" in second.content
+    assert "reconcile the persisted todo list" in second.content
     assert state.completion_retry_count == 2
 
 
