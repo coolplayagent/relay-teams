@@ -3916,6 +3916,8 @@ Object.assign(TRANSLATIONS['zh-CN'], {
 
 Object.assign(TRANSLATIONS['en-US'], {
     'settings.mcp.add_server': 'Add Server',
+    'settings.mcp.json_config': 'JSON config',
+    'settings.mcp.json_placeholder': '{\n  "mcpServers": {\n    "playwright": {\n      "command": "npx",\n      "args": ["@playwright/mcp@latest"]\n    }\n  }\n}',
     'settings.mcp.name': 'Server name',
     'settings.mcp.name_placeholder': 'e.g. filesystem',
     'settings.mcp.transport': 'Transport',
@@ -3947,6 +3949,8 @@ Object.assign(TRANSLATIONS['en-US'], {
 
 Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.mcp.add_server': '\u6dfb\u52a0\u670d\u52a1',
+    'settings.mcp.json_config': 'JSON \u914d\u7f6e',
+    'settings.mcp.json_placeholder': '{\n  "mcpServers": {\n    "playwright": {\n      "command": "npx",\n      "args": ["@playwright/mcp@latest"]\n    }\n  }\n}',
     'settings.mcp.name': '\u670d\u52a1\u540d\u79f0',
     'settings.mcp.name_placeholder': '\u4f8b\u5982 filesystem',
     'settings.mcp.transport': '\u4f20\u8f93\u65b9\u5f0f',
