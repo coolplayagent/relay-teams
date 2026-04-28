@@ -28,6 +28,7 @@ from relay_teams.providers.known_model_context_windows import (
     infer_known_context_window,
 )
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
@@ -671,8 +672,44 @@ class ModelConnectivityProbeService:
             return base_codeagent_auth
         if base_codeagent_auth is None:
             return override_codeagent_auth
+        if override_codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
+            if (
+                override_codeagent_auth.password is None
+                and override_codeagent_auth.username is not None
+                and base_codeagent_auth.username is not None
+                and override_codeagent_auth.username != base_codeagent_auth.username
+                and base_codeagent_auth.password is not None
+            ):
+                raise ValueError(
+                    "CodeAgent password must be re-entered after changing the username."
+                )
+            merged_auth = CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                client_id=override_codeagent_auth.client_id
+                or base_codeagent_auth.client_id,
+                scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
+                scope_resource=override_codeagent_auth.scope_resource
+                or base_codeagent_auth.scope_resource,
+                username=override_codeagent_auth.username
+                or base_codeagent_auth.username,
+                password=(
+                    override_codeagent_auth.password
+                    if override_codeagent_auth.password is not None
+                    else base_codeagent_auth.password
+                ),
+                has_password=(
+                    override_codeagent_auth.has_password
+                    or base_codeagent_auth.has_password
+                ),
+            )
+            return self._with_codeagent_secret_owner(
+                merged_auth,
+                preferred=override_codeagent_auth,
+                fallback=base_codeagent_auth,
+            )
         if override_codeagent_auth.oauth_session_id is not None:
             merged_auth = CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.SSO,
                 client_id=override_codeagent_auth.client_id
                 or base_codeagent_auth.client_id,
                 scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
@@ -690,6 +727,7 @@ class ModelConnectivityProbeService:
                 fallback=base_codeagent_auth,
             )
         merged_auth = CodeAgentAuthConfig(
+            auth_method=override_codeagent_auth.auth_method,
             client_id=override_codeagent_auth.client_id
             or base_codeagent_auth.client_id,
             scope=override_codeagent_auth.scope or base_codeagent_auth.scope,
@@ -1776,10 +1814,18 @@ class ModelConnectivityProbeService:
         self,
         auth_config: CodeAgentAuthConfig,
     ) -> CodeAgentAuthConfig:
+        if auth_config.auth_method == CodeAgentAuthMethod.PASSWORD:
+            if auth_config.username is not None and auth_config.password is not None:
+                return auth_config
+            raise CodeAgentOAuthError(
+                "CodeAgent username/password is not configured.",
+                status_code=None,
+            )
         if auth_config.oauth_session_id is not None:
             token_result = get_codeagent_oauth_tokens(auth_config.oauth_session_id)
             if token_result is not None:
                 resolved_auth = CodeAgentAuthConfig(
+                    auth_method=CodeAgentAuthMethod.SSO,
                     client_id=auth_config.client_id,
                     scope=auth_config.scope,
                     scope_resource=auth_config.scope_resource,

@@ -14,6 +14,7 @@ from relay_teams.providers.codeagent_auth import (
     CodeAgentOAuthTokenResult,
     clear_codeagent_oauth_session_store,
     codeagent_access_token_secret_field_name,
+    codeagent_password_secret_field_name,
     codeagent_refresh_token_secret_field_name,
     create_codeagent_oauth_session,
     get_codeagent_oauth_tokens,
@@ -772,6 +773,7 @@ def test_save_model_profile_stores_codeagent_tokens_from_oauth_session(
     assert codeagent_auth["has_refresh_token"] is True
     assert model_payload["codeagent-profile"]["base_url"] == DEFAULT_CODEAGENT_BASE_URL
     assert model_payload["codeagent-profile"]["codeagent_auth"] == {
+        "auth_method": "sso",
         "has_access_token": True,
         "has_refresh_token": True,
     }
@@ -1018,6 +1020,7 @@ def test_save_model_config_stores_codeagent_profiles_and_hydrates_auth(
     hydrated_auth = cast(dict[str, JsonValue], hydrated_profile["codeagent_auth"])
 
     assert raw_config["raw-note"] == "keep-me"
+    assert raw_auth["auth_method"] == "sso"
     assert raw_auth["has_access_token"] is True
     assert raw_auth["has_refresh_token"] is True
     assert "access_token" not in raw_auth
@@ -1155,33 +1158,44 @@ def test_prepare_profile_codeagent_auth_reuses_existing_config_when_omitted(
         secret_store=_FileOnlySecretStore(),
     )
 
-    merged_profile, next_access_token, next_refresh_token, preserve_tokens, _pending = (
-        manager._prepare_profile_codeagent_auth_for_storage(
-            profile_name="codeagent-profile",
-            existing_profile={
-                "provider": "codeagent",
-                "codeagent_auth": {
-                    "has_access_token": True,
-                    "has_refresh_token": True,
-                },
+    (
+        merged_profile,
+        next_access_token,
+        next_refresh_token,
+        next_password,
+        preserve_tokens,
+        preserve_password,
+        _pending,
+    ) = manager._prepare_profile_codeagent_auth_for_storage(
+        profile_name="codeagent-profile",
+        existing_profile={
+            "provider": "codeagent",
+            "codeagent_auth": {
+                "auth_method": "sso",
+                "has_access_token": True,
+                "has_refresh_token": True,
             },
-            next_profile={
-                "provider": "codeagent",
-                "model": "codeagent-chat",
-            },
-            source_name=None,
-            current_access_token=None,
-            current_refresh_token="saved-refresh-token",
-        )
+        },
+        next_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+        },
+        source_name=None,
+        current_access_token=None,
+        current_password=None,
+        current_refresh_token="saved-refresh-token",
     )
 
     assert merged_profile["codeagent_auth"] == {
+        "auth_method": "sso",
         "has_access_token": True,
         "has_refresh_token": True,
     }
     assert next_access_token is None
     assert next_refresh_token is None
+    assert next_password is None
     assert preserve_tokens is True
+    assert preserve_password is False
 
 
 def test_prepare_profile_codeagent_auth_requires_config_for_codeagent_profiles(
@@ -1205,6 +1219,7 @@ def test_prepare_profile_codeagent_auth_requires_config_for_codeagent_profiles(
             },
             source_name=None,
             current_access_token=None,
+            current_password=None,
             current_refresh_token=None,
         )
 
@@ -1228,6 +1243,7 @@ def test_prepare_profile_codeagent_auth_rejects_non_object_payload(
             },
             source_name=None,
             current_access_token=None,
+            current_password=None,
             current_refresh_token=None,
         )
 
@@ -1257,6 +1273,7 @@ def test_prepare_profile_codeagent_auth_rejects_missing_oauth_session(
             },
             source_name=None,
             current_access_token=None,
+            current_password=None,
             current_refresh_token=None,
         )
 
@@ -1283,6 +1300,7 @@ def test_prepare_profile_codeagent_auth_requires_completed_login_without_saved_t
             },
             source_name=None,
             current_access_token=None,
+            current_password=None,
             current_refresh_token=None,
         )
 
@@ -1292,30 +1310,39 @@ def test_prepare_profile_codeagent_auth_preserves_existing_refresh_token(
 ) -> None:
     manager = ModelConfigManager(config_dir=tmp_path)
 
-    next_profile, next_access_token, next_refresh_token, preserve_tokens, _pending = (
-        manager._prepare_profile_codeagent_auth_for_storage(
-            profile_name="codeagent-profile",
-            existing_profile={
-                "provider": "codeagent",
-                "model": "codeagent-chat",
-                "codeagent_auth": {
-                    "refresh_token": "saved-refresh-token",
-                },
+    (
+        next_profile,
+        next_access_token,
+        next_refresh_token,
+        next_password,
+        preserve_tokens,
+        preserve_password,
+        _pending,
+    ) = manager._prepare_profile_codeagent_auth_for_storage(
+        profile_name="codeagent-profile",
+        existing_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "codeagent_auth": {
+                "refresh_token": "saved-refresh-token",
             },
-            next_profile={
-                "provider": "codeagent",
-                "model": "codeagent-chat",
-                "codeagent_auth": {},
-            },
-            source_name=None,
-            current_access_token=None,
-            current_refresh_token=None,
-        )
+        },
+        next_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "codeagent_auth": {},
+        },
+        source_name=None,
+        current_access_token=None,
+        current_password=None,
+        current_refresh_token=None,
     )
 
     assert preserve_tokens is True
     assert next_access_token is None
     assert next_refresh_token is None
+    assert next_password is None
+    assert preserve_password is False
     assert "codeagent_auth" in next_profile
 
 
@@ -1324,24 +1351,147 @@ def test_prepare_profile_codeagent_auth_preserves_current_refresh_token(
 ) -> None:
     manager = ModelConfigManager(config_dir=tmp_path)
 
-    _next_profile, next_access_token, next_refresh_token, preserve_tokens, _pending = (
+    (
+        _next_profile,
+        next_access_token,
+        next_refresh_token,
+        next_password,
+        preserve_tokens,
+        preserve_password,
+        _pending,
+    ) = manager._prepare_profile_codeagent_auth_for_storage(
+        profile_name="codeagent-profile",
+        existing_profile=None,
+        next_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "codeagent_auth": {},
+        },
+        source_name=None,
+        current_access_token=None,
+        current_password=None,
+        current_refresh_token="current-refresh-token",
+    )
+
+    assert preserve_tokens is True
+    assert next_access_token is None
+    assert next_refresh_token is None
+    assert next_password is None
+    assert preserve_password is False
+
+
+def test_prepare_profile_codeagent_auth_preserves_existing_password_for_password_auth(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_password("codeagent-profile", "saved-password")
+
+    (
+        next_profile,
+        _next_access_token,
+        _next_refresh_token,
+        next_password,
+        preserve_tokens,
+        preserve_password,
+        _pending,
+    ) = manager._prepare_profile_codeagent_auth_for_storage(
+        profile_name="codeagent-profile",
+        existing_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "relay-user",
+                "has_password": True,
+            },
+        },
+        next_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "relay-user",
+            },
+        },
+        source_name=None,
+        current_access_token=None,
+        current_password=None,
+        current_refresh_token=None,
+    )
+
+    assert next_profile["codeagent_auth"] == {
+        "auth_method": "password",
+        "username": "relay-user",
+        "has_password": True,
+    }
+    assert next_password is None
+    assert preserve_tokens is False
+    assert preserve_password is True
+
+
+def test_prepare_profile_codeagent_auth_preserves_current_password_for_password_auth(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    (
+        _next_profile,
+        _next_access_token,
+        _next_refresh_token,
+        next_password,
+        preserve_tokens,
+        preserve_password,
+        _pending,
+    ) = manager._prepare_profile_codeagent_auth_for_storage(
+        profile_name="codeagent-profile",
+        existing_profile=None,
+        next_profile={
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "relay-user",
+            },
+        },
+        source_name=None,
+        current_access_token=None,
+        current_password="current-password",
+        current_refresh_token=None,
+    )
+
+    assert next_password is None
+    assert preserve_tokens is False
+    assert preserve_password is True
+
+
+def test_prepare_profile_codeagent_auth_requires_password_for_first_password_auth(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent auth password requires a value the first time it is configured.",
+    ):
         manager._prepare_profile_codeagent_auth_for_storage(
             profile_name="codeagent-profile",
             existing_profile=None,
             next_profile={
                 "provider": "codeagent",
                 "model": "codeagent-chat",
-                "codeagent_auth": {},
+                "codeagent_auth": {
+                    "auth_method": "password",
+                    "username": "relay-user",
+                },
             },
             source_name=None,
             current_access_token=None,
-            current_refresh_token="current-refresh-token",
+            current_password=None,
+            current_refresh_token=None,
         )
-    )
-
-    assert preserve_tokens is True
-    assert next_access_token is None
-    assert next_refresh_token is None
 
 
 def test_save_model_config_does_not_consume_codeagent_session_before_full_validation(
@@ -1423,10 +1573,217 @@ def test_resolve_codeagent_auth_prefers_inline_tokens_and_session_id(
     )
 
     assert resolved is not None
+    assert resolved.auth_method.value == "sso"
     assert resolved.oauth_session_id == "session-id"
     assert resolved.access_token == "access-token"
     assert resolved.refresh_token == "refresh-token"
     assert resolved._secret_owner_id == "codeagent-profile"
+
+
+def test_save_model_profile_stores_codeagent_password_in_secret_store(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "codeagent-password",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "relay-user",
+                "password": "relay-password",
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    saved_auth = cast(
+        dict[str, JsonValue],
+        profiles["codeagent-password"]["codeagent_auth"],
+    )
+    raw_config = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+
+    assert saved_auth["auth_method"] == "password"
+    assert saved_auth["username"] == "relay-user"
+    assert saved_auth["has_password"] is True
+    assert raw_config["codeagent-password"]["codeagent_auth"] == {
+        "auth_method": "password",
+        "username": "relay-user",
+        "has_password": True,
+    }
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "codeagent-password",
+        "field_name": codeagent_password_secret_field_name(),
+        "storage": "file",
+        "value": "relay-password",
+    } in secrets_payload["entries"]
+
+
+def test_save_model_profile_rejects_codeagent_username_change_without_new_password(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "codeagent-password",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "old-user",
+                "password": "relay-password",
+            },
+        },
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent auth password must be re-entered after changing the username.",
+    ):
+        manager.save_model_profile(
+            "codeagent-password",
+            {
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                "codeagent_auth": {
+                    "auth_method": "password",
+                    "username": "new-user",
+                },
+            },
+        )
+
+
+def test_save_model_profile_rejects_codeagent_password_auth_without_username(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent auth username requires a value for password auth.",
+    ):
+        manager.save_model_profile(
+            "codeagent-password",
+            {
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                "codeagent_auth": {
+                    "auth_method": "password",
+                    "password": "relay-password",
+                },
+            },
+        )
+
+
+def test_save_model_profile_rejects_invalid_codeagent_auth_method(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent auth auth_method must be 'sso' or 'password'.",
+    ):
+        manager.save_model_profile(
+            "codeagent-password",
+            {
+                "provider": "codeagent",
+                "model": "codeagent-chat",
+                "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                "codeagent_auth": {
+                    "auth_method": "Password",
+                    "username": "relay-user",
+                    "password": "relay-password",
+                },
+            },
+        )
+
+
+def test_save_model_profile_migrates_inline_codeagent_password_into_secret_store(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    (tmp_path / "model.json").write_text(
+        json.dumps(
+            {
+                "codeagent-profile": {
+                    "provider": "codeagent",
+                    "model": "codeagent-chat",
+                    "base_url": DEFAULT_CODEAGENT_BASE_URL,
+                    "codeagent_auth": {
+                        "auth_method": "password",
+                        "username": "relay-user",
+                        "password": "inline-password",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager.save_model_profile(
+        "codeagent-profile",
+        {
+            "provider": "codeagent",
+            "model": "codeagent-chat",
+            "base_url": DEFAULT_CODEAGENT_BASE_URL,
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "relay-user",
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    saved_profile = cast(dict[str, JsonValue], profiles["codeagent-profile"])
+    saved_auth = cast(dict[str, JsonValue], saved_profile["codeagent_auth"])
+    raw_config = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+    secrets_payload = json.loads(
+        (tmp_path / "secrets.json").read_text(encoding="utf-8")
+    )
+
+    assert saved_auth["auth_method"] == "password"
+    assert saved_auth["username"] == "relay-user"
+    assert saved_auth["password"] == "inline-password"
+    assert saved_auth["has_password"] is True
+    assert raw_config["codeagent-profile"]["codeagent_auth"] == {
+        "auth_method": "password",
+        "username": "relay-user",
+        "has_password": True,
+    }
+    assert {
+        "namespace": "model_profile",
+        "owner_id": "codeagent-profile",
+        "field_name": codeagent_password_secret_field_name(),
+        "storage": "file",
+        "value": "inline-password",
+    } in secrets_payload["entries"]
 
 
 def test_profile_codeagent_secret_accessors_return_none_for_missing_profile_name(
@@ -1439,6 +1796,42 @@ def test_profile_codeagent_secret_accessors_return_none_for_missing_profile_name
 
     assert manager._get_profile_codeagent_access_token(None) is None
     assert manager._get_profile_codeagent_refresh_token(None) is None
+
+
+def test_get_profile_codeagent_password_returns_saved_secret(tmp_path: Path) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_password("codeagent-profile", "saved-password")
+
+    assert (
+        manager._get_profile_codeagent_password("codeagent-profile") == "saved-password"
+    )
+
+
+def test_resolve_codeagent_auth_reads_inline_password_for_dirty_profile(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(config_dir=tmp_path)
+
+    resolved = manager._resolve_codeagent_auth(
+        "codeagent-profile",
+        {
+            "codeagent_auth": {
+                "auth_method": "password",
+                "username": "relay-user",
+                "password": " inline-password ",
+                "has_password": True,
+            }
+        },
+    )
+
+    assert resolved is not None
+    assert resolved.auth_method.value == "password"
+    assert resolved.username == "relay-user"
+    assert resolved.password == "inline-password"
+    assert resolved.has_password is True
 
 
 def test_apply_profile_codeagent_token_update_moves_explicit_tokens_on_rename(
@@ -1505,3 +1898,65 @@ def test_apply_profile_codeagent_token_update_copies_source_tokens_when_preservi
     )
     assert manager._get_profile_codeagent_access_token("source-profile") is None
     assert manager._get_profile_codeagent_refresh_token("source-profile") is None
+
+
+def test_apply_profile_codeagent_password_update_moves_saved_password_on_rename(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_password("source-profile", "saved-password")
+
+    manager._apply_profile_codeagent_password_update(
+        name="target-profile",
+        source_name="source-profile",
+        next_password=None,
+        preserve_password=True,
+    )
+
+    assert manager._get_profile_codeagent_password("source-profile") is None
+    assert manager._get_profile_codeagent_password("target-profile") == "saved-password"
+
+
+def test_apply_profile_codeagent_password_update_clears_passwords_on_rename_without_preserve(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_password("source-profile", "saved-password")
+    manager._set_profile_codeagent_password("target-profile", "stale-password")
+
+    manager._apply_profile_codeagent_password_update(
+        name="target-profile",
+        source_name="source-profile",
+        next_password=None,
+        preserve_password=False,
+    )
+
+    assert manager._get_profile_codeagent_password("source-profile") is None
+    assert manager._get_profile_codeagent_password("target-profile") is None
+
+
+def test_apply_profile_codeagent_password_update_keeps_password_when_preserved(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+    manager._set_profile_codeagent_password("codeagent-profile", "saved-password")
+
+    manager._apply_profile_codeagent_password_update(
+        name="codeagent-profile",
+        source_name=None,
+        next_password=None,
+        preserve_password=True,
+    )
+
+    assert (
+        manager._get_profile_codeagent_password("codeagent-profile") == "saved-password"
+    )

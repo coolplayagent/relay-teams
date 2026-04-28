@@ -2373,13 +2373,39 @@
     margin-bottom: 0;
 }
 
+.profile-maas-credentials-row {
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+}
+
 .profile-codeagent-credentials-row {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: 0.85rem;
 }
 
+.profile-codeagent-auth-method-row {
+    width: 100%;
+    max-width: 16rem;
+}
+
+.profile-codeagent-auth-method-row select {
+    width: min(100%, 14rem);
+}
+
+.profile-codeagent-auth-detail-row {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
 .profile-codeagent-sso-group {
-    max-width: 560px;
+    grid-column: 1 / -1;
+    max-width: none;
 }
 
 .codeagent-sso-control {
@@ -2392,7 +2418,9 @@
     min-width: 0;
     min-height: 42px;
     max-width: 100%;
-    white-space: nowrap;
+    white-space: normal;
+    line-height: 1.35;
+    text-align: left;
 }
 
 .codeagent-sso-login-btn:disabled {
@@ -2402,7 +2430,7 @@
 
 .codeagent-sso-status-message {
     margin-top: 0.55rem;
-    max-width: 560px;
+    max-width: none;
 }
 
 .profile-editor-subsection {
@@ -3432,6 +3460,9 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
 
 .settings-list-action.codeagent-sso-login-btn {
     min-height: 42px;
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.5rem 0.75rem;
 }
 
 .settings-list-action:hover {
@@ -3577,6 +3608,19 @@ body.dark-theme .notification-toggle input[type="checkbox"]:checked + .notificat
     }
 
     .profile-credentials-row {
+        grid-template-columns: 1fr;
+    }
+
+    .profile-codeagent-auth-method-row {
+        max-width: none;
+    }
+
+    .profile-codeagent-auth-method-row select,
+    .profile-codeagent-auth-detail-row {
+        width: 100%;
+    }
+
+    .profile-codeagent-auth-detail-row {
         grid-template-columns: 1fr;
     }
 

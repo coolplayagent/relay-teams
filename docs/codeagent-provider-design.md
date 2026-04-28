@@ -1,15 +1,22 @@
-# CodeAgent Provider 设计
+# CodeAgent Provider Design
 
-CodeAgent 已作为一等模型提供商注册，`provider` 值为 `"codeagent"`。
-它沿用常规模型配置中的模型名和采样参数，并通过 `codeagent_auth`
-保存 SSO 登录后得到的认证状态。CodeAgent 的 API 端点和 OAuth 应用参数
-均由代码写死，不对用户暴露配置入口。
+## Overview
 
-## 常量
+CodeAgent is a first-class model provider with `provider = "codeagent"`.
+Its inference endpoint, OAuth client parameters, and password-login endpoint are fixed by the backend.
+The user does not configure a separate CodeAgent login URL.
 
-后端在 `relay_teams.providers.model_config` 中维护以下常量：
+CodeAgent profile auth always lives under `codeagent_auth`.
+There are two supported auth modes:
 
-| 名称 | 值 |
+- `sso`: CodeAgent OAuth / refresh-token flow
+- `password`: username/password login that reuses the MaaS secure-login endpoint and payload contract
+
+## Fixed Endpoints And OAuth Constants
+
+The backend enforces these constants:
+
+| Name | Value |
 | --- | --- |
 | `DEFAULT_CODEAGENT_BASE_URL` | `https://codeagentcli.rnd.huawei.com/codeAgentPro` |
 | `DEFAULT_CODEAGENT_SSO_BASE_URL` | `https://ssoproxysvr.cd-cloud-ssoproxysvr.szv.dragon.tools.huawei.com/ssoproxysvr` |
@@ -17,61 +24,56 @@ CodeAgent 已作为一等模型提供商注册，`provider` 值为 `"codeagent"`
 | `DEFAULT_CODEAGENT_SCOPE` | `1000:1002` |
 | `DEFAULT_CODEAGENT_SCOPE_RESOURCE` | `devuc` |
 
-`ModelEndpointConfig` 会强制 CodeAgent 配置使用
-`DEFAULT_CODEAGENT_BASE_URL`。`CodeAgentAuthConfig` 也会强制覆盖
-`client_id`、`scope` 和 `scope_resource`，即使调用方提交了其他值也不会生效。
+`ModelEndpointConfig` always rewrites CodeAgent `base_url` to `DEFAULT_CODEAGENT_BASE_URL`.
+`CodeAgentAuthConfig` also enforces the fixed OAuth client values even if callers submit different ones.
 
-## OAuth 流程
+For password auth, the backend reuses the MaaS secure-login endpoint and request/response shape:
 
-CodeAgent 使用 issue #461 描述的 `client_code` OAuth 轮询流程。前端通过以下
-接口启动和查询登录：
+- `POST http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`
+- request headers include `app-id: RelayTeams`
+
+The returned token is then used as the CodeAgent `X-Auth-Token`.
+
+## Auth Modes
+
+### SSO Mode
+
+`codeagent_auth.auth_method = "sso"` uses the existing OAuth flow:
 
 - `POST /api/system/configs/model/codeagent/oauth:start`
 - `GET /api/system/configs/model/codeagent/oauth/{auth_session_id}`
 
-本地回调路由已删除。SSO 完成后，前端只轮询
-`GET /api/system/configs/model/codeagent/oauth/{auth_session_id}`，后端在该接口中向
-CodeAgent `getToken` 接口查询 token 状态。
+The frontend starts OAuth, opens the returned authorization URL, and polls for completion.
+Completed OAuth sessions yield CodeAgent `access_token` and `refresh_token`.
 
-启动接口不接收用户提供的 provider 配置。后端会生成 32 位 `client_code`，
-并构造：
+At runtime:
 
-- 回调地址：
-  `https://codeagentcli.rnd.huawei.com/codeAgentPro/codeAgent/oauth/callback?client_code={client_code}`
-- 授权地址：
-  `https://ssoproxysvr.cd-cloud-ssoproxysvr.szv.dragon.tools.huawei.com/ssoproxysvr/oauth2/authorize`
+- the current `access_token` is used first when present
+- `401` or `403` triggers one refresh attempt through `refresh_token`
+- refreshed tokens are persisted back to the secret store
 
-授权地址查询参数如下：
+### Password Mode
 
-| 参数 | 值 |
-| --- | --- |
-| `client_id` | `com.huawei.devmind.codebot.apibot` |
-| `redirect_uri` | 上面的回调地址 |
-| `scope` | `1000:1002` |
-| `response_type` | `code` |
-| `scope_resource` | `devuc` |
+`codeagent_auth.auth_method = "password"` requires:
 
-前端打开授权地址后，会轮询登录状态接口。每次状态查询会由后端向 CodeAgent
-轮询 token：
+- `username`
+- `password`
 
-- `POST https://codeagentcli.rnd.huawei.com/codeAgentPro/codeAgent/oauth/getToken`
-- 请求头：`Content-Type: application/json`
-- 请求体：
+The login exchange does not use OAuth sessions or refresh tokens.
+Instead, the CodeAgent token service logs in with the MaaS-compatible secure-login API and caches the returned token for a short TTL.
 
-```json
-{
-  "clientCode": "{client_code}",
-  "redirectUrl": "https://codeagentcli.rnd.huawei.com/codeAgentPro/codeAgent/oauth/callback?client_code={client_code}"
-}
-```
+At runtime:
 
-如果 CodeAgent 尚未返回 `access_token`，会话保持 pending。CodeAgent 返回
-`access_token` 和 `refresh_token` 后，内存中的 OAuth 会话会被标记为完成。
-前端最长轮询 30 分钟。
+- if no cached token is available, the provider logs in with the saved username/password
+- if a CodeAgent request returns `401` or `403`, the provider logs in again and retries once
+- password-mode tokens are not persisted as refreshable CodeAgent credentials
 
-## 配置存储
+## Persisted Profile Shape
 
-保存后的 profile JSON 不包含明文 token，只保存能力标记和 OAuth 状态信息：
+Saved CodeAgent profiles keep auth state in `codeagent_auth`.
+The backend never stores raw CodeAgent password credentials or OAuth tokens in `model.json`.
+
+### Stored SSO Profile
 
 ```json
 {
@@ -79,107 +81,127 @@ CodeAgent `getToken` 接口查询 token 状态。
   "model": "codeagent-chat",
   "base_url": "https://codeagentcli.rnd.huawei.com/codeAgentPro",
   "codeagent_auth": {
+    "auth_method": "sso",
     "has_access_token": true,
     "has_refresh_token": true
   }
 }
 ```
 
-保存 CodeAgent profile 时，服务端会消费已完成的 OAuth 会话，并把 token 写入
-secret store。运行时配置会从 secret store 解析 token，再注入到
-`codeagent_auth` 中用于构建 provider client。
+### Stored Password Profile
 
-## Token 使用
+```json
+{
+  "provider": "codeagent",
+  "model": "codeagent-chat",
+  "base_url": "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+  "codeagent_auth": {
+    "auth_method": "password",
+    "username": "relay-user",
+    "has_password": true
+  }
+}
+```
 
-CodeAgent API 使用 `X-Auth-Token` 认证。
+Persistence rules:
 
-SSO 完成后的首个请求会直接使用 OAuth 返回的 `access_token`。如果运行时配置中
-同时存在 `access_token` 和 `refresh_token`，token service 会先用该
-`access_token` 初始化缓存，不会立刻调用 refresh 接口。
+- SSO `access_token` and `refresh_token` are stored in the unified secret store.
+- Password-mode `password` is stored in the unified secret store.
+- Password-mode `username` stays in the profile JSON.
+- Editing a saved password profile with an empty password field preserves the stored password secret.
+- Switching from SSO to password removes saved SSO tokens.
+- Switching from password to SSO removes the saved password secret.
 
-当请求返回 `401` 或 `403` 时，provider 会调用 refresh 接口刷新一次 token：
+## Runtime Config Resolution
 
-- `POST https://codeagentcli.rnd.huawei.com/codeAgentPro/codeAgent/oauth/refreshToken`
+Runtime profile loading resolves `codeagent_auth` differently by mode:
 
-随后使用刷新后的 access token 重试原请求。
+- `sso`: requires a saved `refresh_token` or an in-progress `oauth_session_id`
+- `password`: requires `username` plus a password from the secret store or inline override
 
-## API 传输
+This keeps `codeagent_auth` as the single CodeAgent auth contract.
+CodeAgent does not reuse top-level `maas_auth`.
 
-CodeAgent chat 请求保留 OpenAI-compatible 的请求体和流式语义，但实际 URL 会被
-重写为：
+## Model Discovery And Chat Requests
 
-- `POST https://codeagentcli.rnd.huawei.com/codeAgentPro/chat/completions`
+CodeAgent model discovery and chat requests use the same provider auth resolver as save-time verification and runtime execution.
 
-chat 请求必需请求头：
+### Model Discovery
 
-| Header | 值 |
+- `GET {DEFAULT_CODEAGENT_BASE_URL}/chat/modles?checkUserPermission=TRUE`
+
+Required request headers:
+
+| Header | Value |
 | --- | --- |
-| `X-Auth-Token` | 当前 OAuth access token |
+| `X-Auth-Token` | resolved CodeAgent token |
+| `app-id` | `CodeAgent2.0` |
+| `User-Agent` | `AgentKernel/1.0` |
+| `gray` | `false` |
+| `oc-heartbeat` | `1` |
+| `X-snap-traceid` | generated UUID |
+| `X-session-id` | generated `ses_...` id |
+
+The discovery parser accepts a bare JSON list or objects with `data` / `models`.
+Model ids are normalized from `name`, `id`, or `model` and deduplicated.
+
+### Chat
+
+- `POST {DEFAULT_CODEAGENT_BASE_URL}/chat/completions`
+
+Required request headers:
+
+| Header | Value |
+| --- | --- |
+| `X-Auth-Token` | resolved CodeAgent token |
 | `app-id` | `CodeAgent2.0` |
 | `Content-Type` | `application/json` |
 | `Accept` | `text/event-stream` |
 | `User-Agent` | `AgentKernel/1.0` |
 | `gray` | `false` |
 | `oc-heartbeat` | `1` |
-| `X-snap-traceid` | 生成的 UUID |
-| `X-session-id` | `ses_` 加生成 UUID 去连字符后的前 20 位 |
+| `X-snap-traceid` | generated UUID |
+| `X-session-id` | generated `ses_...` id |
 
-请求认证层会先移除 OpenAI SDK 请求中已有的 `Authorization`、`X-Auth-Token`
-以及 CodeAgent 专用请求头，再注入上表中的值。
+The provider strips any preexisting OpenAI `Authorization`, `X-Auth-Token`, and CodeAgent-specific headers before injecting the resolved CodeAgent headers.
 
-模型发现使用：
+## Frontend Behavior
 
-- `GET https://codeagentcli.rnd.huawei.com/codeAgentPro/chat/modles?checkUserPermission=TRUE`
+When the user selects `codeagent` in Settings:
 
-模型发现必需请求头：
+- the UI hides API-key auth
+- the UI shows an auth-method selector
+- `sso` shows the existing SSO button and status
+- `password` shows username and password inputs
 
-| Header | 值 |
-| --- | --- |
-| `X-Auth-Token` | 当前 OAuth access token |
-| `app-id` | `CodeAgent2.0` |
-| `User-Agent` | `AgentKernel/1.0` |
-| `gray` | `false` |
-| `oc-heartbeat` | `1` |
-| `X-snap-traceid` | 生成的 UUID |
-| `X-session-id` | `ses_` 加生成 UUID 去连字符后的前 20 位 |
+The draft flow is:
 
-模型发现解析器支持 JSON 数组，也支持带 `data` 或 `models` 字段的包装对象。
-模型 ID 会从 `name`、`id` 或 `model` 字段读取，并进行去重。
+1. select `CodeAgent`
+2. choose `SSO` or `Username and Password`
+3. either complete SSO or enter username/password
+4. fetch the model list using the resolved CodeAgent token
 
-## 前端行为
+For saved password profiles, the password field remains masked by default and the UI preserves the stored secret unless the user enters a new password.
 
-当用户选择 `codeagent` provider 时，设置页会隐藏 API Key 和 Base URL 输入框，
-改为显示 CodeAgent SSO 控件。前端向 OAuth 启动接口发送空请求体，所有
-CodeAgent OAuth 和 API 参数均由后端硬编码值决定。
+## Auth Verification API
 
-前端在准备 profile payload 时也会使用硬编码的 CodeAgent base URL，用户输入的
-端点值不会覆盖后端常量。
-
-## 验证
-
-当前已做的聚焦检查：
-
-- `node --check frontend\dist\js\components\settings\modelProfiles.js`
-- `.venv\Scripts\ruff.exe check` 检查 CodeAgent provider 和相关测试
-- CodeAgent 单元测试覆盖 OAuth、token 缓存初始化、模型发现和 chat probe 行为
-- 使用 DevTools 验证选择 `codeagent` 后会打开 SSO URL，且 URL 中包含硬编码
-  client ID、scope、scope resource 和带 `client_code` 的回调地址
-
-外部 CodeAgent 网络连通性依赖运行环境，因此浏览器验证只要求前端流程和本地 API
-请求/响应结构正确。
-
-## 持久化登录态与校验
-
-保存后的 `codeagent_auth.has_refresh_token` 仅表示本地已保存过 CodeAgent SSO 凭据，不表示当前登录态已经过实时校验。
-
-设置页编辑已保存的 CodeAgent profile 时，前端会调用：
+The settings page uses:
 
 - `POST /api/system/configs/model/codeagent/auth:verify`
 
-该接口只接受已保存的 CodeAgent profile 名称，并强制执行一次 refresh 校验：
+The request body only includes the saved profile name.
+The backend validates the saved CodeAgent auth state for either mode:
 
-- `status = "valid"`：refresh 仍可用，可显示为已登录
-- `status = "reauth_required"`：refresh 已被上游拒绝，需要重新 SSO 登录
-- `status = "error"`：网络或上游异常，无法确认当前登录状态
+- `status = "valid"`: the profile can still obtain or use a CodeAgent token
+- `status = "reauth_required"`: SSO refresh failed or password re-login failed with an auth-invalid result
+- `status = "error"`: transport or upstream failure prevented verification
 
-运行时 chat / model discovery 仍保持原有的按需 refresh 机制；新增接口只用于设置页区分“保存过凭据”和“当前鉴权已验证”这两个状态。
+This endpoint distinguishes “saved credentials exist” from “the credentials were verified successfully right now”.
+
+## Validation Notes
+
+- CodeAgent profiles always require `codeagent_auth`.
+- `sso` mode requires a saved refresh path or OAuth session id.
+- `password` mode requires `username` and `password` for new drafts.
+- The backend always forces the default CodeAgent inference base URL.
+- Password login is a CodeAgent-only auth mode even though it reuses the MaaS login endpoint.

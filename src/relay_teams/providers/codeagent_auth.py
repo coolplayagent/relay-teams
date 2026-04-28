@@ -16,7 +16,13 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.net.clients import create_async_http_client, create_sync_http_client
+from relay_teams.providers.maas_auth import (
+    MaaSAuthConfig,
+    MaaSLoginError,
+    get_maas_token_service,
+)
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     DEFAULT_CODEAGENT_SSO_BASE_URL,
 )
@@ -24,6 +30,7 @@ from relay_teams.secrets import get_secret_store
 
 __all__ = [
     "CODEAGENT_ACCESS_TOKEN_SECRET_FIELD",
+    "CODEAGENT_PASSWORD_SECRET_FIELD",
     "CODEAGENT_REFRESH_TOKEN_SECRET_FIELD",
     "CodeAgentOAuthError",
     "CodeAgentOAuthSession",
@@ -35,6 +42,7 @@ __all__ = [
     "clear_codeagent_oauth_session_store",
     "clear_codeagent_token_service_cache",
     "codeagent_access_token_secret_field_name",
+    "codeagent_password_secret_field_name",
     "codeagent_refresh_token_secret_field_name",
     "consume_codeagent_oauth_tokens",
     "create_codeagent_oauth_session",
@@ -48,6 +56,7 @@ __all__ = [
 ]
 
 CODEAGENT_ACCESS_TOKEN_SECRET_FIELD = "codeagent_access_token"
+CODEAGENT_PASSWORD_SECRET_FIELD = "codeagent_password"
 CODEAGENT_REFRESH_TOKEN_SECRET_FIELD = "codeagent_refresh_token"
 _CODEAGENT_TOKEN_TTL = timedelta(hours=1)
 _CODEAGENT_REFRESH_SKEW = timedelta(minutes=5)
@@ -166,6 +175,19 @@ class CodeAgentTokenService:
                 and not self._should_refresh(cached.token_result)
             ):
                 return cached.token_result
+            if auth_config.auth_method == CodeAgentAuthMethod.PASSWORD:
+                result = self._login_with_password_sync(
+                    auth_config=auth_config,
+                    ssl_verify=ssl_verify,
+                    connect_timeout_seconds=connect_timeout_seconds,
+                    force_refresh=force_refresh,
+                )
+                self._store_token_result(
+                    cache_key=cache_key,
+                    auth_config=auth_config,
+                    token_result=result,
+                )
+                return result
             config_token_result = self._token_result_from_config(auth_config)
             if not force_refresh and config_token_result is not None:
                 self._tokens[cache_key] = _CodeAgentTokenRecord(
@@ -233,6 +255,19 @@ class CodeAgentTokenService:
                 and not self._should_refresh(cached.token_result)
             ):
                 return cached.token_result
+            if auth_config.auth_method == CodeAgentAuthMethod.PASSWORD:
+                result = await self._login_with_password(
+                    auth_config=auth_config,
+                    ssl_verify=ssl_verify,
+                    connect_timeout_seconds=connect_timeout_seconds,
+                    force_refresh=force_refresh,
+                )
+                self._store_token_result(
+                    cache_key=cache_key,
+                    auth_config=auth_config,
+                    token_result=result,
+                )
+                return result
             config_token_result = self._token_result_from_config(auth_config)
             if not force_refresh and config_token_result is not None:
                 self._tokens[cache_key] = _CodeAgentTokenRecord(
@@ -333,19 +368,93 @@ class CodeAgentTokenService:
 
     def _cache_key(self, *, base_url: str, auth_config: CodeAgentAuthConfig) -> str:
         cache_discriminator = (
-            auth_config.secret_owner_id or auth_config.oauth_session_id or ""
+            auth_config.secret_owner_id
+            or auth_config.oauth_session_id
+            or auth_config.username
+            or ""
         )
         raw = "\0".join(
             (
                 base_url.strip(),
+                auth_config.auth_method.value,
                 auth_config.client_id,
                 auth_config.scope,
                 auth_config.scope_resource,
                 cache_discriminator,
+                auth_config.username or "",
+                auth_config.password or "",
                 auth_config.refresh_token or "",
             )
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _login_with_password_sync(
+        *,
+        auth_config: CodeAgentAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool,
+    ) -> CodeAgentOAuthTokenResult:
+        if auth_config.username is None or auth_config.password is None:
+            raise CodeAgentOAuthError(
+                "CodeAgent username/password is not configured.",
+                status_code=None,
+            )
+        try:
+            auth_context = get_maas_token_service().get_auth_context_sync(
+                auth_config=MaaSAuthConfig(
+                    username=auth_config.username,
+                    password=auth_config.password,
+                ),
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+        except MaaSLoginError as exc:
+            raise CodeAgentOAuthError(
+                str(exc) or "CodeAgent password login failed.",
+                status_code=exc.status_code,
+            ) from exc
+        return CodeAgentOAuthTokenResult(
+            access_token=auth_context.token,
+            refresh_token=auth_context.token,
+            expires_at=datetime.now(UTC) + _CODEAGENT_TOKEN_TTL,
+        )
+
+    @staticmethod
+    async def _login_with_password(
+        *,
+        auth_config: CodeAgentAuthConfig,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+        force_refresh: bool,
+    ) -> CodeAgentOAuthTokenResult:
+        if auth_config.username is None or auth_config.password is None:
+            raise CodeAgentOAuthError(
+                "CodeAgent username/password is not configured.",
+                status_code=None,
+            )
+        try:
+            auth_context = await get_maas_token_service().get_auth_context(
+                auth_config=MaaSAuthConfig(
+                    username=auth_config.username,
+                    password=auth_config.password,
+                ),
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+        except MaaSLoginError as exc:
+            raise CodeAgentOAuthError(
+                str(exc) or "CodeAgent password login failed.",
+                status_code=exc.status_code,
+            ) from exc
+        return CodeAgentOAuthTokenResult(
+            access_token=auth_context.token,
+            refresh_token=auth_context.token,
+            expires_at=datetime.now(UTC) + _CODEAGENT_TOKEN_TTL,
+        )
 
     def _should_refresh(self, token_result: CodeAgentOAuthTokenResult) -> bool:
         return datetime.now(UTC) + _CODEAGENT_REFRESH_SKEW >= token_result.expires_at
@@ -373,6 +482,8 @@ class CodeAgentTokenService:
         token_result: CodeAgentOAuthTokenResult,
     ) -> None:
         self._tokens[cache_key] = _CodeAgentTokenRecord(token_result=token_result)
+        if auth_config.auth_method == CodeAgentAuthMethod.PASSWORD:
+            return
         oauth_session_id = auth_config.oauth_session_id
         if oauth_session_id is None:
             _persist_codeagent_profile_tokens(
@@ -400,6 +511,8 @@ class CodeAgentTokenService:
         self,
         auth_config: CodeAgentAuthConfig,
     ) -> CodeAgentOAuthTokenResult | None:
+        if auth_config.auth_method == CodeAgentAuthMethod.PASSWORD:
+            return None
         if auth_config.access_token is None or auth_config.refresh_token is None:
             return None
         return CodeAgentOAuthTokenResult(
@@ -653,6 +766,10 @@ def clear_codeagent_token_service_cache() -> None:
 
 def codeagent_access_token_secret_field_name() -> str:
     return CODEAGENT_ACCESS_TOKEN_SECRET_FIELD
+
+
+def codeagent_password_secret_field_name() -> str:
+    return CODEAGENT_PASSWORD_SECRET_FIELD
 
 
 def codeagent_refresh_token_secret_field_name() -> str:

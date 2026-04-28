@@ -18,6 +18,7 @@ from relay_teams.providers.codeagent_auth import (
 )
 from relay_teams.providers.maas_auth import MaaSAuthContext, MaaSLoginError
 from relay_teams.providers.model_config import (
+    CodeAgentAuthMethod,
     CodeAgentAuthConfig,
     DEFAULT_CODEAGENT_BASE_URL,
     MaaSAuthConfig,
@@ -203,7 +204,7 @@ class _FakeCodeAgentTokenService:
 
 def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -248,7 +249,7 @@ def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -268,7 +269,7 @@ def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
 
 def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -301,7 +302,7 @@ def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
 
 def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -325,7 +326,7 @@ def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> Non
 
 
 def test_probe_returns_timeout_error(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -343,7 +344,7 @@ def test_probe_returns_timeout_error(monkeypatch) -> None:
 
 
 def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -366,7 +367,7 @@ def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None
 
 def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -395,7 +396,7 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
 
 
 def test_probe_requires_base_url_for_openai_override() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="base_url"):
         service.probe(
@@ -410,7 +411,7 @@ def test_probe_requires_base_url_for_openai_override() -> None:
 
 
 def test_probe_requires_codeagent_auth_for_codeagent_override() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="codeagent_auth"):
         service.probe(
@@ -424,7 +425,7 @@ def test_probe_requires_codeagent_auth_for_codeagent_override() -> None:
 
 
 def test_probe_codeagent_override_reports_all_missing_required_fields() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="model, codeagent_auth"):
         service.probe(
@@ -436,7 +437,7 @@ def test_probe_codeagent_override_reports_all_missing_required_fields() -> None:
 
 def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -469,7 +470,7 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
 
 def test_probe_allows_header_only_override(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -503,7 +504,7 @@ def test_probe_allows_header_only_override(monkeypatch) -> None:
 
 def test_probe_supports_maas_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_maas_token_service",
@@ -562,7 +563,7 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
         ),
     )
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -616,7 +617,7 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
 
 def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -655,7 +656,7 @@ def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) 
 
 def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -696,7 +697,7 @@ def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None
 def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -731,7 +732,7 @@ def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
 
 
 def test_probe_codeagent_rejects_invalid_event_stream_payload(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -768,7 +769,7 @@ def test_probe_codeagent_rejects_invalid_event_stream_payload(monkeypatch) -> No
 def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -914,7 +915,7 @@ def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) ->
 
 
 def test_probe_returns_maas_auth_error_for_invalid_credentials(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _InvalidCredentialsTokenService:
         def get_token_sync(
@@ -956,7 +957,7 @@ def test_probe_returns_maas_auth_error_for_invalid_credentials(monkeypatch) -> N
 
 
 def test_probe_returns_retryable_maas_login_service_error(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _UnavailableTokenService:
         def get_token_sync(
@@ -1003,7 +1004,7 @@ def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> 
         httpx.Response(401, json={"error": {"message": "expired"}}),
         httpx.Response(200, json={"usage": {"total_tokens": 1}}),
     ]
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     token_service = _FakeMaaSTokenService(["expired-token", "fresh-token"], captured)
     monkeypatch.setattr(
@@ -1049,7 +1050,7 @@ def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> 
 
 def test_discover_models_supports_maas_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_maas_token_service",
@@ -1142,7 +1143,7 @@ def test_discover_models_supports_codeagent_provider_with_oauth_session(
         ),
     )
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -1198,7 +1199,7 @@ def test_discover_models_supports_codeagent_provider_with_oauth_session(
 
 
 def test_discover_models_requires_base_url_for_openai_override() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="base_url"):
         service.discover_models(
@@ -1213,7 +1214,7 @@ def test_discover_models_requires_base_url_for_openai_override() -> None:
 
 
 def test_discover_models_requires_codeagent_auth_for_codeagent_override() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="codeagent_auth"):
         service.discover_models(
@@ -1227,7 +1228,7 @@ def test_discover_models_requires_codeagent_auth_for_codeagent_override() -> Non
 
 
 def test_discover_models_codeagent_override_reports_missing_codeagent_auth() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="codeagent_auth"):
         service.discover_models(
@@ -1244,7 +1245,7 @@ def test_probe_codeagent_returns_network_error_for_request_exception(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -1281,7 +1282,7 @@ def test_probe_codeagent_returns_network_error_for_request_exception(
 def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_status(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
         def get_token_sync(
@@ -1382,7 +1383,7 @@ def test_discover_models_codeagent_returns_timeout_for_request_exception(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_codeagent_token_service",
@@ -1419,7 +1420,7 @@ def test_discover_models_codeagent_returns_timeout_for_request_exception(
 def test_discover_models_codeagent_returns_invalid_response_for_oauth_error(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
         def get_token_sync(
@@ -2011,7 +2012,7 @@ def test_verify_codeagent_auth_returns_reauth_required_after_refresh_denied(
 def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_errors(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
         def get_token_sync(
@@ -2061,7 +2062,7 @@ def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_erro
 def test_get_codeagent_token_for_probe_returns_timeout_when_token_service_times_out(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _TimeoutingCodeAgentTokenService:
         def get_token_sync(
@@ -2107,7 +2108,7 @@ def test_get_codeagent_token_for_probe_returns_timeout_when_token_service_times_
 def test_get_codeagent_token_for_discovery_returns_network_error_when_token_service_fails(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
         def get_token_sync(
@@ -2166,7 +2167,7 @@ def test_resolve_codeagent_auth_for_request_preserves_secret_owner_metadata() ->
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         ),
     )
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     resolved = service._resolve_codeagent_auth_for_request(
         CodeAgentAuthConfig(
@@ -2187,7 +2188,7 @@ def test_resolve_codeagent_auth_for_request_preserves_secret_owner_metadata() ->
 def test_resolve_codeagent_auth_for_request_rejects_consumed_session_without_refresh_token() -> (
     None
 ):
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(
         CodeAgentOAuthError,
@@ -2201,7 +2202,7 @@ def test_resolve_codeagent_auth_for_request_rejects_consumed_session_without_ref
 def test_resolve_codeagent_auth_for_request_rejects_missing_refresh_token_without_session() -> (
     None
 ):
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(
         CodeAgentOAuthError,
@@ -2211,7 +2212,7 @@ def test_resolve_codeagent_auth_for_request_rejects_missing_refresh_token_withou
 
 
 def test_resolve_codeagent_auth_for_request_returns_existing_refresh_token() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
     auth_config = CodeAgentAuthConfig(refresh_token="refresh-token")
 
     resolved = service._resolve_codeagent_auth_for_request(auth_config)
@@ -2219,8 +2220,39 @@ def test_resolve_codeagent_auth_for_request_returns_existing_refresh_token() -> 
     assert resolved == auth_config
 
 
+def test_resolve_codeagent_auth_for_request_returns_password_auth_config() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+    auth_config = CodeAgentAuthConfig(
+        auth_method=CodeAgentAuthMethod.PASSWORD,
+        username="relay-user",
+        password="relay-password",
+    ).with_secret_owner(
+        config_dir=Path("D:/tmp/.agent_teams"),
+        owner_id="codeagent-profile",
+    )
+
+    resolved = service._resolve_codeagent_auth_for_request(auth_config)
+
+    assert resolved == auth_config
+
+
+def test_resolve_codeagent_auth_for_request_rejects_incomplete_password_auth() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(
+        CodeAgentOAuthError,
+        match="CodeAgent username/password is not configured.",
+    ):
+        service._resolve_codeagent_auth_for_request(
+            CodeAgentAuthConfig(
+                auth_method=CodeAgentAuthMethod.PASSWORD,
+                username="relay-user",
+            )
+        )
+
+
 def test_merge_codeagent_auth_returns_override_when_base_is_missing() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
     override_auth = CodeAgentAuthConfig(refresh_token="refresh-token")
 
     merged = service._merge_codeagent_auth(
@@ -2234,7 +2266,7 @@ def test_merge_codeagent_auth_returns_override_when_base_is_missing() -> None:
 def test_merge_codeagent_auth_with_session_override_drops_stale_base_refresh_token() -> (
     None
 ):
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
     base_auth = CodeAgentAuthConfig(
         refresh_token="stale-refresh-token",
         access_token="stale-access-token",
@@ -2260,7 +2292,7 @@ def test_merge_codeagent_auth_with_session_override_drops_stale_base_refresh_tok
 
 
 def test_merge_codeagent_auth_without_session_override_preserves_secret_owner() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
     base_auth = CodeAgentAuthConfig(
         access_token="saved-access-token",
         refresh_token="saved-refresh-token",
@@ -2282,10 +2314,61 @@ def test_merge_codeagent_auth_without_session_override_preserves_secret_owner() 
     assert merged._secret_owner_id == "saved-profile"
 
 
+def test_merge_codeagent_auth_password_override_drops_stale_sso_tokens() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+    base_auth = CodeAgentAuthConfig(
+        access_token="saved-access-token",
+        refresh_token="saved-refresh-token",
+    ).with_secret_owner(
+        config_dir=Path("D:/tmp/.agent_teams"),
+        owner_id="saved-profile",
+    )
+    override_auth = CodeAgentAuthConfig(
+        auth_method=CodeAgentAuthMethod.PASSWORD,
+        username="relay-user",
+        password="relay-password",
+    )
+
+    merged = service._merge_codeagent_auth(
+        base_codeagent_auth=base_auth,
+        override_codeagent_auth=override_auth,
+    )
+
+    assert merged is not None
+    assert merged.auth_method == CodeAgentAuthMethod.PASSWORD
+    assert merged.username == "relay-user"
+    assert merged.password == "relay-password"
+    assert merged.access_token is None
+    assert merged.refresh_token is None
+    assert merged._secret_owner_id == "saved-profile"
+
+
+def test_merge_codeagent_auth_rejects_username_change_without_new_password() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+    base_auth = CodeAgentAuthConfig(
+        auth_method=CodeAgentAuthMethod.PASSWORD,
+        username="old-user",
+        password="saved-password",
+    )
+    override_auth = CodeAgentAuthConfig(
+        auth_method=CodeAgentAuthMethod.PASSWORD,
+        username="new-user",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="CodeAgent password must be re-entered after changing the username.",
+    ):
+        service._merge_codeagent_auth(
+            base_codeagent_auth=base_auth,
+            override_codeagent_auth=override_auth,
+        )
+
+
 def test_build_maas_login_error_result_without_http_status_returns_invalid_response() -> (
     None
 ):
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     result = service._build_maas_login_error_result(
         config=ModelEndpointConfig(
@@ -2308,7 +2391,7 @@ def test_build_maas_login_error_result_without_http_status_returns_invalid_respo
 
 
 def test_build_model_discovery_maas_login_error_result_maps_auth_failure() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     result = service._build_model_discovery_maas_login_error_result(
         config=ModelDiscoveryResolvedConfig(
@@ -2332,7 +2415,7 @@ def test_build_model_discovery_maas_login_error_result_maps_auth_failure() -> No
 
 
 def test_extract_openai_model_entries_skips_invalid_and_duplicate_items() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     entries = service._extract_model_entries(
         payload={
@@ -2353,7 +2436,7 @@ def test_extract_openai_model_entries_skips_invalid_and_duplicate_items() -> Non
 
 
 def test_extract_model_entries_returns_none_for_non_mapping_payload() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     entries = service._extract_model_entries(
         payload=["gpt-4.1"],
@@ -2364,7 +2447,7 @@ def test_extract_model_entries_returns_none_for_non_mapping_payload() -> None:
 
 
 def test_extract_codeagent_model_entries_reads_models_field() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     entries = service._extract_codeagent_model_entries(
         {
@@ -2383,7 +2466,7 @@ def test_extract_codeagent_model_entries_reads_models_field() -> None:
 
 
 def test_extract_codeagent_model_entries_skips_blank_model_ids() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     entries = service._extract_codeagent_model_entries(
         {
@@ -2458,7 +2541,7 @@ def test_discover_models_refreshes_maas_token_after_unauthorized_response(
         httpx.Response(401, json={"error": {"message": "expired"}}),
         httpx.Response(200, json={"user_model_list": [{"model_id": "maas-chat"}]}),
     ]
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     token_service = _FakeMaaSTokenService(["expired-token", "fresh-token"], captured)
     monkeypatch.setattr(
@@ -2505,7 +2588,7 @@ def test_discover_models_refreshes_maas_auth_when_department_missing(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     token_service = _FakeMaaSTokenService(
         ["stale-token", "fresh-token"],
@@ -2555,7 +2638,7 @@ def test_discover_models_returns_invalid_response_when_maas_department_missing(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_maas_token_service",
@@ -2591,7 +2674,7 @@ def test_discover_models_returns_invalid_response_when_maas_department_missing(
 
 def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2633,7 +2716,7 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
 
 
 def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2668,7 +2751,7 @@ def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> 
 def test_discover_models_extracts_context_window_when_provider_returns_it(
     monkeypatch,
 ) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2705,7 +2788,7 @@ def test_discover_models_extracts_context_window_when_provider_returns_it(
 
 
 def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2735,7 +2818,7 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2765,7 +2848,7 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
 
 def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2796,7 +2879,7 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
 
 def test_discover_models_allows_header_only_override(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2829,7 +2912,7 @@ def test_discover_models_allows_header_only_override(monkeypatch) -> None:
 
 
 def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.create_sync_http_client",
@@ -2847,7 +2930,7 @@ def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
 
 def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
     captured: dict[str, object] = {}
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
         "relay_teams.providers.model_connectivity.get_maas_token_service",
@@ -2891,14 +2974,14 @@ def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
 
 
 def test_probe_requires_source_config() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="Provide profile_name, override, or both."):
         service.probe(ModelConnectivityProbeRequest())
 
 
 def test_discover_models_requires_source_config() -> None:
-    service = ModelConnectivityProbeService(get_runtime=lambda: _runtime_config())
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="Provide profile_name, override, or both."):
         service.discover_models(ModelDiscoveryRequest())

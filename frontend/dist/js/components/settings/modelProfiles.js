@@ -30,6 +30,7 @@ let draftDiscoveredModels = [];
 let draftModelDiscoveryState = null;
 let draftApiKeyState = createDraftSecretState();
 let draftMaasPasswordState = createDraftSecretState();
+let draftCodeAgentPasswordState = createDraftSecretState();
 let draftCatalogSelection = null;
 let modelCatalogProviders = [];
 let selectedCatalogProviderId = '';
@@ -65,6 +66,10 @@ const PROVIDER_MODES = {
     MAAS: 'maas',
     CODEAGENT: 'codeagent',
     CUSTOM: 'custom',
+};
+const CODEAGENT_AUTH_METHODS = {
+    SSO: 'sso',
+    PASSWORD: 'password',
 };
 const FALLBACK_POLICY_TRANSLATION_KEYS = {
     same_provider_then_other_provider: 'settings.model.fallback_policy_same_provider_then_other_provider',
@@ -176,6 +181,25 @@ export function bindModelProfileHandlers() {
         codeagentLoginBtn.onclick = handleCodeAgentLogin;
     }
 
+    const codeagentAuthMethodInput = document.getElementById('profile-codeagent-auth-method');
+    if (codeagentAuthMethodInput) {
+        codeagentAuthMethodInput.onchange = handleDraftCodeAgentAuthMethodChanged;
+    }
+
+    const codeagentUsernameInput = document.getElementById('profile-codeagent-username');
+    if (codeagentUsernameInput) {
+        codeagentUsernameInput.oninput = handleDraftEndpointChanged;
+    }
+
+    const codeagentPasswordInput = document.getElementById('profile-codeagent-password');
+    if (codeagentPasswordInput) {
+        codeagentPasswordInput.oninput = handleDraftCodeAgentPasswordInput;
+        codeagentPasswordInput.onfocus = armDraftCodeAgentPasswordInput;
+        codeagentPasswordInput.onpointerdown = armDraftCodeAgentPasswordInput;
+        codeagentPasswordInput.onkeydown = armDraftCodeAgentPasswordInput;
+        codeagentPasswordInput.onblur = disarmDraftCodeAgentPasswordInput;
+    }
+
     const toggleApiKeyBtn = document.getElementById('toggle-profile-api-key-btn');
     if (toggleApiKeyBtn) {
         toggleApiKeyBtn.onclick = toggleDraftApiKeyVisibility;
@@ -184,6 +208,11 @@ export function bindModelProfileHandlers() {
     const toggleMaasPasswordBtn = document.getElementById('toggle-profile-maas-password-btn');
     if (toggleMaasPasswordBtn) {
         toggleMaasPasswordBtn.onclick = toggleDraftMaasPasswordVisibility;
+    }
+
+    const toggleCodeAgentPasswordBtn = document.getElementById('toggle-profile-codeagent-password-btn');
+    if (toggleCodeAgentPasswordBtn) {
+        toggleCodeAgentPasswordBtn.onclick = toggleDraftCodeAgentPasswordVisibility;
     }
 
     const sslVerifyInput = document.getElementById('profile-ssl-verify');
@@ -918,9 +947,13 @@ function handleAddProfile() {
     delete document.getElementById('profile-base-url').dataset.defaultSourceProvider;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
-    draftCodeAgentAuthState = createDraftCodeAgentAuthState();
+    draftCodeAgentPasswordState = createDraftSecretState();
+    draftCodeAgentAuthState = createDraftCodeAgentAuthState(CODEAGENT_AUTH_METHODS.SSO);
     document.getElementById('profile-maas-username').value = '';
     document.getElementById('profile-maas-password').value = '';
+    document.getElementById('profile-codeagent-auth-method').value = CODEAGENT_AUTH_METHODS.SSO;
+    document.getElementById('profile-codeagent-username').value = '';
+    document.getElementById('profile-codeagent-password').value = '';
     document.getElementById('profile-is-default').checked = Object.keys(profiles).length === 0;
     document.getElementById('profile-temperature').value = '0.7';
     document.getElementById('profile-top-p').value = '1.0';
@@ -980,20 +1013,44 @@ function handleEditProfile(name) {
     document.getElementById('profile-maas-username').value = profile.maas_auth?.username || '';
     document.getElementById('profile-maas-password').value = '';
     const codeagentAuth = profile.codeagent_auth || {};
+    const codeagentAuthMethod = String(
+        codeagentAuth.auth_method || CODEAGENT_AUTH_METHODS.SSO,
+    ).trim() || CODEAGENT_AUTH_METHODS.SSO;
+    draftCodeAgentPasswordState = {
+        persistedValue: typeof codeagentAuth.password === 'string' ? codeagentAuth.password : '',
+        draftValue: '',
+        hasPersistedValue: Boolean(codeagentAuth.has_password),
+        isDirty: false,
+        hasExplicitEntry: false,
+        armedForInput: false,
+        revealed: false,
+    };
+    document.getElementById('profile-codeagent-auth-method').value = codeagentAuthMethod;
+    document.getElementById('profile-codeagent-username').value = codeagentAuth.username || '';
+    document.getElementById('profile-codeagent-password').value = '';
     draftCodeAgentAuthState = {
+        authMethod: codeagentAuthMethod,
+        persistedUsername: codeagentAuthMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+            ? String(codeagentAuth.username || '').trim()
+            : '',
         authSessionId: '',
         completed: false,
         verified: false,
         verifying: false,
         reauthRequired: false,
-        hasPersistedAccessToken: Boolean(codeagentAuth.has_access_token),
-        hasPersistedRefreshToken: Boolean(codeagentAuth.has_refresh_token),
+        hasPersistedAccessToken: codeagentAuthMethod === CODEAGENT_AUTH_METHODS.SSO && Boolean(codeagentAuth.has_access_token),
+        hasPersistedRefreshToken: codeagentAuthMethod === CODEAGENT_AUTH_METHODS.SSO && Boolean(codeagentAuth.has_refresh_token),
+        hasPersistedPassword: codeagentAuthMethod === CODEAGENT_AUTH_METHODS.PASSWORD && Boolean(codeagentAuth.has_password),
         loginInProgress: false,
         pendingAuthorizationUrl: '',
         verificationScopeId: nextDraftCodeAgentVerificationScopeId++,
         verificationRequestId: 0,
-        statusMessage: Boolean(codeagentAuth.has_refresh_token)
-            ? 'Saved sign-in requires verification'
+        statusMessage: (
+            codeagentAuthMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+                ? Boolean(codeagentAuth.has_password)
+                : Boolean(codeagentAuth.has_refresh_token)
+        )
+            ? 'Saved credentials require verification'
             : 'Not signed in',
     };
     document.getElementById('profile-is-default').checked = profile.is_default === true;
@@ -1034,7 +1091,13 @@ function handleEditProfile(name) {
     if (draftProviderMode === PROVIDER_MODES.EXTERNAL) {
         void loadModelCatalogForNewProfile();
     }
-    if (isCodeAgentProvider(profile.provider) && Boolean(codeagentAuth.has_refresh_token)) {
+    if (
+        isCodeAgentProvider(profile.provider)
+        && (
+            (codeagentAuthMethod === CODEAGENT_AUTH_METHODS.SSO && Boolean(codeagentAuth.has_refresh_token))
+            || (codeagentAuthMethod === CODEAGENT_AUTH_METHODS.PASSWORD && Boolean(codeagentAuth.has_password))
+        )
+    ) {
         void verifyPersistedCodeAgentAuth(name);
     }
 }
@@ -1105,10 +1168,20 @@ async function handleSaveProfile() {
             return;
         }
     } else if (isCodeAgentProvider(provider)) {
+        if (requiresDraftCodeAgentPasswordReentry()) {
+            showToast({
+                title: t('settings.model.save_failed_title'),
+                message: 'Re-enter the CodeAgent password after changing the username.',
+                tone: 'warning',
+            });
+            return;
+        }
         if (!hasDraftCodeAgentAuth()) {
             showToast({
                 title: t('settings.model.save_failed_title'),
-                message: 'CodeAgent profiles require SSO login before saving.',
+                message: getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+                    ? 'CodeAgent password login requires username and password before saving.'
+                    : 'CodeAgent profiles require SSO login before saving.',
                 tone: 'warning',
             });
             return;
@@ -1156,11 +1229,19 @@ async function handleSaveProfile() {
         }
     } else if (isCodeAgentProvider(provider)) {
         profile.codeagent_auth = {
-            has_access_token: codeagentAuth.has_access_token,
-            has_refresh_token: codeagentAuth.has_refresh_token,
+            auth_method: codeagentAuth.auth_method,
         };
-        if (codeagentAuth.oauth_session_id) {
-            profile.codeagent_auth.oauth_session_id = codeagentAuth.oauth_session_id;
+        if (codeagentAuth.auth_method === CODEAGENT_AUTH_METHODS.PASSWORD) {
+            profile.codeagent_auth.username = codeagentAuth.username;
+            if (codeagentAuth.password) {
+                profile.codeagent_auth.password = codeagentAuth.password;
+            }
+        } else {
+            profile.codeagent_auth.has_access_token = codeagentAuth.has_access_token;
+            profile.codeagent_auth.has_refresh_token = codeagentAuth.has_refresh_token;
+            if (codeagentAuth.oauth_session_id) {
+                profile.codeagent_auth.oauth_session_id = codeagentAuth.oauth_session_id;
+            }
         }
     } else if (apiKey) {
         profile.api_key = apiKey;
@@ -1371,7 +1452,10 @@ async function handleDiscoverDraftModels() {
 
 async function handleCodeAgentLogin() {
     const provider = getDraftProvider();
-    if (!isCodeAgentProvider(provider)) {
+    if (
+        !isCodeAgentProvider(provider)
+        || getDraftCodeAgentAuthMethod() !== CODEAGENT_AUTH_METHODS.SSO
+    ) {
         return;
     }
     if (draftCodeAgentAuthState.pendingAuthorizationUrl) {
@@ -1421,6 +1505,9 @@ async function handleCodeAgentLogin() {
 }
 
 async function continueCodeAgentLogin() {
+    if (getDraftCodeAgentAuthMethod() !== CODEAGENT_AUTH_METHODS.SSO) {
+        return;
+    }
     const authSessionId = String(draftCodeAgentAuthState.authSessionId || '').trim();
     const authorizationUrl = String(
         draftCodeAgentAuthState.pendingAuthorizationUrl || '',
@@ -1521,7 +1608,10 @@ async function verifyPersistedCodeAgentAuth(profileName) {
     if (!normalizedProfileName || !isCodeAgentProvider(getDraftProvider())) {
         return;
     }
-    if (editingProfile !== normalizedProfileName || !draftCodeAgentAuthState.hasPersistedRefreshToken) {
+    if (
+        editingProfile !== normalizedProfileName
+        || !hasPersistedCodeAgentCredentials()
+    ) {
         return;
     }
     const verificationScopeId = Number(draftCodeAgentAuthState.verificationScopeId || 0);
@@ -1530,7 +1620,9 @@ async function verifyPersistedCodeAgentAuth(profileName) {
     draftCodeAgentAuthState.verified = false;
     draftCodeAgentAuthState.verifying = true;
     draftCodeAgentAuthState.reauthRequired = false;
-    draftCodeAgentAuthState.statusMessage = 'Verifying saved sign-in';
+    draftCodeAgentAuthState.statusMessage = getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+        ? 'Verifying saved credentials'
+        : 'Verifying saved sign-in';
     renderDraftCodeAgentAuthState();
 
     try {
@@ -1542,7 +1634,9 @@ async function verifyPersistedCodeAgentAuth(profileName) {
         if (result.status === 'valid') {
             draftCodeAgentAuthState.verified = true;
             draftCodeAgentAuthState.reauthRequired = false;
-            draftCodeAgentAuthState.statusMessage = 'Signed in';
+            draftCodeAgentAuthState.statusMessage = getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+                ? 'Credentials verified'
+                : 'Signed in';
             renderDraftCodeAgentAuthState();
             return;
         }
@@ -1574,7 +1668,9 @@ function markCodeAgentAuthReauthRequired() {
     draftCodeAgentAuthState.verified = false;
     draftCodeAgentAuthState.verifying = false;
     draftCodeAgentAuthState.reauthRequired = true;
-    draftCodeAgentAuthState.statusMessage = 'Saved sign-in expired. Sign in with SSO again';
+    draftCodeAgentAuthState.statusMessage = getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+        ? 'Saved credentials expired. Update username or password'
+        : 'Saved sign-in expired. Sign in with SSO again';
     renderDraftCodeAgentAuthState();
 }
 
@@ -1615,10 +1711,20 @@ function buildDraftProbePayload() {
             return null;
         }
     } else if (isCodeAgentProvider(provider)) {
-        if (draftCodeAgentAuthState.reauthRequired) {
+        if (shouldBlockDraftCodeAgentReauth()) {
             draftProbeState = {
                 status: 'failed',
-                message: 'SSO login expired. Sign in with SSO again before testing a CodeAgent profile.',
+                message: getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+                    ? 'Saved CodeAgent credentials expired. Update username or password before testing.'
+                    : 'SSO login expired. Sign in with SSO again before testing a CodeAgent profile.',
+            };
+            renderDraftProbeState();
+            return null;
+        }
+        if (requiresDraftCodeAgentPasswordReentry()) {
+            draftProbeState = {
+                status: 'failed',
+                message: 'Re-enter the CodeAgent password after changing the username.',
             };
             renderDraftProbeState();
             return null;
@@ -1626,7 +1732,9 @@ function buildDraftProbePayload() {
         if (!hasDraftCodeAgentAuth()) {
             draftProbeState = {
                 status: 'failed',
-                message: 'Model and SSO login are required before testing a CodeAgent profile.',
+                message: getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+                    ? 'Model, username, and password are required before testing a CodeAgent profile.'
+                    : 'Model and SSO login are required before testing a CodeAgent profile.',
             };
             renderDraftProbeState();
             return null;
@@ -1662,11 +1770,17 @@ function buildDraftProbePayload() {
             override.maas_auth.password = maasAuth.password;
         }
     } else if (isCodeAgentProvider(provider)) {
-        override.codeagent_auth = {
-            oauth_session_id: codeagentAuth.oauth_session_id,
-            has_access_token: codeagentAuth.has_access_token,
-            has_refresh_token: codeagentAuth.has_refresh_token,
-        };
+        override.codeagent_auth = { auth_method: codeagentAuth.auth_method };
+        if (codeagentAuth.auth_method === CODEAGENT_AUTH_METHODS.PASSWORD) {
+            override.codeagent_auth.username = codeagentAuth.username;
+            if (codeagentAuth.password) {
+                override.codeagent_auth.password = codeagentAuth.password;
+            }
+        } else {
+            override.codeagent_auth.oauth_session_id = codeagentAuth.oauth_session_id;
+            override.codeagent_auth.has_access_token = codeagentAuth.has_access_token;
+            override.codeagent_auth.has_refresh_token = codeagentAuth.has_refresh_token;
+        }
     } else if (apiKey) {
         override.api_key = apiKey;
     }
@@ -1702,11 +1816,23 @@ function buildDraftModelDiscoveryPayload() {
             return null;
         }
     } else if (isCodeAgentProvider(provider)) {
-        if (draftCodeAgentAuthState.reauthRequired) {
+        if (shouldBlockDraftCodeAgentReauth()) {
             draftDiscoveredModels = [];
             draftModelDiscoveryState = {
                 status: 'failed',
-                message: 'SSO login expired. Sign in with SSO again before fetching CodeAgent models.',
+                message: getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+                    ? 'Saved CodeAgent credentials expired. Update username or password before fetching models.'
+                    : 'SSO login expired. Sign in with SSO again before fetching CodeAgent models.',
+            };
+            renderDiscoveredModels();
+            renderDraftModelDiscoveryState();
+            return null;
+        }
+        if (requiresDraftCodeAgentPasswordReentry()) {
+            draftDiscoveredModels = [];
+            draftModelDiscoveryState = {
+                status: 'failed',
+                message: 'Re-enter the CodeAgent password after changing the username.',
             };
             renderDiscoveredModels();
             renderDraftModelDiscoveryState();
@@ -1716,7 +1842,9 @@ function buildDraftModelDiscoveryPayload() {
             draftDiscoveredModels = [];
             draftModelDiscoveryState = {
                 status: 'failed',
-                message: 'SSO login is required before fetching CodeAgent models.',
+                message: getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+                    ? 'Username and password are required before fetching CodeAgent models.'
+                    : 'SSO login is required before fetching CodeAgent models.',
             };
             renderDiscoveredModels();
             renderDraftModelDiscoveryState();
@@ -1748,11 +1876,17 @@ function buildDraftModelDiscoveryPayload() {
             override.maas_auth.password = maasAuth.password;
         }
     } else if (isCodeAgentProvider(provider)) {
-        override.codeagent_auth = {
-            oauth_session_id: codeagentAuth.oauth_session_id,
-            has_access_token: codeagentAuth.has_access_token,
-            has_refresh_token: codeagentAuth.has_refresh_token,
-        };
+        override.codeagent_auth = { auth_method: codeagentAuth.auth_method };
+        if (codeagentAuth.auth_method === CODEAGENT_AUTH_METHODS.PASSWORD) {
+            override.codeagent_auth.username = codeagentAuth.username;
+            if (codeagentAuth.password) {
+                override.codeagent_auth.password = codeagentAuth.password;
+            }
+        } else {
+            override.codeagent_auth.oauth_session_id = codeagentAuth.oauth_session_id;
+            override.codeagent_auth.has_access_token = codeagentAuth.has_access_token;
+            override.codeagent_auth.has_refresh_token = codeagentAuth.has_refresh_token;
+        }
     } else if (apiKey) {
         override.api_key = apiKey;
     }
@@ -1939,6 +2073,7 @@ function handleDraftEndpointChanged() {
     ) {
         draftModelInputExpanded = false;
     }
+    syncDraftCodeAgentAuthStatusMessage();
     renderDraftProviderFields();
     renderProfileEditorState();
     draftDiscoveredModels = [];
@@ -2044,6 +2179,48 @@ function handleDraftMaasPasswordInput() {
     renderDraftMaaSPasswordToggle();
 }
 
+function handleDraftCodeAgentAuthMethodChanged() {
+    const nextMethod = getDraftCodeAgentAuthMethod();
+    const nextState = createDraftCodeAgentAuthState(nextMethod);
+    nextState.persistedUsername = nextMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+        ? String(draftCodeAgentAuthState.persistedUsername || '').trim()
+        : '';
+    nextState.hasPersistedAccessToken = draftCodeAgentAuthState.hasPersistedAccessToken;
+    nextState.hasPersistedRefreshToken = draftCodeAgentAuthState.hasPersistedRefreshToken;
+    nextState.hasPersistedPassword = draftCodeAgentPasswordState.hasPersistedValue;
+    draftCodeAgentAuthState = nextState;
+    handleDraftEndpointChanged();
+    renderDraftCodeAgentAuthState();
+}
+
+function handleDraftCodeAgentPasswordInput() {
+    const codeagentPasswordInput = document.getElementById('profile-codeagent-password');
+    if (!codeagentPasswordInput) {
+        return;
+    }
+    if (
+        draftCodeAgentPasswordState.hasPersistedValue
+        && !draftCodeAgentPasswordState.revealed
+        && !canAcceptDraftCodeAgentPasswordInput(codeagentPasswordInput)
+    ) {
+        draftCodeAgentPasswordState.draftValue = '';
+        draftCodeAgentPasswordState.isDirty = false;
+        draftCodeAgentPasswordState.hasExplicitEntry = false;
+        draftCodeAgentPasswordState.armedForInput = false;
+        draftCodeAgentPasswordState.revealed = false;
+        renderDraftCodeAgentPasswordField();
+        return;
+    }
+
+    draftCodeAgentPasswordState.draftValue = codeagentPasswordInput.value;
+    draftCodeAgentPasswordState.isDirty = draftCodeAgentPasswordState.draftValue !== draftCodeAgentPasswordState.persistedValue;
+    draftCodeAgentPasswordState.hasExplicitEntry = Boolean(
+        codeagentPasswordInput.value.trim(),
+    );
+    handleDraftEndpointChanged();
+    renderDraftCodeAgentPasswordToggle();
+}
+
 function toggleDraftApiKeyVisibility() {
     if (!draftApiKeyState.hasPersistedValue && !draftApiKeyState.draftValue.trim()) {
         return;
@@ -2058,6 +2235,14 @@ function toggleDraftMaasPasswordVisibility() {
     }
     draftMaasPasswordState.revealed = !draftMaasPasswordState.revealed;
     renderDraftMaaSPasswordField();
+}
+
+function toggleDraftCodeAgentPasswordVisibility() {
+    if (!draftCodeAgentPasswordState.hasPersistedValue && !draftCodeAgentPasswordState.draftValue.trim()) {
+        return;
+    }
+    draftCodeAgentPasswordState.revealed = !draftCodeAgentPasswordState.revealed;
+    renderDraftCodeAgentPasswordField();
 }
 
 function applyDiscoveredModelSelection() {
@@ -2218,6 +2403,7 @@ function resetDraftEditorState() {
     draftModelDiscoveryState = null;
     draftApiKeyState = createDraftSecretState();
     draftMaasPasswordState = createDraftSecretState();
+    draftCodeAgentPasswordState = createDraftSecretState();
     draftCodeAgentAuthState = createDraftCodeAgentAuthState();
     draftCatalogSelection = null;
     draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
@@ -2662,11 +2848,74 @@ function readDraftMaasAuth() {
     };
 }
 
+function getDraftCodeAgentAuthMethod() {
+    const authMethodInput = document.getElementById('profile-codeagent-auth-method');
+    const normalized = String(authMethodInput?.value || draftCodeAgentAuthState.authMethod || '').trim();
+    return normalized === CODEAGENT_AUTH_METHODS.PASSWORD
+        ? CODEAGENT_AUTH_METHODS.PASSWORD
+        : CODEAGENT_AUTH_METHODS.SSO;
+}
+
+function syncDraftCodeAgentAuthStatusMessage() {
+    if (!isCodeAgentProvider(getDraftProvider())) {
+        return;
+    }
+    const authMethod = getDraftCodeAgentAuthMethod();
+    draftCodeAgentAuthState.authMethod = authMethod;
+    if (draftCodeAgentAuthState.loginInProgress || draftCodeAgentAuthState.verifying) {
+        return;
+    }
+    if (shouldBlockDraftCodeAgentReauth()) {
+        draftCodeAgentAuthState.statusMessage = authMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+            ? 'Saved credentials expired. Update username or password'
+            : 'Saved sign-in expired. Sign in with SSO again';
+        return;
+    }
+    if (authMethod === CODEAGENT_AUTH_METHODS.PASSWORD) {
+        if (requiresDraftCodeAgentPasswordReentry()) {
+            draftCodeAgentAuthState.statusMessage = 'Re-enter password after changing username';
+            return;
+        }
+        if (draftCodeAgentAuthState.verified) {
+            draftCodeAgentAuthState.statusMessage = 'Credentials verified';
+            return;
+        }
+        if (
+            draftCodeAgentPasswordState.hasPersistedValue
+            && !draftCodeAgentPasswordState.isDirty
+            && !draftCodeAgentPasswordState.hasExplicitEntry
+        ) {
+            draftCodeAgentAuthState.statusMessage = 'Saved credentials require verification';
+            return;
+        }
+        draftCodeAgentAuthState.statusMessage = hasDraftCodeAgentAuth()
+            ? 'Credentials ready'
+            : 'Not signed in';
+        return;
+    }
+    if (draftCodeAgentAuthState.completed || draftCodeAgentAuthState.verified) {
+        draftCodeAgentAuthState.statusMessage = 'Signed in';
+        return;
+    }
+    draftCodeAgentAuthState.statusMessage = draftCodeAgentAuthState.hasPersistedRefreshToken
+        ? 'Saved credentials require verification'
+        : 'Not signed in';
+}
+
 function readDraftCodeAgentAuth() {
+    const authMethod = getDraftCodeAgentAuthMethod();
+    if (authMethod === CODEAGENT_AUTH_METHODS.PASSWORD) {
+        return {
+            auth_method: authMethod,
+            username: document.getElementById('profile-codeagent-username').value.trim(),
+            password: readDraftCodeAgentPasswordValue(),
+        };
+    }
     const completedSessionId = draftCodeAgentAuthState.completed
         ? draftCodeAgentAuthState.authSessionId || null
         : null;
     return {
+        auth_method: authMethod,
         oauth_session_id: completedSessionId,
         has_access_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedAccessToken,
         has_refresh_token: draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedRefreshToken,
@@ -2674,33 +2923,101 @@ function readDraftCodeAgentAuth() {
 }
 
 function hasDraftCodeAgentAuth() {
+    if (getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD) {
+        if (requiresDraftCodeAgentPasswordReentry()) {
+            return false;
+        }
+        const username = document.getElementById('profile-codeagent-username').value.trim();
+        return Boolean(username && hasDraftCodeAgentPassword());
+    }
     return draftCodeAgentAuthState.completed || draftCodeAgentAuthState.hasPersistedRefreshToken;
+}
+
+function hasPersistedCodeAgentCredentials() {
+    return getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+        ? draftCodeAgentAuthState.hasPersistedPassword
+        : draftCodeAgentAuthState.hasPersistedRefreshToken;
+}
+
+function hasFreshDraftCodeAgentPasswordEntry() {
+    return getDraftCodeAgentAuthMethod() === CODEAGENT_AUTH_METHODS.PASSWORD
+        && Boolean(readDraftCodeAgentPasswordValue());
+}
+
+function shouldBlockDraftCodeAgentReauth() {
+    return draftCodeAgentAuthState.reauthRequired && !hasFreshDraftCodeAgentPasswordEntry();
+}
+
+function hasDraftCodeAgentPassword() {
+    return Boolean(readDraftCodeAgentPasswordValue()) || draftCodeAgentPasswordState.hasPersistedValue;
+}
+
+function requiresDraftCodeAgentPasswordReentry() {
+    if (getDraftCodeAgentAuthMethod() !== CODEAGENT_AUTH_METHODS.PASSWORD) {
+        return false;
+    }
+    if (!draftCodeAgentPasswordState.hasPersistedValue) {
+        return false;
+    }
+    const persistedUsername = String(
+        draftCodeAgentAuthState.persistedUsername || '',
+    ).trim();
+    if (!persistedUsername) {
+        return false;
+    }
+    const username = document.getElementById('profile-codeagent-username').value.trim();
+    if (!username || username === persistedUsername) {
+        return false;
+    }
+    return !Boolean(readDraftCodeAgentPasswordValue());
 }
 
 function renderDraftCodeAgentAuthState() {
     const loginBtn = document.getElementById('profile-codeagent-login-status');
     const statusMessageEl = document.getElementById('profile-codeagent-login-status-message');
+    const authMethodInput = document.getElementById('profile-codeagent-auth-method');
+    const ssoGroup = document.getElementById('profile-codeagent-sso-group');
+    const usernameGroup = document.getElementById('profile-codeagent-username-group');
+    const passwordGroup = document.getElementById('profile-codeagent-password-group');
     const provider = getDraftProvider();
     const isCodeAgent = isCodeAgentProvider(provider);
+    const authMethod = getDraftCodeAgentAuthMethod();
     const hasAuth = hasDraftCodeAgentAuth();
     const authVerified = Boolean(draftCodeAgentAuthState.verified || draftCodeAgentAuthState.completed);
     const statusMessage = draftCodeAgentAuthState.statusMessage
         || (
-            draftCodeAgentAuthState.hasPersistedRefreshToken
-                ? 'Saved sign-in requires verification'
+            hasPersistedCodeAgentCredentials()
+                ? 'Saved credentials require verification'
                 : hasAuth
-                    ? 'Signed in'
+                    ? authMethod === CODEAGENT_AUTH_METHODS.PASSWORD
+                        ? 'Credentials ready'
+                        : 'Signed in'
                     : 'Not signed in'
         );
     const loginLabel = t('settings.model.codeagent_sign_in_sso');
     const showStatus = isCodeAgent && statusMessage && statusMessage !== 'Not signed in';
     const statusTone = getCodeAgentAuthStatusTone(statusMessage, authVerified);
 
+    if (authMethodInput) {
+        authMethodInput.value = authMethod;
+    }
+    if (ssoGroup) {
+        ssoGroup.style.display = isCodeAgent && authMethod === CODEAGENT_AUTH_METHODS.SSO ? 'block' : 'none';
+    }
+    if (usernameGroup) {
+        usernameGroup.style.display = isCodeAgent && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD ? 'block' : 'none';
+    }
+    if (passwordGroup) {
+        passwordGroup.style.display = isCodeAgent && authMethod === CODEAGENT_AUTH_METHODS.PASSWORD ? 'block' : 'none';
+    }
     if (loginBtn) {
         loginBtn.textContent = loginLabel;
         loginBtn.title = loginLabel;
         loginBtn.setAttribute('aria-label', loginLabel);
-        loginBtn.disabled = !isCodeAgent || draftCodeAgentAuthState.loginInProgress || draftCodeAgentAuthState.verifying;
+        loginBtn.disabled = !isCodeAgent
+            || authMethod !== CODEAGENT_AUTH_METHODS.SSO
+            || draftCodeAgentAuthState.loginInProgress
+            || draftCodeAgentAuthState.verifying;
     }
     if (statusMessageEl) {
         statusMessageEl.textContent = showStatus ? localizeCodeAgentAuthStatusMessage(statusMessage) : '';
@@ -2709,6 +3026,7 @@ function renderDraftCodeAgentAuthState() {
             ? `codeagent-sso-status-message probe-status probe-status-${statusTone}`
             : 'codeagent-sso-status-message';
     }
+    renderDraftCodeAgentPasswordField();
 }
 
 function localizeCodeAgentAuthStatusMessage(statusMessage) {
@@ -2716,11 +3034,14 @@ function localizeCodeAgentAuthStatusMessage(statusMessage) {
     if (message === 'Starting SSO login') {
         return t('settings.model.codeagent_sso_starting');
     }
-    if (message === 'Saved sign-in requires verification') {
-        return t('settings.model.codeagent_sso_saved');
+    if (message === 'Saved credentials require verification') {
+        return t('settings.model.codeagent_credentials_saved');
     }
     if (message === 'Verifying saved sign-in') {
         return t('settings.model.codeagent_sso_verifying');
+    }
+    if (message === 'Verifying saved credentials') {
+        return t('settings.model.codeagent_credentials_verifying');
     }
     if (message === 'Waiting for SSO callback') {
         return t('settings.model.codeagent_sso_waiting');
@@ -2730,6 +3051,18 @@ function localizeCodeAgentAuthStatusMessage(statusMessage) {
     }
     if (message === 'Saved sign-in expired. Sign in with SSO again') {
         return t('settings.model.codeagent_sso_reauth_required');
+    }
+    if (message === 'Saved credentials expired. Update username or password') {
+        return t('settings.model.codeagent_credentials_expired');
+    }
+    if (message === 'Re-enter password after changing username') {
+        return t('settings.model.codeagent_password_reenter');
+    }
+    if (message === 'Credentials ready') {
+        return t('settings.model.codeagent_credentials_ready');
+    }
+    if (message === 'Credentials verified') {
+        return t('settings.model.codeagent_credentials_verified');
     }
     if (message === 'SSO popup blocked') {
         return t('settings.model.codeagent_sso_popup_blocked');
@@ -2751,6 +3084,7 @@ function getCodeAgentAuthStatusTone(statusMessage, hasAuth) {
         normalizedMessage.includes('failed')
         || normalizedMessage.includes('timed out')
         || normalizedMessage.includes('expired')
+        || normalizedMessage.includes('re-enter password')
     ) {
         return 'failed';
     }
@@ -2814,7 +3148,7 @@ function renderDraftProviderFields() {
         maasFields.style.display = maasProvider ? 'grid' : 'none';
     }
     if (codeagentFields) {
-        codeagentFields.style.display = codeagentProvider ? 'grid' : 'none';
+        codeagentFields.style.display = codeagentProvider ? 'flex' : 'none';
     }
     if (passwordInput) {
         renderDraftMaaSPasswordField();
@@ -2865,7 +3199,7 @@ function renderDraftMaaSPasswordField() {
     } else {
         maasPasswordInput.type = 'password';
         maasPasswordInput.value = draftMaasPasswordState.draftValue;
-        maasPasswordInput.placeholder = 'password';
+        maasPasswordInput.placeholder = t('settings.model.password_placeholder');
     }
 
     renderDraftMaaSPasswordToggle();
@@ -2892,19 +3226,82 @@ function renderDraftMaaSPasswordToggle() {
     }
 }
 
+function readDraftCodeAgentPasswordValue() {
+    const codeagentPasswordInput = document.getElementById('profile-codeagent-password');
+    const inputValue = codeagentPasswordInput ? codeagentPasswordInput.value.trim() : '';
+    if (!draftCodeAgentPasswordState.hasPersistedValue) {
+        return inputValue || draftCodeAgentPasswordState.draftValue.trim();
+    }
+    if (draftCodeAgentPasswordState.isDirty || draftCodeAgentPasswordState.hasExplicitEntry) {
+        return inputValue || draftCodeAgentPasswordState.draftValue.trim();
+    }
+    return '';
+}
+
+function renderDraftCodeAgentPasswordField() {
+    const codeagentPasswordInput = document.getElementById('profile-codeagent-password');
+    if (!codeagentPasswordInput) {
+        return;
+    }
+
+    if (draftCodeAgentPasswordState.revealed) {
+        codeagentPasswordInput.type = 'text';
+        codeagentPasswordInput.value = draftCodeAgentPasswordState.isDirty
+            ? draftCodeAgentPasswordState.draftValue
+            : draftCodeAgentPasswordState.persistedValue;
+        codeagentPasswordInput.placeholder = '';
+    } else if (draftCodeAgentPasswordState.hasPersistedValue && !draftCodeAgentPasswordState.isDirty) {
+        codeagentPasswordInput.type = 'password';
+        codeagentPasswordInput.value = '';
+        codeagentPasswordInput.placeholder = '************';
+    } else {
+        codeagentPasswordInput.type = 'password';
+        codeagentPasswordInput.value = draftCodeAgentPasswordState.draftValue;
+        codeagentPasswordInput.placeholder = t('settings.model.codeagent_password_placeholder');
+    }
+
+    renderDraftCodeAgentPasswordToggle();
+}
+
+function renderDraftCodeAgentPasswordToggle() {
+    const toggleCodeAgentPasswordBtn = document.getElementById('toggle-profile-codeagent-password-btn');
+    const codeagentPasswordInput = document.getElementById('profile-codeagent-password');
+    if (!toggleCodeAgentPasswordBtn) {
+        return;
+    }
+
+    const inputValue = codeagentPasswordInput ? codeagentPasswordInput.value.trim() : '';
+    const hasValue = draftCodeAgentPasswordState.hasPersistedValue
+        || Boolean(draftCodeAgentPasswordState.draftValue.trim())
+        || Boolean(inputValue);
+    toggleCodeAgentPasswordBtn.style.display = hasValue ? 'inline-flex' : 'none';
+    toggleCodeAgentPasswordBtn.className = draftCodeAgentPasswordState.revealed ? 'secure-input-btn is-active' : 'secure-input-btn';
+    toggleCodeAgentPasswordBtn.title = draftCodeAgentPasswordState.revealed
+        ? t('settings.model.hide_password')
+        : t('settings.model.show_password');
+    if (typeof toggleCodeAgentPasswordBtn.setAttribute === 'function') {
+        toggleCodeAgentPasswordBtn.setAttribute('aria-label', toggleCodeAgentPasswordBtn.title);
+    } else {
+        toggleCodeAgentPasswordBtn.ariaLabel = toggleCodeAgentPasswordBtn.title;
+    }
+}
+
 function createDraftSecretState() {
     return {
         persistedValue: '',
         draftValue: '',
         hasPersistedValue: false,
         isDirty: false,
+        hasExplicitEntry: false,
         armedForInput: false,
         revealed: false,
     };
 }
 
-function createDraftCodeAgentAuthState() {
+function createDraftCodeAgentAuthState(authMethod = 'sso') {
     return {
+        authMethod,
+        persistedUsername: '',
         authSessionId: '',
         completed: false,
         verified: false,
@@ -2912,6 +3309,7 @@ function createDraftCodeAgentAuthState() {
         reauthRequired: false,
         hasPersistedAccessToken: false,
         hasPersistedRefreshToken: false,
+        hasPersistedPassword: false,
         loginInProgress: false,
         pendingAuthorizationUrl: '',
         verificationScopeId: nextDraftCodeAgentVerificationScopeId++,
@@ -2969,6 +3367,30 @@ function canAcceptDraftMaasPasswordInput(secretInput) {
         return false;
     }
     if (draftMaasPasswordState.armedForInput) {
+        return true;
+    }
+    if (typeof document !== 'object' || document === null) {
+        return false;
+    }
+    if (!('activeElement' in document)) {
+        return true;
+    }
+    return document.activeElement === secretInput;
+}
+
+function armDraftCodeAgentPasswordInput() {
+    draftCodeAgentPasswordState.armedForInput = true;
+}
+
+function disarmDraftCodeAgentPasswordInput() {
+    draftCodeAgentPasswordState.armedForInput = false;
+}
+
+function canAcceptDraftCodeAgentPasswordInput(secretInput) {
+    if (!secretInput) {
+        return false;
+    }
+    if (draftCodeAgentPasswordState.armedForInput) {
         return true;
     }
     if (typeof document !== 'object' || document === null) {

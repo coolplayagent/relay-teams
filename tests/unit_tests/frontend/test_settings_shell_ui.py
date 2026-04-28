@@ -341,7 +341,7 @@ console.log(JSON.stringify({
     assert 'id="profile-maas-username"' in modal_html
     assert 'id="profile-maas-password"' in modal_html
     assert (
-        'id="profile-maas-password" placeholder="password" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
+        'id="profile-maas-password" placeholder="password" data-i18n-placeholder="settings.model.password_placeholder" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false"'
         in modal_html
     )
     assert 'id="profile-maas-model-slot"' in modal_html
@@ -350,7 +350,7 @@ console.log(JSON.stringify({
     assert 'data-i18n="settings.model.provider_codeagent"' in modal_html
     assert 'data-i18n="settings.model.provider_codeagent_copy"' in modal_html
     assert "CodeAgent Model" in modal_html
-    assert "Use CodeAgent models with SSO sign-in" in modal_html
+    assert "Use CodeAgent models with SSO or username/password sign-in" in modal_html
     assert 'id="profile-codeagent-auth-fields"' in modal_html
     assert 'id="profile-codeagent-login-status"' in modal_html
     assert 'id="profile-codeagent-login-status-message"' in modal_html

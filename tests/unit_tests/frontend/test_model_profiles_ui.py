@@ -200,7 +200,272 @@ def test_codeagent_sso_button_uses_shared_form_control_height() -> None:
     override_rule = components_css[override_rule_start:override_rule_end]
 
     assert "min-height: 42px;" in button_rule
+    assert "white-space: normal;" in button_rule
     assert "min-height: 42px;" in override_rule
+    assert "width: fit-content;" in override_rule
+    assert (
+        "display: flex;"
+        in components_css[
+            components_css.index(
+                ".profile-codeagent-credentials-row {"
+            ) : components_css.index(".profile-codeagent-auth-method-row {")
+        ]
+    )
+    maas_rule_start = components_css.index(".profile-maas-credentials-row {")
+    maas_rule_end = components_css.index(
+        ".profile-codeagent-credentials-row {", maas_rule_start
+    )
+    maas_rule = components_css[maas_rule_start:maas_rule_end]
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr));" in maas_rule
+
+
+def test_codeagent_auth_fields_use_split_rows_and_i18n_markup() -> None:
+    template_source = (
+        Path(__file__).resolve().parents[3]
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "settings"
+        / "modelProfiles"
+        / "template.js"
+    ).read_text(encoding="utf-8")
+
+    assert "profile-codeagent-auth-method-row" in template_source
+    assert "profile-codeagent-auth-detail-row" in template_source
+    assert 'data-i18n="settings.model.codeagent_auth_method"' in template_source
+    assert 'data-i18n="settings.model.codeagent_sso_field"' in template_source
+    assert 'data-i18n="settings.model.codeagent_username"' in template_source
+    assert 'data-i18n="settings.model.codeagent_password"' in template_source
+    assert (
+        'data-i18n-placeholder="settings.model.codeagent_username_placeholder"'
+        in template_source
+    )
+    assert (
+        'data-i18n-placeholder="settings.model.codeagent_password_placeholder"'
+        in template_source
+    )
+
+
+def test_maas_auth_fields_use_i18n_markup() -> None:
+    template_source = Path(
+        "frontend/dist/js/components/settings/modelProfiles/template.js"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        'class="profile-credentials-row profile-maas-credentials-row"'
+        in template_source
+    )
+    assert (
+        'for="profile-maas-username" data-i18n="settings.model.username"'
+        in template_source
+    )
+    assert (
+        'id="profile-maas-username" placeholder="username" '
+        'data-i18n-placeholder="settings.model.username_placeholder"' in template_source
+    )
+    assert (
+        'for="profile-maas-password" data-i18n="settings.model.password"'
+        in template_source
+    )
+    assert (
+        'id="profile-maas-password" placeholder="password" '
+        'data-i18n-placeholder="settings.model.password_placeholder"' in template_source
+    )
+
+
+def test_codeagent_password_field_runtime_placeholder_uses_i18n(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider-codeagent-btn").onclick();
+document.getElementById("profile-codeagent-auth-method").value = "password";
+document.getElementById("profile-codeagent-auth-method").onchange();
+
+console.log(JSON.stringify({
+    placeholder: document.getElementById("profile-codeagent-password").placeholder,
+}));
+""".strip(),
+        mock_i18n_source="""
+const translations = {
+    "settings.model.profile_name": "Profile Name",
+    "settings.model.profile_name_placeholder": "profile",
+    "settings.model.default_model_action": "Set as default model",
+    "settings.model.step_provider_model": "Model Provider and Model",
+    "settings.model.provider_external": "Model Marketplace",
+    "settings.model.provider_external_copy": "Choose provider and model from the marketplace",
+    "settings.model.provider_maas": "MaaS Model",
+    "settings.model.provider_maas_copy": "Hosted model service platform",
+    "settings.model.provider_codeagent": "CodeAgent Model",
+    "settings.model.provider_codeagent_copy": "Use CodeAgent models with SSO or username/password sign-in",
+    "settings.model.provider_custom": "Custom Model",
+    "settings.model.provider_custom_copy": "Enter endpoint and model id manually",
+    "settings.model.base_url": "Base URL",
+    "settings.model.custom_base_url_placeholder": "Base URL",
+    "settings.model.catalog_title": "Model Catalog",
+    "settings.model.catalog_loading": "Loading model catalog...",
+    "settings.model.catalog_refresh": "Refresh",
+    "settings.model.provider": "Provider",
+    "settings.model.catalog_provider_search": "Search providers",
+    "settings.model.model": "Model",
+    "settings.model.catalog_model_search": "Search models",
+    "settings.model.custom_model_placeholder": "Model placeholder",
+    "settings.model.api_key": "API Key",
+    "settings.model.codeagent_auth_method": "Authentication Method",
+    "settings.model.codeagent_auth_method_sso": "SSO Sign-In",
+    "settings.model.codeagent_auth_method_password": "Username and Password",
+    "settings.model.codeagent_sso_field": "SSO Sign-In",
+    "settings.model.codeagent_sign_in_sso": "Sign in with SSO",
+    "settings.model.codeagent_username": "Username",
+    "settings.model.codeagent_username_placeholder": "localized username",
+    "settings.model.codeagent_password": "Password",
+    "settings.model.codeagent_password_placeholder": "localized password",
+    "settings.model.temperature": "Temperature",
+    "settings.model.top_p": "Top P",
+    "settings.model.max_output_tokens": "Max Output Tokens",
+    "settings.model.optional": "Optional",
+    "settings.model.context_window": "Context Window",
+    "settings.model.connect_timeout": "Connect Timeout",
+    "settings.proxy.default_ssl": "SSL Verification",
+    "settings.proxy.inherit_default": "Inherit Default",
+    "settings.proxy.verify": "Verify",
+    "settings.proxy.skip_verify": "Skip Verify",
+    "settings.model.step_advanced": "Advanced Options",
+    "settings.model.image_capability": "Image Input",
+    "settings.model.image_capability_follow": "Follow detection",
+    "settings.model.image_capability_supported": "Supports image input",
+    "settings.model.image_capability_unsupported": "Text only",
+    "settings.model.step_fallback": "Fallback Strategy",
+    "settings.model.fallback_strategy": "Fallback Strategy",
+    "settings.model.fallback_priority": "Fallback Priority",
+    "settings.model.codeagent_credentials_ready": "Credentials ready",
+    "settings.model.show_password": "Show password",
+    "settings.model.hide_password": "Hide password",
+    "settings.model.catalog_select_provider_first": "Select a provider first.",
+    "settings.model.catalog_empty": "No providers match the search.",
+    "settings.model.catalog_no_models": "No models match the search.",
+    "settings.model.catalog_loaded": "{providers} providers, {models} models",
+    "settings.model.catalog_cache_current": "just updated",
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+    )
+
+    assert payload["placeholder"] == "localized password"
+
+
+def test_maas_password_field_runtime_placeholder_uses_i18n(tmp_path: Path) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider-maas-btn").onclick();
+
+console.log(JSON.stringify({
+    placeholder: document.getElementById("profile-maas-password").placeholder,
+}));
+""".strip(),
+        mock_i18n_source="""
+const translations = {
+    "settings.model.profile_name": "Profile Name",
+    "settings.model.profile_name_placeholder": "profile",
+    "settings.model.default_model_action": "Set as default model",
+    "settings.model.step_provider_model": "Model Provider and Model",
+    "settings.model.provider_external": "Model Marketplace",
+    "settings.model.provider_external_copy": "Choose provider and model from the marketplace",
+    "settings.model.provider_maas": "MaaS Model",
+    "settings.model.provider_maas_copy": "Hosted model service platform",
+    "settings.model.provider_codeagent": "CodeAgent Model",
+    "settings.model.provider_codeagent_copy": "Use CodeAgent models with SSO or username/password sign-in",
+    "settings.model.provider_custom": "Custom Model",
+    "settings.model.provider_custom_copy": "Enter endpoint and model id manually",
+    "settings.model.base_url": "Base URL",
+    "settings.model.custom_base_url_placeholder": "Base URL",
+    "settings.model.catalog_title": "Model Catalog",
+    "settings.model.catalog_loading": "Loading model catalog...",
+    "settings.model.catalog_refresh": "Refresh",
+    "settings.model.provider": "Provider",
+    "settings.model.catalog_provider_search": "Search providers",
+    "settings.model.model": "Model",
+    "settings.model.catalog_model_search": "Search models",
+    "settings.model.custom_model_placeholder": "Model placeholder",
+    "settings.model.api_key": "API Key",
+    "settings.model.username": "Username",
+    "settings.model.username_placeholder": "localized username",
+    "settings.model.password": "Password",
+    "settings.model.password_placeholder": "localized password",
+    "settings.model.temperature": "Temperature",
+    "settings.model.top_p": "Top P",
+    "settings.model.max_output_tokens": "Max Output Tokens",
+    "settings.model.optional": "Optional",
+    "settings.model.context_window": "Context Window",
+    "settings.model.connect_timeout": "Connect Timeout",
+    "settings.proxy.default_ssl": "SSL Verification",
+    "settings.proxy.inherit_default": "Inherit Default",
+    "settings.proxy.verify": "Verify",
+    "settings.proxy.skip_verify": "Skip Verify",
+    "settings.model.step_advanced": "Advanced Options",
+    "settings.model.image_capability": "Image Input",
+    "settings.model.image_capability_follow": "Follow detection",
+    "settings.model.image_capability_supported": "Supports image input",
+    "settings.model.image_capability_unsupported": "Text only",
+    "settings.model.show_password": "Show password",
+    "settings.model.hide_password": "Hide password",
+    "settings.model.catalog_select_provider_first": "Select a provider first.",
+    "settings.model.catalog_empty": "No providers match the search.",
+    "settings.model.catalog_no_models": "No models match the search.",
+    "settings.model.catalog_loaded": "{providers} providers, {models} models",
+    "settings.model.catalog_cache_current": "just updated",
+    "settings.model.catalog_cache_age": "{seconds}s old",
+    "settings.model.catalog_reasoning": "reasoning",
+    "settings.model.catalog_tools": "tools",
+    "settings.model.capability_section": "Capabilities",
+    "settings.model.show_api_key": "Show API key",
+    "settings.model.hide_api_key": "Hide API key",
+    "settings.model.advanced_summary": "Temperature {temperature}",
+    "settings.model.catalog_selected": "Selected Model",
+    "settings.model.catalog_selected_empty": "Choose a model from the catalog.",
+    "settings.model.capability_image_input": "Image input",
+    "settings.model.capability_text_only": "Text only",
+    "settings.model.capability_unknown": "Capability unknown",
+    "settings.model.no_model": "No model",
+    "settings.model.no_endpoint": "No endpoint",
+    "settings.model.fallback_policy_same_provider_then_other_provider": "Same Provider Then Other Provider",
+    "settings.model.fallback_policy_other_provider_only": "Other Provider Only",
+    "settings.model.unknown": "Unknown",
+    "settings.action.test": "Test",
+    "settings.action.edit": "Edit",
+    "settings.action.delete": "Delete",
+    "settings.action.cancel": "Cancel"
+};
+
+export function t(key) {
+    return translations[key] || key;
+}
+""".strip(),
+    )
+
+    assert payload["placeholder"] == "localized password"
 
 
 def test_saving_model_profile_restores_profile_list_visibility(
@@ -2491,7 +2756,7 @@ console.log(JSON.stringify({
     assert codeagent_state["baseUrlDisabled"] is True
     assert codeagent_state["baseUrlGroupDisplay"] == "none"
     assert codeagent_state["apiKeyDisplay"] == "none"
-    assert codeagent_state["codeagentDisplay"] == "grid"
+    assert codeagent_state["codeagentDisplay"] == "flex"
     assert codeagent_state["summary"] == "CodeAgent Model · No model"
     assert custom_state["providerValue"] == "openai_compatible"
     assert custom_state["baseUrlValue"] == ""
@@ -3918,6 +4183,312 @@ export async function discoverModelCatalog(payload) {
     )
 
 
+def test_saved_codeagent_password_profile_allows_probe_and_discovery_with_new_password_after_reauth_required(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+document.getElementById("profile-codeagent-password").value = "fresh-password";
+document.getElementById("profile-codeagent-password").oninput();
+await document.getElementById("test-profile-btn").onclick();
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    probePayload: globalThis.__probePayload || null,
+    discoverPayload: globalThis.__discoverPayload || null,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                auth_method: "password",
+                username: "saved-user",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return {
+        status: "reauth_required",
+        checked_at: "2026-04-27T02:00:00Z",
+        detail: "expired credentials",
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42, token_usage: { total_tokens: 9 } };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+""".strip(),
+    )
+
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    probe_override = cast(dict[str, JsonValue], probe_payload["override"])
+    discover_override = cast(dict[str, JsonValue], discover_payload["override"])
+
+    assert cast(dict[str, JsonValue], probe_override["codeagent_auth"]) == {
+        "auth_method": "password",
+        "username": "saved-user",
+        "password": "fresh-password",
+    }
+    assert cast(dict[str, JsonValue], discover_override["codeagent_auth"]) == {
+        "auth_method": "password",
+        "username": "saved-user",
+        "password": "fresh-password",
+    }
+    assert payload["authStatus"] == "Credentials ready"
+
+
+def test_saved_codeagent_password_profile_accepts_same_password_reentry_after_reauth_required(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+document.getElementById("profile-codeagent-password").value = "same-password";
+document.getElementById("profile-codeagent-password").oninput();
+await document.getElementById("test-profile-btn").onclick();
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    probePayload: globalThis.__probePayload || null,
+    discoverPayload: globalThis.__discoverPayload || null,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                auth_method: "password",
+                username: "saved-user",
+                password: "same-password",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return {
+        status: "reauth_required",
+        checked_at: "2026-04-27T02:00:00Z",
+        detail: "expired credentials",
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42, token_usage: { total_tokens: 9 } };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+""".strip(),
+    )
+
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    probe_override = cast(dict[str, JsonValue], probe_payload["override"])
+    discover_override = cast(dict[str, JsonValue], discover_payload["override"])
+
+    assert cast(dict[str, JsonValue], probe_override["codeagent_auth"]) == {
+        "auth_method": "password",
+        "username": "saved-user",
+        "password": "same-password",
+    }
+    assert cast(dict[str, JsonValue], discover_override["codeagent_auth"]) == {
+        "auth_method": "password",
+        "username": "saved-user",
+        "password": "same-password",
+    }
+    assert payload["authStatus"] == "Credentials ready"
+
+
+def test_codeagent_password_auth_discovery_uses_username_and_password(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider").value = "codeagent";
+document.getElementById("profile-provider").onchange();
+document.getElementById("profile-codeagent-auth-method").value = "password";
+document.getElementById("profile-codeagent-auth-method").onchange();
+document.getElementById("profile-codeagent-username").value = "relay-user";
+document.getElementById("profile-codeagent-username").oninput();
+document.getElementById("profile-codeagent-password").onfocus();
+document.getElementById("profile-codeagent-password").value = "relay-password";
+document.getElementById("profile-codeagent-password").oninput();
+document.getElementById("profile-model").value = "codeagent-chat";
+document.getElementById("profile-model").oninput();
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    discoverPayload: globalThis.__discoverPayload,
+    authStatus: document.getElementById("profile-codeagent-login-status-message").textContent,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+""".strip(),
+    )
+
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    override = cast(dict[str, JsonValue], discover_payload["override"])
+    codeagent_auth = cast(dict[str, JsonValue], override["codeagent_auth"])
+
+    assert codeagent_auth == {
+        "auth_method": "password",
+        "username": "relay-user",
+        "password": "relay-password",
+    }
+    assert payload["authStatus"] == "Credentials ready"
+
+
+def test_editing_saved_codeagent_password_profile_requires_new_password_after_username_change(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+document.getElementById("profile-codeagent-username").value = "new-user";
+document.getElementById("profile-codeagent-username").oninput();
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    notifications,
+    savedProfile: globalThis.__savedProfile || null,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                auth_method: "password",
+                username: "old-user",
+                has_password: true,
+            },
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+""".strip(),
+    )
+
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+
+    assert payload["savedProfile"] is None
+    assert notifications == [
+        {
+            "title": "Save Failed",
+            "message": "Re-enter the CodeAgent password after changing the username.",
+            "tone": "warning",
+        }
+    ]
+
+
 def test_codeagent_sso_polling_stops_when_auth_session_changes(
     tmp_path: Path,
 ) -> None:
@@ -4391,6 +4962,18 @@ const translations = {
     "settings.model.image_capability_follow": "Follow detection",
     "settings.model.image_capability_supported": "Supports image input",
     "settings.model.image_capability_unsupported": "Text only",
+    "settings.model.username": "Username",
+    "settings.model.username_placeholder": "username",
+    "settings.model.password": "Password",
+    "settings.model.password_placeholder": "password",
+    "settings.model.codeagent_auth_method": "Authentication Method",
+    "settings.model.codeagent_auth_method_sso": "SSO Sign-In",
+    "settings.model.codeagent_auth_method_password": "Username and Password",
+    "settings.model.codeagent_sso_field": "SSO Sign-In",
+    "settings.model.codeagent_username": "Username",
+    "settings.model.codeagent_username_placeholder": "username",
+    "settings.model.codeagent_password": "Password",
+    "settings.model.codeagent_password_placeholder": "password",
     "settings.model.codeagent_sign_in_sso": "Sign in with SSO",
     "settings.model.codeagent_sso_starting": "Starting SSO login",
     "settings.model.codeagent_sso_saved": "Saved sign-in requires verification",
@@ -4401,6 +4984,12 @@ const translations = {
     "settings.model.codeagent_sso_popup_blocked": "SSO popup was blocked. Click Sign in with SSO again to continue.",
     "settings.model.codeagent_sso_timed_out": "SSO login timed out",
     "settings.model.codeagent_sso_failed": "SSO failed: {error}",
+    "settings.model.codeagent_credentials_saved": "Saved credentials require verification",
+    "settings.model.codeagent_credentials_verifying": "Verifying saved credentials",
+    "settings.model.codeagent_credentials_expired": "Saved credentials expired. Update username or password.",
+    "settings.model.codeagent_password_reenter": "Re-enter password after changing username.",
+    "settings.model.codeagent_credentials_ready": "Credentials ready",
+    "settings.model.codeagent_credentials_verified": "Credentials verified",
     "settings.model.show_api_key": "Show API key",
     "settings.model.hide_api_key": "Hide API key",
     "settings.model.show_password": "Show password",
@@ -4412,7 +5001,7 @@ const translations = {
     "settings.model.default_saved_message": "{name} is now the default model.",
     "settings.model.provider_external": "Model Marketplace",
     "settings.model.provider_maas": "MaaS Model",
-    "settings.model.provider_codeagent_copy": "Use CodeAgent models with SSO sign-in",
+    "settings.model.provider_codeagent_copy": "Use CodeAgent models with SSO or username/password sign-in",
     "settings.model.provider_codeagent": "CodeAgent Model",
     "settings.model.provider_custom": "Custom Model",
     "settings.model.custom_model": "Custom model",
@@ -4606,8 +5195,15 @@ function createElements() {{
             ["profile-maas-model-slot", createElement("block", "profile-maas-model-slot")],
             ["profile-codeagent-auth-fields", createElement("none", "profile-codeagent-auth-fields")],
             ["profile-codeagent-model-slot", createElement("block", "profile-codeagent-model-slot")],
+            ["profile-codeagent-auth-method", createElement("block", "profile-codeagent-auth-method")],
+            ["profile-codeagent-sso-group", createElement("block", "profile-codeagent-sso-group")],
             ["profile-codeagent-login-status", createElement("block", "profile-codeagent-login-status")],
             ["profile-codeagent-login-status-message", createElement("none", "profile-codeagent-login-status-message")],
+            ["profile-codeagent-username-group", createElement("none", "profile-codeagent-username-group")],
+            ["profile-codeagent-username", createElement("block", "profile-codeagent-username")],
+            ["profile-codeagent-password-group", createElement("none", "profile-codeagent-password-group")],
+            ["profile-codeagent-password", createElement("block", "profile-codeagent-password")],
+            ["toggle-profile-codeagent-password-btn", createElement("none", "toggle-profile-codeagent-password-btn")],
             ["profile-maas-username", createElement("block", "profile-maas-username")],
             ["profile-maas-password", createElement("block", "profile-maas-password")],
             ["toggle-profile-maas-password-btn", createElement("none", "toggle-profile-maas-password-btn")],
@@ -4639,8 +5235,15 @@ function createElements() {{
         elements.get("profile-model-field-home")?.appendChild(elements.get("profile-model-group"));
         elements.get("profile-maas-auth-fields")?.appendChild(elements.get("profile-maas-model-slot"));
         elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-model-slot"));
-        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-login-status"));
-        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-login-status-message"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-auth-method"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-sso-group"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-username-group"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-password-group"));
+        elements.get("profile-codeagent-sso-group")?.appendChild(elements.get("profile-codeagent-login-status"));
+        elements.get("profile-codeagent-sso-group")?.appendChild(elements.get("profile-codeagent-login-status-message"));
+        elements.get("profile-codeagent-username-group")?.appendChild(elements.get("profile-codeagent-username"));
+        elements.get("profile-codeagent-password-group")?.appendChild(elements.get("profile-codeagent-password"));
+        elements.get("profile-codeagent-password-group")?.appendChild(elements.get("toggle-profile-codeagent-password-btn"));
         elements.get("profile-base-url").closestElements = {{ ".form-group": baseUrlGroup }};
         return elements;
     }}

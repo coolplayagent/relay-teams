@@ -34,6 +34,11 @@ class ProviderType(StrEnum):
     ECHO = "echo"
 
 
+class CodeAgentAuthMethod(StrEnum):
+    SSO = "sso"
+    PASSWORD = "password"
+
+
 class ModelFallbackTrigger(StrEnum):
     RATE_LIMIT_AFTER_RETRIES = "rate_limit_after_retries"
 
@@ -74,12 +79,16 @@ class CodeAgentAuthConfig(BaseModel):
     _secret_config_dir: Path | None = PrivateAttr(default=None)
     _secret_owner_id: str | None = PrivateAttr(default=None)
 
+    auth_method: CodeAgentAuthMethod = CodeAgentAuthMethod.SSO
     client_id: str = Field(default=DEFAULT_CODEAGENT_CLIENT_ID, min_length=1)
     scope: str = Field(default=DEFAULT_CODEAGENT_SCOPE, min_length=1)
     scope_resource: str = Field(
         default=DEFAULT_CODEAGENT_SCOPE_RESOURCE,
         min_length=1,
     )
+    username: str | None = Field(default=None, min_length=1)
+    password: str | None = Field(default=None, min_length=1)
+    has_password: bool = False
     access_token: str | None = Field(default=None, min_length=1)
     refresh_token: str | None = Field(default=None, min_length=1)
     has_access_token: bool = False
@@ -90,6 +99,8 @@ class CodeAgentAuthConfig(BaseModel):
         "client_id",
         "scope",
         "scope_resource",
+        "username",
+        "password",
         "access_token",
         "refresh_token",
         "oauth_session_id",
@@ -107,6 +118,8 @@ class CodeAgentAuthConfig(BaseModel):
         self.client_id = DEFAULT_CODEAGENT_CLIENT_ID
         self.scope = DEFAULT_CODEAGENT_SCOPE
         self.scope_resource = DEFAULT_CODEAGENT_SCOPE_RESOURCE
+        if self.password is not None:
+            self.has_password = True
         if self.access_token is not None:
             self.has_access_token = True
         if self.refresh_token is not None:
@@ -291,6 +304,15 @@ class ModelEndpointConfig(BaseModel):
                 raise ValueError(
                     "CodeAgent model endpoint config requires codeagent_auth configuration."
                 )
+            if self.codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
+                if (
+                    self.codeagent_auth.username is None
+                    or self.codeagent_auth.password is None
+                ):
+                    raise ValueError(
+                        "CodeAgent model endpoint config requires codeagent_auth.username and codeagent_auth.password for password auth."
+                    )
+                return self
             if (
                 self.codeagent_auth.refresh_token is None
                 and self.codeagent_auth.oauth_session_id is None

@@ -78,37 +78,6 @@ Response fields:
 Notes:
 - Health stays `200 ok` for a reachable server even when builtin roles or local
   tools are degraded; inspect the `*_sanity` fields for diagnosis.
-- This endpoint is a diagnostic/readiness contract. UI liveness should use the
-  control-plane endpoints below so high task or tool concurrency cannot make the
-  browser misclassify a busy server as offline.
-
-### `GET /system/live`
-
-Returns a lightweight liveness payload from the main API process:
-
-- `status`: `alive`
-- `version`
-- `pid`
-- `uptime_seconds`
-- `main_base_url`
-
-This route intentionally avoids registry, filesystem, provider, and tool checks.
-
-### `GET /system/control-plane`
-
-Returns the out-of-band liveness endpoint published by `relay-teams server start`.
-
-Response fields:
-- `enabled`
-- `live_url`
-- `host`
-- `port`
-- `main_base_url`
-
-When `enabled` is true, `live_url` points at the sidecar control-plane HTTP
-server. The browser status indicator probes that endpoint first. If the sidecar
-is alive but the main API liveness probe times out, the UI reports the backend as
-busy rather than offline.
 
 ### `GET /system/commands`
 
@@ -214,7 +183,7 @@ The response body is a root object whose keys are profile ids and whose values u
 Returns normalized model profiles.
 Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, `fallback_priority` to rank it as a fallback candidate, structured `capabilities.input/output.*`, and a derived `input_modalities[]` compatibility field so the UI can label profiles that accept direct media input.
 Profiles created from the shared model directory may also include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata. These fields are descriptive and do not change provider transport selection.
-`provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, and the internal/testing-only `echo`. MAAS profiles also return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. The MAAS login endpoint and `app-id` are fixed by the backend.
+`provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, `codeagent`, and the internal/testing-only `echo`. MAAS profiles return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. CodeAgent profiles return `codeagent_auth`; `auth_method = "sso"` exposes `has_access_token` and `has_refresh_token`, while `auth_method = "password"` exposes `username` and `has_password`. The MaaS login endpoint and `app-id`, and the CodeAgent OAuth/login endpoints and inference base URL, are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `GET /system/configs/model/catalog`
@@ -247,15 +216,16 @@ Selecting a catalog model in the UI only pre-fills the add-profile editor; persi
 Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key and secret headers when `api_key` and `headers` are omitted.
 If `source_name` does not exist, the backend returns `404`. Profile-level semantic validation failures that occur after request parsing, such as invalid secret-header state or missing MAAS password on first configuration, return `400`.
-`provider` accepts `openai_compatible`, `bigmodel`, `minimax`, `maas`, and `echo`.
+`provider` accepts `openai_compatible`, `bigmodel`, `minimax`, `maas`, `codeagent`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap when explicitly set. If `max_tokens` is omitted, the backend preserves that unset state and lets the provider decide the default output cap for primary LLM requests.
 Profiles may include optional `fallback_policy_id` to enable quota/rate-limit fallback for that profile. The referenced policy id must exist in `model-fallback.json`. Profiles may also include `fallback_priority`; higher values are preferred when the profile is selected as a fallback candidate.
 Profiles may include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata when the UI prefilled the draft from `GET /system/configs/model/catalog`.
 Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
-Profiles must provide at least one auth source: `api_key`, one configured header, or `maas_auth` for `provider = "maas"`.
-When `provider = "maas"`, `maas_auth` must include `username`; `password` is accepted on write but persisted only in the unified secret store. The backend always authenticates against `http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`, always sends `app-id: RelayTeams`, and always uses `http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/` as the MAAS inference base URL. When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
+Profiles must provide at least one auth source: `api_key`, one configured header, `maas_auth` for `provider = "maas"`, or `codeagent_auth` for `provider = "codeagent"`.
+When `provider = "maas"`, `maas_auth` must include `username`; `password` is accepted on write but persisted only in the unified secret store. The backend always authenticates against `http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`, always sends `app-id: RelayTeams`, and always uses `http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/` as the MAAS inference base URL.
+When `provider = "codeagent"`, `codeagent_auth.auth_method` must be either `sso` or `password`. `sso` accepts the saved-token flags plus an optional `oauth_session_id`; the backend persists the resulting CodeAgent tokens in the unified secret store. `password` accepts `username` and `password`; `username` remains in the profile, while `password` is persisted only in the unified secret store. CodeAgent password login reuses the MaaS secure-login endpoint and request/response contract, but it remains a CodeAgent-only auth flow under `codeagent_auth`. The backend always uses `https://codeagentcli.rnd.huawei.com/codeAgentPro` as the CodeAgent inference base URL. When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
 
 ### `GET /system/configs/model-fallback`
 
@@ -293,16 +263,16 @@ Unknown profile fields and invalid profile ids are rejected at request validatio
 
 Tests model connectivity for a saved profile and/or draft override.
 Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `false`.
-Draft overrides may include `headers[]` and may omit `api_key` when headers are provided. MAAS draft overrides use `maas_auth` instead of `api_key` and perform a login before probing `/chat/completions`.
+Draft overrides may include `headers[]` and may omit `api_key` when headers are provided. MAAS draft overrides use `maas_auth` instead of `api_key` and perform a login before probing `/chat/completions`. CodeAgent draft overrides use `codeagent_auth`; `sso` reuses the saved OAuth session/tokens, while `password` logs in with username/password before probing.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 
 ### `POST /system/configs/model:discover`
 
 Fetches the available model catalog for a saved profile and/or draft override.
-Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`.
+Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`. For `provider = "codeagent"`, the override must provide `codeagent_auth`; the backend still forces the fixed CodeAgent base URL.
 When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
-`openai_compatible`, `bigmodel`, and `minimax` map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated. `maas` maps this call to the fixed PromptCenter discovery endpoint after MAAS login, using the returned `X-Auth-Token` plus department info from `userInfo` to build the discovery request payload.
+`openai_compatible`, `bigmodel`, and `minimax` map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated. `maas` maps this call to the fixed PromptCenter discovery endpoint after MAAS login, using the returned `X-Auth-Token` plus department info from `userInfo` to build the discovery request payload. `codeagent` resolves a CodeAgent token through either saved SSO credentials or username/password login, then calls the fixed CodeAgent model-discovery endpoint.
 For `maas`, the backend merges model ids from top-level `user_model_list` and nested `plugin_config[].config` payloads, filters invalid ids, then returns sorted deduplicated ids in `models[]` and `model_entries[]`.
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
 - `model`
@@ -315,9 +285,9 @@ For a small set of known provider/model pairs, the backend also applies a built-
 
 ### `POST /system/configs/model/codeagent/auth:verify`
 
-Verifies whether a saved CodeAgent profile still has a usable SSO session.
+Verifies whether a saved CodeAgent profile still has usable auth state.
 The request body is `{ "profile_name": "<saved profile name>" }`.
-The backend only accepts saved `codeagent` profiles for this endpoint. It validates the saved session by making a lightweight authenticated CodeAgent request with the currently available token, and only forces a refresh when the first authenticated request comes back `401/403`.
+The backend only accepts saved `codeagent` profiles for this endpoint. It validates the saved auth state by making a lightweight authenticated CodeAgent request with the currently available token. For SSO profiles it retries once through the refresh path after `401/403`. For password profiles it retries once by logging in again with the saved username/password.
 
 The response shape is:
 
@@ -325,7 +295,7 @@ The response shape is:
 - `checked_at`
 - optional `detail`
 
-`reauth_required` means the saved session can no longer complete an authenticated CodeAgent request, including one retry through the refresh path, and the user must sign in again. The persisted `codeagent_auth.has_refresh_token` flag still means saved credentials exist; it does not mean the current session has already been verified.
+`reauth_required` means the saved CodeAgent credentials can no longer complete an authenticated CodeAgent request, including one retry through refresh or password re-login, and the user must authenticate again. The persisted `codeagent_auth.has_refresh_token` or `codeagent_auth.has_password` flags still mean saved credentials exist; they do not mean the current auth state has already been verified.
 
 ### `POST /system/configs/model:reload`
 
@@ -890,8 +860,6 @@ Notes:
 
 Lists sessions.
 
-Each item uses the same `SessionRecord` response shape as `GET /sessions/{session_id}`.
-
 ### `GET /sessions/{session_id}`
 
 Gets one session.
@@ -902,13 +870,6 @@ Response fields also include:
 - `orchestration_preset_id`
 - `started_at`
 - `can_switch_mode`
-- `last_viewed_terminal_run_id`
-- `latest_terminal_run_id`
-- `latest_terminal_run_status`
-- `latest_terminal_run_updated_at`
-- `has_unread_terminal_run`
-
-`latest_terminal_run_*` projects the most recent top-level run whose status is `completed`, `failed`, or `stopped`. `has_unread_terminal_run` is `true` when that run is newer than the last terminal run the user has viewed.
 
 ### `PATCH /sessions/{session_id}`
 
@@ -936,18 +897,6 @@ Rules:
 - `custom_metadata` replaces only the caller-managed custom metadata subset. System-managed metadata keys remain intact.
 - `custom_metadata` keys must be non-empty and cannot overwrite reserved keys such as `title`, `title_source`, `source_label`, `source_icon`, `source_kind`, `source_provider`, or any key with the `feishu_` prefix.
 - `custom_metadata` values must be non-empty strings.
-
-### `POST /sessions/{session_id}/terminal-view`
-
-Marks the latest terminal top-level run for a session as viewed.
-
-Response:
-
-```json
-{"status": "ok"}
-```
-
-If the session has no terminal top-level run yet, the endpoint is a no-op. Missing sessions return `404`.
 
 ### `PATCH /sessions/{session_id}/topology`
 
@@ -1205,16 +1154,6 @@ Response fields include:
 - `reflection_updated_at`
 - `runtime_system_prompt`
 - `runtime_tools_json`
-
-### `GET /sessions/{session_id}/subagents/events`
-
-Streams persisted and live normal-mode subagent run events for a session through SSE.
-
-Notes:
-- The stream is session-scoped and includes only synthetic `subagent_run_*` run events.
-- Clients may pass `after_event_id` to replay events after a known persisted event id before receiving live events.
-- One session-level connection replaces one EventSource per subagent run, so sidebar and subagent views should use this endpoint to avoid request fan-out when a session has many child runs.
-- Event payloads use the same run-event JSON shape as `/api/runs/{run_id}/events`.
 
 ### `DELETE /sessions/{session_id}/subagents/{instance_id}`
 
@@ -2451,52 +2390,11 @@ Response:
 
 ### `GET /mcp/servers`
 
-Lists effective MCP servers from app scope, including disabled servers for
-management views.
-
-### `POST /mcp/servers`
-
-Adds an app-scoped MCP server and reloads the runtime registry.
-
-Request:
-```json
-{
-  "name": "filesystem",
-  "config": {
-    "transport": "stdio",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem"]
-  },
-  "overwrite": false
-}
-```
-
-The backend also accepts opencode-style local/remote config shapes, including
-`{"type": "local", "command": ["npx", "-y", "package"]}` and
-`{"type": "remote", "url": "https://example.com/mcp"}`.
-
-### `PUT /mcp/servers/{server_name}/enabled`
-
-Enables or disables an app-scoped MCP server without deleting its config, then
-reloads the runtime registry. Disabled servers remain visible in management APIs
-but are not expanded by `*` role bindings or injected as runtime MCP tools.
-
-Request:
-```json
-{
-  "enabled": false
-}
-```
+Lists effective MCP servers from app scope.
 
 ### `GET /mcp/servers/{server_name}/tools`
 
 Lists tools exposed by one MCP server. Returned tool names are the effective callable names registered at runtime in the form `<server_name>_<tool_name>` so tools from different MCP servers cannot collide.
-
-### `POST /mcp/servers/{server_name}/test`
-
-Connects to one MCP server, lists its tools, and returns `{ "ok": true }` with
-tool metadata on success or `{ "ok": false, "error": "..." }` on connection
-failure.
 
 ## Gateway APIs
 
@@ -2921,6 +2819,3 @@ Returns sessions generated for one automation project.
 `GET /sessions` and `GET /sessions/{session_id}` now also include:
 - `project_kind`: `workspace` or `automation`
 - `project_id`: workspace id or automation project id used by the sidebar grouping logic
-- `latest_terminal_run_id`, `latest_terminal_run_status`, and `latest_terminal_run_updated_at`: latest terminal top-level run projection
-- `last_viewed_terminal_run_id`: last terminal top-level run opened by the user
-- `has_unread_terminal_run`: whether the latest terminal top-level run has not been viewed
