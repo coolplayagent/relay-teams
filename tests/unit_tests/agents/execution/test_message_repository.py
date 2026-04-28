@@ -10,6 +10,7 @@ from pydantic_ai.messages import (
     ImageUrl,
     ModelRequest,
     ModelResponse,
+    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -126,6 +127,56 @@ def test_message_repo_hides_duplicate_task_objective_messages(tmp_path: Path) ->
     messages = repo.get_messages_by_session("session-1")
 
     assert len(messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_message_repo_returns_latest_task_message_id(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_latest_task_message.db"
+    repo = MessageRepository(db_path)
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="first")])],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-2",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelResponse(parts=[TextPart(content="other instance")])],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelResponse(parts=[TextPart(content="latest")])],
+    )
+
+    latest_for_task = await repo.get_latest_task_message_id_async(task_id="task-1")
+    latest_for_instance = await repo.get_latest_task_message_id_async(
+        task_id="task-1",
+        instance_id="inst-1",
+    )
+    missing = await repo.get_latest_task_message_id_async(task_id="missing")
+
+    assert latest_for_task == 3
+    assert latest_for_instance == 3
+    assert missing == 0
 
 
 @pytest.mark.asyncio
