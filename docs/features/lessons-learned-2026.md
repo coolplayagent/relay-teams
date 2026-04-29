@@ -14,7 +14,7 @@
 
 2026-04-28 增补分析继续复盘 hello 项目中的 AI 相关 Markdown 语料，并将本文件引用的 hello 来源材料归档到 [`lessons-learned/hello/`](lessons-learned/hello/)：排除 `node_modules` 后共扫描 1272 个 Markdown 文件，其中英文工程关键词粗筛命中 1123 个 AI/Agent/LLM/SDD/MAS/Harness 相关文件；补充中文关键词后命中 1226 个文件，覆盖人工智能、智能体、大模型、多智能体等中文综述材料。新增复盘重点放在 Coding Agent 协作产品源码级横评、2026 Harness 工程归档、SDD/SPDD/形式化验证归档、MAS/A2A/Google 企业 Agent 归档、中文 AI Agent 研究综述与市场材料。该增补未推翻原 25 个借鉴点，而是修正部分已落地状态，并补充 13 个更偏运营化和产品化的缺口。
 
-2026-04-29 进一步复盘 [`lessons-learned/hello/docs/openai-symphony-research.md`](lessons-learned/hello/docs/openai-symphony-research.md) 及 OpenAI Codex/Harness 归档后，补充了一个更直接面向产品形态的结论：任务看板不应只是展示层，而可以作为定义任务、承载状态、触发 Agent 执行、回收证据和审查 PR 的控制平面。OpenAI Symphony 将 Linear 工单状态作为状态机输入，并用私有调度状态机管理 claim、running、retry、reconciliation 和 stall timeout，这一点可直接补强 relay-teams 的任务看板、运行时调度和外部任务系统集成路线。
+2026-04-29 进一步复盘 [`lessons-learned/hello/docs/coding-agent-orchestration/openai-symphony-research.md`](lessons-learned/hello/docs/coding-agent-orchestration/openai-symphony-research.md) 及 OpenAI Codex/Harness 归档后，补充了一个更直接面向产品形态的结论：任务看板不应只是展示层，而可以作为定义任务、承载状态、触发 Agent 执行、回收证据和审查 PR 的控制平面。OpenAI Symphony 将 Linear 工单状态作为状态机输入，并用私有调度状态机管理 claim、running、retry、reconciliation 和 stall timeout，这一点可直接补强 relay-teams 的任务看板、运行时调度和外部任务系统集成路线。
 
 2026-04-29 追加复盘 hello 项目的 [`docs/spdd-report/`](lessons-learned/hello/docs/spdd-report/) 后，补充一个 SDD 之外的更细颗粒度结论：对复杂、长期维护、强约束任务，规格不应只作为一次性 prompt section 注入，而应升级为可版本化、可审查、可同步的 Structured Prompt Artifact。SPDD 的 REASONS Canvas 将 Requirements、Entities、Approach、Structure、Operations、Norms、Safeguards 拆成七维合约，并强调 prompt 与代码双向同步，这能直接补强 relay-teams 已有 `TaskSpec`、`VerificationPlan` 和 Evidence Bundle 路线。
 
@@ -42,8 +42,8 @@
 | `cross-reference-analysis.md` | 综合借鉴分析报告 | 25 个借鉴点 |
 | `markdown-research-points.md` | 研究点提取报告 | 35 条研究点 |
 | `validation-report.md` | 验收报告 | 覆盖率 74.3%，准确率 92.5% |
-| [`lessons-learned/hello/docs/coding-agent-collaboration-research.md`](lessons-learned/hello/docs/coding-agent-collaboration-research.md), [`lessons-learned/hello/docs/coding-agent-collaboration-overview.md`](lessons-learned/hello/docs/coding-agent-collaboration-overview.md) | Paperclip / Multica / Routa / SpectrAI 源码级横评 | 7 个对比维度、6 个趋势 |
-| [`lessons-learned/hello/docs/openai-symphony-research.md`](lessons-learned/hello/docs/openai-symphony-research.md) | OpenAI Symphony / Linear 状态机研究 | 看板控制面、事务状态机、claim/retry/reconciliation |
+| [`lessons-learned/hello/docs/coding-agent-orchestration/coding-agent-collaboration-research.md`](lessons-learned/hello/docs/coding-agent-orchestration/coding-agent-collaboration-research.md), [`lessons-learned/hello/docs/coding-agent-orchestration/coding-agent-collaboration-overview.md`](lessons-learned/hello/docs/coding-agent-orchestration/coding-agent-collaboration-overview.md) | Paperclip / Multica / Routa / SpectrAI 源码级横评 | 7 个对比维度、6 个趋势 |
+| [`lessons-learned/hello/docs/coding-agent-orchestration/openai-symphony-research.md`](lessons-learned/hello/docs/coding-agent-orchestration/openai-symphony-research.md) | OpenAI Symphony / Linear 状态机研究 | 看板控制面、事务状态机、claim/retry/reconciliation |
 | [`lessons-learned/hello/docs/reports/2026/harness/openai_*.md`](lessons-learned/hello/docs/reports/2026/harness/), [`lessons-learned/hello/docs/reports/2026/mas/openai/*.md`](lessons-learned/hello/docs/reports/2026/mas/openai/) | OpenAI Codex / Harness 归档 | Codex harness、sandbox agents、WebSocket、agent eval |
 | [`lessons-learned/hello/docs/reports/2026/harness/MANIFEST.md`](lessons-learned/hello/docs/reports/2026/harness/MANIFEST.md) | 2026 AI Harness 工程归档 | 90 个归档条目 |
 | [`lessons-learned/hello/docs/reports/2026/sdd/README.md`](lessons-learned/hello/docs/reports/2026/sdd/README.md), [`lessons-learned/hello/docs/reports/2026/sdd/MANIFEST.md`](lessons-learned/hello/docs/reports/2026/sdd/MANIFEST.md) | 2026 Spec-Driven Development 归档 | 37 篇论文、12 篇实践博客、14 个工具/公司指南 |
@@ -72,8 +72,8 @@
 
 | 分组 | 代表路径 | 核心主题 | 对 relay-teams 的价值 |
 |------|----------|----------|-----------------------|
-| 协作平台横评 | [`hello/docs/coding-agent-collaboration-research.md`](lessons-learned/hello/docs/coding-agent-collaboration-research.md), [`hello/docs/ai-agent-orchestration-platforms-research.md`](lessons-learned/hello/docs/ai-agent-orchestration-platforms-research.md) | Paperclip / Multica / Routa / SpectrAI 的生命周期、任务编排、记忆、质量治理、安全 | 给出现成产品形态和工程模式 |
-| OpenAI Symphony | [`hello/docs/openai-symphony-research.md`](lessons-learned/hello/docs/openai-symphony-research.md) | Linear 任务看板控制面、事务状态机、claim/retry/reconciliation、Codex 守护进程 | 校准任务看板从展示层升级为调度输入和状态权威 |
+| 协作平台横评 | [`hello/docs/coding-agent-orchestration/coding-agent-collaboration-research.md`](lessons-learned/hello/docs/coding-agent-orchestration/coding-agent-collaboration-research.md), [`hello/docs/coding-agent-orchestration/ai-agent-orchestration-platforms-research.md`](lessons-learned/hello/docs/coding-agent-orchestration/ai-agent-orchestration-platforms-research.md) | Paperclip / Multica / Routa / SpectrAI 的生命周期、任务编排、记忆、质量治理、安全 | 给出现成产品形态和工程模式 |
+| OpenAI Symphony | [`hello/docs/coding-agent-orchestration/openai-symphony-research.md`](lessons-learned/hello/docs/coding-agent-orchestration/openai-symphony-research.md) | Linear 任务看板控制面、事务状态机、claim/retry/reconciliation、Codex 守护进程 | 校准任务看板从展示层升级为调度输入和状态权威 |
 | Harness 工程 | [`hello/docs/reports/2026/harness/`](lessons-learned/hello/docs/reports/2026/harness/) | Harness/compute 分离、Agent Behavioral Contracts、Runtime Guardrails、Context Engineering | 校准 TaskExecutionService 拆分后的下一层控制面 |
 | SDD | [`hello/docs/reports/2026/sdd/`](lessons-learned/hello/docs/reports/2026/sdd/) | Spec Kit、契约式开发、规格质量门、长任务 faithfulness loss、实践博客 | 校准 TaskSpec、VerificationPlan、Gater 的闭环强度 |
 | SPDD | [`hello/docs/spdd-report/`](lessons-learned/hello/docs/spdd-report/) | REASONS Canvas、prompt 一等交付工件、prompt/code 双向同步、OpenSPDD | 校准 TaskSpec 从执行附件升级为版本化 Prompt Artifact 的路线 |

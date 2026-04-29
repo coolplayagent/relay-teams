@@ -2,7 +2,7 @@
 
 This directory archives the `/opt/workspace/hello` Markdown sources referenced by `docs/features/lessons-learned-2026.md`.
 
-The files keep the original hello relative paths under this directory, so a source such as `/opt/workspace/hello/docs/openai-symphony-research.md` is archived as `docs/openai-symphony-research.md`.
+Most files keep the original hello relative paths under this directory. Top-level coding-agent collaboration and orchestration notes are grouped under `docs/coding-agent-orchestration/`, so a source such as `/opt/workspace/hello/docs/openai-symphony-research.md` is archived as `docs/coding-agent-orchestration/openai-symphony-research.md`.
 
 Selection scope:
 
