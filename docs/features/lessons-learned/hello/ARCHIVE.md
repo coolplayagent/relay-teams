@@ -9,7 +9,9 @@ Selection scope:
 - Coding agent collaboration and orchestration platform research.
 - OpenAI Symphony, Codex harness, sandbox, realtime eval, and WebSocket workflow notes.
 - 2026 Harness, SDD, MAS, Google, market, presentation, and Chinese research summary entry points used by the analysis.
-- Root governance files used for cross-provider instruction and handoff lessons.
+- SPDD material under `docs/spdd-report/`, including the REASONS Canvas workflow, OpenSPDD CLI notes, and SDD ecosystem comparison.
+- Formal verification research under `docs/formal-verification-research/`, including the research report and archived PDF references.
+- Root AI-native organization playbook used for governance and handoff lessons.
 
 Repository style normalization:
 
