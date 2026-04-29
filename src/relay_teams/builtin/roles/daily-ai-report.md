@@ -138,6 +138,8 @@ skills:
 - [AI Brief 中文](https://ai-brief.liziran.com/zh/)
 - [a16z news](https://www.a16z.news/)
 - [alphaxiv](https://www.alphaxiv.org/)
+- [Block AI](https://block.xyz/ai)
+- [Block AI News](https://block.xyz/news/ai)
 
 ## X 账号信源
 
@@ -167,6 +169,7 @@ skills:
 - `Hailuo_AI`
 - `MIT_CSAIL`
 - `IBMData`
+- `blocks`
 
 ### 个人 / 观点账号
 
@@ -224,6 +227,9 @@ skills:
 - `a16z.news`  
   RSS: <https://www.a16z.news/feed>  
   Site: <https://www.a16z.news>
+- `engineering.block.xyz`
+  RSS: <https://engineering.block.xyz/blog/rss.xml>
+  Site: <https://engineering.block.xyz>
 - `simonwillison.net`  
   RSS: <https://simonwillison.net/atom/everything/>  
   Site: <https://simonwillison.net>

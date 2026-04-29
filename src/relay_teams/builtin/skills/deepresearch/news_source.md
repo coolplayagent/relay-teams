@@ -2,11 +2,16 @@
 
 - [AI Digest 中文](https://ai-digest.liziran.com/zh/)
 - [AI Brief 中文](https://ai-brief.liziran.com/zh/)
+- [Block AI](https://block.xyz/ai)
+- [Block AI News](https://block.xyz/news/ai)
 
 ## RSS 博客池
 
 ### Blogs
 
+- `engineering.block.xyz`
+  RSS: <https://engineering.block.xyz/blog/rss.xml>
+  Site: <https://engineering.block.xyz>
 - `simonwillison.net`  
   RSS: <https://simonwillison.net/atom/everything/>  
   Site: <https://simonwillison.net>

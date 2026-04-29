@@ -7,6 +7,7 @@ from pathlib import Path
 from relay_teams.builtin.resources import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
+    get_builtin_skills_dir,
 )
 from relay_teams.roles.role_registry import RoleLoader
 
@@ -30,3 +31,13 @@ def test_primary_builtin_runtime_roles_allow_all_mcp_servers_and_skills() -> Non
         role = registry.get(role_id)
         assert role.mcp_servers == ("*",)
         assert role.skills == ("*",)
+
+
+def test_deepresearch_news_sources_include_block_ai_source_entries() -> None:
+    news_source_path = get_builtin_skills_dir() / "deepresearch" / "news_source.md"
+
+    content = news_source_path.read_text(encoding="utf-8")
+
+    assert "- [Block AI](https://block.xyz/ai)" in content
+    assert "- [Block AI News](https://block.xyz/news/ai)" in content
+    assert "RSS: <https://engineering.block.xyz/blog/rss.xml>" in content
