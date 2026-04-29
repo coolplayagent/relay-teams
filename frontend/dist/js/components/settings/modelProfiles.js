@@ -64,6 +64,12 @@ const IMAGE_CAPABILITY_MODES = {
     SUPPORTED: 'supported',
     UNSUPPORTED: 'unsupported',
 };
+const SPEECH_CAPABILITY_MODES = {
+    AUTO: 'auto',
+    STT: 'stt',
+    TTS: 'tts',
+    UNSUPPORTED: 'unsupported',
+};
 const PROVIDER_MODES = {
     EXTERNAL: 'external',
     MAAS: 'maas',
@@ -79,6 +85,7 @@ const FALLBACK_POLICY_TRANSLATION_KEYS = {
     other_provider_only: 'settings.model.fallback_policy_other_provider_only',
 };
 let draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+let draftSpeechCapabilityMode = SPEECH_CAPABILITY_MODES.AUTO;
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
@@ -254,6 +261,11 @@ export function bindModelProfileHandlers() {
         imageCapabilityInput.onchange = syncDraftImageCapabilityMode;
     }
 
+    const speechCapabilityInput = document.getElementById('profile-speech-capability');
+    if (speechCapabilityInput) {
+        speechCapabilityInput.onchange = syncDraftSpeechCapabilityMode;
+    }
+
     if (!languageBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', handleModelProfileLanguageChanged);
         languageBound = true;
@@ -289,6 +301,7 @@ function handleModelProfileLanguageChanged() {
         renderDraftApiKeyField();
         renderDraftProviderFields();
         renderDraftImageCapability();
+        renderDraftSpeechCapability();
         renderDraftProbeState();
         renderDraftModelDiscoveryState();
         renderDraftCodeAgentAuthState();
@@ -837,11 +850,13 @@ function handleCatalogModelPicked(providerId, modelId) {
     delete document.getElementById('profile-max-tokens').dataset.autofilledModel;
     draftImageCapabilityMode = deriveImageCapabilityMode(model.capabilities, model.input_modalities);
     draftImageCapabilityManualOverride = false;
+    draftSpeechCapabilityMode = deriveSpeechCapabilityMode(model.capabilities, model.input_modalities);
     draftDiscoveredModels = [normalizeCatalogModelForDraft(model)];
 
     renderDraftApiKeyField();
     renderDraftProviderFields();
     renderDraftImageCapability();
+    renderDraftSpeechCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -990,11 +1005,13 @@ function handleAddProfile() {
     document.getElementById('profile-fallback-policy').value = '';
     document.getElementById('profile-fallback-priority').value = '0';
     draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+    draftSpeechCapabilityMode = SPEECH_CAPABILITY_MODES.AUTO;
 
     showProfileEditor();
     renderDraftApiKeyField();
     renderDraftProviderFields();
     renderDraftImageCapability();
+    renderDraftSpeechCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -1092,6 +1109,7 @@ function handleEditProfile(name) {
     draftCatalogSelection = buildDraftCatalogSelection(profile);
     draftImageCapabilityMode = deriveImageCapabilityMode(profile.capabilities);
     draftImageCapabilityManualOverride = draftImageCapabilityMode !== IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+    draftSpeechCapabilityMode = deriveSpeechCapabilityMode(profile.capabilities, profile.input_modalities);
     draftProviderMode = isMaaSProvider(profile.provider)
         ? PROVIDER_MODES.MAAS
         : isCodeAgentProvider(profile.provider)
@@ -1110,6 +1128,7 @@ function handleEditProfile(name) {
     renderDraftApiKeyField();
     renderDraftProviderFields();
     renderDraftImageCapability();
+    renderDraftSpeechCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -1135,6 +1154,7 @@ function handleCancelProfile() {
     resetDraftEditorState();
     resetCatalogFilters();
     renderDraftImageCapability();
+    renderDraftSpeechCapability();
     renderDraftProbeState();
     renderDraftModelDiscoveryState();
     renderDiscoveredModels();
@@ -1245,6 +1265,10 @@ async function handleSaveProfile() {
     if (sslVerify !== null) {
         profile.ssl_verify = sslVerify;
     }
+    const existingSpeechRealtime = editingProfile ? profiles[editingProfile]?.speech_realtime : null;
+    if (existingSpeechRealtime && typeof existingSpeechRealtime === 'object') {
+        profile.speech_realtime = existingSpeechRealtime;
+    }
     profile.capabilities = buildDraftProfileCapabilities(discoveredModelEntry);
 
     if (isMaaSProvider(provider)) {
@@ -1348,6 +1372,9 @@ function buildExistingProfileSavePayload(profile, options = {}) {
     }
     if (profile.capabilities && typeof profile.capabilities === 'object') {
         payload.capabilities = profile.capabilities;
+    }
+    if (profile.speech_realtime && typeof profile.speech_realtime === 'object') {
+        payload.speech_realtime = profile.speech_realtime;
     }
     return payload;
 }
@@ -2479,6 +2506,7 @@ function resetDraftEditorState() {
     draftCatalogSelection = null;
     draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     draftImageCapabilityManualOverride = false;
+    draftSpeechCapabilityMode = SPEECH_CAPABILITY_MODES.AUTO;
     isModelMenuOpen = false;
     draftBaseUrlExpanded = false;
     draftModelInputExpanded = false;
@@ -2542,11 +2570,32 @@ function deriveImageCapabilityMode(capabilities, inputModalities = []) {
     return IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
 }
 
+function deriveSpeechCapabilityMode(capabilities, inputModalities = []) {
+    const speechCapability = resolveSpeechCapabilityState(capabilities, inputModalities);
+    if (speechCapability === SPEECH_CAPABILITY_MODES.STT) {
+        return SPEECH_CAPABILITY_MODES.STT;
+    }
+    if (speechCapability === SPEECH_CAPABILITY_MODES.TTS) {
+        return SPEECH_CAPABILITY_MODES.TTS;
+    }
+    if (speechCapability === SPEECH_CAPABILITY_MODES.UNSUPPORTED) {
+        return SPEECH_CAPABILITY_MODES.UNSUPPORTED;
+    }
+    return SPEECH_CAPABILITY_MODES.AUTO;
+}
+
 function syncDraftImageCapabilityMode() {
     const imageCapabilityInput = document.getElementById('profile-image-capability');
     draftImageCapabilityMode = normalizeImageCapabilityMode(imageCapabilityInput?.value);
     draftImageCapabilityManualOverride = draftImageCapabilityMode !== IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     renderDraftImageCapability();
+    renderProfileEditorState();
+}
+
+function syncDraftSpeechCapabilityMode() {
+    const speechCapabilityInput = document.getElementById('profile-speech-capability');
+    draftSpeechCapabilityMode = normalizeSpeechCapabilityMode(speechCapabilityInput?.value);
+    renderDraftSpeechCapability();
     renderProfileEditorState();
 }
 
@@ -2556,6 +2605,14 @@ function renderDraftImageCapability() {
         return;
     }
     imageCapabilityInput.value = normalizeImageCapabilityMode(draftImageCapabilityMode);
+}
+
+function renderDraftSpeechCapability() {
+    const speechCapabilityInput = document.getElementById('profile-speech-capability');
+    if (!speechCapabilityInput) {
+        return;
+    }
+    speechCapabilityInput.value = normalizeSpeechCapabilityMode(draftSpeechCapabilityMode);
 }
 
 function normalizeImageCapabilityMode(value) {
@@ -2569,20 +2626,50 @@ function normalizeImageCapabilityMode(value) {
     return IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
 }
 
+function normalizeSpeechCapabilityMode(value) {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === SPEECH_CAPABILITY_MODES.STT) {
+        return SPEECH_CAPABILITY_MODES.STT;
+    }
+    if (normalized === SPEECH_CAPABILITY_MODES.TTS) {
+        return SPEECH_CAPABILITY_MODES.TTS;
+    }
+    if (normalized === SPEECH_CAPABILITY_MODES.UNSUPPORTED) {
+        return SPEECH_CAPABILITY_MODES.UNSUPPORTED;
+    }
+    return SPEECH_CAPABILITY_MODES.AUTO;
+}
+
 function buildDraftProfileCapabilities(discoveredModelEntry) {
     const baseCapabilities = resolveDraftCapabilityBase(discoveredModelEntry);
     const imageCapabilityMode = normalizeImageCapabilityMode(draftImageCapabilityMode);
+    const speechCapabilityMode = normalizeSpeechCapabilityMode(draftSpeechCapabilityMode);
     const inputCapabilities = { ...baseCapabilities.input };
     if (imageCapabilityMode === IMAGE_CAPABILITY_MODES.SUPPORTED) {
         inputCapabilities.image = true;
     } else if (imageCapabilityMode === IMAGE_CAPABILITY_MODES.UNSUPPORTED) {
         inputCapabilities.image = false;
     }
+    if (speechCapabilityMode === SPEECH_CAPABILITY_MODES.STT) {
+        inputCapabilities.audio = true;
+    } else if (
+        speechCapabilityMode === SPEECH_CAPABILITY_MODES.TTS
+        || speechCapabilityMode === SPEECH_CAPABILITY_MODES.UNSUPPORTED
+    ) {
+        inputCapabilities.audio = false;
+    }
+    const outputCapabilities = { ...baseCapabilities.output };
+    if (speechCapabilityMode === SPEECH_CAPABILITY_MODES.TTS) {
+        outputCapabilities.audio = true;
+    } else if (
+        speechCapabilityMode === SPEECH_CAPABILITY_MODES.STT
+        || speechCapabilityMode === SPEECH_CAPABILITY_MODES.UNSUPPORTED
+    ) {
+        outputCapabilities.audio = false;
+    }
     return {
         input: inputCapabilities,
-        output: {
-            ...baseCapabilities.output,
-        },
+        output: outputCapabilities,
     };
 }
 
@@ -3825,26 +3912,67 @@ function resolveImageCapabilityState(capabilities, inputModalities = []) {
     return normalizedCapabilities.input.image;
 }
 
+function resolveSpeechCapabilityState(capabilities, inputModalities = []) {
+    const normalizedCapabilities = normalizeModelCapabilities(capabilities, inputModalities);
+    if (normalizedCapabilities.input.audio === true) {
+        return SPEECH_CAPABILITY_MODES.STT;
+    }
+    if (normalizedCapabilities.output.audio === true) {
+        return SPEECH_CAPABILITY_MODES.TTS;
+    }
+    if (
+        normalizedCapabilities.input.audio === false
+        && normalizedCapabilities.output.audio === false
+    ) {
+        return SPEECH_CAPABILITY_MODES.UNSUPPORTED;
+    }
+    return SPEECH_CAPABILITY_MODES.AUTO;
+}
+
 function renderInputCapabilityChip(capabilities, { compact = false, inputModalities = [] } = {}) {
-    const imageInput = resolveImageCapabilityState(capabilities, inputModalities);
-    const label = imageInput === true
-        ? t('settings.model.capability_image_input')
-        : imageInput === false
-            ? t('settings.model.capability_text_only')
-            : t('settings.model.capability_unknown');
+    const descriptor = resolveCapabilityChipDescriptor(capabilities, inputModalities);
     const classes = [
         'profile-card-chip',
         'profile-card-chip-capability',
-        imageInput === true
-            ? 'profile-card-chip-capability-image'
-            : imageInput === false
-                ? 'profile-card-chip-capability-text'
-                : 'profile-card-chip-capability-unknown',
+        descriptor.className,
         compact ? 'profile-card-chip-compact' : '',
     ]
         .filter(Boolean)
         .join(' ');
-    return `<span class="${classes}">${escapeHtml(label)}</span>`;
+    return `<span class="${classes}">${escapeHtml(descriptor.label)}</span>`;
+}
+
+function resolveCapabilityChipDescriptor(capabilities, inputModalities) {
+    const speechCapability = resolveSpeechCapabilityState(capabilities, inputModalities);
+    if (speechCapability === SPEECH_CAPABILITY_MODES.STT) {
+        return {
+            label: t('settings.model.capability_stt'),
+            className: 'profile-card-chip-capability-stt',
+        };
+    }
+    if (speechCapability === SPEECH_CAPABILITY_MODES.TTS) {
+        return {
+            label: t('settings.model.capability_tts'),
+            className: 'profile-card-chip-capability-tts',
+        };
+    }
+    const imageInput = resolveImageCapabilityState(capabilities, inputModalities);
+    if (imageInput === true) {
+        return {
+            label: t('settings.model.capability_image_input'),
+            className: 'profile-card-chip-capability-image',
+        };
+    }
+    if (imageInput === false) {
+        return {
+            label: t('settings.model.capability_text_only'),
+            className: 'profile-card-chip-capability-text',
+        };
+    }
+    return {
+        label: t('settings.model.capability_unknown'),
+        className: 'profile-card-chip-capability-unknown',
+    };
 }
 
 function renderDiscoveredModelSummary(modelEntry) {

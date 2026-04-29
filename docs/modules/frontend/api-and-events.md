@@ -14,6 +14,7 @@
 - `automation.js`：automation project、delivery binding、sessions、run now。
 - `observability.js`：overview 和 breakdowns。
 - `token_usage.js`：run/session token usage。
+- speech config 和 STT WebSocket URL 由 system/speech facade 暴露，供 Speech settings 与语音输入组件复用。
 
 组件不应直接绕过这些 facade 在局部重新实现请求封装。新增 API 时应先放入对应领域模块，再从 `core/api/index.js` 导出。
 
@@ -74,6 +75,8 @@ prompt composer：
 - `resolveCommandPrompt`
 - `searchWorkspacePaths`
 - `updateSessionTopology`
+- `fetchSpeechConfig`
+- `createSpeechSttWebSocketUrl`
 
 workspace/project：
 
@@ -88,6 +91,7 @@ workspace/project：
 settings：
 
 - model、MCP、commands、hooks、roles、orchestration、notifications、web、proxy、workspace、environment 等均通过 `system.js` 和 `roles.js` 暴露。
+- speech 设置通过 speech config API 读取/保存 STT profile、语言、提示词和高级实时转写参数。
 
 project features：
 

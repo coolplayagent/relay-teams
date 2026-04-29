@@ -488,6 +488,11 @@ async def save_model_profile(
             profile["ssl_verify"] = req.ssl_verify
         if req.capabilities is not None:
             profile["capabilities"] = req.capabilities.model_dump(mode="json")
+        if req.speech_realtime is not None:
+            profile["speech_realtime"] = req.speech_realtime.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
         if req.api_key is not None and req.api_key.strip():
             profile["api_key"] = req.api_key
         if req.headers is not None:

@@ -196,7 +196,7 @@ WeChat 表现：
 负责模块：
 
 - `components/settings/index.js`
-- 各 panel：`appearanceSettings.js`、`modelProfiles.js`、`systemStatus.js`、`commandsSettings.js`、`hooksSettings.js`、`agentsSettings.js`、`rolesSettings.js`、`orchestrationSettings.js`、`notifications.js`、`webSettings.js`、`proxySettings.js`、`workspaceSettings.js`、`environmentVariables.js`。
+- 各 panel：`appearanceSettings.js`、`modelProfiles.js`、`speechSettings.js`、`systemStatus.js`、`commandsSettings.js`、`hooksSettings.js`、`agentsSettings.js`、`rolesSettings.js`、`orchestrationSettings.js`、`notifications.js`、`webSettings.js`、`proxySettings.js`、`workspaceSettings.js`、`environmentVariables.js`。
 
 主要状态：
 
@@ -231,6 +231,10 @@ WeChat 表现：
 ### Model
 
 负责模型配置和 model profiles。提供 provider/model profile 编辑、测试连接、catalog 发现/刷新、fallback 配置等能力。
+
+### Speech
+
+负责语音输入和浏览器朗读配置。语音输入使用后端 STT WebSocket 与模型配置中的 STT profile；朗读使用浏览器原生 `speechSynthesis`。Speech tab 提供 STT 配置选择、语言下拉、提示词保存，并复用 settings shell 的 `ACTION_TAB_OWNERS` 管理 `save-speech-btn`，避免切换 tab 后残留错误的保存按钮。
 
 ### MCP
 

@@ -26,6 +26,11 @@ import {
 } from './orchestrationSettings.js';
 import { bindProxySettingsHandlers, loadProxyStatusPanel } from './proxySettings.js';
 import { bindRoleSettingsHandlers, loadRoleSettingsPanel } from './rolesSettings.js';
+import {
+    bindSpeechSettingsHandlers,
+    loadSpeechSettingsPanel,
+    renderSpeechSettingsPanelMarkup,
+} from './speechSettings.js';
 import { bindWorkspaceSettingsHandlers, loadWorkspaceSettingsPanel } from './workspaceSettings.js';
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
@@ -55,6 +60,10 @@ const TAB_METADATA = {
     model: {
         titleKey: 'settings.panel.model.title',
         descriptionKey: 'settings.panel.model.description',
+    },
+    speech: {
+        titleKey: 'settings.panel.speech.title',
+        descriptionKey: 'settings.panel.speech.description',
     },
     mcp: {
         titleKey: 'settings.panel.mcp.title',
@@ -108,6 +117,7 @@ const ACTION_TAB_OWNERS = {
     'cancel-profile-btn': 'model',
     'test-profile-btn': 'model',
     'profile-probe-inline-status': 'model',
+    'save-speech-btn': 'speech',
     'add-ssh-profile-btn': 'workspace',
     'save-ssh-profile-btn': 'workspace',
     'cancel-ssh-profile-btn': 'workspace',
@@ -168,6 +178,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="model">
                         <span class="settings-tab-label" data-i18n="settings.tab.model">Model</span>
+                    </button>
+                    <button class="settings-tab" data-tab="speech">
+                        <span class="settings-tab-label" data-i18n="settings.tab.speech">Speech</span>
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
@@ -292,6 +305,7 @@ function createModal() {
                         </div>
                     </div>
                     ${renderModelProfilesPanelMarkup()}
+                    ${renderSpeechSettingsPanelMarkup()}
                     <div class="settings-panel" id="mcp-panel" style="display:none;">
                         <div class="settings-section">
                             <div class="settings-content-stack status-stack" id="mcp-status"></div>
@@ -881,6 +895,7 @@ function createModal() {
                             <button class="secondary-btn section-action-btn settings-action" id="add-profile-btn" type="button" style="display:none;" data-i18n="settings.action.add_profile">Add Profile</button>
                             <button class="secondary-btn section-action-btn settings-action" id="add-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.workspace.add_profile">Add SSH Profile</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
+                            <button class="primary-btn section-action-btn settings-action" id="save-speech-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="primary-btn section-action-btn settings-action" id="save-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-ssh-profile-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
@@ -951,6 +966,7 @@ function setupEventListeners() {
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
+    bindSpeechSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindNotificationSettingsHandlers();
     bindWebSettingsHandlers();
@@ -989,6 +1005,7 @@ async function showPanel(tab) {
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
+    bindSpeechSettingsHandlers();
     bindEnvironmentVariableSettingsHandlers();
     bindWebSettingsHandlers();
     bindProxySettingsHandlers();
@@ -1011,6 +1028,8 @@ async function loadSettingsPanel(tab) {
         await loadAgentSettingsPanel();
     } else if (tab === 'roles') {
         await loadRoleSettingsPanel();
+    } else if (tab === 'speech') {
+        await loadSpeechSettingsPanel();
     } else if (tab === 'orchestration') {
         await loadOrchestrationSettingsPanel();
     } else if (tab === 'environment') {
@@ -1067,7 +1086,13 @@ function renderPanelActions(tab) {
     if (actionsBar) actionsBar.style.display = 'flex';
     if (tab === 'model') {
         document.getElementById('add-profile-btn').style.display = 'inline-flex';
-    } else if (tab === 'hooks') {
+        return;
+    }
+    if (tab === 'speech') {
+        document.getElementById('save-speech-btn').style.display = 'inline-flex';
+        return;
+    }
+    if (tab === 'hooks') {
         syncHooksSettingsActions();
     } else if (tab === 'agents') {
         document.getElementById('add-agent-btn').style.display = 'inline-flex';

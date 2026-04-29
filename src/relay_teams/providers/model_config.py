@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import (
     BaseModel,
@@ -202,6 +202,27 @@ class ModelCapabilities(BaseModel):
         return self.input.supported_media_modalities()
 
 
+RealtimeSttStopEventType = Literal["input_audio_buffer.commit", "session.finish"]
+
+
+class SpeechRealtimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    websocket_url_template: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
+    send_model_in_session_update: bool = True
+    stop_event_type: RealtimeSttStopEventType = "input_audio_buffer.commit"
+    send_openai_beta_header: bool | None = None
+
+    @field_validator("websocket_url_template", "model", mode="before")
+    @classmethod
+    def _normalize_string_fields(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+
 class ModelRequestHeader(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -244,6 +265,7 @@ class ModelEndpointConfig(BaseModel):
     codeagent_auth: CodeAgentAuthConfig | None = None
     ssl_verify: bool | None = None
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    speech_realtime: SpeechRealtimeConfig = Field(default_factory=SpeechRealtimeConfig)
     context_window: int | None = Field(default=None, ge=1)
     fallback_policy_id: str | None = Field(default=None, min_length=1)
     fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
@@ -359,6 +381,7 @@ class ModelProfileConfigPayload(BaseModel):
     codeagent_auth: CodeAgentAuthConfig | None = None
     ssl_verify: bool | None = None
     capabilities: ModelCapabilities | None = None
+    speech_realtime: SpeechRealtimeConfig | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
     max_tokens: Optional[int] = Field(default=None, ge=1)

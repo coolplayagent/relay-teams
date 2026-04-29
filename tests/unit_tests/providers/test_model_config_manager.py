@@ -91,6 +91,44 @@ def test_save_model_profile_and_get_model_profiles(tmp_path: Path) -> None:
     ]
 
 
+def test_save_model_profile_persists_speech_realtime_config(tmp_path: Path) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "stt",
+        {
+            "provider": "openai_compatible",
+            "model": "third-party-stt",
+            "base_url": "https://example.test/v1",
+            "api_key": "secret-key",
+            "speech_realtime": {
+                "websocket_url_template": "wss://example.test/stream?model={model}",
+                "model": "third-party-stt-realtime",
+                "stop_event_type": "session.finish",
+                "send_model_in_session_update": False,
+                "send_openai_beta_header": False,
+            },
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+
+    assert profiles["stt"]["speech_realtime"] == {
+        "websocket_url_template": "wss://example.test/stream?model={model}",
+        "model": "third-party-stt-realtime",
+        "stop_event_type": "session.finish",
+        "send_model_in_session_update": False,
+        "send_openai_beta_header": False,
+    }
+    assert model_payload["stt"]["speech_realtime"]["model"] == (
+        "third-party-stt-realtime"
+    )
+
+
 def test_save_model_profile_and_get_model_profiles_with_secret_headers(
     tmp_path: Path,
 ) -> None:

@@ -6,7 +6,8 @@
     margin-top: 0.45rem;
 }
 
-.message-copy-btn {
+.message-copy-btn,
+.message-read-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -22,7 +23,9 @@
 }
 
 .message-copy-btn:hover,
-.message-copy-btn:focus-visible {
+.message-copy-btn:focus-visible,
+.message-read-btn:hover,
+.message-read-btn:focus-visible {
     border-color: color-mix(in srgb, var(--border-color) 86%, transparent);
     background: color-mix(in srgb, var(--bg-hover-strong) 58%, transparent);
     color: var(--text-primary);
@@ -31,6 +34,10 @@
 
 .message-copy-btn.is-copied {
     color: var(--success);
+}
+
+.message-read-btn.is-reading {
+    color: var(--text-primary);
 }
 
 .message-copy-icon {

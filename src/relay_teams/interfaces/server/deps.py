@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import Request
+from fastapi import Request, WebSocket
 
 from relay_teams.commands import CommandRegistry
 from relay_teams.agents.orchestration.settings_service import (
@@ -54,6 +54,7 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
+from relay_teams.speech import RealtimeSttProxyService, SpeechConfigService
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.workspace import SshProfileService, WorkspaceManager, WorkspaceService
@@ -61,6 +62,10 @@ from relay_teams.workspace import SshProfileService, WorkspaceManager, Workspace
 
 def get_container(request: Request) -> ServerContainer:
     return request.app.state.container
+
+
+def get_websocket_container(websocket: WebSocket) -> ServerContainer:
+    return websocket.app.state.container
 
 
 def get_run_service(request: Request) -> SessionRunService:
@@ -101,6 +106,20 @@ def get_plugin_registry(request: Request) -> PluginRegistry:
 
 def get_model_config_service(request: Request) -> ModelConfigService:
     return get_container(request).model_config_service
+
+
+def get_speech_config_service(request: Request) -> SpeechConfigService:
+    return get_container(request).speech_config_service
+
+
+def get_realtime_stt_proxy_service(request: Request) -> RealtimeSttProxyService:
+    return get_container(request).realtime_stt_proxy_service
+
+
+def get_websocket_realtime_stt_proxy_service(
+    websocket: WebSocket,
+) -> RealtimeSttProxyService:
+    return get_websocket_container(websocket).realtime_stt_proxy_service
 
 
 def get_notification_settings_service(request: Request) -> NotificationSettingsService:

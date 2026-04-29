@@ -2223,6 +2223,83 @@ console.log(JSON.stringify({
     assert input_capabilities["image"] is True
 
 
+def test_saving_manual_speech_capability_persists_stt_model(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "manual-stt-profile";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+document.getElementById("profile-model").value = "mimo-v2.5-stt";
+document.getElementById("profile-speech-capability").value = "stt";
+document.getElementById("profile-speech-capability").onchange();
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    capabilities = cast(dict[str, JsonValue], saved_profile_body["capabilities"])
+    input_capabilities = cast(dict[str, JsonValue], capabilities["input"])
+    output_capabilities = cast(dict[str, JsonValue], capabilities["output"])
+    assert input_capabilities["audio"] is True
+    assert output_capabilities["audio"] is False
+
+
+def test_saving_manual_speech_profile_does_not_require_realtime_fields(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "manual-realtime-profile";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+document.getElementById("profile-model").value = "third-party-stt";
+document.getElementById("profile-speech-capability").value = "stt";
+document.getElementById("profile-speech-capability").onchange();
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    capabilities = cast(dict[str, JsonValue], saved_profile_body["capabilities"])
+    input_capabilities = cast(dict[str, JsonValue], capabilities["input"])
+    assert input_capabilities["audio"] is True
+    assert "speech_realtime" not in saved_profile_body
+
+
 def test_editing_profile_restores_manual_image_capability_override(
     tmp_path: Path,
 ) -> None:
@@ -5436,6 +5513,7 @@ function createElements() {{
             ["profile-connect-timeout", createElement("block", "profile-connect-timeout")],
             ["profile-ssl-verify", createElement("block", "profile-ssl-verify")],
             ["profile-image-capability", createElement("block", "profile-image-capability")],
+            ["profile-speech-capability", createElement("block", "profile-speech-capability")],
             ["profile-fallback-policy", createElement("block", "profile-fallback-policy")],
             ["profile-fallback-priority", createElement("block", "profile-fallback-priority")],
         ];

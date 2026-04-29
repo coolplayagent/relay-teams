@@ -43,6 +43,7 @@ let sessionSelectionController = null;
 let sessionSelectionTargetId = '';
 let sessionSwitchLoadingTimer = null;
 let sessionSwitchReadyTimer = null;
+let cancelSessionSwitchFinishFrame = null;
 let sessionSelectionCancellationBound = false;
 const SESSION_SWITCH_LOADING_DELAY_MS = 80;
 const SESSION_SWITCH_READY_MS = 140;
@@ -252,6 +253,7 @@ function beginSessionSwitchLoading(selectionToken, sessionId) {
     }
     clearTimeout(sessionSwitchLoadingTimer);
     clearTimeout(sessionSwitchReadyTimer);
+    clearSessionSwitchFinishFrame();
     chatContainer.classList.remove('is-session-switch-ready');
     chatContainer.classList.add('is-session-switch-pending');
     ensureSessionSwitchLoadingNode(chatContainer);
@@ -273,6 +275,22 @@ function finishSessionSwitchLoading(selectionToken, sessionId) {
     }
     clearTimeout(sessionSwitchLoadingTimer);
     clearTimeout(sessionSwitchReadyTimer);
+    clearSessionSwitchFinishFrame();
+    if (!elementHasClass(chatContainer, 'is-session-switching')) {
+        chatContainer.classList.add('is-session-switching');
+        cancelSessionSwitchFinishFrame = scheduleSessionSwitchFrame(() => {
+            cancelSessionSwitchFinishFrame = null;
+            completeSessionSwitchLoading(selectionToken, sessionId, chatContainer);
+        });
+        return;
+    }
+    completeSessionSwitchLoading(selectionToken, sessionId, chatContainer);
+}
+
+function completeSessionSwitchLoading(selectionToken, sessionId, chatContainer) {
+    if (!isLatestSessionSelection(selectionToken, sessionId)) {
+        return;
+    }
     chatContainer.classList.remove('is-session-switch-pending', 'is-session-switching');
     chatContainer.classList.add('is-session-switch-ready');
     sessionSwitchReadyTimer = globalThis.setTimeout(() => {
@@ -281,6 +299,33 @@ function finishSessionSwitchLoading(selectionToken, sessionId) {
         }
         chatContainer.classList.remove('is-session-switch-ready');
     }, SESSION_SWITCH_READY_MS);
+}
+
+function clearSessionSwitchFinishFrame() {
+    if (cancelSessionSwitchFinishFrame) {
+        cancelSessionSwitchFinishFrame();
+        cancelSessionSwitchFinishFrame = null;
+    }
+}
+
+function scheduleSessionSwitchFrame(callback) {
+    if (typeof globalThis.requestAnimationFrame === 'function') {
+        const frameId = globalThis.requestAnimationFrame(callback);
+        return () => {
+            globalThis.cancelAnimationFrame?.(frameId);
+        };
+    }
+    const timerId = globalThis.setTimeout(callback, 16);
+    return () => {
+        globalThis.clearTimeout(timerId);
+    };
+}
+
+function elementHasClass(element, className) {
+    if (element?.classList?.contains?.(className) === true) {
+        return true;
+    }
+    return String(element?.className || '').split(/\s+/).includes(className);
 }
 
 function ensureSessionSwitchLoadingNode(chatContainer) {
@@ -327,6 +372,7 @@ function cancelActiveSessionSelection() {
 function clearSessionSwitchLoading() {
     clearTimeout(sessionSwitchLoadingTimer);
     clearTimeout(sessionSwitchReadyTimer);
+    clearSessionSwitchFinishFrame();
     const chatContainer = els.chatContainer || els.chatMessages?.parentElement || null;
     chatContainer?.classList?.remove?.(
         'is-session-switch-pending',

@@ -22,6 +22,7 @@
 - model profiles、roles、agents、commands、hooks、proxy、workspace、environment、system status。
 - subagent rail、subagent sessions、subagent streams。
 - prompt tokens、YOLO、workspace prompt。
+- speech UI、语音输入状态、composer action rail 布局。
 - CSS module split 和样式辅助校验。
 
 ### 浏览器集成测试
@@ -35,6 +36,7 @@
 - message copy actions。
 - ClawHub browser flow。
 - GitHub browser flow。
+- voice input audio 和 composer action button layout。
 
 ## 推荐验证命令
 
@@ -61,6 +63,14 @@ uv run --extra dev pytest -q tests/integration_tests/browser/test_streaming_mess
 uv run --extra dev pytest -q tests/unit_tests/frontend/test_settings_shell_ui.py
 uv run --extra dev pytest -q tests/unit_tests/frontend/test_model_profiles_ui.py
 uv run --extra dev pytest -q tests/unit_tests/frontend/test_hooks_settings_ui.py
+```
+
+涉及 speech、composer action rail 或 session switch loading 的变更建议补充：
+
+```powershell
+uv run --extra dev pytest -q tests/unit_tests/frontend/test_speech_ui.py
+uv run --extra dev pytest -q tests/integration_tests/browser/test_voice_input_audio.py
+uv run --extra dev pytest -q tests/unit_tests/frontend/test_session_selection_ui.py
 ```
 
 完整仓库自检仍以根目录 `AGENTS.md` 的 pre-commit self-check 为准。

@@ -241,6 +241,15 @@ export function renderModelProfilesPanelMarkup() {
                                             </select>
                                         </div>
                                         <div class="form-group">
+                                            <label for="profile-speech-capability" data-i18n="settings.model.speech_capability">Speech</label>
+                                            <select id="profile-speech-capability">
+                                                <option value="auto" data-i18n="settings.model.speech_capability_auto">Auto / unknown</option>
+                                                <option value="stt" data-i18n="settings.model.speech_capability_stt">STT model</option>
+                                                <option value="tts" data-i18n="settings.model.speech_capability_tts">TTS model</option>
+                                                <option value="unsupported" data-i18n="settings.model.speech_capability_unsupported">No speech</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
                                             <label for="profile-temperature" data-i18n="settings.model.temperature">Temperature</label>
                                             <input type="number" id="profile-temperature" value="0.7" step="0.1" min="0" max="2" autocomplete="off">
                                         </div>

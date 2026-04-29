@@ -25,6 +25,7 @@
     <link rel="stylesheet" href="/css/components/subagent.css" />
     <link rel="stylesheet" href="/css/components/observability.css" />
     <link rel="stylesheet" href="/css/components/interface.css" />
+    <link rel="stylesheet" href="/css/components/voice.css" />
     <link rel="stylesheet" href="/css/components/new-session-draft.css" />
     <link rel="stylesheet" href="/css/components/new-session-draft-composer.css" />
     <link rel="stylesheet" href="/css/components/new-session-draft-workspace.css" />
@@ -363,60 +364,87 @@
                     class="prompt-mention-menu"
                     hidden
                   ></div>
-                  <button
-                    type="button"
-                    id="resume-run-btn"
-                    class="composer-resume-btn"
-                    title="Resume run"
-                    data-i18n-title="recovery.action.resume_run"
-                    style="display: none"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <path
-                        d="M8 6.5v11l9-5.5-9-5.5Z"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                    <span data-i18n="recovery.action.resume_run">Resume Run</span>
-                  </button>
-                  <button
-                    type="submit"
-                    id="send-btn"
-                    title="Send (Enter)"
-                    data-i18n-title="composer.send_title"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none">
-                      <path
-                        d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linejoin="round"
-                      />
-                    </svg>
-                    <span class="send-btn-label" data-i18n="new_session_draft.start_button">Start</span>
-                  </button>
-                  <button
-                    type="button"
-                    id="stop-btn"
-                    title="Stop run"
-                    data-i18n-title="composer.stop_title"
-                    style="display: none"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <rect
-                        x="7"
-                        y="7"
-                        width="10"
-                        height="10"
-                        rx="2"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      />
-                    </svg>
-                    <span data-i18n="composer.stop">Stop</span>
-                  </button>
+                  <div class="composer-actions" aria-label="Composer actions">
+                    <button
+                      type="button"
+                      id="resume-run-btn"
+                      class="composer-resume-btn"
+                      title="Resume run"
+                      data-i18n-title="recovery.action.resume_run"
+                      style="display: none"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M8 6.5v11l9-5.5-9-5.5Z"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                      <span data-i18n="recovery.action.resume_run">Resume Run</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="stop-btn"
+                      title="Stop run"
+                      data-i18n-title="composer.stop_title"
+                      style="display: none"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <rect
+                          x="7"
+                          y="7"
+                          width="10"
+                          height="10"
+                          rx="2"
+                          stroke="currentColor"
+                          stroke-width="2"
+                        />
+                      </svg>
+                      <span data-i18n="composer.stop">Stop</span>
+                    </button>
+                    <button
+                      type="button"
+                      id="voice-input-btn"
+                      class="composer-voice-btn"
+                      title="Voice input"
+                      data-i18n-title="voice.input_title"
+                      data-i18n-aria-label="voice.input_title"
+                      hidden
+                      disabled
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                        />
+                        <path
+                          d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v3"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      type="submit"
+                      id="send-btn"
+                      title="Send (Enter)"
+                      data-i18n-title="composer.send_title"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none">
+                        <path
+                          d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2Z"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                      <span class="send-btn-label" data-i18n="new_session_draft.start_button">Start</span>
+                    </button>
+                  </div>
                   <div
                     id="prompt-input-hint"
                     class="input-footer-hint"

@@ -361,6 +361,27 @@ export async function fetchModelFallbackConfig() {
     );
 }
 
+export async function fetchSpeechConfig() {
+    return requestJson('/api/speech/config', undefined, 'Failed to fetch speech config');
+}
+
+export async function saveSpeechConfig(config) {
+    return requestJson(
+        '/api/speech/config',
+        {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        },
+        'Failed to save speech config',
+    );
+}
+
+export function createSpeechSttWebSocketUrl() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/api/speech/stt/stream`;
+}
+
 export async function fetchModelCatalog(options = {}) {
     const refresh = options.refresh === true ? '?refresh=true' : '';
     return requestJsonManaged(

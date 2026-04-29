@@ -10,6 +10,7 @@ from relay_teams.providers.model_config import (
     MaaSAuthConfig,
     ModelEndpointConfig,
     ProviderType,
+    SpeechRealtimeConfig,
 )
 
 
@@ -67,3 +68,20 @@ def test_model_endpoint_config_requires_codeagent_password_fields() -> None:
                 username="relay-user",
             ),
         )
+
+
+def test_speech_realtime_config_normalizes_blank_optional_fields() -> None:
+    config = SpeechRealtimeConfig(
+        websocket_url_template=" ",
+        model=" qwen3-omni-flash-realtime ",
+        send_openai_beta_header=False,
+    )
+
+    assert config.websocket_url_template is None
+    assert config.model == "qwen3-omni-flash-realtime"
+    assert config.send_openai_beta_header is False
+
+
+def test_speech_realtime_config_rejects_non_string_optional_text() -> None:
+    with pytest.raises(ValueError):
+        SpeechRealtimeConfig.model_validate({"websocket_url_template": 123})

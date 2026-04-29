@@ -133,6 +133,11 @@ class ModelConfigManager:
                 "capabilities": (
                     raw_capabilities if isinstance(raw_capabilities, dict) else None
                 ),
+                "speech_realtime": (
+                    normalized_profile.get("speech_realtime")
+                    if isinstance(normalized_profile.get("speech_realtime"), dict)
+                    else None
+                ),
                 "resolved_capabilities": capabilities.model_dump(mode="json"),
                 "input_modalities": [
                     modality.value
@@ -259,8 +264,11 @@ class ModelConfigManager:
             current_password=current_codeagent_password,
             current_refresh_token=current_codeagent_refresh_token,
         )
-        if cast(dict[str, JsonValue], config[name]).get("max_tokens") is None:
-            cast(dict[str, JsonValue], config[name]).pop("max_tokens", None)
+        next_profile_for_storage = cast(dict[str, JsonValue], config[name])
+        if next_profile_for_storage.get("max_tokens") is None:
+            next_profile_for_storage.pop("max_tokens", None)
+        if not isinstance(next_profile_for_storage.get("speech_realtime"), dict):
+            next_profile_for_storage.pop("speech_realtime", None)
         if source_name is not None and source_name != name:
             config.pop(source_name, None)
         _normalize_default_profile_flags(config, preferred_name=name)
@@ -500,6 +508,8 @@ class ModelConfigManager:
             api_key, has_api_key = self._resolve_api_key(name, profile)
             if has_api_key:
                 next_profile["api_key"] = api_key
+            if not isinstance(next_profile.get("speech_realtime"), dict):
+                next_profile.pop("speech_realtime", None)
             headers = self._resolve_headers(name, profile)
             if headers:
                 next_profile["headers"] = [
@@ -1547,7 +1557,7 @@ def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     except Exception:
         return {}
     if isinstance(raw, dict):
-        return cast(dict[str, JsonValue], raw)
+        return raw
     return {}
 
 

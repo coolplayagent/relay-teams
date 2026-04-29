@@ -2236,6 +2236,18 @@
     color: var(--primary-hover);
 }
 
+.profile-card-chip-capability-stt {
+    border-color: color-mix(in srgb, var(--accent-color) 34%, transparent);
+    background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+    color: color-mix(in srgb, var(--accent-color) 72%, var(--text-primary));
+}
+
+.profile-card-chip-capability-tts {
+    border-color: color-mix(in srgb, var(--text-secondary) 28%, transparent);
+    background: color-mix(in srgb, var(--bg-surface-muted) 86%, transparent);
+    color: var(--text-secondary);
+}
+
 .profile-card-chip-capability-text {
     color: var(--text-secondary);
 }

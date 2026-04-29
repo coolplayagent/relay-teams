@@ -19,12 +19,25 @@ export function showToast({
     message = '',
     tone = 'info',
     durationMs = 4200,
+    dedupeKey = '',
 } = {}) {
     const hosts = ensureHosts();
     if (!hosts?.toastStack) return;
 
+    const normalizedDedupeKey = String(dedupeKey || '').trim();
+    if (normalizedDedupeKey) {
+        Array.from(hosts.toastStack.querySelectorAll('.feedback-toast')).forEach(existingToast => {
+            if (existingToast.getAttribute('data-feedback-toast-key') === normalizedDedupeKey) {
+                existingToast.remove();
+            }
+        });
+    }
+
     const toast = document.createElement('div');
     toast.className = `feedback-toast feedback-tone-${normalizeTone(tone)}`;
+    if (normalizedDedupeKey) {
+        toast.setAttribute('data-feedback-toast-key', normalizedDedupeKey);
+    }
     toast.innerHTML = `
         <div class="feedback-toast-body">
             ${title ? `<div class="feedback-toast-title">${escapeHtml(title)}</div>` : ''}
