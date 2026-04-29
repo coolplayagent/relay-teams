@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import logging
+import os
 import re
 import signal
 import sys
@@ -15,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
+from starlette.types import Scope
 
 from relay_teams.builtin import ensure_app_config_bootstrap
 from relay_teams.env.runtime_env import sync_app_env_to_process_env
@@ -82,6 +84,19 @@ _SUPPRESSED_SUCCESS_PATHS = (
 _SUPPRESSED_NOISY_PATHS = (
     re.compile(r"^/\.well-known/appspecific/com\.chrome\.devtools\.json$"),
 )
+
+
+class FrontendStaticFiles(StaticFiles):
+    def file_response(
+        self,
+        full_path: os.PathLike[str] | str,
+        stat_result: os.stat_result,
+        scope: Scope,
+        status_code: int = 200,
+    ) -> Response:
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
 
 @asynccontextmanager
@@ -394,7 +409,9 @@ def _register_signal_handlers() -> None:
 
 if FRONTEND_DIST_DIR.exists():
     app.mount(
-        "/", StaticFiles(directory=str(FRONTEND_DIST_DIR), html=True), name="frontend"
+        "/",
+        FrontendStaticFiles(directory=str(FRONTEND_DIST_DIR), html=True),
+        name="frontend",
     )
 else:
 

@@ -78,8 +78,12 @@ let chatScrollAnimationFrame = 0;
 let chatScrollAnimationToken = 0;
 let scrollToBottomControl = null;
 let historyLoadMoreResizeBound = false;
+let roundTokenUsageController = null;
+const terminalRoundOverlays = new Map();
 
 export function clearSessionTimeline() {
+    abortRoundTokenUsageRequests();
+    terminalRoundOverlays.clear();
     roundsState.currentRounds = [];
     roundsState.timelineRounds = [];
     roundsState.currentRound = null;
@@ -111,11 +115,17 @@ export async function loadSessionRounds(sessionId, options = {}) {
     const signal = options.signal || null;
     throwIfAborted(signal);
     const priority = String(options.priority || '').trim();
-    const timelinePageResult = fetchTimelineRoundsPage(sessionId, { priority, signal })
-        .then(value => ({ status: 'fulfilled', value }))
-        .catch(reason => ({ status: 'rejected', reason }));
+    const timelineLoadMode = options.timelineLoadMode === 'background' ? 'background' : 'await';
+    abortRoundTokenUsageRequests();
     try {
-        const page = await fetchInitialRoundsPage(sessionId, { priority, signal });
+        const timelinePageResult = timelineLoadMode === 'await'
+            ? fetchTimelineRoundPageResult(sessionId, { priority, signal })
+            : null;
+        const page = await fetchInitialRoundsPage(sessionId, {
+            priority,
+            signal,
+            summary: timelineLoadMode === 'background',
+        });
         throwIfAborted(signal);
         if (!isSessionLoadCurrent(sessionId)) {
             return;
@@ -127,14 +137,40 @@ export async function loadSessionRounds(sessionId, options = {}) {
         applyTimelineRoundPage(page);
         reconcileTerminalRoundStreamState(page);
         mergeLiveRoundsForSession(sessionId);
+        applyTerminalRoundOverlays();
         syncExportedState();
-        if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {
-            renderSessionTimeline(roundsState.currentRounds, {
-                scrollPlan: renderPlan,
-                navigatorLayoutReason: renderPlan.navigatorLayoutReason,
+        renderLoadedRoundPage(sessionId, options, renderPlan);
+
+        if (timelineLoadMode === 'background') {
+            void applyFullRoundPageInBackground(sessionId, {
+                options,
+                renderPlan,
+                signal,
+            }).catch(error => {
+                if (error?.name === 'AbortError') {
+                    return;
+                }
+                logError(
+                    'frontend.rounds.full_page_load_failed',
+                    'Failed loading full round page',
+                    errorToPayload(error, { session_id: sessionId }),
+                );
             });
-        } else {
-            renderNavigatorForTimeline({ layoutReason: renderPlan.navigatorLayoutReason });
+            void applyTimelineRoundPageInBackground(sessionId, {
+                priority: '',
+                renderPlan,
+                signal,
+            }).catch(error => {
+                if (error?.name === 'AbortError') {
+                    return;
+                }
+                logError(
+                    'frontend.rounds.timeline_load_failed',
+                    'Failed loading timeline rounds',
+                    errorToPayload(error, { session_id: sessionId }),
+                );
+            });
+            return;
         }
 
         const timelineResult = await timelinePageResult;
@@ -142,19 +178,7 @@ export async function loadSessionRounds(sessionId, options = {}) {
         if (!isSessionLoadCurrent(sessionId)) {
             return;
         }
-        if (timelineResult.status === 'fulfilled') {
-            applyTimelineRoundPage(timelineResult.value);
-            reconcileTerminalRoundStreamState(timelineResult.value);
-            mergeLiveRoundsForSession(sessionId);
-            syncExportedState();
-            renderNavigatorForTimeline({ layoutReason: renderPlan.navigatorLayoutReason });
-        } else {
-            logError(
-                'frontend.rounds.timeline_load_failed',
-                'Failed loading timeline rounds',
-                errorToPayload(timelineResult.reason, { session_id: sessionId }),
-            );
-        }
+        applyTimelineRoundPageResult(sessionId, timelineResult, renderPlan);
     } catch (e) {
         if (e?.name === 'AbortError') {
             throw e;
@@ -165,6 +189,79 @@ export async function loadSessionRounds(sessionId, options = {}) {
             errorToPayload(e, { session_id: sessionId }),
         );
     }
+}
+
+function fetchTimelineRoundPageResult(sessionId, { priority = '', signal = null } = {}) {
+    return fetchTimelineRoundsPage(sessionId, { priority, signal })
+        .then(value => ({ status: 'fulfilled', value }))
+        .catch(reason => ({ status: 'rejected', reason }));
+}
+
+async function applyTimelineRoundPageInBackground(sessionId, { priority, renderPlan, signal }) {
+    const timelineResult = await fetchTimelineRoundPageResult(sessionId, { priority, signal });
+    throwIfAborted(signal);
+    if (!isSessionLoadCurrent(sessionId)) {
+        return;
+    }
+    applyTimelineRoundPageResult(sessionId, timelineResult, renderPlan);
+}
+
+async function applyFullRoundPageInBackground(sessionId, { options, renderPlan, signal }) {
+    const page = await fetchInitialRoundsPage(sessionId, { priority: '', signal });
+    throwIfAborted(signal);
+    if (!isSessionLoadCurrent(sessionId)) {
+        return;
+    }
+    applyRoundPage(page, {
+        prepend: false,
+        mergeExisting: renderPlan.preserveLoadedRounds,
+    });
+    reconcileTerminalRoundStreamState(page);
+    mergeLiveRoundsForSession(sessionId);
+    applyTerminalRoundOverlays();
+    syncExportedState();
+    renderLoadedRoundPage(sessionId, options, renderPlan);
+}
+
+function applyTimelineRoundPageResult(sessionId, timelineResult, renderPlan) {
+    if (timelineResult.status === 'fulfilled') {
+        applyTimelineRoundPage(timelineResult.value);
+        reconcileTerminalRoundStreamState(timelineResult.value);
+        mergeLiveRoundsForSession(sessionId);
+        applyTerminalRoundOverlays();
+        syncExportedState();
+        if (!shouldPreserveSubagentView(sessionId)) {
+            renderNavigatorForTimeline({ layoutReason: renderPlan.navigatorLayoutReason });
+        }
+        return;
+    }
+    logError(
+        'frontend.rounds.timeline_load_failed',
+        'Failed loading timeline rounds',
+        errorToPayload(timelineResult.reason, { session_id: sessionId }),
+    );
+}
+
+function renderLoadedRoundPage(sessionId, options, renderPlan) {
+    if (options.render !== false && !shouldPreserveSubagentView(sessionId)) {
+        renderSessionTimeline(roundsState.currentRounds, {
+            scrollPlan: renderPlan,
+            navigatorLayoutReason: renderPlan.navigatorLayoutReason,
+        });
+        return;
+    }
+    if (!shouldPreserveSubagentView(sessionId)) {
+        renderNavigatorForTimeline({ layoutReason: renderPlan.navigatorLayoutReason });
+    }
+}
+
+function abortRoundTokenUsageRequests() {
+    if (!roundTokenUsageController) {
+        roundTokenUsageController = new AbortController();
+        return;
+    }
+    roundTokenUsageController.abort();
+    roundTokenUsageController = new AbortController();
 }
 
 function reconcileTerminalRoundStreamState(page) {
@@ -309,6 +406,7 @@ function applyTerminalHistoryRound(sessionId, runId, round, options = {}) {
         ...round,
         __liveOnly: false,
     };
+    terminalRoundOverlays.delete(runId);
     roundsState.currentRounds = upsertRound(
         roundsState.currentRounds,
         runId,
@@ -461,7 +559,13 @@ function throwIfAborted(signal) {
 function isSessionLoadCurrent(sessionId) {
     const requestedSessionId = String(sessionId || '').trim();
     const currentSessionId = String(state.currentSessionId || '').trim();
-    return !currentSessionId || currentSessionId === requestedSessionId;
+    if (!requestedSessionId) {
+        return false;
+    }
+    if (state.pendingNewSessionActive === true || state.currentMainView === 'new-session-draft') {
+        return false;
+    }
+    return currentSessionId === requestedSessionId;
 }
 
 export function createLiveRound(runId, intentText, intentParts = null) {
@@ -884,12 +988,18 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
 
+    const overlayPatch = pickDefinedRoundOverlay(overlay);
+    syncTerminalRoundOverlay(safeRunId, overlayPatch);
     const roundIndex = roundsState.currentRounds.findIndex(round => round.run_id === safeRunId);
     const current = roundsState.currentRounds[roundIndex]
         || roundsState.timelineRounds.find(round => round.run_id === safeRunId);
-    if (!current) return;
+    if (!current) {
+        if (isTerminalRoundOverlay(overlayPatch)) {
+            reconcileTerminalRunStreamState(safeRunId);
+        }
+        return;
+    }
 
-    const overlayPatch = pickDefinedRoundOverlay(overlay);
     const nextRound = { ...current, ...overlayPatch };
     roundsState.currentRounds = roundsState.currentRounds.map(round =>
         round.run_id === safeRunId ? { ...round, ...overlayPatch } : round,
@@ -908,6 +1018,9 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
     if (roundIndex >= 0) {
         patchRoundHeader(nextRound, roundIndex);
     }
+    if (isTerminalRoundOverlay(overlayPatch)) {
+        reconcileTerminalRunStreamState(safeRunId);
+    }
     syncRetryTimelineTimer();
     renderNavigatorForTimeline();
     setActiveRoundNav(roundsState.activeRunId);
@@ -918,6 +1031,68 @@ export function overlayRoundRecoveryState(runId, overlay = {}) {
             : [];
         setRoundPendingApprovals(safeRunId, pendingApprovals);
     }
+}
+
+function syncTerminalRoundOverlay(runId, overlayPatch) {
+    if (typeof overlayPatch !== 'object') {
+        return;
+    }
+    if (isTerminalRoundOverlay(overlayPatch)) {
+        terminalRoundOverlays.set(runId, {
+            ...terminalRoundOverlays.get(runId),
+            ...overlayPatch,
+        });
+        return;
+    }
+    if (String(overlayPatch.run_status || '').trim()) {
+        terminalRoundOverlays.delete(runId);
+    }
+}
+
+function isTerminalRoundOverlay(overlayPatch) {
+    if (!overlayPatch || typeof overlayPatch !== 'object') {
+        return false;
+    }
+    return (
+        isTerminalRoundStatus(overlayPatch.run_status)
+        || overlayPatch.is_recoverable === false
+    );
+}
+
+function applyTerminalRoundOverlays() {
+    if (terminalRoundOverlays.size === 0) {
+        return;
+    }
+    terminalRoundOverlays.forEach((overlayPatch, runId) => {
+        const safeRunId = String(runId || '').trim();
+        if (!safeRunId) {
+            return;
+        }
+        let patched = false;
+        const patchCurrentRound = round => {
+            patched = true;
+            return { ...round, ...overlayPatch };
+        };
+        roundsState.currentRounds = patchRoundCollection(
+            roundsState.currentRounds,
+            safeRunId,
+            patchCurrentRound,
+        );
+        roundsState.timelineRounds = patchRoundCollection(
+            roundsState.timelineRounds,
+            safeRunId,
+            round => ({ ...round, ...overlayPatch }),
+        );
+        if (roundsState.currentRound?.run_id === safeRunId) {
+            roundsState.currentRound = {
+                ...roundsState.currentRound,
+                ...overlayPatch,
+            };
+        }
+        if (patched) {
+            reconcileTerminalRunStreamState(safeRunId);
+        }
+    });
 }
 
 export function updateRoundTodo(runId, todoSnapshot) {
@@ -1557,7 +1732,16 @@ function renderRoundSection(round, index) {
 
     if (state.currentSessionId) {
         const headerEl = header;
-        void fetchRunTokenUsage(state.currentSessionId, round.run_id).then(usage => {
+        const tokenSessionId = String(state.currentSessionId || '').trim();
+        const tokenRunId = String(round.run_id || '').trim();
+        const tokenSignal = roundTokenUsageController?.signal || null;
+        void fetchRunTokenUsage(tokenSessionId, tokenRunId, { signal: tokenSignal }).then(usage => {
+            if (
+                tokenSignal?.aborted
+                || String(state.currentSessionId || '').trim() !== tokenSessionId
+            ) {
+                return;
+            }
             if (!usage || usage.total_tokens === 0) return;
             const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
             const pill = document.createElement('div');
@@ -1575,6 +1759,10 @@ function renderRoundSection(round, index) {
             const tokenHost = headerEl.querySelector('.round-detail-token-host');
             if (tokenHost) {
                 tokenHost.appendChild(pill);
+            }
+        }).catch(error => {
+            if (error?.name === 'AbortError') {
+                return;
             }
         });
     }

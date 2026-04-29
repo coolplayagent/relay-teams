@@ -13,7 +13,7 @@ export async function fetchRunTokenUsage(sessionId, runId, options = {}) {
                 signal: options.signal,
             },
             'Failed to fetch run token usage',
-            { ttlMs: 700, lane: 'heavy' },
+            { ttlMs: 1500, lane: 'heavy' },
         );
     } catch (error) {
         if (error?.name === 'AbortError') {
@@ -32,7 +32,7 @@ export async function fetchSessionTokenUsage(sessionId, options = {}) {
                 signal: options.signal,
             },
             'Failed to fetch session token usage',
-            { ttlMs: 700, lane: 'heavy' },
+            { ttlMs: 1500, lane: 'heavy' },
         );
     } catch (error) {
         if (error?.name === 'AbortError') {

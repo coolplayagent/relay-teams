@@ -16,6 +16,7 @@ import {
     clearActiveSubagentSession,
     ensureSessionSubagents,
     getSessionSubagentSessions,
+    isSubagentSessionListExpanded,
     openSubagentSession,
 } from '../components/subagentSessions.js';
 import { fetchSessionHistory, markSessionTerminalRunViewed } from '../core/api.js';
@@ -24,6 +25,7 @@ import {
     hydrateSessionView,
     stopSessionContinuity,
 } from './recovery.js';
+import { hydrateMainSessionForSwitch } from './sessionView.js';
 import { applyCurrentSessionRecord, resetCurrentSessionTopology, state } from '../core/state.js';
 import {
     detachActiveStreamForSessionSwitch,
@@ -157,19 +159,10 @@ export async function selectSession(sessionId) {
     beginSessionSwitchLoading(selectionToken, safeSessionId);
 
     try {
-        const sessionRecordPromise = fetchSessionHistory(safeSessionId, {
+        const sessionRecord = await fetchSessionHistory(safeSessionId, {
             priority: 'high',
             signal: selectionSignal,
         });
-        sessionRecordPromise.catch(() => null);
-        const hydratePromise = hydrateSessionView(safeSessionId, {
-            includeRounds: true,
-            priority: 'high',
-            quiet: true,
-            signal: selectionSignal,
-        });
-        hydratePromise.catch(() => null);
-        const sessionRecord = await sessionRecordPromise;
         if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
             return;
         }
@@ -177,7 +170,20 @@ export async function selectSession(sessionId) {
             || sessionRecordNeedsTerminalView(sessionRecord);
         applyCurrentSessionRecord(sessionRecord);
         refreshSessionTopologyControls();
-        await hydratePromise;
+        if (isSameSession) {
+            await hydrateSessionView(safeSessionId, {
+                includeRounds: true,
+                priority: 'high',
+                quiet: true,
+                signal: selectionSignal,
+            });
+        } else {
+            await hydrateMainSessionForSwitch(safeSessionId, {
+                priority: 'high',
+                quiet: true,
+                signal: selectionSignal,
+            });
+        }
         if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
             return;
         }
@@ -195,10 +201,12 @@ export async function selectSession(sessionId) {
     }
     scheduleCoordinatorContextPreview({ immediate: true });
     scheduleSessionTokenUsageRefresh({ immediate: true });
-    void ensureSessionSubagents(safeSessionId, {
-        force: true,
-        signal: selectionSignal,
-    });
+    if (isSubagentSessionListExpanded(safeSessionId)) {
+        void ensureSessionSubagents(safeSessionId, {
+            force: false,
+            signal: selectionSignal,
+        });
+    }
     document.dispatchEvent(
         new CustomEvent('agent-teams-session-selected', {
             detail: { sessionId: safeSessionId },

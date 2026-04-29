@@ -286,7 +286,7 @@ console.log(JSON.stringify({
 
     assert payload["activeRunId"] == "run-parent"
     assert payload["recoveryCalls"] == []
-    assert payload["tokenUsageCalls"] == [{"immediate": True}]
+    assert payload["tokenUsageCalls"] == [{"immediate": False}]
     assert payload["runEventCalls"] == [
         {
             "name": "handleTextDelta",
@@ -300,6 +300,34 @@ console.log(JSON.stringify({
                 None,
             ],
         }
+    ]
+
+
+def test_route_event_does_not_refresh_recovery_for_high_frequency_deltas(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('output_delta', {}, { run_id: 'run-1', trace_id: 'run-1' });
+routeEvent('generation_progress', {}, { run_id: 'run-1', trace_id: 'run-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    run_event_calls = cast(list[dict[str, object]], payload["runEventCalls"])
+    assert payload["recoveryCalls"] == []
+    assert [call["name"] for call in run_event_calls] == [
+        "handleOutputDelta",
+        "handleGenerationProgress",
     ]
 
 
@@ -384,7 +412,7 @@ console.log(JSON.stringify({
     assert payload["recoveryCalls"] == [
         {
             "sessionId": "session-1",
-            "delayMs": 0,
+            "delayMs": 350,
             "forceRefresh": True,
             "includeRounds": False,
             "quiet": True,
@@ -416,7 +444,7 @@ console.log(JSON.stringify({
     assert payload["recoveryCalls"] == [
         {
             "sessionId": "session-1",
-            "delayMs": 0,
+            "delayMs": 350,
             "forceRefresh": True,
             "includeRounds": False,
             "quiet": True,
@@ -424,7 +452,7 @@ console.log(JSON.stringify({
         },
         {
             "sessionId": "session-1",
-            "delayMs": 0,
+            "delayMs": 350,
             "forceRefresh": True,
             "includeRounds": False,
             "quiet": True,

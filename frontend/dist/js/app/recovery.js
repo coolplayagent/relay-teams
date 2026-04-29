@@ -139,6 +139,51 @@ export async function hydrateSessionView(
     return snapshot;
 }
 
+export async function hydrateSessionSwitchView(
+    sessionId = state.currentSessionId,
+    {
+        priority = 'high',
+        quiet = true,
+        roundsScrollPolicy = '',
+        signal = null,
+    } = {},
+) {
+    const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
+    if (!safeSessionId) {
+        stopSessionContinuity();
+        clearSessionRecovery();
+        return null;
+    }
+    throwIfAborted(signal);
+
+    startSessionContinuity(safeSessionId);
+    await loadSessionRounds(safeSessionId, {
+        priority,
+        render: !shouldPreserveActiveSubagentView(safeSessionId),
+        scrollPolicy: roundsScrollPolicy || undefined,
+        signal,
+        timelineLoadMode: 'background',
+    });
+    throwIfAborted(signal);
+    if (state.currentSessionId !== safeSessionId) {
+        return null;
+    }
+    void hydrateSessionView(safeSessionId, {
+        includeRounds: false,
+        priority: '',
+        quiet,
+        signal,
+    }).catch(error => {
+        if (error?.name === 'AbortError') {
+            return;
+        }
+        if (!quiet) {
+            sysLog(`Failed to complete session hydration: ${error.message || error}`, 'log-error');
+        }
+    });
+    return null;
+}
+
 export function startSessionContinuity(sessionId = state.currentSessionId) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) return;
@@ -545,22 +590,34 @@ export function markRunStreamConnected(runId, { phase = 'running' } = {}) {
 }
 
 export function markRunTerminalState(runId, { status, phase, recoverable } = {}) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
     const activeRun = getActiveRecoveryRun();
-    if (!activeRun || activeRun.run_id !== runId) {
-        if (!recoverable) {
+    const isRecoverable = recoverable !== false;
+    const terminalStatus = status || activeRun?.status || (isRecoverable ? 'stopped' : 'completed');
+    const terminalPhase = phase || activeRun?.phase || (isRecoverable ? 'stopped' : 'terminal');
+    const terminalOverlay = {
+        run_status: terminalStatus,
+        run_phase: terminalPhase,
+        is_recoverable: isRecoverable,
+        pending_tool_approval_count: 0,
+        pending_tool_approvals: [],
+    };
+    if (!activeRun || activeRun.run_id !== safeRunId) {
+        overlayRoundRecoveryState(safeRunId, terminalOverlay);
+        if (recoverable === false) {
             clearSessionRecovery();
         }
+        scheduleSessionsRefresh();
+        renderRecoveryBanner();
+        syncSessionContinuity();
         return;
     }
 
-    if (!recoverable) {
-        overlayRoundRecoveryState(runId, {
-            run_status: status || activeRun.status || 'completed',
-            run_phase: phase || activeRun.phase || 'terminal',
-            is_recoverable: false,
-            pending_tool_approval_count: 0,
-            pending_tool_approvals: [],
-        });
+    if (recoverable === false) {
+        overlayRoundRecoveryState(safeRunId, terminalOverlay);
         clearSessionRecovery();
         return;
     }
@@ -569,8 +626,8 @@ export function markRunTerminalState(runId, { status, phase, recoverable } = {})
         ...state.currentRecoverySnapshot,
         activeRun: {
             ...activeRun,
-            status: status || activeRun.status || 'stopped',
-            phase: phase || 'stopped',
+            status: terminalStatus,
+            phase: terminalPhase,
             is_recoverable: true,
             stream_connected: false,
             should_show_recover: true,
@@ -1011,8 +1068,37 @@ function shouldPollContinuity() {
         || hasUserQuestions
         || hasActiveBackgroundTasks
         || hasPausedSubagent
-        || activeRun?.is_recoverable
+        || isContinuityPollableRun(activeRun)
     );
+}
+
+function isContinuityPollableRun(activeRun) {
+    if (!activeRun || typeof activeRun !== 'object') return false;
+    if (activeRun.is_recoverable === false) return false;
+    if (isTerminalRecoveryRun(activeRun)) return false;
+    const status = String(activeRun.status || '').trim().toLowerCase();
+    const phase = String(activeRun.phase || '').trim().toLowerCase();
+    return [
+        'pending',
+        'queued',
+        'running',
+        'starting',
+        'stopping',
+        'awaiting_input',
+        'awaiting_tool_approval',
+        'awaiting_recovery',
+        'paused',
+    ].includes(status) || [
+        'pending',
+        'queued',
+        'running',
+        'starting',
+        'stopping',
+        'awaiting_input',
+        'awaiting_tool_approval',
+        'awaiting_recovery',
+        'paused',
+    ].includes(phase);
 }
 
 function nextContinuityPollDelay() {

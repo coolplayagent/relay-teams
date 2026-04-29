@@ -169,6 +169,7 @@ def _probe_paths(session_ids: tuple[str, ...]) -> tuple[str, ...]:
         paths.extend(
             [
                 f"/api/sessions/{session_id}",
+                f"/api/sessions/{session_id}/rounds?summary=true&limit=4",
                 f"/api/sessions/{session_id}/rounds?limit=4",
                 f"/api/sessions/{session_id}/recovery",
                 f"/api/sessions/{session_id}/token-usage",

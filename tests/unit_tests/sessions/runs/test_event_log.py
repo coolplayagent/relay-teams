@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -189,3 +190,87 @@ async def test_event_log_lists_session_events_after_id_and_filters_subagent_runs
     assert tuple(row["id"] for row in async_session_rows) == (subagent_id,)
     assert tuple(row["id"] for row in subagent_rows) == (subagent_id,)
     assert tuple(row["id"] for row in async_subagent_rows) == (subagent_id,)
+
+
+@pytest.mark.asyncio
+async def test_event_log_lists_multiple_traces_after_offsets_in_one_batch(
+    tmp_path: Path,
+) -> None:
+    event_log = EventLog(tmp_path / "event_log_multi_trace_after_id.db")
+    run_1_first = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run": 1, "seq": 1}',
+        )
+    )
+    run_2_first = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-2",
+            run_id="run-2",
+            trace_id="run-2",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run": 2, "seq": 1}',
+        )
+    )
+    run_1_second = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.MODEL_STEP_STARTED,
+            payload_json='{"run": 1, "seq": 2}',
+        )
+    )
+    run_2_second = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-2",
+            run_id="run-2",
+            trace_id="run-2",
+            event_type=RunEventType.MODEL_STEP_STARTED,
+            payload_json='{"run": 2, "seq": 2}',
+        )
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-3",
+            run_id="run-3",
+            trace_id="run-3",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run": 3}',
+        )
+    )
+
+    try:
+        rows = await event_log.list_by_traces_after_ids_async(
+            (("run-1", run_1_first), ("run-2", run_2_first), ("run-1", 0))
+        )
+    finally:
+        await event_log.close_async()
+
+    assert run_2_first > run_1_first
+    assert tuple(row["id"] for row in rows) == (run_1_second, run_2_second)
+
+
+def test_event_log_multi_trace_replay_ignores_empty_offsets(tmp_path: Path) -> None:
+    event_log = EventLog(tmp_path / "event_log_multi_trace_empty_offsets.db")
+    try:
+        rows = event_log.list_by_traces_after_ids(((" ", 4),))
+    finally:
+        event_log.close()
+
+    assert rows == ()
+
+
+def test_event_log_has_trace_id_replay_index(tmp_path: Path) -> None:
+    db_path = tmp_path / "event_log_trace_id_index.db"
+    event_log = EventLog(db_path)
+    event_log.close()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("PRAGMA index_list(events)").fetchall()
+
+    assert "idx_events_trace_id" in {str(row["name"]) for row in rows}

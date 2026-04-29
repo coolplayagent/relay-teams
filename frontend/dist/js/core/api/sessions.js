@@ -2,7 +2,12 @@
  * core/api/sessions.js
  * Session and history related API wrappers.
  */
-import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
+import {
+    invalidateManagedRequestCache,
+    invalidateManagedRequests,
+    requestJson,
+    requestJsonManaged,
+} from './request.js';
 
 export async function fetchSessions(options = {}) {
     if (options.forceRefresh === true) {
@@ -27,7 +32,7 @@ export async function startNewSession(workspaceId) {
         },
         'Failed to create session',
     );
-    invalidateManagedRequests('sessions:');
+    invalidateManagedRequestCache('sessions:');
     return result;
 }
 
@@ -55,8 +60,8 @@ export async function markSessionTerminalRunViewed(sessionId, options = {}) {
         },
         'Failed to mark session run viewed',
     );
-    invalidateManagedRequests('sessions:list');
-    invalidateManagedRequests(`sessions:${safeSessionId}:record`);
+    invalidateManagedRequestCache('sessions:list');
+    invalidateManagedRequestCache(`sessions:${safeSessionId}:record`);
     return result;
 }
 
@@ -90,13 +95,23 @@ export async function updateSessionTopology(sessionId, payload) {
 
 export async function fetchSessionRounds(
     sessionId,
-    { limit = 8, cursorRunId = null, priority = '', timeline = false, signal = undefined } = {},
+    {
+        limit = 8,
+        cursorRunId = null,
+        priority = '',
+        timeline = false,
+        summary = false,
+        signal = undefined,
+    } = {},
 ) {
     const params = new URLSearchParams();
     if (timeline) {
         params.set('timeline', 'true');
     } else {
         params.set('limit', String(limit));
+    }
+    if (summary) {
+        params.set('summary', 'true');
     }
     if (cursorRunId) params.set('cursor_run_id', cursorRunId);
     const query = params.toString();

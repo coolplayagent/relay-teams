@@ -232,6 +232,7 @@ async def get_session_rounds(
     limit: int = 8,
     cursor_run_id: OptionalIdentifierStr = None,
     timeline: bool = False,
+    summary: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     def _get_session_rounds() -> dict[str, object]:
@@ -240,6 +241,7 @@ async def get_session_rounds(
             limit=limit,
             cursor_run_id=cursor_run_id,
             timeline=timeline,
+            summary=summary,
         )
 
     return await _call_session_read("sessions.rounds", _get_session_rounds)

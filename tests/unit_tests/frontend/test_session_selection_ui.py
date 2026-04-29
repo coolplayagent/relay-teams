@@ -82,7 +82,7 @@ console.log(JSON.stringify({
     assert payload["selectedAfterB"] == []
     assert payload["selectedEvents"] == ["session-a"]
     assert payload["activatedEvents"] == ["session-a", "session-b", "session-a"]
-    assert payload["ensureSubagentCalls"] == ["session-a"]
+    assert payload["ensureSubagentCalls"] == []
     assert payload["contextPreviewCalls"] == 1
     assert payload["tokenUsageRefreshCalls"] == 1
     assert payload["clearContextIndicatorOptions"] == [
@@ -166,7 +166,7 @@ console.log(JSON.stringify({
     assert payload["viewedBeforeHydration"] == []
     assert payload["viewedAfterHydration"] == ["session-a"]
     assert payload["sidebarViewedTerminalRuns"] == ["session-a"]
-    assert payload["ensureSubagentCalls"] == ["session-a"]
+    assert payload["ensureSubagentCalls"] == []
 
 
 def test_select_session_terminal_view_mark_does_not_survive_cancelled_hydration(
@@ -250,6 +250,38 @@ console.log(JSON.stringify({
     assert payload["viewedAfterHydration"] == ["session-c"]
     assert payload["sidebarViewedTerminalRuns"] == ["session-c"]
     assert payload["appliedRecords"] == ["session-c"]
+
+
+def test_select_session_refreshes_subagents_only_for_expanded_parent(
+    tmp_path: Path,
+) -> None:
+    payload = _run_session_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+globalThis.__expandedSubagentSessionIds.add("session-a");
+
+const { selectSession } = await import("./session.mjs");
+const selection = selectSession("session-a");
+await Promise.resolve();
+globalThis.__hydrateResolvers[0].resolve();
+await selection;
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    ensureSubagentCalls: globalThis.__ensureSubagentCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["ensureSubagentCalls"] == [
+        {"sessionId": "session-a", "force": False}
+    ]
 
 
 def test_select_subagent_cancels_pending_main_session_hydration(
@@ -503,6 +535,7 @@ def _run_session_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
     mock_api_path = tmp_path / "mockApi.mjs"
     mock_recovery_path = tmp_path / "mockRecovery.mjs"
+    mock_session_view_path = tmp_path / "mockSessionView.mjs"
     mock_state_path = tmp_path / "mockState.mjs"
     mock_stream_path = tmp_path / "mockStream.mjs"
     mock_submission_path = tmp_path / "mockSubmission.mjs"
@@ -611,8 +644,15 @@ export function getSessionSubagentSessions() {
     return [];
 }
 
-export async function ensureSessionSubagents(sessionId) {
-    globalThis.__ensureSubagentCalls.push(sessionId);
+export function isSubagentSessionListExpanded(sessionId) {
+    return globalThis.__expandedSubagentSessionIds.has(sessionId);
+}
+
+export async function ensureSessionSubagents(sessionId, options = {}) {
+    globalThis.__ensureSubagentCalls.push({
+        sessionId,
+        force: options.force === true,
+    });
     return [];
 }
 
@@ -666,6 +706,23 @@ export async function hydrateSessionView(sessionId, options = {}) {
 
 export function stopSessionContinuity(sessionId) {
     globalThis.__stopSessionContinuityCalls.push(sessionId);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_session_view_path.write_text(
+        """
+export async function hydrateMainSessionForSwitch(sessionId, options = {}) {
+    const index = globalThis.__hydrateCalls.length;
+    globalThis.__hydrateCalls.push({
+        sessionId,
+        includeRounds: true,
+        priority: options.priority || "",
+        index,
+    });
+    await new Promise(resolve => {
+        globalThis.__hydrateResolvers.push({ sessionId, index, resolve });
+    });
 }
 """.strip(),
         encoding="utf-8",
@@ -903,6 +960,7 @@ export function refreshSessionTopologyControls() {
         .replace("../components/subagentSessions.js", "./mockSubagentSessions.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("./recovery.js", "./mockRecovery.mjs")
+        .replace("./sessionView.js", "./mockSessionView.mjs")
         .replace("../core/state.js", "./mockState.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("../core/submission.js", "./mockSubmission.mjs")
@@ -935,6 +993,7 @@ globalThis.__setRoundsModeCalls = 0;
 globalThis.__markSubagentRailLoadingCalls = [];
 globalThis.__clearActiveSubagentSessionCalls = 0;
 globalThis.__ensureSubagentCalls = [];
+globalThis.__expandedSubagentSessionIds = new Set();
 globalThis.__openSubagentSessionCalls = 0;
 globalThis.__fetchCalls = [];
 globalThis.__viewedTerminalRuns = [];

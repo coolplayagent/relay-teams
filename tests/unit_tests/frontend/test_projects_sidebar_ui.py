@@ -2927,6 +2927,7 @@ import {
     loadProjects,
     setSelectSessionHandler,
 } from "./sidebar.mjs";
+import { rememberSidebarDataSnapshot } from "./sessionSidebarStore.mjs";
 import { state } from "./mockState.mjs";
 
 installGlobals(createDomEnvironment());
@@ -2936,6 +2937,7 @@ setSelectSessionHandler(async (sessionId) => {
 });
 
 await loadProjects();
+rememberSidebarDataSnapshot({ workspaces: [], sessions: [], automationProjects: [] });
 const projectsList = document.getElementById("projects-list");
 const featureSection = projectsList.children[0];
 const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
@@ -3515,9 +3517,9 @@ console.log(JSON.stringify({
     }
     assert payload["hoveredCounts"] == payload["initialCounts"]
     assert payload["settledCounts"] == {
-        "workspaces": 2,
+        "workspaces": 1,
         "sessions": 2,
-        "automationProjects": 2,
+        "automationProjects": 1,
     }
 
 
@@ -3651,9 +3653,9 @@ export async function runAutomationProject() {
         "automationProjects": 1,
     }
     assert payload["refreshedCounts"] == {
-        "workspaces": 2,
+        "workspaces": 1,
         "sessions": 2,
-        "automationProjects": 2,
+        "automationProjects": 1,
     }
     assert payload["sessionForceRefreshes"] == [False, True]
 
@@ -3778,11 +3780,169 @@ export async function runAutomationProject() {
     )
 
     assert payload["fetchCounts"] == {
-        "workspaces": 2,
+        "workspaces": 1,
         "sessions": 2,
-        "automationProjects": 2,
+        "automationProjects": 1,
     }
     assert payload["sessionForceRefreshes"] == [False, True]
+
+
+def test_projects_sidebar_coalesces_session_refresh_while_request_is_in_flight(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    loadProjects,
+    scheduleSessionsRefresh,
+} from "./sidebar.mjs";
+
+await loadProjects();
+globalThis.__deferSessionFetches = true;
+scheduleSessionsRefresh(0);
+await new Promise(resolve => setTimeout(resolve, 20));
+scheduleSessionsRefresh(0, { forceRefresh: true });
+await new Promise(resolve => setTimeout(resolve, 20));
+const countsWhileInFlight = { ...globalThis.__fetchCounts };
+const forceRefreshesWhileInFlight = [...globalThis.__sessionForceRefreshes];
+
+globalThis.__sessionResolvers.shift()();
+await new Promise(resolve => setTimeout(resolve, 180));
+const countsBeforeTrailingResolve = { ...globalThis.__fetchCounts };
+globalThis.__sessionResolvers.shift()();
+await new Promise(resolve => setTimeout(resolve, 20));
+
+console.log(JSON.stringify({
+    countsWhileInFlight,
+    forceRefreshesWhileInFlight,
+    countsBeforeTrailingResolve,
+    finalCounts: globalThis.__fetchCounts,
+    sessionForceRefreshes: globalThis.__sessionForceRefreshes,
+}));
+""".strip(),
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: {
+            file_scope: {
+                backend: "project",
+            },
+        },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-1",
+        workspace_id: "alpha-project",
+        session_mode: "normal",
+        updated_at: "2026-03-14T10:11:00Z",
+        pending_tool_approval_count: 0,
+        metadata: { title: "Root session" },
+    },
+];
+
+globalThis.__fetchCounts = {
+    workspaces: 0,
+    sessions: 0,
+    automationProjects: 0,
+};
+globalThis.__sessionForceRefreshes = [];
+globalThis.__sessionResolvers = [];
+globalThis.__deferSessionFetches = false;
+
+export async function fetchWorkspaces() {
+    globalThis.__fetchCounts.workspaces += 1;
+    return workspaces;
+}
+
+export async function fetchSessions(options = {}) {
+    globalThis.__fetchCounts.sessions += 1;
+    globalThis.__sessionForceRefreshes.push(options.forceRefresh === true);
+    if (globalThis.__deferSessionFetches === true) {
+        return await new Promise(resolve => {
+            globalThis.__sessionResolvers.push(() => resolve(sessions));
+        });
+    }
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    globalThis.__fetchCounts.automationProjects += 1;
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function pickWorkspace() {
+    throw new Error("not used");
+}
+
+export async function forkWorkspace() {
+    throw new Error("not used");
+}
+
+export async function deleteSession() {
+    return undefined;
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function createAutomationProject() {
+    throw new Error("not used");
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function runAutomationProject() {
+    throw new Error("not used");
+}
+""".strip(),
+    )
+
+    assert payload["countsWhileInFlight"] == {
+        "workspaces": 1,
+        "sessions": 2,
+        "automationProjects": 1,
+    }
+    assert payload["forceRefreshesWhileInFlight"] == [False, False]
+    assert payload["countsBeforeTrailingResolve"] == {
+        "workspaces": 1,
+        "sessions": 3,
+        "automationProjects": 1,
+    }
+    assert payload["finalCounts"] == {
+        "workspaces": 1,
+        "sessions": 3,
+        "automationProjects": 1,
+    }
+    assert payload["sessionForceRefreshes"] == [False, False, True]
 
 
 def test_projects_sidebar_defers_subagent_events_without_force_refresh_while_hovering(
