@@ -12,17 +12,22 @@ const MAIN_LIVE_TIMEOUT_MS = 1500;
 const CONTROL_PLANE_FALLBACK_PORT_RANGE = 50;
 const CONTROL_PLANE_CACHE_KEY = 'relayTeams.controlPlaneLiveUrl';
 const BACKEND_STATUS_HINT_EVENT = 'agent-teams-backend-status-hint';
+const LANGUAGE_CHANGED_EVENT = 'agent-teams-language-changed';
 
 let healthPollTimer = null;
 let inFlightHealthCheck = null;
 let backendStatus = 'checking';
+let backendStatusCustomLabel = '';
+let backendStatusUsesDefaultLabel = true;
 let controlPlaneLiveUrl = readCachedControlPlaneLiveUrl();
 let controlPlaneDiscoveryAttempted = false;
 let backendStatusHintBound = false;
+let languageChangedBound = false;
 
 export function initBackendStatusMonitor() {
     bindBackendStatusHintListener();
-    applyBackendStatus('checking', t('backend.status.checking'));
+    bindLanguageChangedListener();
+    applyBackendStatus('checking');
     void refreshBackendStatus({ force: true });
     if (healthPollTimer) return;
     healthPollTimer = window.setInterval(() => {
@@ -31,16 +36,17 @@ export function initBackendStatusMonitor() {
 }
 
 bindBackendStatusHintListener();
+bindLanguageChangedListener();
 
-export function markBackendOnline(label = t('backend.status.connected')) {
+export function markBackendOnline(label = null) {
     applyBackendStatus('online', label);
 }
 
-export function markBackendOffline(label = t('backend.status.offline')) {
+export function markBackendOffline(label = null) {
     applyBackendStatus('offline', label);
 }
 
-export function markBackendBusy(label = t('backend.status.busy')) {
+export function markBackendBusy(label = null) {
     applyBackendStatus('busy', label);
 }
 
@@ -70,7 +76,7 @@ async function probeBackendHealth() {
             if (await confirmMainBackendOnline()) {
                 return true;
             }
-            markBackendBusy(t('backend.status.busy'));
+            markBackendBusy();
             return true;
         }
         forgetControlPlaneLiveUrl(controlUrl);
@@ -86,18 +92,18 @@ async function probeBackendHealth() {
         if (await confirmMainBackendOnline()) {
             return true;
         }
-        markBackendBusy(t('backend.status.busy'));
+        markBackendBusy();
         return true;
     }
 
-    markBackendOffline(t('backend.status.offline'));
+    markBackendOffline();
     return false;
 }
 
 async function confirmMainBackendOnline() {
     const mainProbe = await probeJson('/api/system/live', MAIN_LIVE_TIMEOUT_MS);
     if (mainProbe.ok && isLivePayload(mainProbe.payload)) {
-        markBackendOnline(t('backend.status.connected'));
+        markBackendOnline();
         return true;
     }
     return false;
@@ -165,13 +171,22 @@ async function probeFallbackControlPlaneUrls(controlUrl) {
     )) || null;
 }
 
-function applyBackendStatus(nextStatus, label) {
+function applyBackendStatus(nextStatus, label = null) {
     backendStatus = nextStatus;
+    const safeCustomLabel = typeof label === 'string' ? label.trim() : '';
+    backendStatusUsesDefaultLabel = !safeCustomLabel;
+    backendStatusCustomLabel = safeCustomLabel;
+    renderBackendStatus();
+}
+
+function renderBackendStatus() {
     if (!els.backendStatus) return;
     els.backendStatus.classList.remove('online', 'offline', 'checking', 'busy');
-    els.backendStatus.classList.add(nextStatus);
-    els.backendStatus.dataset.status = nextStatus;
-    const safeLabel = String(label || defaultLabelForStatus(nextStatus));
+    els.backendStatus.classList.add(backendStatus);
+    els.backendStatus.dataset.status = backendStatus;
+    const safeLabel = backendStatusUsesDefaultLabel
+        ? defaultLabelForStatus(backendStatus)
+        : backendStatusCustomLabel;
     if (els.backendStatusLabel) {
         els.backendStatusLabel.textContent = safeLabel;
     } else {
@@ -192,15 +207,31 @@ function bindBackendStatusHintListener() {
     backendStatusHintBound = true;
 }
 
+function bindLanguageChangedListener() {
+    if (
+        languageChangedBound
+        || typeof document === 'undefined'
+        || typeof document.addEventListener !== 'function'
+    ) {
+        return;
+    }
+    document.addEventListener(LANGUAGE_CHANGED_EVENT, handleLanguageChanged);
+    languageChangedBound = true;
+}
+
 function handleBackendStatusHint(event) {
     const status = String(event?.detail?.status || '').trim();
     if (status === 'online') {
-        markBackendOnline(t('backend.status.connected'));
+        markBackendOnline();
         return;
     }
     if (status === 'offline') {
-        markBackendOffline(t('backend.status.offline'));
+        markBackendOffline();
     }
+}
+
+function handleLanguageChanged() {
+    renderBackendStatus();
 }
 
 function defaultLabelForStatus(status) {

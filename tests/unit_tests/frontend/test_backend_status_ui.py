@@ -105,6 +105,133 @@ console.log(JSON.stringify({
     }
 
 
+def test_backend_status_refreshes_default_label_after_language_change(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    backend_status_source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "backendStatus.js"
+    ).read_text(encoding="utf-8")
+    module_source = backend_status_source.replace(
+        "import { els } from './dom.js';",
+        "const els = globalThis.__backendStatusEls;",
+    ).replace(
+        "import { t } from './i18n.js';",
+        "const t = key => `${globalThis.__language}:${key}`;",
+    )
+    module_path = tmp_path / "backendStatus.test.mjs"
+    module_path.write_text(module_source, encoding="utf-8")
+    runner_path = tmp_path / "runner-language.mjs"
+    runner_path.write_text(
+        """
+const classNames = new Set();
+const windowListeners = new Map();
+const documentListeners = new Map();
+const backendStatusEl = {
+    classList: {
+        remove: (...names) => names.forEach(name => classNames.delete(name)),
+        add: name => classNames.add(name),
+    },
+    dataset: {},
+    title: '',
+    textContent: '',
+};
+const backendStatusLabel = { textContent: '' };
+const storage = new Map();
+
+globalThis.__language = 'zh-CN';
+globalThis.__backendStatusEls = {
+    backendStatus: backendStatusEl,
+    backendStatusLabel,
+};
+globalThis.window = {
+    location: new URL('http://127.0.0.1:8000/'),
+    localStorage: {
+        getItem: key => storage.get(key) || null,
+        setItem: (key, value) => storage.set(key, value),
+        removeItem: key => storage.delete(key),
+    },
+    addEventListener: (type, listener) => windowListeners.set(type, listener),
+    dispatchEvent: event => windowListeners.get(event.type)?.(event),
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+    setInterval: globalThis.setInterval.bind(globalThis),
+};
+globalThis.document = {
+    addEventListener: (type, listener) => documentListeners.set(type, listener),
+    dispatchEvent: event => documentListeners.get(event.type)?.(event),
+};
+
+const backendStatus = await import('./backendStatus.test.mjs');
+window.dispatchEvent({
+    type: 'agent-teams-backend-status-hint',
+    detail: { status: 'online' },
+});
+const beforeLanguageChange = {
+    classNames: Array.from(classNames).sort(),
+    label: backendStatusLabel.textContent,
+    status: backendStatus.getBackendStatus(),
+    title: backendStatusEl.title,
+};
+
+globalThis.__language = 'en-US';
+backendStatusLabel.textContent = 'en-US:backend.status.checking';
+document.dispatchEvent({ type: 'agent-teams-language-changed' });
+const afterLanguageChange = {
+    classNames: Array.from(classNames).sort(),
+    label: backendStatusLabel.textContent,
+    status: backendStatus.getBackendStatus(),
+    title: backendStatusEl.title,
+};
+
+backendStatus.markBackendBusy('Custom busy label');
+globalThis.__language = 'zh-CN';
+document.dispatchEvent({ type: 'agent-teams-language-changed' });
+
+console.log(JSON.stringify({
+    beforeLanguageChange,
+    afterLanguageChange,
+    customLabelSnapshot: {
+        classNames: Array.from(classNames).sort(),
+        label: backendStatusLabel.textContent,
+        status: backendStatus.getBackendStatus(),
+        title: backendStatusEl.title,
+    },
+}));
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["node", str(runner_path)],
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload == {
+        "beforeLanguageChange": {
+            "classNames": ["online"],
+            "label": "zh-CN:backend.status.connected",
+            "status": "online",
+            "title": "zh-CN:backend.status.connected",
+        },
+        "afterLanguageChange": {
+            "classNames": ["online"],
+            "label": "en-US:backend.status.connected",
+            "status": "online",
+            "title": "en-US:backend.status.connected",
+        },
+        "customLabelSnapshot": {
+            "classNames": ["busy"],
+            "label": "Custom busy label",
+            "status": "busy",
+            "title": "Custom busy label",
+        },
+    }
+
+
 def test_backend_status_fallback_confirms_main_liveness(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     backend_status_source = (
