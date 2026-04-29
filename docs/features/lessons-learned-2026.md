@@ -12,7 +12,9 @@
 
 本文档基于 **2026 年 AI Agent 领域的 38 篇前沿研究**，系统性地提取了 **25 个结构化借鉴点**，覆盖架构优化、角色与编排、Spec-Driven 流程、安全与治理、工程实践、功能增强六大维度。每个借鉴点均经过源码验证，与 relay-teams 当前实现进行详细对比，并给出可操作的实施建议和优先级评估。
 
-2026-04-28 增补分析继续复盘 `/opt/workspace/hello` 中的 AI 相关 Markdown 语料：排除 `node_modules` 后共扫描 1272 个 Markdown 文件，其中英文工程关键词粗筛命中 1123 个 AI/Agent/LLM/SDD/MAS/Harness 相关文件；补充中文关键词后命中 1226 个文件，覆盖人工智能、智能体、大模型、多智能体等中文综述材料。新增复盘重点放在 Coding Agent 协作产品源码级横评、2026 Harness 工程归档、SDD 归档、MAS/A2A/Google 企业 Agent 归档、中文 AI Agent 研究综述与市场材料。该增补未推翻原 25 个借鉴点，而是修正部分已落地状态，并补充 10 个更偏运营化和产品化的缺口。
+2026-04-28 增补分析继续复盘 `/opt/workspace/hello` 中的 AI 相关 Markdown 语料：排除 `node_modules` 后共扫描 1272 个 Markdown 文件，其中英文工程关键词粗筛命中 1123 个 AI/Agent/LLM/SDD/MAS/Harness 相关文件；补充中文关键词后命中 1226 个文件，覆盖人工智能、智能体、大模型、多智能体等中文综述材料。新增复盘重点放在 Coding Agent 协作产品源码级横评、2026 Harness 工程归档、SDD 归档、MAS/A2A/Google 企业 Agent 归档、中文 AI Agent 研究综述与市场材料。该增补未推翻原 25 个借鉴点，而是修正部分已落地状态，并先补充 10 个更偏运营化和产品化的缺口。
+
+2026-04-29 进一步复盘 `/opt/workspace/hello/docs/openai-symphony-research.md` 及 OpenAI Codex/Harness 归档后，补充了一个更直接面向产品形态的结论：任务看板不应只是展示层，而可以作为定义任务、承载状态、触发 Agent 执行、回收证据和审查 PR 的控制平面。OpenAI Symphony 将 Linear 工单状态作为状态机输入，并用私有调度状态机管理 claim、running、retry、reconciliation 和 stall timeout，这一点可直接补强 relay-teams 的任务看板、运行时调度和外部任务系统集成路线。
 
 ## 研究背景
 
@@ -25,6 +27,7 @@
 3. **交叉引用分析**：将 35 条研究点与 relay-teams 源码现状逐一对照，识别出 **25 个可落地的改进借鉴点**
 4. **源码验证**：关键数据点均通过源码实际验证（如文件行数、字段存在性、方法签名等），验收准确率达 **92.5%**
 5. **增补复盘**：2026-04-28 对 `/opt/workspace/hello` 的 AI Markdown 语料做二次分组分析，优先采用 `docs/coding-agent-collaboration-*.md`、`docs/reports/2026/{harness,sdd,mas,google}/` 等汇总材料，再回查 relay-teams 当前源码确认已落地与缺口
+6. **OpenAI Symphony 复盘**：2026-04-29 单独复盘 OpenAI Symphony/Linear 状态机材料，抽取“任务看板即控制面”的调度模式，并对照 relay-teams 的 `TaskStatus`、`TaskRepository`、`TaskOrchestrationService` 和运行事件实现确认缺口
 
 ### 关键数据来源
 
@@ -34,6 +37,8 @@
 | `markdown-research-points.md` | 研究点提取报告 | 35 条研究点 |
 | `validation-report.md` | 验收报告 | 覆盖率 74.3%，准确率 92.5% |
 | `/opt/workspace/hello/docs/coding-agent-collaboration-research.md` | Paperclip / Multica / Routa / SpectrAI 源码级横评 | 7 个对比维度、6 个趋势 |
+| `/opt/workspace/hello/docs/openai-symphony-research.md` | OpenAI Symphony / Linear 状态机研究 | 看板控制面、事务状态机、claim/retry/reconciliation |
+| `/opt/workspace/hello/docs/reports/2026/harness/openai_*.md`, `/opt/workspace/hello/docs/reports/2026/mas/openai/*.md` | OpenAI Codex / Harness 归档 | Codex harness、sandbox agents、WebSocket、agent eval |
 | `/opt/workspace/hello/docs/reports/2026/harness/MANIFEST.md` | 2026 AI Harness 工程归档 | 90 个归档条目 |
 | `/opt/workspace/hello/docs/reports/2026/sdd/README.md` | 2026 Spec-Driven Development 归档 | 37 篇论文、12 篇实践博客、14 个工具/公司指南 |
 | `/opt/workspace/hello/docs/reports/2026/mas/00-INDEX.md` | 多 Agent 工程与协议归档 | MAS、MCP、A2A、协议生态 |
@@ -54,17 +59,28 @@
 
 ### 语料分组
 
-本次增补将 `/opt/workspace/hello` 中的 AI Markdown 归为六组，避免把 `tmp/` 下镜像仓库和 `docs/reports/2026/` 主归档重复计数为独立结论：
+本次增补将 `/opt/workspace/hello` 中的 AI Markdown 归为八组，避免把 `tmp/` 下镜像仓库和 `docs/reports/2026/` 主归档重复计数为独立结论：
 
 | 分组 | 代表路径 | 核心主题 | 对 relay-teams 的价值 |
 |------|----------|----------|-----------------------|
 | 协作平台横评 | `docs/coding-agent-collaboration-research.md`, `docs/ai-agent-orchestration-platforms-research.md` | Paperclip / Multica / Routa / SpectrAI 的生命周期、任务编排、记忆、质量治理、安全 | 给出现成产品形态和工程模式 |
+| OpenAI Symphony | `docs/openai-symphony-research.md` | Linear 任务看板控制面、事务状态机、claim/retry/reconciliation、Codex 守护进程 | 校准任务看板从展示层升级为调度输入和状态权威 |
 | Harness 工程 | `docs/reports/2026/harness/` | Harness/compute 分离、Agent Behavioral Contracts、Runtime Guardrails、Context Engineering | 校准 TaskExecutionService 拆分后的下一层控制面 |
 | SDD | `docs/reports/2026/sdd/` | Spec Kit、契约式开发、规格质量门、长任务 faithfulness loss、实践博客 | 校准 TaskSpec、VerificationPlan、Gater 的闭环强度 |
 | MAS / 协议 | `docs/reports/2026/mas/` | Supervisor、Adaptive Network、Swarming、MCP+A2A+ACP | 校准 relay-teams 的 MCP/ACP/A2A 边界 |
 | 企业 Agent 平台 | `docs/reports/2026/google/`, `google-cloud-next/` | Agentic Enterprise、平台化 Agent、上下文和基础设施 | 校准企业部署和多 Provider 管理方向 |
 | 中文综述与市场材料 | `docs/reports/research-report.md`, `docs/research/ai-market/`, `docs/presentations/ai-*` | Agent Memory、Agent Evolution、Agent Teams、AI Agent 市场、企业落地 | 补强 FE-1、AO-2、FE-3、SG-1 等原借鉴点的证据 |
 | 治理与 AI-native 组织 | `The_Playbook_For_Building_An_AI_Native_Company.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` | 闭环组织、可查询工件、跨 Provider 治理包、证据纪律 | 校准产品层治理和组织级知识工程 |
+
+### OpenAI Symphony 补充洞察
+
+OpenAI Symphony 的亮点不是“支持 Linear 集成”，而是把任务看板提升为 Agent 工作系统的控制面：
+
+1. **看板是单事实来源**：工单状态不只是 UI 标签，而是调度输入。活跃状态代表可处理任务，终态代表停止、清理和释放资源。
+2. **双层状态机**：外层使用 Linear 的 Todo/In Progress/Done 等业务状态；内层使用编排器私有状态管理 Unclaimed、Claimed、Running、RetryQueued、Released 和每次 Run Attempt 的成功、失败、超时、取消。
+3. **事件驱动调度**：Poll Tick、Worker Outcome、Retry Timer、Reconciliation Refresh、Stall Timeout 都会触发明确状态转换，避免 Agent 正常退出就被误判为任务完成。
+4. **读写分离**：编排器读取看板并持有调度权威；Agent 通过受控工具写回评论、PR、CI 和状态，避免把外部系统 token 暴露给执行沙箱。
+5. **产品形态变化**：用户不再“管理 Agent 会话”，而是在熟悉的任务看板里移动任务、审查证据和合并结果；Agent 变成总是在线的后台执行者。
 
 ### 当前实现快照
 
@@ -78,6 +94,7 @@
 | 指令加载 | `PromptInstructionResolver` 支持 AGENTS.md/CLAUDE.md/GEMINI.md、全局 AGENTS.md、配置化远程/本地指令，并触发 `InstructionsLoaded` hook | 缺少自动生成跨 Provider 治理包并注入外部 Coding Agent 原生目录的能力 |
 | 事件/流 | `EventLog`、`RunEventHub`、`RunInjectionManager` 已支持持久事件、SSE 订阅、运行中注入队列 | 事件还未表达 blocker/dependency、wake reason、claim/checkout lease 等编排语义 |
 | 工作区 | `WorkspaceService.fork_workspace()` 已基于 Git worktree 创建隔离工作区 | 还未做到每个 delegated task 自动独占工作区，也缺少任务级 merge/review gate |
+| 任务看板/状态机 | `TaskStatus` 已有 created/assigned/running/stopped/completed/failed/timeout；任务仓库和控制面会写入任务事件、心跳、超时和运行状态 | 任务状态还不是可配置业务看板状态；缺少 active/terminal 状态映射、claimed/retry queued/run attempt、reconciliation refresh、外部看板 adapter 和“看板状态驱动调度”的统一语义 |
 | 成本 | `TokenUsageRepository` 按 session/run/instance/role/model_profile 记录 token 和 cache usage | 缺少费用换算、预算策略、阈值预警、硬停、按任务价值的模型路由 |
 | 外部 Agent | `external_agents/` 已实现 ACP over stdio/HTTP/custom transport；角色可绑定 `bound_agent_id` | 未实现 A2A；也没有 Multica 风格的 provider-native runtime config 和 skill bridge |
 
@@ -87,6 +104,7 @@
 |------|------|--------|------|----------|----------|
 | **OP-1** | DB-backed Wake Queue 与唤醒合并 | 高 | Paperclip Heartbeat、Multica WebSocket Wakeup | 有 task heartbeat、RunEventHub 和 injection queue，但没有按 Agent/Role 去重的持久唤醒队列 | 增加 `agent_wakeups` 表，字段包含 wake_reason、target_role/instance、run_id、task_id、coalesce_key；任务完成、审批通过、用户追加输入、依赖解除时写入；Worker 只消费合并后的最新 wake |
 | **OP-2** | 原子 Claim/Checkout 与 blocker 自动推进 | 高 | Paperclip issue checkout、Multica ClaimTask、Routa lane gate | `TaskOrchestrationService` 有 role assignment lock 和 busy check，但没有任务级 lease、claim token、blocker/dependency 字段 | 在 `TaskEnvelope` 或 TaskRecord 增加 dependencies/blockers/lease_owner/lease_expires_at；dispatch 前必须原子 claim，冲突返回明确错误；所有 blocker 完成后自动发布 wake |
+| **OP-11** | Task Board as State Machine | 高 | OpenAI Symphony、Linear 控制面 | 有内部 `TaskStatus` 和事件流，但任务看板仍偏展示/查询；状态更新没有外部 tracker 映射，也没有 claimed/retry queued/reconciliation 的调度状态机 | 增加 `TaskBoardAdapter` 和 `TaskBoardStateMap`，支持内部看板、GitHub Issue、Linear 等来源；配置 active/terminal/paused/review 状态；Coordinator 轮询或订阅看板事件并进行 claim、dispatch、retry、stall timeout、terminal cleanup；Agent 只通过受控工具写回评论、PR、CI、evidence |
 | **OP-3** | 递增式 Task Artifact 与 Evidence Bundle | 高 | Routa Kanban Card、Evidence Bundle、Review Guard | 已有 `TaskSpec`、`VerificationPlan`、`TaskHandoff`、`VerificationReport`，但证据散落在 result/event/tool history 中 | 将每个任务维护为结构化 artifact：spec -> implementation evidence -> verification findings -> completion summary；Gater 读取 normalized evidence snapshot，而不是依赖上游自述 |
 | **OP-4** | Provider-native runtime config 与 Skill Bridge | 中 | Multica `CLAUDE.md`/`AGENTS.md`/`GEMINI.md` 动态注入、Agent 原生 Skills | 内部 prompt 加载支持三类指令文件，skills 是 relay-teams 自有注册表；外部 ACP agent 未获得 provider-native 项目配置 | 为 external agent session 生成临时原生配置目录，按 provider 写入 AGENTS/CLAUDE/GEMINI 和对应 skill 索引，复用已有 `PromptInstructionResolver` 与 `SkillRuntimeService` 的内容 |
 | **OP-5** | 预算硬停与 Token 经济学 | 高 | Paperclip 七维成本追踪/预算硬停、YC token-maxing、Routa 强弱模型分工 | 已记录 token usage，但没有 cost ledger、budget policy 或自动暂停 | 增加 `BudgetPolicy`：按 workspace/session/run/role/model_profile 聚合费用；阈值触发 warning、human gate、hard stop；Coordinator 分配任务时把“规划用强模型、执行用性价比模型”变成策略 |
@@ -100,14 +118,14 @@
 
 新增 OP 点并非替代原路线图，而是把原路线图中较抽象的方向压到更具体的产品机制：
 
-| 原借鉴点 | 2026-04-28 增补影响 |
-|----------|---------------------|
-| AO-2 DAG 编排 | OP-2/OP-3 提供 DAG 落地前需要的一等 dependency、claim、artifact 基础 |
+| 原借鉴点 | 2026-04-28/29 增补影响 |
+|----------|------------------------|
+| AO-2 DAG 编排 | OP-11/OP-2/OP-3 提供 DAG 落地前需要的一等 board state、dependency、claim、artifact 基础 |
 | RP-1 / FE-3 A2A | OP-8 定义内部 handoff 格式，OP-4 定义跨 Provider 原生配置桥 |
 | SP-1 / FE-5 规格与验证 | OP-3 把 spec、evidence、verification 串成持续增长的任务工件 |
 | SG-1 / SG-2 护栏 | OP-9 明确控制面/计算面边界，避免把策略放进可被 Agent 修改的执行环境 |
 | EP-1 Context Engineering | OP-4/OP-10 把上下文策略连接到 Provider 原生文件、skills 和失败模式采样 |
-| FE-4 资源感知 | OP-1/OP-5 把资源感知扩展到唤醒队列、预算硬停和模型路由 |
+| FE-4 资源感知 | OP-1/OP-5/OP-11 把资源感知扩展到唤醒队列、预算硬停、模型路由和看板状态驱动的调度槽位 |
 
 ---
 
@@ -992,6 +1010,7 @@ Phase 3 — 编排与通信进化（6-8 周）
 ├── FE-1: Memory Bank ← 前置：无（可并行）
 ├── FE-3: MCP + A2A 双协议栈 ← 前置：Phase 1-2 稳定
 ├── EP-2: Benchmark 体系 ← 依赖 SP-1/FE-5 的验证能力
+├── OP-11: Task Board as State Machine / 外部看板驱动调度
 ├── OP-1: DB-backed Wake Queue / coalescing
 ├── OP-2: Atomic Claim / blocker 自动推进
 └── OP-4: Provider-native runtime config / Skill Bridge
@@ -1028,14 +1047,14 @@ Phase 4 — 差异化特性（按需启动）
 
 | 优先级 | 数量 | 编号 |
 |--------|------|------|
-| **高** | 5 | OP-1, OP-2, OP-3, OP-5, OP-9 |
+| **高** | 6 | OP-1, OP-2, OP-3, OP-5, OP-9, OP-11 |
 | **中** | 5 | OP-4, OP-6, OP-7, OP-8, OP-10 |
 
 ---
 
 ## 总结
 
-本研究通过对 2026 年 AI Agent 领域 38 篇前沿研究的系统分析，识别出 25 个与 relay-teams 产品高度相关的改进借鉴点。这些借鉴点分布在六大维度，覆盖了从底层架构到顶层功能的完整技术栈。2026-04-28 增补又对 `/opt/workspace/hello` 中 1226 个关键词命中的 AI Markdown 文件做复盘，补充了 10 个更偏运营化、产品化和跨 Provider 协作的 OP 借鉴点。
+本研究通过对 2026 年 AI Agent 领域 38 篇前沿研究的系统分析，识别出 25 个与 relay-teams 产品高度相关的改进借鉴点。这些借鉴点分布在六大维度，覆盖了从底层架构到顶层功能的完整技术栈。2026-04-28/29 增补又对 `/opt/workspace/hello` 中 1226 个关键词命中的 AI Markdown 文件和 OpenAI Symphony 状态机研究做复盘，补充了 11 个更偏运营化、产品化和跨 Provider 协作的 OP 借鉴点。
 
 **核心发现**：
 
@@ -1044,10 +1063,10 @@ Phase 4 — 差异化特性（按需启动）
 3. **安全层面**：角色行为边界的强制执行（SG-2）和企业级运行时护栏（SG-1）是走向生产的必要条件
 4. **工程层面**：全面的 Context Engineering 策略（EP-1）可直接带来 20-40% 的 Token 开销优化
 5. **功能层面**：跨 Run 的 Memory Bank（FE-1）和 MCP+A2A 双协议栈（FE-3）构成核心差异化能力
-6. **运营层面**：Wake Queue、Atomic Claim、Evidence Bundle、预算硬停、多 Provider 互评是从"能跑"走向"可运营"的关键补强
+6. **运营层面**：Task Board as State Machine、Wake Queue、Atomic Claim、Evidence Bundle、预算硬停、多 Provider 互评是从"能跑"走向"可运营"的关键补强
 
-四阶段路线图确保了依赖关系的正确性和实施的渐进性。由于 AO-1、AO-4、TaskSpec、VerificationReport、timeout/heartbeat 等基础已部分落地，后续重点应从"补模型字段"转向"补控制面机制"：任务认领、依赖唤醒、证据包、预算策略、治理包和语义验证。
+四阶段路线图确保了依赖关系的正确性和实施的渐进性。由于 AO-1、AO-4、TaskSpec、VerificationReport、timeout/heartbeat 等基础已部分落地，后续重点应从"补模型字段"转向"补控制面机制"：看板状态机、任务认领、依赖唤醒、证据包、预算策略、治理包和语义验证。
 
 ---
 
-*本文件整合自 cross-reference-analysis.md（25 借鉴点）、markdown-research-points.md（35 研究点 + 38 源文件）、validation-report.md（验收修正）三份原始报告，并在 2026-04-28 增补 `/opt/workspace/hello` AI Markdown 复盘。所有原 25 个借鉴点已逐一提取、交叉引用来源、标注验收修正；新增 OP 借鉴点以当前源码状态为准。*
+*本文件整合自 cross-reference-analysis.md（25 借鉴点）、markdown-research-points.md（35 研究点 + 38 源文件）、validation-report.md（验收修正）三份原始报告，并在 2026-04-28/29 增补 `/opt/workspace/hello` AI Markdown 与 OpenAI Symphony 状态机复盘。所有原 25 个借鉴点已逐一提取、交叉引用来源、标注验收修正；新增 OP 借鉴点以当前源码状态为准。*
