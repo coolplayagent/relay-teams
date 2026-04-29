@@ -70,9 +70,9 @@ class AutomationXiaolubanBindingService:
 
 
 def _build_source_label(account: XiaolubanAccountRecord) -> str:
-    receiver = str(account.notification_receiver or "").strip()
-    if receiver:
-        return f"发送给 {receiver}"
+    group_count = len(account.notification_receivers)
+    if group_count > 0:
+        return f"发送给自己（{account.derived_uid}）和 {group_count} 个群"
     return f"发送给自己（{account.derived_uid}）"
 
 

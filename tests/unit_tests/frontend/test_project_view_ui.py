@@ -3174,6 +3174,22 @@ def test_feedback_form_dialog_supports_multiselect_fields() -> None:
     assert "changedValue === summaryAllValue" in source
 
 
+def test_feedback_password_toggle_preserves_edited_revealed_value() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "feedback.js"
+    ).read_text(encoding="utf-8")
+
+    assert "let inputEditedAfterReveal = false;" in source
+    assert (
+        "inputEditedAfterReveal = String(matchedInput.value || '') !== revealedValue;"
+        in source
+    )
+    assert "if (!nextRevealed && maskedValue && !inputEditedAfterReveal)" in source
+    assert "formatMessage('feedback.reveal_sensitive_failed'" in source
+    assert "showDialogSubmitError(" in source
+
+
 def test_feedback_form_dialog_supports_inline_submit_errors() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source = (
@@ -3183,6 +3199,9 @@ def test_feedback_form_dialog_supports_inline_submit_errors() -> None:
     assert "submitHandler = null" in source
     assert "typeof activeDialog?.submitHandler === 'function'" in source
     assert "feedback-dialog-submit-error" in source
+    assert "data-feedback-field-error" in source
+    assert "function showDialogSubmitError(dialogNode, submitError, error)" in source
+    assert "error?.fieldId || error?.field_id" in source
     assert "setDialogSubmittingState({" in source
     assert "submitError.hidden = false;" in source
 
@@ -4414,6 +4433,9 @@ def test_project_view_feedback_submit_error_aligns_with_form_fields() -> None:
 
     assert ".feedback-dialog-submit-error {" in components_css
     assert "padding: 0 1.15rem;" in components_css
+    assert ".feedback-dialog-field-error {" in components_css
+    assert ".feedback-dialog-field-compact {" in components_css
+    assert ".feedback-dialog-textarea-compact {" in components_css
 
 
 def test_project_view_skills_feature_does_not_repeat_inner_title(
@@ -5182,7 +5204,7 @@ export async function createXiaolubanGatewayAccount(payload) {
     assert "Xiaoluban" in str(payload["contentHtml"])
     assert "Self Notify" in str(payload["contentHtml"])
     assert "Internal ID: xlb_1" in str(payload["contentHtml"])
-    assert "Notify: group-123" in str(payload["contentHtml"])
+    assert "Notify: self + 1 groups" in str(payload["contentHtml"])
     assert "30 workspaces" in str(payload["contentHtml"])
     assert "workspace-long-id-001" not in str(payload["contentHtml"])
     assert "workspace-long-id-030" not in str(payload["contentHtml"])
@@ -5194,7 +5216,8 @@ export async function createXiaolubanGatewayAccount(payload) {
     assert payload["createdPayload"] == {
         "display_name": "Xiaoluban",
         "notification_workspace_ids": [],
-        "notification_receiver": None,
+        "notification_receivers": [],
+        "notify_self": True,
         "token": "uid_self_1234567890abcdef1234567890ab",
         "im_config": {
             "workspace_id": "workspace-1",
@@ -5205,9 +5228,16 @@ export async function createXiaolubanGatewayAccount(payload) {
         "display_name",
         "token",
         "notification_workspace_ids",
-        "notification_receiver",
+        "notification_receivers",
         "xiaoluban_im_workspace_id",
     ]
+    show_form_calls = cast(list[dict[str, object]], payload["showFormDialogCalls"])
+    fields = cast(list[dict[str, object]], show_form_calls[-1]["fields"])
+    receivers_field = next(
+        field for field in fields if field["id"] == "notification_receivers"
+    )
+    assert receivers_field["compact"] is True
+    assert receivers_field["rows"] == 2
     assert payload["displayNameValue"] == "Xiaoluban"
     workspace_field = cast(dict[str, object], payload["workspaceField"])
     workspace_options = cast(list[dict[str, object]], workspace_field["options"])
@@ -5229,8 +5259,195 @@ export async function createXiaolubanGatewayAccount(payload) {
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
     assert (
         toast_calls[-1]["message"]
-        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_new?auth=secret-token g"
+        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_new g"
     )
+
+
+def test_project_view_creates_xiaoluban_account_when_prepare_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    token: "uid_self_1234567890abcdef1234567890ab",
+    xiaoluban_im_workspace_id: "workspace-1",
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-feature-gateway-add-xiaoluban]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    createdPayload: globalThis.__createdXiaolubanAccountPayload || null,
+    showFormDialogCalls: globalThis.__showFormDialogCalls || [],
+    fieldIds: fields.map(field => field.id),
+    dialogMessage: dialogCall.message || "",
+    warnLogs: globalThis.__warnLogs || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function prepareXiaolubanGatewayAccount() {
+    throw new Error("xiaoluban_im_listener_host_unavailable");
+}
+
+export async function createXiaolubanGatewayAccount(payload) {
+    globalThis.__createdXiaolubanAccountPayload = payload;
+    return {
+        account_id: "xlb_new",
+        display_name: payload?.display_name || "Xiaoluban",
+        derived_uid: "uid_self",
+        secret_status: { token_configured: true },
+    };
+}
+""".strip(),
+    )
+
+    assert payload["showFormDialogCalls"] != []
+    assert payload["fieldIds"] == [
+        "display_name",
+        "token",
+        "notification_workspace_ids",
+        "notification_receivers",
+        "xiaoluban_im_workspace_id",
+    ]
+    assert payload["dialogMessage"] == ""
+    assert payload["createdPayload"] == {
+        "display_name": "Xiaoluban",
+        "notification_workspace_ids": [],
+        "notification_receivers": [],
+        "notify_self": True,
+        "token": "uid_self_1234567890abcdef1234567890ab",
+        "im_config": {
+            "workspace_id": "workspace-1",
+        },
+    }
+    assert "Failed to prepare Xiaoluban account" in str(payload["warnLogs"])
+
+
+def test_project_view_hides_prepared_forwarding_command_when_listener_is_stopped(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    token: "uid_self_1234567890abcdef1234567890ab",
+    xiaoluban_im_workspace_id: "workspace-1",
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-feature-gateway-add-xiaoluban]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    createdPayload: globalThis.__createdXiaolubanAccountPayload || null,
+    fieldIds: fields.map(field => field.id),
+    forwardingCommandValue: (fields.find(field => field.id === "forwarding_command") || {}).value || "",
+    dialogMessage: dialogCall.message || "",
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function prepareXiaolubanGatewayAccount() {
+    return {
+        account_id: "xlb_abcdef123456",
+        forwarding_command: "http://10.88.1.23:9009/xlb_abcdef123456 g",
+        listener_running: false,
+    };
+}
+
+export async function createXiaolubanGatewayAccount(payload) {
+    globalThis.__createdXiaolubanAccountPayload = payload;
+    return {
+        account_id: payload?.account_id || "xlb_new",
+        display_name: payload?.display_name || "Xiaoluban",
+        derived_uid: "uid_self",
+        secret_status: { token_configured: true },
+    };
+}
+""".strip(),
+    )
+
+    assert payload["fieldIds"] == [
+        "display_name",
+        "token",
+        "notification_workspace_ids",
+        "notification_receivers",
+        "xiaoluban_im_workspace_id",
+    ]
+    assert payload["forwardingCommandValue"] == ""
+    assert "xlb_abcdef123456" in str(payload["dialogMessage"])
+    assert payload["createdPayload"] == {
+        "display_name": "Xiaoluban",
+        "notification_workspace_ids": [],
+        "notification_receivers": [],
+        "notify_self": True,
+        "account_id": "xlb_abcdef123456",
+        "token": "uid_self_1234567890abcdef1234567890ab",
+        "im_config": {
+            "workspace_id": "workspace-1",
+        },
+    }
 
 
 def test_project_view_updates_toggles_and_deletes_xiaoluban_account(
@@ -5261,6 +5478,7 @@ await flushTasks();
 await flushTasks();
 
 const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = dialogCall.fields || [];
 
 els.projectViewContent.querySelector('[data-feature-xiaoluban-toggle]')?.onclick?.();
 await flushTasks();
@@ -5276,10 +5494,10 @@ console.log(JSON.stringify({
     disabledAccountId: globalThis.__disabledXiaolubanAccountId || null,
     deletedAccountId: globalThis.__deletedXiaolubanAccountId || null,
     editDialogMessage: dialogCall.message || "",
-    tokenFieldPlaceholder: (dialogCall.fields || []).find(field => field.id === "token")?.placeholder || "",
-    tokenFieldDescription: (dialogCall.fields || []).find(field => field.id === "token")?.description || "",
-    receiverFieldPlaceholder: (dialogCall.fields || []).find(field => field.id === "notification_receiver")?.placeholder || "",
-    receiverFieldDescription: (dialogCall.fields || []).find(field => field.id === "notification_receiver")?.description || "",
+    tokenFieldPlaceholder: fields.find(field => field.id === "token")?.placeholder || "",
+    tokenFieldDescription: fields.find(field => field.id === "token")?.description || "",
+    receiverFieldPlaceholder: fields.find(field => field.id === "notification_receivers")?.placeholder || "",
+    receiverFieldDescription: fields.find(field => field.id === "notification_receivers")?.description || "",
     toastCalls: globalThis.__toastCalls || [],
 }));
 """.strip(),
@@ -5341,7 +5559,8 @@ export async function deleteXiaolubanGatewayAccount(accountId) {
         "payload": {
             "display_name": "Self Notify Updated",
             "notification_workspace_ids": [],
-            "notification_receiver": None,
+            "notification_receivers": [],
+            "notify_self": True,
             "im_config": {
                 "workspace_id": "workspace-1",
             },
@@ -5356,17 +5575,17 @@ export async function deleteXiaolubanGatewayAccount(accountId) {
     )
     assert (
         payload["tokenFieldDescription"]
-        == "A personal token is already configured. Leave this blank to keep it, and enter a new personal token only if you want to update it."
+        == "A personal token is saved. Leave the masked value as-is to keep it, or reveal and replace it to update."
     )
-    assert payload["receiverFieldPlaceholder"] == "Defaults to self; optional group ID"
+    assert payload["receiverFieldPlaceholder"] == "Group IDs, one per line"
     assert (
         payload["receiverFieldDescription"]
-        == "Leave empty to notify yourself. Enter a group ID to notify a group after a selected workspace run completes."
+        == "Optional extra recipients. Use new lines, commas, or semicolons to enter multiple groups."
     )
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
     assert (
         toast_calls[0]["message"]
-        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_1?auth=secret-token g"
+        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_1 g"
     )
     assert toast_calls[-1]["message"] == "Xiaoluban account deleted."
 
@@ -5387,7 +5606,7 @@ globalThis.__showFormDialogResult = {
     display_name: "Self Notify",
     token: "",
     notification_workspace_ids: ["workspace-1"],
-    notification_receiver: "group-123",
+    notification_receivers: "group-123",
     xiaoluban_im_workspace_id: "workspace-2",
 };
 
@@ -5413,6 +5632,8 @@ console.log(JSON.stringify({
     fieldIds: fields.map(field => field.id),
     workspaceOptions: (fields.find(field => field.id === "xiaoluban_im_workspace_id") || {}).options || [],
     workspaceDescription: (fields.find(field => field.id === "xiaoluban_im_workspace_id") || {}).description || "",
+    forwardingCommandValue: (fields.find(field => field.id === "forwarding_command") || {}).value || "",
+    forwardingCommandDescription: (fields.find(field => field.id === "forwarding_command") || {}).description || "",
     toastCalls: globalThis.__toastCalls || [],
 }));
 """.strip(),
@@ -5469,7 +5690,8 @@ export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
         "payload": {
             "display_name": "Self Notify",
             "notification_workspace_ids": ["workspace-1"],
-            "notification_receiver": "group-123",
+            "notification_receivers": ["group-123"],
+            "notify_self": True,
             "im_config": {
                 "workspace_id": "workspace-2",
             },
@@ -5481,15 +5703,21 @@ export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
     assert "http://127.0.0.1" not in str(payload["dialogMessage"])
     assert "enter forwarding mode" not in str(payload["dialogMessage"])
     assert (
-        "Forwarding command: http://10.88.1.23:9009/xlb_1?auth=secret-token g"
-    ) in str(payload["workspaceDescription"])
-    assert "Send this in WeLink Xiaoluban" in str(payload["workspaceDescription"])
+        payload["workspaceDescription"]
+        == "Required. Inbound Xiaoluban messages will create tasks in this workspace."
+    )
+    assert payload["forwardingCommandValue"] == "http://10.88.1.23:9009/xlb_1 g"
+    assert (
+        payload["forwardingCommandDescription"]
+        == "Send this command to WeLink Xiaoluban to enter the local session. Send q to exit."
+    )
     assert payload["fieldIds"] == [
         "display_name",
         "token",
         "notification_workspace_ids",
-        "notification_receiver",
+        "notification_receivers",
         "xiaoluban_im_workspace_id",
+        "forwarding_command",
     ]
     workspace_options = cast(list[dict[str, object]], payload["workspaceOptions"])
     assert [option["value"] for option in workspace_options] == [
@@ -5499,7 +5727,7 @@ export async function fetchXiaolubanGatewayImForwardingCommand(accountId) {
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
     assert (
         toast_calls[-1]["message"]
-        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_1?auth=secret-token g"
+        == "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: http://10.88.1.23:9009/xlb_1 g"
     )
 
 
@@ -5616,7 +5844,7 @@ await flushTasks();
 await flushTasks();
 
 const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
-const messages = [];
+const errors = [];
 
 for (const formValues of [
     { display_name: "Xiaoluban", token: "bad", xiaoluban_im_workspace_id: "workspace-1" },
@@ -5626,14 +5854,17 @@ for (const formValues of [
 ]) {
     try {
         await dialogCall.submitHandler(formValues);
-        messages.push("ok");
+        errors.push({ message: "ok", fieldId: "" });
     } catch (error) {
-        messages.push(String(error?.message || error || ""));
+        errors.push({
+            message: String(error?.message || error || ""),
+            fieldId: String(error?.fieldId || ""),
+        });
     }
 }
 
 console.log(JSON.stringify({
-    messages,
+    errors,
     toastCalls: globalThis.__toastCalls || [],
 }));
 """.strip(),
@@ -5664,11 +5895,23 @@ export async function createXiaolubanGatewayAccount() {
 """.strip(),
     )
 
-    assert payload["messages"] == [
-        "Personal token format is invalid.",
-        "Enter a personal token. Plugin tokens are not supported.",
-        "Personal token is required.",
-        "Unable to save the Xiaoluban account. Check the personal token and try again.",
+    assert payload["errors"] == [
+        {
+            "message": "Personal token format is invalid.",
+            "fieldId": "token",
+        },
+        {
+            "message": "Enter a personal token. Plugin tokens are not supported.",
+            "fieldId": "token",
+        },
+        {
+            "message": "Personal token is required.",
+            "fieldId": "token",
+        },
+        {
+            "message": "Unable to save the Xiaoluban account. Check the personal token and try again.",
+            "fieldId": "",
+        },
     ]
     assert payload["toastCalls"] == []
 
@@ -6668,7 +6911,7 @@ export const state = {
         "settings.gateway.xiaoluban_token": "Personal Token",
         "settings.gateway.xiaoluban_token_copy": "Paste the personal token used for outbound notifications.",
         "settings.gateway.xiaoluban_token_edit_placeholder": "Personal token saved, re-enter to update",
-        "settings.gateway.xiaoluban_token_edit_copy": "A personal token is already configured. Leave this blank to keep it, and enter a new personal token only if you want to update it.",
+        "settings.gateway.xiaoluban_token_edit_copy": "A personal token is saved. Leave the masked value as-is to keep it, or reveal and replace it to update.",
         "settings.gateway.xiaoluban_token_keep": "Keep existing token",
         "settings.gateway.xiaoluban_missing_token": "Personal token is required.",
         "settings.gateway.xiaoluban_token_invalid": "Personal token format is invalid.",
@@ -6682,17 +6925,23 @@ export const state = {
         "settings.gateway.xiaoluban_notification_workspaces_copy": "Run completion notifications are sent only for selected workspaces.",
         "settings.gateway.xiaoluban_notification_workspace_count": "{count} workspaces",
         "settings.gateway.xiaoluban_notification_receiver": "Notification Recipient",
-        "settings.gateway.xiaoluban_notification_receiver_placeholder": "Defaults to self; optional group ID",
-        "settings.gateway.xiaoluban_notification_receiver_copy": "Leave empty to notify yourself. Enter a group ID to notify a group after a selected workspace run completes.",
+        "settings.gateway.xiaoluban_notification_receiver_placeholder": "Optional extra group ID",
+        "settings.gateway.xiaoluban_notification_receiver_copy": "Completion notifications always notify yourself. Group IDs are additional recipients.",
+        "settings.gateway.xiaoluban_notification_receivers": "Notification Groups",
+        "settings.gateway.xiaoluban_notification_receivers_placeholder": "Group IDs, one per line",
+        "settings.gateway.xiaoluban_notification_receivers_copy": "Optional extra recipients. Use new lines, commas, or semicolons to enter multiple groups.",
         "settings.gateway.xiaoluban_notification_receiver_self": "self",
+        "settings.gateway.xiaoluban_notification_receiver_none": "none",
+        "settings.gateway.xiaoluban_notification_group_count": "{count} groups",
         "settings.gateway.xiaoluban_notification_receiver_summary": "Notify: {receiver}",
         "settings.gateway.xiaoluban_im_summary": "IM: {status}",
         "settings.gateway.xiaoluban_im_action": "IM",
         "settings.gateway.xiaoluban_im_editor": "Xiaoluban IM",
         "settings.gateway.xiaoluban_im_workspace": "IM workspace",
-        "settings.gateway.xiaoluban_im_workspace_copy": "Required.",
+        "settings.gateway.xiaoluban_im_workspace_copy": "Required. Inbound Xiaoluban messages will create tasks in this workspace.",
         "settings.gateway.xiaoluban_im_access_copy": "Access: only current account owner {uid}.",
-        "settings.gateway.xiaoluban_im_forwarding_copy": "Send this in WeLink Xiaoluban to enter the local Relay Teams session.\\nForwarding command: {command}\\nSend q to exit.",
+        "settings.gateway.xiaoluban_im_forwarding_copy": "Send this command to WeLink Xiaoluban to enter the local session. Send q to exit.",
+        "settings.gateway.xiaoluban_im_forwarding_command": "Forwarding Command",
         "settings.gateway.xiaoluban_im_forwarding_after_save_copy": "Save to show the forwarding command.",
         "settings.gateway.xiaoluban_im_forwarding_saved_message": "Saved. Send this in WeLink Xiaoluban to enter the local Relay Teams session: {command}",
         "settings.gateway.xiaoluban_im_status_workspace_required": "workspace required",

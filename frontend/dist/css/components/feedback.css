@@ -115,7 +115,11 @@
 }
 
 .feedback-dialog-input-wrap {
-    padding: 0.85rem 1rem 0;
+    padding: 0.25rem 1rem 0;
+}
+
+.feedback-dialog-field-compact {
+    padding-top: 0.25rem;
 }
 
 .feedback-dialog-input {
@@ -130,6 +134,18 @@
 
 .feedback-dialog-secure-row .feedback-dialog-input {
     min-width: 0;
+}
+
+.feedback-dialog-copyable-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.55rem;
+    align-items: center;
+}
+
+.feedback-dialog-copy-btn {
+    min-width: 74px;
+    height: 100%;
 }
 
 .feedback-dialog-form {
@@ -156,10 +172,19 @@
     line-height: 1.5;
 }
 
+.feedback-dialog-field-compact .feedback-dialog-field-copy {
+    margin-bottom: 0.3rem;
+    line-height: 1.35;
+}
+
 .feedback-dialog-textarea {
     min-height: 132px;
     resize: vertical;
     line-height: 1.5;
+}
+
+.feedback-dialog-textarea-compact {
+    min-height: 74px;
 }
 
 .feedback-dialog-select {
@@ -208,12 +233,33 @@
     background: var(--bg-surface-muted);
 }
 
+.feedback-dialog-field-compact .feedback-dialog-checkbox {
+    align-items: center;
+    padding: 0.55rem 0.75rem;
+}
+
 .feedback-dialog-checkbox-input {
     width: 16px;
     height: 16px;
     margin-top: 0.1rem;
     accent-color: var(--primary);
     flex: 0 0 auto;
+}
+
+.feedback-dialog-field-error {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--danger);
+    font-size: 0.76rem;
+    line-height: 1.45;
+}
+
+.feedback-dialog-submit-error {
+    margin-top: 0.8rem;
+    padding: 0 1.15rem;
+    color: var(--danger);
+    font-size: 0.8rem;
+    line-height: 1.5;
 }
 
 .feedback-dialog-checkbox-copy {
@@ -229,10 +275,15 @@
 }
 
 .feedback-dialog-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
     display: flex;
     justify-content: flex-end;
     gap: 0.65rem;
     padding: 1rem;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-surface);
 }
 
 .feedback-action-btn {

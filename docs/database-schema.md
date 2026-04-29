@@ -530,7 +530,7 @@ CREATE INDEX IF NOT EXISTS idx_gateway_sessions_internal_session
 Purpose: persistent mapping between an external gateway channel session and the internal Agent Teams session/run state used by the runtime.
 
 Notes:
-- `channel_type` identifies the transport-facing gateway implementation and currently includes `acp_stdio` and `wechat`.
+- `channel_type` identifies the transport-facing gateway implementation and currently includes `acp_stdio`, `wechat`, and `xiaoluban`.
 - `external_session_id` is the channel-visible session key; `internal_session_id` remains the core runtime session source of truth.
 - `cwd` stores the resolved absolute workspace root last provided by the gateway channel. For ACP stdio, `session/new.cwd` creates or reuses that workspace, and `session/load.cwd` may rebind the internal session to a different workspace when no active or recoverable run is attached.
 - `capabilities_json` stores channel-scoped capability negotiation data.
@@ -612,9 +612,43 @@ Notes:
 - `gateway_session_id` points back to the transport-facing WeChat gateway session row
 - `status` flows through `queued`, `waiting_result`, then a terminal state
 - `run_id` is populated only after the shared gateway ingress path successfully starts
-  the detached run for that message
 - queued WeChat messages never auto-attach to an already active session run
 - `last_error` captures terminal start/reply failures for that inbound item
+
+---
+
+### 2.10.4 `xiaoluban_accounts`
+
+```sql
+CREATE TABLE IF NOT EXISTS xiaoluban_accounts (
+    account_id                          TEXT PRIMARY KEY,
+    display_name                        TEXT NOT NULL,
+    base_url                            TEXT NOT NULL,
+    status                              TEXT NOT NULL,
+    derived_uid                         TEXT NOT NULL,
+    notification_workspace_ids_json     TEXT NOT NULL DEFAULT '[]',
+    notification_receiver               TEXT,
+    notification_receivers_json         TEXT NOT NULL DEFAULT '[]',
+    notify_self                         INTEGER NOT NULL DEFAULT 1,
+    im_config_json                      TEXT NOT NULL DEFAULT '{}',
+    created_at                          TEXT NOT NULL,
+    updated_at                          TEXT NOT NULL
+);
+```
+
+Purpose: persisted Xiaoluban outbound notification and inbound IM account configuration.
+
+Notes:
+- Personal tokens are stored in the unified secret store and resolved by `account_id`; they are not stored in this table.
+- `notification_receivers_json` stores the normalized list of Xiaoluban group ids used for completion notifications.
+- `notify_self` is retained as a compatibility column but Xiaoluban completion notifications always include the token owner's `derived_uid`.
+- `notification_receiver` is a legacy compatibility column. Rows with only this old column populated are loaded as one group receiver and still notify the token owner.
+- `notification_workspace_ids_json` scopes normal workspace completion notifications; an empty list disables those notifications for the account.
+- `im_config_json` currently stores the Xiaoluban IM workspace id used for inbound forwarded messages.
+
+`status` values:
+- `enabled`
+- `disabled`
 
 ---
 
@@ -633,6 +667,7 @@ Primary query keys used by repositories:
 - `account_id`: Feishu gateway account retrieval across `feishu_gateway_accounts`.
 - `account_id`: WeChat gateway account retrieval across `wechat_accounts`,
   `wechat_inbound_queue`.
+- `account_id`: Xiaoluban gateway account retrieval across `xiaoluban_accounts`.
 
 ---
 
@@ -654,6 +689,7 @@ Primary query keys used by repositories:
 - `relay_teams.automation`: `automation_execution_events`.
 - `relay_teams.gateway`: `gateway_sessions`.
 - `relay_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
+- `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
 - `relay_teams.roles`: `role_memories`.
 
 ---

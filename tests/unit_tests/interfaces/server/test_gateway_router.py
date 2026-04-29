@@ -14,6 +14,7 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanImConfigUpdateInput,
     XiaolubanInboundMessage,
     XiaolubanSecretStatus,
+    XiaolubanTokenRevealResponse,
 )
 from relay_teams.interfaces.server.deps import (
     get_wechat_gateway_service,
@@ -130,6 +131,8 @@ class _FakeXiaolubanGatewayService:
         self.updated_im_payloads: list[tuple[str, XiaolubanImConfigUpdateInput]] = []
         self.inbound_messages: list[tuple[str, XiaolubanInboundMessage]] = []
         self.deleted_account_ids: list[tuple[str, bool]] = []
+        self.prepare_account_id_calls = 0
+        self.revealed_account_ids: list[str] = []
 
     def list_accounts(self) -> tuple[XiaolubanAccountRecord, ...]:
         return (self._record(),)
@@ -139,7 +142,12 @@ class _FakeXiaolubanGatewayService:
         req: XiaolubanAccountCreateInput,
     ) -> XiaolubanAccountRecord:
         self.created_payloads.append(req)
-        return self._record().model_copy(update={"display_name": req.display_name})
+        return self._record().model_copy(
+            update={
+                "account_id": req.account_id or self._record().account_id,
+                "display_name": req.display_name,
+            }
+        )
 
     def update_account(
         self,
@@ -176,6 +184,14 @@ class _FakeXiaolubanGatewayService:
     def get_im_callback_auth_token(self, account_id: str) -> str:
         del account_id
         return "secret-token"
+
+    def prepare_account_id(self) -> str:
+        self.prepare_account_id_calls += 1
+        return "xlb_prepared"
+
+    def reveal_token(self, account_id: str) -> XiaolubanTokenRevealResponse:
+        self.revealed_account_ids.append(account_id)
+        return XiaolubanTokenRevealResponse(token="uid_saved_token")
 
     def validate_im_workspace(self, workspace_id: str) -> None:
         del workspace_id
@@ -408,6 +424,66 @@ def test_create_xiaoluban_account_route_returns_created_record() -> None:
     assert fake_xiaoluban_service.created_payloads[0].display_name == "小鲁班主账号"
 
 
+def test_prepare_xiaoluban_account_route_returns_forwarding_command() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.post("/api/gateway/xiaoluban/accounts:prepare")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "xlb_prepared",
+        "forwarding_url": "http://10.88.1.23:9009/xlb_prepared",
+        "forwarding_command": "http://10.88.1.23:9009/xlb_prepared g",
+        "listener_running": True,
+    }
+    assert fake_xiaoluban_service.prepare_account_id_calls == 1
+
+
+def test_prepare_xiaoluban_account_route_maps_runtimeerror_to_409() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    listener = _FakeXiaolubanImListenerService()
+    original_callback_url = listener.callback_url
+    listener.callback_url = lambda *, account_id: (_ for _ in ()).throw(
+        RuntimeError("xiaoluban_im_listener_host_unavailable")
+    )
+    client = _client(
+        _FakeWeChatGatewayService(),
+        fake_xiaoluban_service,
+        xiaoluban_im_listener=listener,
+    )
+
+    response = client.post("/api/gateway/xiaoluban/accounts:prepare")
+
+    assert response.status_code == 409
+    listener.callback_url = original_callback_url
+
+
+def test_reveal_xiaoluban_token_route_returns_saved_token() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.post("/api/gateway/xiaoluban/accounts/xlb_123:reveal-token")
+
+    assert response.status_code == 200
+    assert response.json() == {"token": "uid_saved_token"}
+    assert fake_xiaoluban_service.revealed_account_ids == ["xlb_123"]
+
+
+def test_reveal_xiaoluban_token_route_maps_keyerror_to_404() -> None:
+    fake_xiaoluban_service = _FakeXiaolubanGatewayService()
+    original_reveal = fake_xiaoluban_service.reveal_token
+    fake_xiaoluban_service.reveal_token = lambda account_id: (_ for _ in ()).throw(
+        KeyError("Unknown Xiaoluban account_id")
+    )
+    client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
+
+    response = client.post("/api/gateway/xiaoluban/accounts/missing:reveal-token")
+
+    assert response.status_code == 404
+    fake_xiaoluban_service.reveal_token = original_reveal
+
+
 def test_disable_xiaoluban_account_route_returns_disabled_record() -> None:
     client = _client(
         _FakeWeChatGatewayService(),
@@ -466,8 +542,8 @@ def test_xiaoluban_im_forwarding_command_route_uses_listener_url() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "account_id": "xlb_123",
-        "forwarding_url": "http://10.88.1.23:9009/xlb_123?auth=secret-token",
-        "forwarding_command": "http://10.88.1.23:9009/xlb_123?auth=secret-token g",
+        "forwarding_url": "http://10.88.1.23:9009/xlb_123",
+        "forwarding_command": "http://10.88.1.23:9009/xlb_123 g",
         "listener_running": True,
     }
 
@@ -521,10 +597,7 @@ def test_xiaoluban_im_forwarding_command_reports_stopped_listener() -> None:
     )
 
     assert response.status_code == 200
-    assert (
-        response.json()["forwarding_command"]
-        == "http://10.88.1.23:9009/xlb_123?auth=secret-token g"
-    )
+    assert response.json()["forwarding_command"] == "http://10.88.1.23:9009/xlb_123 g"
     assert response.json()["listener_running"] is False
 
 
@@ -543,10 +616,7 @@ def test_xiaoluban_im_forwarding_command_route_uses_configured_listener_port() -
     )
 
     assert response.status_code == 200
-    assert (
-        response.json()["forwarding_url"]
-        == "http://10.88.1.23:8091/xlb_123?auth=secret-token"
-    )
+    assert response.json()["forwarding_url"] == "http://10.88.1.23:8091/xlb_123"
 
 
 def test_xiaoluban_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:

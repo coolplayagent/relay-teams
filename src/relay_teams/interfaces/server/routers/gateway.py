@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -23,6 +24,7 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanImConfigUpdateInput,
     XiaolubanImForwardingCommandResponse,
     XiaolubanImListenerService,
+    XiaolubanTokenRevealResponse,
 )
 from relay_teams.interfaces.server.deps import (
     get_wechat_gateway_service,
@@ -63,6 +65,32 @@ async def create_xiaoluban_account(
         raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
 
 
+@router.post(
+    "/xiaoluban/accounts:prepare",
+    response_model=XiaolubanImForwardingCommandResponse,
+)
+async def prepare_xiaoluban_account(
+    service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
+    listener_service: Annotated[
+        XiaolubanImListenerService,
+        Depends(get_xiaoluban_im_listener_service),
+    ],
+) -> XiaolubanImForwardingCommandResponse:
+    try:
+        account_id = await call_maybe_async(service.prepare_account_id)
+        forwarding_url = _xiaoluban_forwarding_url(
+            listener_service.callback_url(account_id=account_id)
+        )
+        return XiaolubanImForwardingCommandResponse(
+            account_id=account_id,
+            forwarding_url=forwarding_url,
+            forwarding_command=f"{forwarding_url} g",
+            listener_running=listener_service.is_running(),
+        )
+    except RuntimeError as exc:
+        raise http_exception_for(exc, mappings=((RuntimeError, 409),)) from exc
+
+
 @router.patch("/xiaoluban/accounts/{account_id}", response_model=XiaolubanAccountRecord)
 async def update_xiaoluban_account(
     account_id: RequiredIdentifierStr,
@@ -76,6 +104,20 @@ async def update_xiaoluban_account(
             exc,
             mappings=((ValueError, 422),),
         ) from exc
+
+
+@router.post(
+    "/xiaoluban/accounts/{account_id}:reveal-token",
+    response_model=XiaolubanTokenRevealResponse,
+)
+async def reveal_xiaoluban_account_token(
+    account_id: RequiredIdentifierStr,
+    service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
+) -> XiaolubanTokenRevealResponse:
+    try:
+        return await call_maybe_async(service.reveal_token, account_id)
+    except KeyError as exc:
+        raise http_exception_for(exc) from exc
 
 
 @router.patch(
@@ -118,7 +160,9 @@ async def get_xiaoluban_im_forwarding_command(
             service.validate_im_workspace, account.im_config.workspace_id
         )
         _ = await call_maybe_async(service.get_im_callback_auth_token, account_id)
-        forwarding_url = listener_service.callback_url(account_id=account_id)
+        forwarding_url = _xiaoluban_forwarding_url(
+            listener_service.callback_url(account_id=account_id)
+        )
         return XiaolubanImForwardingCommandResponse(
             account_id=account_id,
             forwarding_url=forwarding_url,
@@ -280,3 +324,9 @@ async def reload_wechat_gateway(
 ) -> dict[str, str]:
     await call_maybe_async(service.reload)
     return {"status": "ok"}
+
+
+def _xiaoluban_forwarding_url(callback_url: str) -> str:
+    # Xiaoluban manual forwarding rejects query-string callback URLs.
+    parsed = urlsplit(callback_url)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))

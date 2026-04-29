@@ -2533,6 +2533,114 @@ Notes:
 - When a Feishu gateway account's runtime preset changes, the backend clears that account's external chat bindings so the next message creates a session with the new preset.
 - For inbound Feishu chat messages, terminal Feishu replies are owned by the message pool worker, and the generic Feishu `run_completed` / `run_failed` notification path is suppressed to avoid duplicate replies.
 
+### `GET /gateway/xiaoluban/accounts`
+
+Lists all persisted Xiaoluban gateway accounts.
+
+Each record includes:
+- `account_id`
+- `display_name`
+- `base_url`
+- `status`: `enabled` or `disabled`
+- `derived_uid`
+- `notification_workspace_ids`
+- `notification_receivers`
+- `notify_self`: always `true` in responses; retained for compatibility
+- `notification_receiver`: legacy compatibility projection of the first configured receiver
+- `im_config.workspace_id`
+- `secret_status.token_configured`
+- `created_at`
+- `updated_at`
+
+### `POST /gateway/xiaoluban/accounts:prepare`
+
+Prepares a Xiaoluban account id before creation and returns the corresponding IM forwarding data without writing a database row.
+
+Response fields:
+- `account_id`
+- `forwarding_url`
+- `forwarding_command`
+- `listener_running`
+
+The settings UI uses this endpoint so a new account form can display a copyable forwarding command before the account is saved.
+
+Rules:
+- `forwarding_url` and `forwarding_command` are user-visible Xiaoluban manual forwarding values and must not include a query string.
+- Xiaoluban does not support forwarding commands such as `http://host:9009/xlb_123?auth=... g`; API responses must return `http://host:9009/xlb_123 g`.
+
+### `POST /gateway/xiaoluban/accounts`
+
+Creates a Xiaoluban gateway account and stores its personal token in the unified secret store.
+
+Request fields:
+- `account_id` optional prepared id from `/gateway/xiaoluban/accounts:prepare`
+- `display_name`
+- `token`
+- `notification_workspace_ids`
+- `notification_receivers`
+- `notify_self` compatibility field; false values are ignored and notifications still include the token owner
+- `notification_receiver` legacy compatibility field
+- `im_config.workspace_id`
+
+Rules:
+- `token` is required on create, must be a personal token, and must not use a plugin-token `p_` prefix.
+- `account_id`, when supplied, must use the generated Xiaoluban id format and must not already exist.
+- `notification_receivers` accepts one or more group ids; server-side validation trims, splits common separators, removes blanks, and deduplicates.
+- The token owner's `derived_uid` is always included as a notification recipient. Group IDs are additional recipients.
+- Legacy `notification_receiver` input is still accepted for compatibility and is converted to a single `notification_receivers` value; it no longer disables notification to the token owner.
+
+### `PATCH /gateway/xiaoluban/accounts/{account_id}`
+
+Updates mutable Xiaoluban account settings.
+
+Mutable fields:
+- `display_name`
+- `token`
+- `base_url`
+- `enabled`
+- `notification_workspace_ids`
+- `notification_receivers`
+- `notify_self` compatibility field; false values are ignored and notifications still include the token owner
+- `notification_receiver` legacy compatibility field
+- `im_config.workspace_id`
+
+### `POST /gateway/xiaoluban/accounts/{account_id}:reveal-token`
+
+Returns the saved token for an existing Xiaoluban account from the server secret store:
+
+```json
+{"token":"uidself_1234567890abcdef1234567890abcdef"}
+```
+
+If no token is configured, `token` is `null`. List and account read responses continue to expose only `secret_status.token_configured`.
+
+### `GET /gateway/xiaoluban/accounts/{account_id}/im:forwarding-command`
+
+Returns the Xiaoluban manual forwarding URL and command for an existing account.
+
+The returned `forwarding_url` and `forwarding_command` follow the same no-query rule as `/gateway/xiaoluban/accounts:prepare`; stripping query parameters is intentional for Xiaoluban compatibility.
+
+### `PATCH /gateway/xiaoluban/accounts/{account_id}/im`
+
+Updates the workspace used by inbound Xiaoluban IM-triggered tasks.
+
+### `POST /gateway/xiaoluban/accounts/{account_id}:enable`
+
+Enables one Xiaoluban account.
+
+### `POST /gateway/xiaoluban/accounts/{account_id}:disable`
+
+Disables one Xiaoluban account.
+
+### `DELETE /gateway/xiaoluban/accounts/{account_id}`
+
+Deletes one Xiaoluban account and removes its stored personal token.
+
+Notes:
+- Xiaoluban notification delivery always fans out to `derived_uid` and to every configured `notification_receivers` group id.
+- Delivery continues after a single target fails; the operation raises only when all target sends fail.
+- Existing rows with only the legacy `notification_receiver` column are read as one group receiver and still notify the token owner.
+
 ### `GET /gateway/wechat/accounts`
 
 Lists all persisted WeChat gateway accounts.

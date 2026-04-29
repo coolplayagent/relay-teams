@@ -44,6 +44,8 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     derived_uid TEXT NOT NULL,
                     notification_workspace_ids_json TEXT NOT NULL DEFAULT '[]',
                     notification_receiver TEXT,
+                    notification_receivers_json TEXT NOT NULL DEFAULT '[]',
+                    notify_self INTEGER NOT NULL DEFAULT 1,
                     im_config_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -59,6 +61,16 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                 "xiaoluban_accounts",
                 "notification_receiver",
                 "TEXT",
+            )
+            self._ensure_column(
+                "xiaoluban_accounts",
+                "notification_receivers_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            self._ensure_column(
+                "xiaoluban_accounts",
+                "notify_self",
+                "INTEGER NOT NULL DEFAULT 1",
             )
             self._ensure_column(
                 "xiaoluban_accounts",
@@ -126,11 +138,13 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     derived_uid,
                     notification_workspace_ids_json,
                     notification_receiver,
+                    notification_receivers_json,
+                    notify_self,
                     im_config_json,
                     created_at,
                     updated_at
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(account_id) DO UPDATE SET
                     display_name=excluded.display_name,
                     base_url=excluded.base_url,
@@ -138,6 +152,8 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     derived_uid=excluded.derived_uid,
                     notification_workspace_ids_json=excluded.notification_workspace_ids_json,
                     notification_receiver=excluded.notification_receiver,
+                    notification_receivers_json=excluded.notification_receivers_json,
+                    notify_self=excluded.notify_self,
                     im_config_json=excluded.im_config_json,
                     updated_at=excluded.updated_at
                 """,
@@ -148,7 +164,9 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                     record.status.value,
                     record.derived_uid,
                     _workspace_ids_to_json(record.notification_workspace_ids),
-                    record.notification_receiver,
+                    None,
+                    _notification_receivers_to_json(record.notification_receivers),
+                    1 if record.notify_self else 0,
                     _im_config_to_json(record.im_config),
                     record.created_at.isoformat(),
                     record.updated_at.isoformat(),
@@ -197,6 +215,18 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
             raise ValueError("Invalid persisted created_at")
         if updated_at is None:
             raise ValueError("Invalid persisted updated_at")
+        legacy_receiver = (
+            str(row["notification_receiver"]).strip()
+            if row["notification_receiver"] is not None
+            else ""
+        )
+        notification_receivers = _notification_receivers_from_json(
+            str(row["notification_receivers_json"] or "[]")
+        )
+        notify_self = bool(int(row["notify_self"] or 0))
+        if not notification_receivers and legacy_receiver:
+            notification_receivers = (legacy_receiver,)
+            notify_self = True
         return XiaolubanAccountRecord(
             account_id=account_id,
             display_name=str(row["display_name"]),
@@ -206,11 +236,8 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
             notification_workspace_ids=_workspace_ids_from_json(
                 str(row["notification_workspace_ids_json"] or "[]")
             ),
-            notification_receiver=(
-                str(row["notification_receiver"])
-                if row["notification_receiver"] is not None
-                else None
-            ),
+            notification_receivers=notification_receivers,
+            notify_self=notify_self,
             im_config=_im_config_from_json(str(row["im_config_json"] or "{}")),
             created_at=created_at,
             updated_at=updated_at,
@@ -260,6 +287,25 @@ def _workspace_ids_from_json(value: str) -> tuple[str, ...]:
         field_name="notification_workspace_ids",
     )
     return () if normalized is None else normalized
+
+
+def _notification_receivers_to_json(receivers: tuple[str, ...]) -> str:
+    return json.dumps(list(receivers), ensure_ascii=False)
+
+
+def _notification_receivers_from_json(value: str) -> tuple[str, ...]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, list):
+        raise ValueError("Invalid persisted notification_receivers_json")
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in parsed:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return tuple(result)
 
 
 def _im_config_to_json(config: XiaolubanImConfig) -> str:

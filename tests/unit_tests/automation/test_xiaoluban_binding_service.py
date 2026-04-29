@@ -94,7 +94,7 @@ def test_list_candidates_labels_configured_receiver() -> None:
 
     candidates = service.list_candidates()
 
-    assert candidates[0].source_label == "发送给 group-123"
+    assert candidates[0].source_label == "发送给自己（uid_1）和 1 个群"
 
 
 def test_validate_binding_rejects_account_without_usable_credentials() -> None:
