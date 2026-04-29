@@ -34,6 +34,7 @@ def test_registry_contains_registered_local_tools() -> None:
         "list_skill_roles",
         "list_windows",
         "notebook_edit",
+        "notify",
         "office_read_markdown",
         "orch_create_tasks",
         "orch_create_temporary_role",
@@ -63,6 +64,7 @@ def test_registry_hides_im_send_from_manual_role_configuration() -> None:
     registry = build_default_registry()
 
     assert "im_send" not in registry.list_configurable_names()
+    assert "notify" in registry.list_configurable_names()
 
 
 def test_default_registry_ignores_unknown_tools_for_runtime_resolution() -> None:

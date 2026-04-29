@@ -709,6 +709,16 @@ class SessionRecoveryMixin(AgentLlmSessionMixinBase):
                 DisabledLlmFallbackMiddleware(),
             ),
             im_tool_service=self._im_tool_service,
+            xiaoluban_notify_service=getattr(
+                self,
+                "_xiaoluban_notify_service",
+                None,
+            ),
+            gateway_session_lookup=getattr(
+                self,
+                "_gateway_session_lookup",
+                None,
+            ),
             computer_runtime=self._computer_runtime,
             shell_approval_repo=self._shell_approval_repo,
         )

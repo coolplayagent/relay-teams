@@ -370,6 +370,16 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 metric_recorder=self._metric_recorder,
                 notification_service=self._notification_service,
                 im_tool_service=self._im_tool_service,
+                xiaoluban_notify_service=getattr(
+                    self,
+                    "_xiaoluban_notify_service",
+                    None,
+                ),
+                gateway_session_lookup=getattr(
+                    self,
+                    "_gateway_session_lookup",
+                    None,
+                ),
                 hook_service=hook_service,
                 reminder_service=getattr(self, "_reminder_service", None),
                 model_capabilities=self._config.capabilities,

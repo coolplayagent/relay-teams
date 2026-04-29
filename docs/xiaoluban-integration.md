@@ -16,12 +16,13 @@ Current scope:
 - Xiaoluban IM forwarding for the current token owner
 - inbound WeLink messages forwarded through Xiaoluban's manual forwarding mode
 - Xiaoluban-triggered Relay task execution with a final-result reply
+- Agent-initiated text notifications through the configurable `notify` tool
 - interactive session management via `/new`, `/resume`, `/help` commands
 - instant acknowledgement on every received message
 
 Current non-goals for this phase:
 
-- Xiaoluban tool execution or plugin orchestration
+- Xiaoluban plugin-hosted tool execution or plugin orchestration
 - group, department, or collaborator whitelist editing
 - intermediate progress pushes
 - Xiaoluban plugin script publishing
@@ -183,6 +184,35 @@ Workspace completion behavior:
 - matching enabled accounts with usable credentials receive the run completion body
 - automation-owned terminal notifications are suppressed from the workspace dispatcher to avoid duplicate Xiaoluban messages
 - IM-triggered run terminal notifications are also suppressed from the workspace dispatcher because the IM path sends the final reply itself
+
+### Agent-Initiated Notify Tool
+
+Roles can be explicitly configured with the `notify` tool. Unlike `im_send`,
+`notify` is not implicitly opened for IM sessions; it is a normal configurable
+tool for proactive outbound notifications.
+
+The first provider is `provider="xiaoluban"` and supports text-only messages:
+
+- `target="owner"` is the default and sends only to the selected account's `derived_uid`
+- `target="configured_groups"` sends to every configured `notification_receivers` group
+- `target="owner_and_configured_groups"` sends to the token owner plus configured groups
+- `target="explicit"` accepts `recipients` as candidate group IDs, then filters them through `notification_receivers`
+
+Account selection is automatic when the current session came from Xiaoluban IM
+and its gateway session has `channel_state.account_id`, or when exactly one
+enabled Xiaoluban account has a configured token. If multiple usable accounts
+exist, the tool asks the Agent to retry with `account` set to an account ID or a
+unique display name.
+
+Explicit group recipients are never sent directly. They are intersected with the
+selected account's configured notification group whitelist. Partial matches send
+to the allowed groups and report filtered values in the tool result; no matches
+fail the tool call.
+
+Approval behavior is target-based:
+
+- owner-only notifications do not create an internal tool approval request
+- any resolved group target creates a guarded tool approval request with the account and group count in the target summary
 
 ## Inbound IM Semantics
 

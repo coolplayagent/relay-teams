@@ -670,6 +670,16 @@ class ServerContainer:
             resolve_model_config=self.resolve_external_agent_model_config,
             metric_recorder=self.metric_recorder,
             im_tool_service=self.im_tool_service,
+            get_xiaoluban_notify_service=lambda: getattr(
+                self,
+                "xiaoluban_gateway_service",
+                None,
+            ),
+            get_gateway_session_lookup=lambda: getattr(
+                self,
+                "gateway_session_service",
+                None,
+            ),
             computer_runtime=self.computer_runtime,
         )
         self.run_control_manager.bind_runtime(
@@ -1095,6 +1105,16 @@ class ServerContainer:
             token_usage_repo=self.token_usage_repo,
             metric_recorder=self.metric_recorder,
             im_tool_service=self.im_tool_service,
+            get_xiaoluban_notify_service=lambda: getattr(
+                self,
+                "xiaoluban_gateway_service",
+                None,
+            ),
+            get_gateway_session_lookup=lambda: getattr(
+                self,
+                "gateway_session_service",
+                None,
+            ),
             external_agent_session_manager=self.external_acp_session_manager,
             session_model_profile_lookup=self._session_model_profile_lookup,
             hook_service=self.hook_service,

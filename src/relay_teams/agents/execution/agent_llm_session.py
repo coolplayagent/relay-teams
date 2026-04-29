@@ -71,6 +71,10 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.context import (
+    GatewaySessionLookupLike,
+    XiaolubanNotifyServiceLike,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.persisted_state import (
     load_or_recover_tool_call_state,
@@ -137,6 +141,8 @@ class AgentLlmSession(
         | DisabledLlmFallbackMiddleware
         | None = None,
         im_tool_service: ImToolService | None = None,
+        xiaoluban_notify_service: XiaolubanNotifyServiceLike | None = None,
+        gateway_session_lookup: GatewaySessionLookupLike | None = None,
         computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         hook_service: HookService | None = None,
@@ -191,6 +197,8 @@ class AgentLlmSession(
             else DisabledLlmFallbackMiddleware()
         )
         self._im_tool_service = im_tool_service
+        self._xiaoluban_notify_service = xiaoluban_notify_service
+        self._gateway_session_lookup = gateway_session_lookup
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
         self._hook_service = hook_service

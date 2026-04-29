@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from relay_teams.tools.computer_tools import TOOLS as COMPUTER_TOOLS
 from relay_teams.tools.im_tools.im_send import register as register_im_send
+from relay_teams.tools.notify_tools import TOOLS as NOTIFY_TOOLS
 from relay_teams.tools.orchestration_tools import TOOLS as ORCHESTRATION_TOOLS
 from relay_teams.tools.registry.registry import ToolRegistry
 from relay_teams.tools.skill_team_tools import TOOLS as SKILL_TEAM_TOOLS
@@ -26,6 +27,7 @@ def build_default_registry() -> ToolRegistry:
         **WEB_TOOLS,
         **WORKSPACE_TOOLS,
         **COMPUTER_TOOLS,
+        **NOTIFY_TOOLS,
         **IM_TOOLS,
     }
     return ToolRegistry(
