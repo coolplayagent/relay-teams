@@ -127,6 +127,7 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
         label || st.label,
         false,
     );
+    syncMessageCopyButton(st.container);
     scheduleStreamScrollBottom(st.container, follow);
 }
 
@@ -190,6 +191,7 @@ export function appendStreamOutputParts(
         endActiveText(st);
         appendStructuredContentPart(st.contentEl, part);
     });
+    syncMessageCopyButton(st.container || container);
     scheduleStreamScrollBottom(st.container || container, follow);
 }
 
@@ -308,6 +310,10 @@ function clearPendingStreamWork() {
     pendingScrollFrame = 0;
     pendingTextUpdates.clear();
     pendingScrollContainers.clear();
+}
+
+function syncMessageCopyButton(container) {
+    globalThis.__relayTeamsSyncLastAnswerCopyButton?.(container);
 }
 
 export function clearRunStreamState(runId) {
@@ -1172,6 +1178,7 @@ function finalizeStreamEntry(entry) {
         type: 'stream_finished',
         scope: streamScope(entry),
     });
+    syncMessageCopyButton(entry.container);
 }
 
 function matchesFinalizeTarget(entry, target) {

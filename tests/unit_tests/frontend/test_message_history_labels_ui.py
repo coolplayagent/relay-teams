@@ -27,6 +27,7 @@ def test_message_history_uses_task_prompt_override_for_user_messages(
         .replace("./helpers.js", "./mockHelpers.mjs")
         .replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -127,6 +128,14 @@ export function formatMessage(key) {
 """.strip(),
         encoding="utf-8",
     )
+    (tmp_path / "mockMessageActions.mjs").write_text(
+        """
+export function syncLastAnswerCopyButton() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
     runner_path.write_text(
         """
 globalThis.__renderCalls = [];
@@ -213,6 +222,7 @@ def test_message_history_elapsed_duration_keeps_minutes_and_seconds(
         .replace("./helpers.js", "./mockHelpers.mjs")
         .replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -251,6 +261,14 @@ export function isRunPrimaryRoleId() {
         """
 export function formatMessage(key) {
     return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageActions.mjs").write_text(
+        """
+export function syncLastAnswerCopyButton() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",

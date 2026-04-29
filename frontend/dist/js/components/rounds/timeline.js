@@ -17,6 +17,8 @@ import {
     reconcileTerminalRunStreamState,
     getCoordinatorStreamOverlay,
     renderHistoricalMessageList,
+    bindCopyButton,
+    syncLastAnswerCopyButton,
 } from '../messageRenderer.js';
 import {
     normalizePromptContentParts,
@@ -1263,6 +1265,7 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
     syncHistoryLoadMoreAlignment(container);
     ensureScrollToBottomControl(container);
     syncScrollToBottomControl(container);
+    syncLastAnswerCopyButton(container);
     syncRetryTimelineTimer();
 }
 
@@ -1593,21 +1596,28 @@ function buildRoundIntentBlock(runId, intentText, intentParts = null, options = 
     block.className = 'round-detail-intent';
     block.dataset.intentKey = intentKey;
     block.dataset.hasStructuredContent = hasStructuredIntentContent(normalizedParts) ? 'true' : 'false';
+    block.dataset.intentTextLength = String(normalized.length);
+    block.dataset.intentLineCount = String(normalized.split('\n').length);
     if (stateKey) {
         block.dataset.intentStateKey = stateKey;
     }
     block.dataset.overflow = 'pending';
     if (shouldRestoreOpen) {
         block.dataset.restoreOpen = 'true';
+        block.open = true;
     }
     block.innerHTML = `
         <summary class="round-detail-intent-summary">
             <span class="round-detail-intent-preview"></span>
-            <span class="round-detail-intent-toggle"></span>
+            <span class="round-detail-intent-summary-actions">
+                <button type="button" class="round-detail-intent-copy" data-intent-copy-placement="summary"></button>
+                <span class="round-detail-intent-toggle"></span>
+            </span>
         </summary>
         <div class="round-detail-intent-body">
             <div class="round-detail-intent-content"></div>
             <div class="round-detail-intent-actions">
+                <button type="button" class="round-detail-intent-copy" data-intent-copy-placement="body"></button>
                 <button type="button" class="round-detail-intent-collapse"></button>
             </div>
         </div>
@@ -1618,6 +1628,9 @@ function buildRoundIntentBlock(runId, intentText, intentParts = null, options = 
     const bodyEl = block.querySelector('.round-detail-intent-content');
     const collapseBtn = block.querySelector('.round-detail-intent-collapse');
     const summaryEl = block.querySelector('.round-detail-intent-summary');
+    block.querySelectorAll('.round-detail-intent-copy').forEach(button => {
+        bindCopyButton(button, normalized);
+    });
     if (previewEl) {
         renderPromptTokenizedText(previewEl, normalized);
     }
@@ -1635,31 +1648,57 @@ function buildRoundIntentBlock(runId, intentText, intentParts = null, options = 
         collapseBtn.textContent = t('rounds.collapse');
         collapseBtn.addEventListener('click', event => {
             event.preventDefault();
+            event.stopPropagation();
             block.open = false;
             rememberRoundIntentOpenState(block);
+            syncRoundIntentToggleText(block);
         });
     }
     if (summaryEl) {
         summaryEl.addEventListener('click', event => {
-            if (block.dataset.overflow !== 'true') {
-                event.preventDefault();
-                block.open = false;
+            if (isRoundIntentSummaryInteractiveTarget(event.target, summaryEl)) {
+                return;
             }
+            event.preventDefault();
+            if (block.dataset.overflow !== 'true') {
+                block.open = false;
+                syncRoundIntentToggleText(block);
+                return;
+            }
+            block.open = !block.open;
+            rememberRoundIntentOpenState(block);
+            syncRoundIntentToggleText(block);
+        });
+        summaryEl.addEventListener('keydown', event => {
+            const key = String(event.key || '');
+            if (key !== 'Enter' && key !== ' ') return;
+            if (event.target !== summaryEl) return;
+            event.preventDefault();
+            if (block.dataset.overflow !== 'true') {
+                block.open = false;
+                syncRoundIntentToggleText(block);
+                return;
+            }
+            block.open = !block.open;
+            rememberRoundIntentOpenState(block);
+            syncRoundIntentToggleText(block);
         });
     }
     block.addEventListener('toggle', () => {
-        if (block.dataset.overflow !== 'true') {
+        if (block.dataset.overflow === 'false') {
             block.open = false;
-            forgetRoundIntentOpenState(block);
-            return;
         }
-        rememberRoundIntentOpenState(block);
-        if (toggleEl) {
-            toggleEl.textContent = block.open ? t('rounds.collapse') : t('rounds.expand');
-        }
+        syncRoundIntentToggleText(block);
     });
+    syncRoundIntentToggleText(block);
     scheduleRoundIntentOverflowMeasure(block);
     return block;
+}
+
+function isRoundIntentSummaryInteractiveTarget(target, summaryEl) {
+    if (!target || target === summaryEl) return false;
+    const interactive = target.closest?.('button, a, input, textarea, select, [contenteditable="true"]');
+    return !!interactive && summaryEl.contains(interactive);
 }
 
 function getRoundIntentKey(intentText, intentParts = null) {
@@ -1695,12 +1734,6 @@ function rememberRoundIntentOpenState(block) {
     roundIntentOpenState.set(stateKey, block.open === true);
 }
 
-function forgetRoundIntentOpenState(block) {
-    const stateKey = String(block?.dataset?.intentStateKey || '').trim();
-    if (!stateKey) return;
-    roundIntentOpenState.delete(stateKey);
-}
-
 function scheduleRoundIntentOverflowMeasure(block, attempt = 0) {
     const measure = () => updateRoundIntentOverflowState(block, attempt);
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
@@ -1713,9 +1746,7 @@ function scheduleRoundIntentOverflowMeasure(block, attempt = 0) {
 function updateRoundIntentOverflowState(block, attempt = 0) {
     const previewEl = block.querySelector('.round-detail-intent-preview');
     if (!previewEl) {
-        block.dataset.overflow = 'false';
-        block.open = false;
-        forgetRoundIntentOpenState(block);
+        applyRoundIntentOverflowState(block, false);
         return;
     }
 
@@ -1730,11 +1761,25 @@ function updateRoundIntentOverflowState(block, attempt = 0) {
     }
 
     const hasStructuredContent = block.dataset.hasStructuredContent === 'true';
+    const fallbackOverflow = hasRoundIntentFallbackOverflow(block);
     const hasOverflow = hasStructuredContent
         || scrollHeight > clientHeight + 1
-        || scrollWidth > clientWidth + 1;
+        || scrollWidth > clientWidth + 1
+        || (!isMeasurable && fallbackOverflow)
+        || fallbackOverflow;
+    applyRoundIntentOverflowState(block, hasOverflow);
+}
+
+function hasRoundIntentFallbackOverflow(block) {
+    const textLength = Number(block?.dataset?.intentTextLength || 0);
+    const lineCount = Number(block?.dataset?.intentLineCount || 0);
+    return block?.dataset?.hasStructuredContent === 'true'
+        || lineCount > 2
+        || textLength > 160;
+}
+
+function applyRoundIntentOverflowState(block, hasOverflow) {
     const summaryEl = block.querySelector('.round-detail-intent-summary');
-    const toggleEl = block.querySelector('.round-detail-intent-toggle');
     const shouldRestoreOpen = block.dataset.restoreOpen === 'true';
     block.dataset.overflow = hasOverflow ? 'true' : 'false';
     if (summaryEl) {
@@ -1746,9 +1791,13 @@ function updateRoundIntentOverflowState(block, attempt = 0) {
     }
     if (!hasOverflow) {
         block.open = false;
-        forgetRoundIntentOpenState(block);
     }
     delete block.dataset.restoreOpen;
+    syncRoundIntentToggleText(block);
+}
+
+function syncRoundIntentToggleText(block) {
+    const toggleEl = block.querySelector('.round-detail-intent-toggle');
     if (toggleEl) {
         toggleEl.textContent = block.open ? t('rounds.collapse') : t('rounds.expand');
     }
