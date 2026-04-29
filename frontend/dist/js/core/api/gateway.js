@@ -4,12 +4,20 @@
  */
 import { requestJson } from './request.js';
 
-export async function fetchWeChatGatewayAccounts() {
-    return requestJson('/api/gateway/wechat/accounts', undefined, 'Failed to fetch WeChat gateway accounts');
+export async function fetchWeChatGatewayAccounts(options = {}) {
+    return requestJson(
+        '/api/gateway/wechat/accounts',
+        { signal: options.signal },
+        'Failed to fetch WeChat gateway accounts',
+    );
 }
 
-export async function fetchXiaolubanGatewayAccounts() {
-    return requestJson('/api/gateway/xiaoluban/accounts', undefined, 'Failed to fetch Xiaoluban gateway accounts');
+export async function fetchXiaolubanGatewayAccounts(options = {}) {
+    return requestJson(
+        '/api/gateway/xiaoluban/accounts',
+        { signal: options.signal },
+        'Failed to fetch Xiaoluban gateway accounts',
+    );
 }
 
 export async function createXiaolubanGatewayAccount(payload) {

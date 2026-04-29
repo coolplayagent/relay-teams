@@ -4,16 +4,16 @@
  */
 import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
-export async function fetchAutomationDeliveryBindings() {
+export async function fetchAutomationDeliveryBindings(options = {}) {
     return requestJson(
         '/api/automation/delivery-bindings',
-        undefined,
+        { signal: options.signal },
         'Failed to fetch automation delivery bindings',
     );
 }
 
-export async function fetchAutomationFeishuBindings() {
-    return fetchAutomationDeliveryBindings();
+export async function fetchAutomationFeishuBindings(options = {}) {
+    return fetchAutomationDeliveryBindings(options);
 }
 
 export async function fetchAutomationProjects(options = {}) {
@@ -40,10 +40,10 @@ export async function createAutomationProject(payload) {
     return result;
 }
 
-export async function fetchAutomationProject(automationProjectId) {
+export async function fetchAutomationProject(automationProjectId, options = {}) {
     return requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}`,
-        undefined,
+        { signal: options.signal },
         'Failed to fetch automation project',
     );
 }
@@ -119,10 +119,10 @@ export async function disableAutomationProject(automationProjectId) {
     return result;
 }
 
-export async function fetchAutomationProjectSessions(automationProjectId) {
+export async function fetchAutomationProjectSessions(automationProjectId, options = {}) {
     return requestJson(
         `/api/automation/projects/${encodeURIComponent(automationProjectId)}/sessions`,
-        undefined,
+        { signal: options.signal },
         'Failed to fetch automation project sessions',
     );
 }

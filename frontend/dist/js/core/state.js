@@ -65,7 +65,7 @@ export function setMainAgentRoleId(roleId) {
 }
 
 export function getMainAgentRoleId() {
-    return normalizeRoleId(state.mainAgentRoleId);
+    return normalizeRoleId(state.mainAgentRoleId) || 'MainAgent';
 }
 
 export function setMainAgentRoleOption(roleOption) {
@@ -138,7 +138,7 @@ export function isMainAgentRoleId(roleId) {
     if (!safeRoleId) {
         return false;
     }
-    return safeRoleId === getMainAgentRoleId();
+    return safeRoleId === getMainAgentRoleId() || isMainAgentRoleIdentifier(safeRoleId);
 }
 
 export function isReservedSystemRoleId(roleId) {
@@ -206,7 +206,15 @@ export function isRunPrimaryRoleId(roleId, runId, sessionMode = state.currentSes
     if (!safeRoleId) {
         return false;
     }
-    return safeRoleId === getRunPrimaryRoleId(runId, sessionMode);
+    const primaryRoleId = getRunPrimaryRoleId(runId, sessionMode);
+    if (safeRoleId === primaryRoleId) {
+        return true;
+    }
+    return (
+        String(sessionMode || '').trim() !== 'orchestration'
+        && isMainAgentRoleId(safeRoleId)
+        && (!primaryRoleId || isMainAgentRoleId(primaryRoleId))
+    );
 }
 
 export function isPrimaryOrReservedRoleId(roleId, sessionMode = state.currentSessionMode) {
@@ -279,6 +287,13 @@ export function humanizeRoleId(roleId, { coordinatorLabel = 'Coordinator', fallb
 
 function normalizeRoleId(roleId) {
     return String(roleId || '').trim();
+}
+
+function isMainAgentRoleIdentifier(roleId) {
+    return String(roleId || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[\s_-]+/g, '') === 'mainagent';
 }
 
 function normalizeRoleOption(roleOption) {

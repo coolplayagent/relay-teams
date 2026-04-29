@@ -420,8 +420,30 @@ def test_late_tool_call_rebinds_after_stream_container_rerender_in_browser(
     )
 
     assert payload["beforeClearToolCount"] == 1
-    assert payload["afterClearToolCount"] == 1
-    assert payload["toolCallIds"] == ["call-2"]
+    assert payload["afterClearToolCount"] == 2
+    assert payload["toolCallIds"] == ["call-1", "call-2"]
+
+
+def test_randomized_stream_switch_pressure_preserves_tool_calls_in_browser(
+    browser_page: Page,
+    tmp_path: Path,
+) -> None:
+    page = browser_page
+    _open_harness(page, tmp_path)
+
+    payload = page.evaluate(
+        """
+        () => window.__streamTimelineHarness.renderRandomizedStreamSwitchPressure()
+        """
+    )
+
+    assert payload["missing"] == [], payload
+    assert payload["missingResults"] == [], payload
+    assert payload["orderMismatches"] == [], payload
+    assert payload["overlayCounts"] == [12] * 18
+    assert payload["duplicateMax"] == 1
+    assert payload["containers"] == 18
+    assert payload["toolBlocks"] == 216
 
 
 def test_terminal_completed_overlay_does_not_block_processed_group_in_browser(
@@ -513,8 +535,10 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
       finalizeStream,
       finalizeThinking,
       getCoordinatorStreamOverlay,
+      getInstanceStreamOverlay,
       getOrCreateStreamBlock,
       startThinkingBlock,
+      updateToolResult,
     }} from {json.dumps(stream_module)};
     import {{
       renderHistoricalMessageList,
@@ -1595,6 +1619,141 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
           afterClearToolCount: container.querySelectorAll('.tool-block').length,
           toolCallIds: Array.from(container.querySelectorAll('.tool-block'))
             .map(item => item.dataset.toolCallId || ''),
+        }};
+      }},
+
+      renderRandomizedStreamSwitchPressure() {{
+        clearAllStreamState();
+        const containers = new Map();
+        const expected = new Map();
+        const expectedArrivalOrder = new Map();
+        const order = [];
+        let seed = 1337;
+        function random() {{
+          seed = (seed * 48271) % 0x7fffffff;
+          return seed / 0x7fffffff;
+        }}
+        function shuffle(items) {{
+          const next = items.slice();
+          for (let index = next.length - 1; index > 0; index -= 1) {{
+            const swapIndex = Math.floor(random() * (index + 1));
+            const tmp = next[index];
+            next[index] = next[swapIndex];
+            next[swapIndex] = tmp;
+          }}
+          return next;
+        }}
+        function keyFor(runId, instanceId) {{
+          return `${{runId}}::${{instanceId}}`;
+        }}
+        for (let sessionIndex = 0; sessionIndex < 6; sessionIndex += 1) {{
+          for (const agent of ['primary', 'sub-a', 'sub-b']) {{
+            const runId = `run-${{sessionIndex}}`;
+            const instanceId = agent === 'primary' ? 'primary' : `${{agent}}-${{sessionIndex}}`;
+            const roleId = agent === 'primary' ? 'MainAgent' : 'Explorer';
+            const key = keyFor(runId, instanceId);
+            containers.set(key, makeContainer(`pressure-${{sessionIndex}}-${{agent}}`));
+            expected.set(key, []);
+            expectedArrivalOrder.set(key, []);
+            getOrCreateStreamBlock(containers.get(key), instanceId, roleId, agent, runId);
+            for (let callIndex = 0; callIndex < 12; callIndex += 1) {{
+              const toolCallId = `call-${{sessionIndex}}-${{agent}}-${{callIndex}}`;
+              expected.get(key).push(toolCallId);
+              order.push({{ key, runId, instanceId, roleId, toolCallId, callIndex }});
+            }}
+          }}
+        }}
+        shuffle(order).forEach((item, index) => {{
+          const container = containers.get(item.key);
+          if (index % 5 === 0) {{
+            container.replaceChildren();
+          }}
+          if (index % 7 === 0) {{
+            const [runId, instanceId] = item.key.split('::');
+            const roleId = instanceId === 'primary' ? 'MainAgent' : 'Explorer';
+            getOrCreateStreamBlock(container, instanceId, roleId, instanceId, runId);
+          }}
+          appendToolCallBlock(
+            container,
+            item.instanceId,
+            'spawn_subagent',
+            {{ description: `Explore ${{item.callIndex}}` }},
+            item.toolCallId,
+            {{
+              runId: item.runId,
+              roleId: item.roleId,
+              label: item.instanceId === 'primary' ? 'Main Agent' : 'Explorer',
+            }},
+          );
+          expectedArrivalOrder.get(item.key).push(item.toolCallId);
+        }});
+        shuffle(order).forEach((item, index) => {{
+          const container = containers.get(item.key);
+          if (index % 4 === 0) {{
+            container.replaceChildren();
+          }}
+          updateToolResult(
+            item.instanceId,
+            'spawn_subagent',
+            `done-${{item.toolCallId}}`,
+            false,
+            item.toolCallId,
+            {{
+              container,
+              runId: item.runId,
+              roleId: item.roleId,
+              label: item.instanceId === 'primary' ? 'Main Agent' : 'Explorer',
+            }},
+          );
+        }});
+        containers.forEach((container, key) => {{
+          container.replaceChildren();
+          const [runId, instanceId] = key.split('::');
+          const roleId = instanceId === 'primary' ? 'MainAgent' : 'Explorer';
+          getOrCreateStreamBlock(container, instanceId, roleId, instanceId, runId);
+        }});
+        const missing = [];
+        const missingResults = [];
+        const orderMismatches = [];
+        const overlayCounts = [];
+        let duplicateMax = 0;
+        let toolBlocks = 0;
+        containers.forEach((container, key) => {{
+          const rendered = Array.from(container.querySelectorAll('.tool-block'))
+            .map(item => item.dataset.toolCallId || '');
+          toolBlocks += rendered.length;
+          const renderedSet = new Set(rendered);
+          expected.get(key).forEach(toolCallId => {{
+            if (!renderedSet.has(toolCallId)) {{
+              missing.push(`${{key}}:${{toolCallId}}`);
+            }}
+            if (!container.textContent.includes(`done-${{toolCallId}}`)) {{
+              missingResults.push(`${{key}}:${{toolCallId}}`);
+            }}
+          }});
+          const arrivalOrder = expectedArrivalOrder.get(key) || [];
+          if (JSON.stringify(rendered) !== JSON.stringify(arrivalOrder)) {{
+            orderMismatches.push({{
+              key,
+              expected: arrivalOrder,
+              rendered,
+            }});
+          }}
+          const [runId, instanceId] = key.split('::');
+          const overlay = instanceId === 'primary'
+            ? getCoordinatorStreamOverlay(runId)
+            : getInstanceStreamOverlay(runId, instanceId);
+          overlayCounts.push((overlay?.parts || []).filter(part => part.kind === 'tool').length);
+          duplicateMax = Math.max(duplicateMax, maxDuplicateToolCount(container));
+        }});
+        return {{
+          missing,
+          missingResults,
+          orderMismatches,
+          overlayCounts,
+          duplicateMax,
+          containers: containers.size,
+          toolBlocks,
         }};
       }},
 

@@ -4,8 +4,8 @@
  */
 import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
-export async function fetchConfigStatus() {
-    return requestJson('/api/system/configs', undefined, 'Failed to fetch config status');
+export async function fetchConfigStatus(options = {}) {
+    return requestJson('/api/system/configs', { signal: options.signal }, 'Failed to fetch config status');
 }
 
 export async function fetchSshProfiles() {
@@ -602,8 +602,12 @@ export async function fetchNotificationConfig() {
     return requestJson('/api/system/configs/notifications', undefined, 'Failed to fetch notification config');
 }
 
-export async function fetchOrchestrationConfig() {
-    return requestJson('/api/system/configs/orchestration', undefined, 'Failed to fetch orchestration config');
+export async function fetchOrchestrationConfig(options = {}) {
+    return requestJson(
+        '/api/system/configs/orchestration',
+        { signal: options.signal },
+        'Failed to fetch orchestration config',
+    );
 }
 
 export async function saveNotificationConfig(config) {

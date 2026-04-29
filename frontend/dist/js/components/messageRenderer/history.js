@@ -446,15 +446,17 @@ function filterPersistedOverlayParts(streamOverlayEntry, persistedIndex, runId, 
         }
         return true;
     });
+    const isTerminalStatus = isTerminalRunStatus(options.runStatus);
     const allowIdleCursor = streamOverlayEntry.idleCursor === true
         && (
             filteredParts.length > 0
             || parts.length === 0
         )
-        && !isTerminalRunStatus(options.runStatus);
+        && !isTerminalStatus;
+    const allowTextStreaming = streamOverlayEntry.textStreaming === true && !isTerminalStatus;
     const hasRenderableState = filteredParts.length > 0
         || allowIdleCursor
-        || streamOverlayEntry.textStreaming === true;
+        || allowTextStreaming;
     if (!hasRenderableState) {
         return null;
     }
@@ -462,6 +464,7 @@ function filterPersistedOverlayParts(streamOverlayEntry, persistedIndex, runId, 
         ...streamOverlayEntry,
         parts: filteredParts,
         idleCursor: allowIdleCursor,
+        textStreaming: allowTextStreaming,
     };
 }
 
@@ -628,6 +631,7 @@ function renderStreamOverlayEntry(
     runId = '',
     options = {},
 ) {
+    const isTerminalStatus = isTerminalRunStatus(options.runStatus);
     const label = streamOverlayEntry.label
         || labelFromRole('assistant', streamOverlayEntry.roleId, streamOverlayEntry.instanceId);
     const contentEl = resolveOverlayContentTarget(
@@ -679,7 +683,7 @@ function renderStreamOverlayEntry(
             flushText(false);
             appendThinkingText(contentEl, String(part.content || ''), {
                 partIndex: part._key ?? part.part_index ?? '',
-                streaming: part.finished !== true,
+                streaming: part.finished !== true && !isTerminalStatus,
                 runId: overlayRunId,
                 instanceId: String(streamOverlayEntry?.instanceId || '').trim(),
                 streamKey: overlayStreamKey,

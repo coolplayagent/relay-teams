@@ -3,7 +3,9 @@
  * Prompt send flow: live round bootstrap and SSE stream start.
  */
 import {
+  clearPendingRunStartPlaceholder,
   createLiveRound,
+  showPendingRunStartPlaceholder,
 } from "../components/rounds/timeline.js";
 import { refreshVisibleContextIndicators } from "../components/contextIndicators.js";
 import { clearAllStreamState } from "../components/messageRenderer.js";
@@ -19,6 +21,7 @@ import {
   applyDraftSessionTopology,
   ensureSessionForNewSessionDraft,
   isNewSessionDraftActive,
+  syncNewSessionDraftMentionHintVisibility,
 } from "../components/newSessionDraft.js";
 import { hydrateSessionView, startSessionContinuity } from "./recovery.js";
 import {
@@ -398,6 +401,11 @@ export async function handleSend() {
   refreshSessionTopologyControls();
   refreshVisibleContextIndicators({ immediate: true });
   clearAllStreamState({ preserveOverlay: true });
+  showPendingRunStartPlaceholder(
+    state.currentSessionId,
+    promptPreviewText,
+    displayInputParts,
+  );
 
   sysLog(t("composer.log.sending_prompt"));
   startSessionContinuity(state.currentSessionId);
@@ -424,13 +432,36 @@ export async function handleSend() {
           }
           state.currentSessionCanSwitchMode = false;
           refreshSessionTopologyControls();
+          emitSessionTitlePreview(state.currentSessionId, promptPreviewText);
           createLiveRound(run.run_id, promptPreviewText, displayInputParts);
         },
       },
     );
   } finally {
+    clearPendingRunStartPlaceholder();
     finishForegroundSubmission(submission);
   }
+}
+
+function emitSessionTitlePreview(sessionId, title) {
+  const safeSessionId = String(sessionId || "").trim();
+  const safeTitle = String(title || "").trim();
+  if (
+    !safeSessionId
+    || !safeTitle
+    || typeof document === "undefined"
+    || typeof document.dispatchEvent !== "function"
+  ) {
+    return;
+  }
+  document.dispatchEvent(
+    new CustomEvent("agent-teams-session-title-previewed", {
+      detail: {
+        sessionId: safeSessionId,
+        title: safeTitle,
+      },
+    }),
+  );
 }
 
 function restorePromptComposerAfterSendAbort() {
@@ -603,6 +634,7 @@ function resetPromptComposer() {
 function renderPromptAttachments() {
   const container = els.promptAttachments;
   if (!container) {
+    syncPromptAttachmentHintVisibility();
     return;
   }
   container.classList.toggle(
@@ -612,6 +644,7 @@ function renderPromptAttachments() {
   if (promptAttachments.length === 0) {
     container.innerHTML = "";
     container.hidden = true;
+    syncPromptAttachmentHintVisibility();
     return;
   }
   container.hidden = false;
@@ -659,6 +692,7 @@ function renderPromptAttachments() {
       `;
     })
     .join("");
+  syncPromptAttachmentHintVisibility();
   if (typeof container.querySelectorAll !== "function") {
     return;
   }
@@ -679,6 +713,12 @@ function renderPromptAttachments() {
         els.promptInput?.focus?.();
       });
     });
+}
+
+function syncPromptAttachmentHintVisibility() {
+  const hasAttachments = promptAttachments.length > 0;
+  els.promptInputHint?.classList?.toggle("is-hidden", hasAttachments);
+  syncNewSessionDraftMentionHintVisibility();
 }
 
 function renderPromptTokenPreview() {

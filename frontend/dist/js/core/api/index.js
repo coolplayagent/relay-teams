@@ -10,6 +10,7 @@ export {
     fetchSessionAgents,
     fetchSessionHistory,
     fetchSessionRecovery,
+    fetchSessionRound,
     fetchSessionRounds,
     fetchSessionSubagents,
     fetchSessions,

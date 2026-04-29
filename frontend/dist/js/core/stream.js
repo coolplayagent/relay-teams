@@ -44,6 +44,8 @@ let normalModeSubagentConnection = null;
 let backgroundDiscoveryTimer = null;
 let backgroundDiscoveryPromise = null;
 let backgroundDiscoveryQueued = false;
+let backgroundDiscoveryPausedUntil = 0;
+let foregroundNavigationStreamToken = 0;
 let normalModeSubagentDiscoveryTimer = null;
 let normalModeSubagentDiscoveryPromise = null;
 let normalModeSubagentDiscoveryQueued = false;
@@ -53,8 +55,10 @@ const unavailableRunCooldownUntil = new Map();
 const RUN_NOT_FOUND_COOLDOWN_MS = 30000;
 // Keep some room in the browser connection pool for control actions like stop.
 const MAX_BACKGROUND_STREAMS = 2;
+const FOREGROUND_NAVIGATION_STREAM_PAUSE_MS = 1200;
 const NORMAL_MODE_SUBAGENT_DISCOVERY_DELAY_MS = 2500;
 const NORMAL_MODE_SUBAGENT_RECONNECT_DELAY_MS = 900;
+const RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS = 360;
 
 function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
     state.isGenerating = isBusy;
@@ -129,7 +133,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
                 clearStopRequest: true,
                 releaseUi: false,
             });
-            scheduleSessionsRefresh(0, { forceRefresh: true });
+            scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: true });
             attachRunStreamAsBackground(runId, safeSessionId, {
                 reason: 'start-background',
             });
@@ -139,7 +143,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
         }
-        scheduleSessionsRefresh(0, { forceRefresh: true });
+        scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: true });
     } catch (err) {
         logError(
             'frontend.run.create_failed',
@@ -151,7 +155,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
                 clearStopRequest: true,
                 releaseUi: false,
             });
-            scheduleSessionsRefresh(0, { forceRefresh: true });
+            scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: true });
             return;
         }
         finishPendingRunStart(runStart, {
@@ -265,6 +269,41 @@ export function detachActiveStreamForSessionSwitch(options = {}) {
     setStreamUiBusy(false, { focusPrompt: options.focusPrompt !== false });
     ensureBackgroundDiscoveryLoop();
     return true;
+}
+
+export function prepareStreamsForForegroundNavigation(sessionId = '') {
+    const targetSessionId = String(sessionId || '').trim();
+    foregroundNavigationStreamToken += 1;
+    backgroundDiscoveryPausedUntil = Math.max(
+        backgroundDiscoveryPausedUntil,
+        Date.now() + FOREGROUND_NAVIGATION_STREAM_PAUSE_MS,
+    );
+    rescheduleBackgroundDiscoveryAfterPause();
+    let keptTargetBackground = false;
+    Array.from(backgroundStreams.values()).forEach(connection => {
+        if (
+            targetSessionId
+            && connection?.sessionId === targetSessionId
+            && !keptTargetBackground
+        ) {
+            keptTargetBackground = true;
+            return;
+        }
+        finishBackgroundConnection(connection, { rediscover: false, refreshSidebar: false });
+    });
+
+    if (
+        normalModeSubagentConnection
+        && (!targetSessionId || normalModeSubagentConnection.sessionId !== targetSessionId)
+    ) {
+        finishNormalModeSubagentSessionConnection(normalModeSubagentConnection);
+    }
+    Array.from(normalModeSubagentStreams.values()).forEach(connection => {
+        if (targetSessionId && connection?.sessionId === targetSessionId) {
+            return;
+        }
+        finishNormalModeSubagentConnection(connection);
+    });
 }
 
 export function hasPendingRunCreation(sessionId = '') {
@@ -476,16 +515,30 @@ export function resumeRunStream(runId, sessionId = state.currentSessionId, onCom
     attachRunStream(runId, sessionId, onCompleted, options);
 }
 
-async function refreshRoundsAfterCompletion(sessionId) {
+async function refreshRoundsAfterCompletion(sessionId, runId = '', options = {}) {
     if (!sessionId || state.currentSessionId !== sessionId) return;
     try {
-        const recoveryModule = await import('../app/recovery.js');
-        if (typeof recoveryModule.hydrateSessionView === 'function' && state.currentSessionId === sessionId) {
-            await recoveryModule.hydrateSessionView(sessionId, {
-                includeRounds: true,
-                quiet: true,
-                roundsScrollPolicy: 'completion-auto',
-            });
+        const shouldHydrate = options.hydrate !== false;
+        if (shouldHydrate) {
+            const recoveryModule = await import('../app/recovery.js');
+            if (typeof recoveryModule.hydrateSessionView === 'function' && state.currentSessionId === sessionId) {
+                await recoveryModule.hydrateSessionView(sessionId, {
+                    includeRounds: true,
+                    quiet: true,
+                    roundsScrollPolicy: 'completion-auto',
+                });
+            }
+        }
+        const safeRunId = String(runId || '').trim();
+        if (safeRunId && state.currentSessionId === sessionId) {
+            const timelineModule = await import('../components/rounds/timeline.js');
+            if (typeof timelineModule.refreshTerminalRoundFromHistory === 'function') {
+                await timelineModule.refreshTerminalRoundFromHistory(sessionId, safeRunId, {
+                    scrollPolicy: 'completion-auto',
+                    navigatorLayoutReason: 'terminal-history',
+                    expectedToolCallIds: options.expectedToolCallIds,
+                });
+            }
         }
     } catch (e) {
         logError(
@@ -643,6 +696,7 @@ function openRunStreamConnection(connection, { reason, afterEventId = null } = {
 
 function finishActiveConnection(connection, finishOptions = {}) {
     if (!connection || connection.closed) return;
+    const expectedToolCallIds = collectCoordinatorOverlayToolCallIds(connection.runId);
     connection.closed = true;
     clearReconnectTimer(connection);
     if (connection.eventSource) {
@@ -661,16 +715,57 @@ function finishActiveConnection(connection, finishOptions = {}) {
     endStream(finishOptions);
     ensureNormalModeSubagentDiscoveryLoop();
     if (typeof connection.onCompleted === 'function') {
-        connection.onCompleted(connection.sessionId);
+        Promise.resolve()
+            .then(() => connection.onCompleted(connection.sessionId))
+            .catch(error => {
+                logError(
+                    'frontend.run.completed_callback_failed',
+                    'Run completion callback failed',
+                    errorToPayload(error, {
+                        session_id: connection.sessionId,
+                        run_id: connection.runId,
+                    }),
+                );
+            })
+            .finally(() => {
+                if (connection.sessionId) {
+                    void refreshRoundsAfterCompletion(connection.sessionId, connection.runId, {
+                        hydrate: false,
+                        expectedToolCallIds,
+                    });
+                }
+                ensureBackgroundDiscoveryLoop();
+            });
         return;
     }
     if (connection.sessionId) {
-        void refreshRoundsAfterCompletion(connection.sessionId);
+        void refreshRoundsAfterCompletion(connection.sessionId, connection.runId, {
+            expectedToolCallIds,
+        });
     }
     ensureBackgroundDiscoveryLoop();
 }
 
-function finishBackgroundConnection(connection) {
+function collectCoordinatorOverlayToolCallIds(runId) {
+    const overlay = messageRenderer.getCoordinatorStreamOverlay?.(runId);
+    if (!overlay || typeof overlay !== 'object') {
+        return [];
+    }
+    const parts = Array.isArray(overlay.parts) ? overlay.parts : [];
+    const ids = [];
+    parts.forEach(part => {
+        if (String(part?.kind || '').trim() !== 'tool') {
+            return;
+        }
+        const toolCallId = String(part.tool_call_id || part.toolCallId || part.id || '').trim();
+        if (toolCallId) {
+            ids.push(toolCallId);
+        }
+    });
+    return ids;
+}
+
+function finishBackgroundConnection(connection, { rediscover = true, refreshSidebar = true } = {}) {
     if (!connection || connection.closed) return;
     connection.closed = true;
     clearReconnectTimer(connection);
@@ -679,8 +774,12 @@ function finishBackgroundConnection(connection) {
         connection.eventSource = null;
     }
     backgroundStreams.delete(connection.runId);
-    scheduleSessionsRefresh();
-    ensureBackgroundDiscoveryLoop();
+    if (refreshSidebar) {
+        scheduleSessionsRefresh();
+    }
+    if (rediscover) {
+        ensureBackgroundDiscoveryLoop();
+    }
 }
 
 function scheduleBackgroundReconnect(connection) {
@@ -710,7 +809,9 @@ function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {
     if (isCurrentSessionConnection) {
         routeEvent(evType, payload, eventMeta);
         if (isTerminalRunEvent(evType)) {
-            void refreshRoundsAfterCompletion(connection.sessionId);
+            void refreshRoundsAfterCompletion(connection.sessionId, connection.runId, {
+                expectedToolCallIds: collectCoordinatorOverlayToolCallIds(connection.runId),
+            });
         }
         return;
     }
@@ -749,6 +850,10 @@ function ensureBackgroundDiscoveryLoop() {
         }
         return;
     }
+    if (isBackgroundDiscoveryPaused()) {
+        rescheduleBackgroundDiscoveryAfterPause();
+        return;
+    }
     if (backgroundDiscoveryTimer || backgroundDiscoveryPromise) {
         return;
     }
@@ -756,6 +861,26 @@ function ensureBackgroundDiscoveryLoop() {
         backgroundDiscoveryTimer = null;
         void runBackgroundDiscovery();
     }, 2500);
+    backgroundDiscoveryTimer.unref?.();
+}
+
+function isBackgroundDiscoveryPaused(now = Date.now()) {
+    return backgroundDiscoveryPausedUntil > now;
+}
+
+function rescheduleBackgroundDiscoveryAfterPause() {
+    const remainingMs = Math.max(0, backgroundDiscoveryPausedUntil - Date.now());
+    if (remainingMs <= 0) {
+        return;
+    }
+    if (backgroundDiscoveryTimer) {
+        clearTimeout(backgroundDiscoveryTimer);
+        backgroundDiscoveryTimer = null;
+    }
+    backgroundDiscoveryTimer = setTimeout(() => {
+        backgroundDiscoveryTimer = null;
+        ensureBackgroundDiscoveryLoop();
+    }, remainingMs + 40);
     backgroundDiscoveryTimer.unref?.();
 }
 
@@ -869,7 +994,13 @@ async function runBackgroundDiscovery() {
     }
     backgroundDiscoveryPromise = (async () => {
         try {
+            if (isBackgroundDiscoveryPaused()) {
+                return;
+            }
             const sessions = await fetchSessions();
+            if (isBackgroundDiscoveryPaused()) {
+                return;
+            }
             await reconcileBackgroundStreams(sessions);
         } catch (e) {
             logWarn('frontend.background.discovery_failed', 'Failed to discover running sessions', {
@@ -879,6 +1010,10 @@ async function runBackgroundDiscovery() {
             backgroundDiscoveryPromise = null;
             if (backgroundDiscoveryQueued) {
                 backgroundDiscoveryQueued = false;
+                if (isBackgroundDiscoveryPaused()) {
+                    ensureBackgroundDiscoveryLoop();
+                    return;
+                }
                 void runBackgroundDiscovery();
                 return;
             }
@@ -889,6 +1024,9 @@ async function runBackgroundDiscovery() {
 }
 
 async function reconcileBackgroundStreams(sessionRecords = []) {
+    if (isBackgroundDiscoveryPaused()) {
+        return;
+    }
     const records = Array.isArray(sessionRecords) ? sessionRecords : [];
     const focusedRunId = String(activeConnection?.runId || '').trim();
     const backgroundRunIds = new Set();
@@ -987,8 +1125,12 @@ async function attachBackgroundStreamForSession(record) {
     }
 
     pendingBackgroundAttachRunIds.add(runId);
+    const navigationToken = foregroundNavigationStreamToken;
     try {
         const snapshot = await fetchSessionRecovery(sessionId);
+        if (navigationToken !== foregroundNavigationStreamToken || isBackgroundDiscoveryPaused()) {
+            return false;
+        }
         const activeRun = snapshot?.active_run && typeof snapshot.active_run === 'object'
             ? snapshot.active_run
             : snapshot?.activeRun && typeof snapshot.activeRun === 'object'

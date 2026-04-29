@@ -31,6 +31,7 @@ export function applyToolReturn() {}
 export function appendStructuredContentPart() {}
 export function appendThinkingText() { return {}; }
 export function buildPendingToolBlock() { return { querySelector() { return null; } }; }
+export function clearThinkingOpenStateForRun() {}
 export function findToolBlock() { return null; }
 export function findToolBlockInContainer() { return null; }
 export function indexPendingToolBlock() {}
@@ -89,6 +90,26 @@ import {
 } from "./stream.js";
 
 applyStreamOverlayEvent(
+  "thinking_started",
+  { part_index: 0 },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
+  "thinking_delta",
+  { part_index: 0, text: "planning" },
+  {
+    runId: "run-primary",
+    instanceId: "primary",
+    roleId: "main-role",
+    label: "Main Agent",
+  },
+);
+applyStreamOverlayEvent(
   "text_delta",
   { text: "still not persisted" },
   {
@@ -133,10 +154,16 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary")));
     )
 
     payload = json.loads(result.stdout)
-    assert payload["coordinator"]["parts"] == [
-        {"kind": "text", "content": "still not persisted"}
-    ]
+    assert payload["coordinator"]["parts"][0]["kind"] == "thinking"
+    assert payload["coordinator"]["parts"][0]["content"] == "planning"
+    assert payload["coordinator"]["parts"][0]["finished"] is True
+    assert payload["coordinator"]["parts"][1] == {
+        "kind": "text",
+        "content": "still not persisted",
+        "streaming": False,
+    }
     assert payload["coordinator"]["textStreaming"] is False
+    assert payload["coordinator"]["idleCursor"] is False
 
 
 def test_stream_overlay_replayed_event_ids_do_not_duplicate_parts(
@@ -210,6 +237,61 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinato
     assert overlay["parts"][0]["content"] == "plan"
     assert overlay["parts"][1]["tool_call_id"] == "call-1"
     assert overlay["parts"][1]["status"] == "completed"
+
+
+def test_stream_overlay_terminal_event_releases_event_id_dedupe(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_terminal_replay"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+const options = {
+  runId: "run-primary",
+  instanceId: "primary",
+  roleId: "main-role",
+  label: "Main Agent",
+};
+applyStreamOverlayEvent("text_delta", { text: "first lifecycle" }, {
+  ...options,
+  eventId: "evt-repeat",
+});
+applyStreamOverlayEvent("run_completed", {}, { ...options, eventId: "evt-terminal" });
+applyStreamOverlayEvent("text_delta", { text: "second lifecycle" }, {
+  ...options,
+  eventId: "evt-repeat",
+});
+
+const overlay = getRunStreamOverlaySnapshot("run-primary").coordinator;
+console.log(JSON.stringify({
+  text: overlay.parts.filter(part => part.kind === "text").map(part => part.content).join("\\n"),
+  textStreaming: overlay.textStreaming,
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert "first lifecycle" in payload["text"]
+    assert "second lifecycle" in payload["text"]
+    assert payload["textStreaming"] is True
 
 
 def test_stream_overlay_merges_out_of_order_parallel_tool_events(
@@ -973,8 +1055,12 @@ export function formatMessage(key, values = {}) {
         """
 export function applyToolReturn() {}
 export function appendStructuredContentPart() {}
-export function appendThinkingText(contentEl, text) {
-  contentEl.children.push({ type: "thinking", text });
+export function appendThinkingText(contentEl, text, options = {}) {
+  contentEl.children.push({
+    type: "thinking",
+    text,
+    streaming: options.streaming === true,
+  });
   return { closest() { return null; } };
 }
 export function buildToolBlock(toolName, args, toolCallId) {
@@ -1114,10 +1200,51 @@ renderHistoricalMessageList(tailContainer, [
   runStatus: "running",
 });
 
+const terminalContainer = {
+  dataset: {},
+  messages: [],
+  appendChild() {},
+  querySelectorAll() {
+    return this.messages.map(item => item.wrapper);
+  },
+  querySelector() {
+    return null;
+  },
+};
+
+renderHistoricalMessageList(terminalContainer, [
+  {
+    role: "assistant",
+    role_id: "Main Agent",
+    instance_id: "primary",
+    created_at: "2026-04-25T12:00:00",
+    message: {
+      parts: [{ part_kind: "text", content: "persisted" }],
+    },
+  },
+], {
+  runId: "run-1",
+  streamOverlayEntry: {
+    roleId: "Main Agent",
+    instanceId: "primary",
+    label: "Main Agent",
+    parts: [
+      { kind: "thinking", content: "late thought", finished: false, part_index: 0 },
+      { kind: "text", content: "late chunk" },
+    ],
+    textStreaming: true,
+    idleCursor: true,
+  },
+  isLatestRound: true,
+  runStatus: "completed",
+});
+
 console.log(JSON.stringify({
   wrapperCount: container.messages.length,
   children: container.messages[0].contentEl.children,
   tailChildren: tailContainer.messages[1].contentEl.children,
+  terminalMessageCount: terminalContainer.messages.length,
+  terminalChildren: terminalContainer.messages[terminalContainer.messages.length - 1].contentEl.children,
 }));
 """.strip()
 
@@ -1161,6 +1288,11 @@ console.log(JSON.stringify({
             "parts": [{"part_kind": "text", "content": "different tail"}],
         },
         {"type": "text", "text": "done", "streaming": True},
+    ]
+    assert payload["terminalMessageCount"] == 2
+    assert payload["terminalChildren"] == [
+        {"type": "thinking", "text": "late thought", "streaming": False},
+        {"type": "text", "text": "late chunk", "streaming": False},
     ]
 
 

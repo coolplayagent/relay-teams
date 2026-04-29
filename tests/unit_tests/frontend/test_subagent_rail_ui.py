@@ -74,14 +74,16 @@ console.log(JSON.stringify({
     assert "writer" in selector_html
     assert meta_html == ""
     assert payload["metaHidden"] is True
-    assert open_agent_panel_calls[-1] == {
-        "instanceId": "writer-2",
-        "roleId": "writer",
-        "options": {
-            "reveal": False,
-            "forceRefresh": False,
+    assert open_agent_panel_calls == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {
+                "reveal": False,
+                "forceRefresh": False,
+            },
         },
-    }
+    ]
 
 
 def test_subagent_rail_rebuilds_labels_when_language_changes(tmp_path: Path) -> None:

@@ -9,12 +9,14 @@ import { roundsState } from './state.js';
 export async function fetchInitialRoundsPage(sessionId, options = {}) {
     return fetchSessionRounds(sessionId, {
         limit: roundsState.pageSize,
+        priority: options.priority,
         signal: options.signal,
     });
 }
 
 export async function fetchTimelineRoundsPage(sessionId, options = {}) {
     return fetchSessionRounds(sessionId, {
+        priority: options.priority,
         timeline: true,
         signal: options.signal,
     });

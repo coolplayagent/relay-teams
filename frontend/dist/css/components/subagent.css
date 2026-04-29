@@ -203,7 +203,7 @@
 }
 
 .projects-list .session-subagent-list {
-    --session-subagent-list-height: 0px;
+    --session-subagent-list-height: auto;
     position: relative;
     display: flex;
     flex-direction: column;
@@ -213,10 +213,11 @@
     overflow: hidden;
     max-height: var(--session-subagent-list-height);
     opacity: 1;
-    transform: translateY(0);
-    transform-origin: top;
-    transition: max-height 0.16s ease, opacity 0.16s ease;
     pointer-events: auto;
+}
+
+.projects-list .session-subagent-list.is-animating {
+    transition: max-height 0.16s ease, opacity 0.16s ease;
 }
 
 .projects-list .session-subagent-list.is-expanded {
@@ -240,14 +241,10 @@
     width: 1px;
     background: color-mix(in srgb, var(--border-color) 82%, transparent);
     opacity: 0.95;
-    transform-origin: top;
-    transform: scaleY(1);
-    transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .projects-list .session-subagent-list.is-collapsed::before {
     opacity: 0;
-    transform: scaleY(0);
 }
 
 .projects-list .session-subagent-item {
@@ -386,7 +383,9 @@
     .projects-list .project-session-list.is-visibility-height-collapsing,
     .projects-list .project-menu.is-opening,
     .projects-list .project-body.is-animating,
-    .projects-list .session-subagent-list {
+    .projects-list .session-subagent-list,
+    .subagent-session-loading-spinner,
+    .subagent-main-session-loading-spinner {
         animation: none;
         transition: none;
     }
@@ -483,6 +482,48 @@
     flex-direction: column;
     gap: 0.75rem;
     min-width: 0;
+}
+
+.subagent-session-loading {
+    display: none;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 30px;
+    padding: 0.28rem 0.4rem;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+}
+
+.subagent-session-view.is-loading .subagent-session-loading {
+    display: inline-flex;
+}
+
+.subagent-session-loading-spinner,
+.subagent-main-session-loading-spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid color-mix(in srgb, var(--primary) 18%, var(--border-color));
+    border-top-color: color-mix(in srgb, var(--primary) 80%, var(--text-primary));
+    border-radius: 50%;
+    animation: subagentSessionLoadingSpin 0.82s linear infinite;
+}
+
+.subagent-main-session-loading {
+    width: min(1264px, 100%);
+    max-width: 100%;
+    margin: 1rem auto;
+    padding: 0.55rem 0.4rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+@keyframes subagentSessionLoadingSpin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .projects-list .project-session-visibility-btn:hover {

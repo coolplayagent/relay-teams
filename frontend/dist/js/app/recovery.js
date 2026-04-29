@@ -4,7 +4,10 @@
  */
 import { refreshSubagentRail } from '../components/subagentRail.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
-import { clearRunStreamState } from '../components/messageRenderer.js';
+import {
+    clearRunStreamState,
+    reconcileTerminalRunStreamState,
+} from '../components/messageRenderer.js';
 import {
     loadSessionRounds,
     overlayRoundRecoveryState,
@@ -88,7 +91,13 @@ function handleBackgroundTaskPanelToggle(runId) {
 
 export async function hydrateSessionView(
     sessionId = state.currentSessionId,
-    { includeRounds = true, quiet = true, roundsScrollPolicy = '', signal = null } = {},
+    {
+        includeRounds = true,
+        priority = '',
+        quiet = true,
+        roundsScrollPolicy = '',
+        signal = null,
+    } = {},
 ) {
     const safeSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!safeSessionId) {
@@ -106,8 +115,11 @@ export async function hydrateSessionView(
         && state.activeEventSource
         && state.isGenerating
     );
+    const recoveryPromise = refreshSessionRecovery(safeSessionId, { priority, quiet, signal });
+    recoveryPromise.catch(() => null);
     if (includeRounds && !shouldSkipRoundsReload) {
         await loadSessionRounds(safeSessionId, {
+            priority,
             render: !preserveActiveSubagentView,
             scrollPolicy: roundsScrollPolicy || undefined,
             signal,
@@ -115,13 +127,14 @@ export async function hydrateSessionView(
         throwIfAborted(signal);
         if (state.currentSessionId !== safeSessionId) return null;
     }
-    const snapshot = await refreshSessionRecovery(safeSessionId, { quiet, signal });
+    const snapshot = await recoveryPromise;
     throwIfAborted(signal);
     await ensureAutomaticRecoveryStream(snapshot, {
         sessionId: safeSessionId,
         reason: 'hydrate-session',
     });
-    await refreshSubagentRail(safeSessionId, { preserveSelection: true, signal });
+    await refreshSubagentRail(safeSessionId, { preserveSelection: true, priority, signal });
+    throwIfAborted(signal);
     syncSessionContinuity();
     return snapshot;
 }
@@ -208,6 +221,7 @@ export function clearSessionRecovery() {
 
 export function applyRecoverySnapshot(snapshot) {
     const normalized = normalizeRecoverySnapshot(snapshot);
+    reconcileTerminalRecoverySnapshot(normalized);
     const primaryRoleId = String(
         normalized.activeRun?.primary_role_id
         || normalized.roundSnapshot?.primary_role_id
@@ -218,11 +232,7 @@ export function applyRecoverySnapshot(snapshot) {
     }
     const previous = state.currentRecoverySnapshot;
     if (areRecoverySnapshotsEquivalent(previous, normalized)) {
-        if (normalized.activeRun?.run_id) {
-            state.activeRunId = normalized.activeRun.run_id;
-        } else if (!state.isGenerating) {
-            state.activeRunId = null;
-        }
+        syncActiveRunIdFromRecoverySnapshot(normalized);
         syncRecoveryRoundOverlay();
         syncRoundTodoVisibility();
         renderRecoveryBanner();
@@ -236,11 +246,7 @@ export function applyRecoverySnapshot(snapshot) {
     reconcileBackgroundTaskActionState(normalized.backgroundTasks);
     state.currentRecoverySnapshot = normalized;
     state.pausedSubagent = normalized.pausedSubagent;
-    if (normalized.activeRun?.run_id) {
-        state.activeRunId = normalized.activeRun.run_id;
-    } else if (!state.isGenerating) {
-        state.activeRunId = null;
-    }
+    syncActiveRunIdFromRecoverySnapshot(normalized);
     scheduleSessionsRefresh();
     syncRecoveryRoundOverlay();
     syncRoundTodoVisibility();
@@ -248,6 +254,147 @@ export function applyRecoverySnapshot(snapshot) {
     syncSessionContinuity();
     refreshVisibleContextIndicators({ immediate: true });
     return normalized;
+}
+
+function reconcileTerminalRecoverySnapshot(snapshot) {
+    const activeRun = snapshot?.activeRun || null;
+    if (activeRun?.run_id && isTerminalRecoveryRun(activeRun)) {
+        reconcileTerminalRunStreamState(activeRun.run_id);
+    }
+    const roundSnapshot = snapshot?.roundSnapshot || null;
+    const roundRunId = String(roundSnapshot?.run_id || '').trim();
+    if (roundRunId && isTerminalRecoveryRound(roundSnapshot)) {
+        reconcileTerminalRunStreamState(roundRunId);
+    }
+}
+
+function syncActiveRunIdFromRecoverySnapshot(snapshot) {
+    const activeRun = snapshot?.activeRun || null;
+    if (activeRun?.run_id && !isTerminalRecoveryRun(activeRun)) {
+        state.activeRunId = activeRun.run_id;
+        return;
+    }
+    if (!state.isGenerating || isTerminalRecoveryRun(activeRun)) {
+        state.activeRunId = null;
+    }
+}
+
+function isTerminalRecoveryRun(activeRun) {
+    if (!activeRun || typeof activeRun !== 'object') {
+        return false;
+    }
+    return isTerminalRecoveryStatus(activeRun.status) || isTerminalRecoveryStatus(activeRun.phase);
+}
+
+function isTerminalRecoveryRound(round) {
+    if (!round || typeof round !== 'object') {
+        return false;
+    }
+    return isTerminalRecoveryStatus(round.run_status) || isTerminalRecoveryStatus(round.run_phase);
+}
+
+function isTerminalRecoveryStatus(status) {
+    return [
+        'completed',
+        'failed',
+        'stopped',
+        'cancelled',
+        'canceled',
+        'terminal',
+    ].includes(String(status || '').trim().toLowerCase());
+}
+
+export function applyBackgroundTaskEvent(payload, eventMeta = null, eventType = '') {
+    const currentSessionId = String(state.currentSessionId || '').trim();
+    const eventSessionId = String(
+        payload?.session_id
+        || payload?.sessionId
+        || eventMeta?.session_id
+        || eventMeta?.sessionId
+        || '',
+    ).trim();
+    if (eventSessionId && currentSessionId && eventSessionId !== currentSessionId) {
+        return false;
+    }
+    const runId = String(
+        payload?.run_id
+        || payload?.runId
+        || eventMeta?.run_id
+        || eventMeta?.trace_id
+        || state.activeRunId
+        || '',
+    ).trim();
+    const normalized = normalizeBackgroundTask({
+        ...payload,
+        run_id: runId,
+        status: normalizeBackgroundTaskEventStatus(payload, eventType),
+        updated_at: payload?.updated_at || payload?.updatedAt || new Date().toISOString(),
+    }, runId);
+    if (!normalized) {
+        return false;
+    }
+    if (!isDisplayableBackgroundTask(normalized)) {
+        return false;
+    }
+
+    const existingSnapshot = state.currentRecoverySnapshot || normalizeRecoverySnapshot({
+        active_run: runId
+            ? {
+                run_id: runId,
+                status: 'running',
+                phase: 'running',
+                is_recoverable: true,
+            }
+            : null,
+        background_tasks: [],
+    });
+    const existingTasks = Array.isArray(existingSnapshot.backgroundTasks)
+        ? existingSnapshot.backgroundTasks
+        : [];
+    const found = existingTasks.some(
+        item => item.backgroundTaskId === normalized.backgroundTaskId,
+    );
+    const nextBackgroundTasks = found
+        ? existingTasks.map(item => (
+            item.backgroundTaskId === normalized.backgroundTaskId
+                ? {
+                    ...item,
+                    ...normalized,
+                    command: normalized.command || item.command,
+                    cwd: normalized.cwd || item.cwd,
+                    logPath: normalized.logPath || item.logPath,
+                }
+                : item
+        ))
+        : [normalized, ...existingTasks];
+
+    state.currentRecoverySnapshot = {
+        ...existingSnapshot,
+        activeRun: existingSnapshot.activeRun
+            ? {
+                ...existingSnapshot.activeRun,
+                run_id: existingSnapshot.activeRun.run_id || runId,
+                background_task_count: nextBackgroundTasks.length,
+            }
+            : runId
+                ? {
+                    run_id: runId,
+                    status: 'running',
+                    phase: 'running',
+                    is_recoverable: true,
+                    background_task_count: nextBackgroundTasks.length,
+                }
+                : null,
+        backgroundTasks: nextBackgroundTasks,
+    };
+    reconcileBackgroundTaskActionState(nextBackgroundTasks);
+    renderRecoveryBanner();
+    syncSessionContinuity();
+    return true;
+}
+
+export function isDisplayableBackgroundTaskPayload(payload) {
+    return isDisplayableBackgroundTask(payload);
 }
 
 export async function refreshSessionRecovery(sessionId = state.currentSessionId, options = {}) {
@@ -262,6 +409,7 @@ export async function refreshSessionRecovery(sessionId = state.currentSessionId,
             state.currentRecoverySnapshot?.activeRun?.run_id || state.activeRunId || '',
         ).trim();
         const snapshot = await fetchSessionRecovery(safeSessionId, {
+            priority: options.priority,
             signal: options.signal,
         });
         throwIfAborted(options.signal);
@@ -592,7 +740,7 @@ function normalizeRecoverySnapshot(snapshot) {
     const backgroundTasks = Array.isArray(snapshot?.background_tasks)
         ? snapshot.background_tasks
             .map(item => normalizeBackgroundTask(item, activeRun?.run_id || null))
-            .filter(Boolean)
+            .filter(item => item && isDisplayableBackgroundTask(item))
         : [];
     const roundSnapshot = snapshot?.round_snapshot && typeof snapshot.round_snapshot === 'object'
         ? { ...snapshot.round_snapshot }
@@ -663,6 +811,8 @@ function normalizeBackgroundTask(raw, runId = null) {
     if (!raw || typeof raw !== 'object') return null;
     const backgroundTaskId = typeof raw.background_task_id === 'string'
         ? raw.background_task_id
+        : typeof raw.backgroundTaskId === 'string'
+            ? raw.backgroundTaskId
         : '';
     if (!backgroundTaskId) return null;
     const recentOutput = Array.isArray(raw.recent_output)
@@ -675,6 +825,8 @@ function normalizeBackgroundTask(raw, runId = null) {
     return {
         backgroundTaskId,
         runId: String(raw.run_id || runId || ''),
+        kind: String(raw.kind || '').trim(),
+        executionMode: String(raw.execution_mode || raw.executionMode || '').trim(),
         command: String(raw.command || '').trim(),
         cwd: String(raw.cwd || '').trim(),
         status: String(raw.status || '').trim(),
@@ -684,9 +836,49 @@ function normalizeBackgroundTask(raw, runId = null) {
         recentOutput,
         outputExcerpt,
         logPath: String(raw.log_path || raw.logPath || '').trim(),
+        subagentRunId: String(raw.subagent_run_id || raw.subagentRunId || '').trim(),
+        subagentInstanceId: String(
+            raw.subagent_instance_id || raw.subagentInstanceId || '',
+        ).trim(),
+        subagentRoleId: String(raw.subagent_role_id || raw.subagentRoleId || '').trim(),
         completedAt: raw.completed_at ? String(raw.completed_at) : raw.completedAt ? String(raw.completedAt) : '',
         updatedAt: raw.updated_at ? String(raw.updated_at) : raw.updatedAt ? String(raw.updatedAt) : '',
     };
+}
+
+function isDisplayableBackgroundTask(task) {
+    if (!task || typeof task !== 'object') {
+        return false;
+    }
+    const executionMode = String(task.executionMode || task.execution_mode || '').trim();
+    if (executionMode === 'foreground') {
+        return false;
+    }
+    if (executionMode === 'background') {
+        return true;
+    }
+    return isSubagentBackgroundTaskLike(task);
+}
+
+function isSubagentBackgroundTaskLike(task) {
+    const kind = String(task.kind || '').trim();
+    const subagentRunId = String(task.subagentRunId || task.subagent_run_id || '').trim();
+    return kind === 'subagent' || subagentRunId.startsWith('subagent_run_');
+}
+
+function normalizeBackgroundTaskEventStatus(payload, eventType) {
+    const safeEventType = String(eventType || '').trim();
+    const safeStatus = String(payload?.status || '').trim();
+    if (safeStatus === 'started' || safeStatus === 'pending') {
+        return 'running';
+    }
+    if (safeEventType === 'background_task_completed') {
+        return safeStatus || 'completed';
+    }
+    if (safeEventType === 'background_task_stopped') {
+        return 'stopped';
+    }
+    return safeStatus || 'running';
 }
 
 function normalizePausedSubagent(raw, runId = null) {
@@ -1563,6 +1755,7 @@ async function handleBackgroundTaskAction(runId, backgroundTask, action) {
 function applyBackgroundTaskUpdate(backgroundTask) {
     const snapshot = state.currentRecoverySnapshot;
     if (!snapshot) return;
+    if (!isDisplayableBackgroundTask(backgroundTask)) return;
     const existing = snapshot.backgroundTasks || [];
     const found = existing.some(item => item.backgroundTaskId === backgroundTask.backgroundTaskId);
     const nextBackgroundTasks = found
@@ -1618,7 +1811,8 @@ function renderBackgroundTaskPanel() {
 
     const snapshot = state.currentRecoverySnapshot;
     const backgroundTasks = snapshot?.backgroundTasks || [];
-    const activeBackgroundTasks = backgroundTasks.filter(task => isBackgroundTaskActive(task));
+    const activeBackgroundTasks = backgroundTasks
+        .filter(task => isDisplayableBackgroundTask(task) && isBackgroundTaskActive(task));
     const runId = String(
         snapshot?.activeRun?.run_id
         || activeBackgroundTasks[0]?.runId

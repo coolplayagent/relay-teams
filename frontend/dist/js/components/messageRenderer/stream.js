@@ -22,6 +22,7 @@ import {
     updateThinkingText,
     updateMessageText,
 } from './helpers.js';
+import * as rendererHelpers from './helpers.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 
 const streamState = new Map();
@@ -316,6 +317,7 @@ export function clearRunStreamState(runId) {
     overlayState.delete(safeRunId);
     overlaySeenEventIdsByRun.delete(safeRunId);
     clearTimelineRun(safeRunId);
+    clearRunThinkingOpenState(safeRunId);
     Array.from(streamState.entries()).forEach(([key, entry]) => {
         if (entry.runId === safeRunId) {
             if (entry.activeTextEl) {
@@ -330,6 +332,13 @@ export function clearRunStreamState(runId) {
             streamState.delete(key);
         }
     });
+    clearDetachedRenderedRunStreamingArtifacts(safeRunId);
+}
+
+export function reconcileTerminalRunStreamState(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) return;
+    finalizeRunStreamState(safeRunId);
 }
 
 export function clearStreamOverlayEntry(runId, instanceId = '', roleId = '') {
@@ -343,6 +352,7 @@ if (typeof globalThis !== 'undefined') {
 export function clearRunRenderedStreamState(runId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;
+    clearRunThinkingOpenState(safeRunId);
     Array.from(streamState.entries()).forEach(([key, entry]) => {
         if (entry.runId === safeRunId) {
             if (entry.activeTextEl) {
@@ -357,6 +367,7 @@ export function clearRunRenderedStreamState(runId) {
             streamState.delete(key);
         }
     });
+    clearDetachedRenderedRunStreamingArtifacts(safeRunId);
 }
 
 export function clearRenderedStreamState() {
@@ -450,17 +461,25 @@ export function appendToolCallBlock(
 
     const follow = captureStreamFollow(st.container || container);
     endActiveText(st);
-
-    const toolBlock = buildPendingToolBlock(toolName, args, toolCallId);
-    st.contentEl.appendChild(toolBlock);
-    bindHeightObserver(st.container || container, toolBlock);
-    indexPendingToolBlock(st.pendingToolBlocks, toolBlock, toolName, toolCallId);
     updateOverlayToolCall(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label, {
         tool_call_id: toolCallId || '',
         tool_name: toolName,
         args,
         status: 'pending',
     });
+
+    const existingToolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId, {
+        preferIdOnly: Boolean(toolCallId),
+    });
+    if (existingToolBlock) {
+        scheduleStreamScrollBottom(st.container || container, follow);
+        return existingToolBlock;
+    }
+
+    const toolBlock = buildPendingToolBlock(toolName, args, toolCallId);
+    st.contentEl.appendChild(toolBlock);
+    bindHeightObserver(st.container || container, toolBlock);
+    indexPendingToolBlock(st.pendingToolBlocks, toolBlock, toolName, toolCallId);
     applyTimelineAction({
         type: 'tool_call',
         scope: streamScope(st, {
@@ -989,11 +1008,86 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
         return;
     }
     if (evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped') {
-        setOverlayTextStreaming(runId, streamKey, roleId, label, false);
-        setOverlayIdleCursor(runId, streamKey, roleId, label, false);
-        overlaySeenEventIdsByRun.delete(runId);
-        clearTimelineRun(runId);
+        reconcileTerminalRunStreamState(runId);
+        clearRunOverlayEventDedupe(runId);
+        clearTimelineRunEventDedupe(runId);
     }
+}
+
+function clearDetachedRenderedRunStreamingArtifacts(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (
+        !safeRunId
+        || typeof document === 'undefined'
+        || typeof document.querySelectorAll !== 'function'
+    ) {
+        return;
+    }
+    const roots = Array.from(document.querySelectorAll('[data-run-id]'))
+        .filter(root => String(root?.dataset?.runId || '').trim() === safeRunId);
+    roots.forEach(root => {
+        root.querySelectorAll?.('.streaming-cursor').forEach(cursor => cursor.remove());
+        root.querySelectorAll?.('.thinking-live').forEach(liveEl => {
+            liveEl.style.display = 'none';
+        });
+        root.querySelectorAll?.('.thinking-block[data-streaming="true"]').forEach(block => {
+            block.dataset.streaming = 'false';
+        });
+        root.querySelectorAll?.('.msg-text[data-idle-cursor="true"]').forEach(textEl => {
+            syncStreamingCursor(textEl, false);
+            delete textEl.dataset.idleCursor;
+            textEl.__idleCursor = false;
+        });
+    });
+}
+
+function clearRunThinkingOpenState(runId) {
+    rendererHelpers.clearThinkingOpenStateForRun?.(runId);
+}
+
+function finalizeRunStreamState(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    clearRunThinkingOpenState(safeRunId);
+    Array.from(streamState.entries()).forEach(([key, entry]) => {
+        if (String(entry?.runId || '').trim() !== safeRunId) {
+            return;
+        }
+        finalizeStreamEntry(entry);
+        streamState.delete(key);
+    });
+    const runOverlay = overlayState.get(safeRunId);
+    runOverlay?.entries?.forEach(entry => {
+        finalizeOverlayEntry(entry);
+    });
+    clearDetachedRenderedRunStreamingArtifacts(safeRunId);
+}
+
+function finalizeOverlayEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return;
+    }
+    entry.textStreaming = false;
+    entry.idleCursor = false;
+    if (entry.thinkingActiveByPart instanceof Map) {
+        entry.thinkingActiveByPart.clear();
+    }
+    if (!Array.isArray(entry.parts)) {
+        return;
+    }
+    entry.parts.forEach(part => {
+        if (!part || typeof part !== 'object') {
+            return;
+        }
+        if (part.kind === 'thinking') {
+            part.finished = true;
+        }
+        if (part.kind === 'text') {
+            part.streaming = false;
+        }
+    });
 }
 
 function isDuplicateOverlayEvent(runId, eventId) {
@@ -1012,6 +1106,12 @@ function isDuplicateOverlayEvent(runId, eventId) {
         Array.from(seen).slice(0, overflow).forEach(id => seen.delete(id));
     }
     return false;
+}
+
+function clearRunOverlayEventDedupe(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) return;
+    overlaySeenEventIdsByRun.delete(safeRunId);
 }
 
 function ensureApprovalState(toolBlock) {
@@ -1143,7 +1243,7 @@ function createStreamState({
         streamKey,
     });
     bindHeightObserver(container, wrapper);
-    return {
+    const nextState = {
         container,
         wrapper,
         contentEl,
@@ -1161,6 +1261,91 @@ function createStreamState({
         instanceId: String(instanceId || ''),
         streamKey,
     };
+    const overlayEntry = resolveOverlayEntry(runId, instanceId, roleId, label);
+    materializeOverlayEntryIntoState(nextState, overlayEntry);
+    return nextState;
+}
+
+function materializeOverlayEntryIntoState(st, overlayEntry) {
+    if (!st || !overlayEntry || !Array.isArray(overlayEntry.parts)) {
+        return;
+    }
+    overlayEntry.parts.forEach(part => {
+        if (!part || typeof part !== 'object') {
+            return;
+        }
+        if (part.kind === 'text') {
+            const textEl = document.createElement('div');
+            textEl.className = 'msg-text';
+            updateMessageText(textEl, String(part.content || ''), {
+                streaming: overlayEntry.textStreaming === true,
+            });
+            st.contentEl.appendChild(textEl);
+            st.activeTextEl = overlayEntry.textStreaming === true ? textEl : st.activeTextEl;
+            st.activeRaw = overlayEntry.textStreaming === true
+                ? String(part.content || '')
+                : st.activeRaw;
+            st.raw += String(part.content || '');
+            return;
+        }
+        if (part.kind === 'media_ref') {
+            appendStructuredContentPart(st.contentEl, part);
+            return;
+        }
+        if (part.kind === 'thinking') {
+            const safePartIndex = String(part.part_index ?? '');
+            const key = String(part._key || `${safePartIndex}:${st.thinkingSequence}`);
+            const textEl = appendThinkingText(st.contentEl, String(part.content || ''), {
+                streaming: part.finished !== true,
+                runId: st.runId,
+                instanceId: st.instanceId,
+                streamKey: st.streamKey,
+                partIndex: key,
+            });
+            st.thinkingParts.set(key, {
+                textEl,
+                raw: String(part.content || ''),
+                finished: part.finished === true,
+                partIndex: safePartIndex,
+                key,
+            });
+            if (part.finished !== true && safePartIndex) {
+                st.thinkingActiveByPart.set(safePartIndex, key);
+            }
+            st.thinkingSequence = Math.max(
+                st.thinkingSequence,
+                parseThinkingSequenceValue(key, safePartIndex) + 1,
+            );
+            return;
+        }
+        if (part.kind !== 'tool') {
+            return;
+        }
+        const toolCallId = part.tool_call_id || null;
+        const existingToolBlock = toolCallId
+            ? findExactToolBlockByCallId(st.contentEl, toolCallId)
+            : findToolBlock(st.contentEl, part.tool_name, null);
+        if (existingToolBlock) {
+            return;
+        }
+        const toolBlock = buildPendingToolBlock(
+            part.tool_name,
+            part.args || {},
+            toolCallId,
+        );
+        st.contentEl.appendChild(toolBlock);
+        if (part.result !== undefined) {
+            applyToolReturn(toolBlock, part.result);
+        } else if (part.status && part.status !== 'pending') {
+            setToolStatus(toolBlock, part.status);
+        }
+        indexPendingToolBlock(
+            st.pendingToolBlocks,
+            toolBlock,
+            part.tool_name,
+            toolCallId,
+        );
+    });
 }
 
 function isStreamStateDetachedFromContainer(st, container) {
@@ -1442,6 +1627,23 @@ function escapeSelectorValue(value) {
     return String(value || '').replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
+function findExactToolBlockByCallId(root, toolCallId) {
+    const safeToolCallId = String(toolCallId || '').trim();
+    if (!root || !safeToolCallId) return null;
+    if (typeof root.querySelector === 'function') {
+        const block = root.querySelector(
+            `.tool-block[data-tool-call-id="${escapeSelectorValue(safeToolCallId)}"]`,
+        );
+        if (block) return block;
+    }
+    if (Array.isArray(root.children)) {
+        return root.children.find(child => (
+            String(child?.dataset?.toolCallId || '').trim() === safeToolCallId
+        )) || null;
+    }
+    return null;
+}
+
 function endActiveText(st) {
     if (!st) return;
     if (st.activeTextEl) {
@@ -1461,7 +1663,19 @@ function endActiveText(st) {
     st.activeTextIsIdle = false;
 }
 
-function resolveToolBlockTarget(st, container, toolName, toolCallId) {
+function resolveToolBlockTarget(st, container, toolName, toolCallId, options = {}) {
+    const preferIdOnly = options.preferIdOnly === true && Boolean(toolCallId);
+    if (preferIdOnly) {
+        if (st) {
+            const byStreamState = findExactToolBlockByCallId(
+                st.contentEl,
+                toolCallId,
+            );
+            if (byStreamState) return byStreamState;
+        }
+        if (!container) return null;
+        return findToolBlockInContainer(container, toolName, toolCallId, true);
+    }
     if (st) {
         const indexed = resolvePendingToolBlock(
             st.pendingToolBlocks || {},
@@ -2194,6 +2408,10 @@ function applyRunEventToTimeline() {
 
 function clearTimelineRun(runId) {
     globalThis.__relayTeamsMessageTimelineClearRun?.(runId);
+}
+
+function clearTimelineRunEventDedupe(runId) {
+    globalThis.__relayTeamsMessageTimelineClearRunEventDedupe?.(runId);
 }
 
 function clearTimelineState(options = {}) {

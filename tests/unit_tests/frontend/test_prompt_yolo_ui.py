@@ -184,6 +184,14 @@ export function appendRoundUserMessage() {
 export function createLiveRound() {
     return undefined;
 }
+
+export function showPendingRunStartPlaceholder() {
+    return undefined;
+}
+
+export function clearPendingRunStartPlaceholder() {
+    return undefined;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -628,6 +636,14 @@ export function appendRoundUserMessage(runId, text) {
 export function createLiveRound(runId, text, inputParts) {
     globalThis.__liveRounds.push({ runId, text, inputParts });
 }
+
+export function showPendingRunStartPlaceholder() {
+    return undefined;
+}
+
+export function clearPendingRunStartPlaceholder() {
+    return undefined;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -987,6 +1003,14 @@ export function appendRoundUserMessage() {
 }
 
 export function createLiveRound() {
+    return undefined;
+}
+
+export function showPendingRunStartPlaceholder() {
+    return undefined;
+}
+
+export function clearPendingRunStartPlaceholder() {
     return undefined;
 }
 """.strip(),
@@ -1882,6 +1906,74 @@ console.log(JSON.stringify({
     )
 
 
+def test_handle_send_emits_title_preview_only_after_run_created(
+    tmp_path: Path,
+) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail || {};
+    }
+};
+globalThis.__titleEvents = [];
+globalThis.document = {
+    addEventListener() {
+        return undefined;
+    },
+    dispatchEvent(event) {
+        globalThis.__titleEvents.push({
+            type: event.type,
+            detail: event.detail,
+        });
+        return true;
+    },
+};
+
+const { handleSend } = await import("./prompt.js");
+const { els } = await import("./mockDom.mjs");
+const { state } = await import("./mockState.mjs");
+
+globalThis.__streamCalls = [];
+globalThis.__logs = [];
+globalThis.__notifications = [];
+els.promptInput.value = "preview before run";
+
+await handleSend();
+
+els.promptInput.value = "preview after run";
+els.promptInput.disabled = false;
+state.isGenerating = false;
+globalThis.__invokeRunCreated = true;
+
+await handleSend();
+
+console.log(JSON.stringify({
+    titleEvents: globalThis.__titleEvents,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["titleEvents"] == [
+        {
+            "type": "agent-teams-session-title-previewed",
+            "detail": {
+                "sessionId": "session-1",
+                "title": "preview after run",
+            },
+        }
+    ]
+
+
 def test_handle_send_prefers_command_alias_over_skill_alias(tmp_path: Path) -> None:
     temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
     runner = """
@@ -2748,6 +2840,69 @@ console.log(JSON.stringify({
     assert payload["attachmentHtmlAfterSend"] == ""
 
 
+def test_pasted_image_hides_prompt_footer_hint(tmp_path: Path) -> None:
+    temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
+    runner = """
+import {
+    handlePromptComposerPaste,
+} from "./prompt.js";
+import { els } from "./mockDom.mjs";
+
+globalThis.__draftMentionHintSyncCalls = 0;
+globalThis.FileReader = class {
+    constructor() {
+        this.result = null;
+        this.onload = null;
+        this.onerror = null;
+        this.error = null;
+    }
+    readAsDataURL(file) {
+        this.result = file.__dataUrl;
+        this.onload?.();
+    }
+};
+
+await handlePromptComposerPaste({
+    clipboardData: {
+        items: [
+            {
+                type: "image/png",
+                getAsFile() {
+                    return {
+                        name: "diagram.png",
+                        size: 4,
+                        __dataUrl: "data:image/png;base64,QUJDRA==",
+                    };
+                },
+            },
+        ],
+    },
+    preventDefault() {
+        return undefined;
+    },
+});
+
+console.log(JSON.stringify({
+    attachmentHidden: els.promptAttachments.hidden,
+    footerHintClassName: els.promptInputHint.className,
+    draftMentionHintSyncCalls: globalThis.__draftMentionHintSyncCalls,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["attachmentHidden"] is False
+    assert "is-hidden" in payload["footerHintClassName"]
+    assert payload["draftMentionHintSyncCalls"] >= 1
+
+
 def test_handle_send_blocks_pasted_image_for_text_only_role(tmp_path: Path) -> None:
     temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=False)
     runner = """
@@ -2939,6 +3094,10 @@ export async function ensureSessionForNewSessionDraft() {
 export function isNewSessionDraftActive() {
     return false;
 }
+
+export function syncNewSessionDraftMentionHintVisibility() {
+    globalThis.__draftMentionHintSyncCalls = (globalThis.__draftMentionHintSyncCalls || 0) + 1;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -2997,6 +3156,14 @@ export function appendRoundUserMessage() {
 }
 
 export function createLiveRound() {
+    return undefined;
+}
+
+export function showPendingRunStartPlaceholder() {
+    return undefined;
+}
+
+export function clearPendingRunStartPlaceholder() {
     return undefined;
 }
 """.strip(),
@@ -3221,6 +3388,9 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
         sessionId,
         options,
     });
+    if (globalThis.__invokeRunCreated && typeof options.onRunCreated === "function") {
+        options.onRunCreated({ run_id: "run-created-1" });
+    }
     return onCompleted;
 }
 """.strip(),
@@ -3271,6 +3441,7 @@ export const els = {
     promptAttachments: createElement(),
     promptMentionMenu: createElement({ hidden: true }),
     promptInputStatus: createElement({ hidden: true }),
+    promptInputHint: createElement(),
     sendBtn: createElement(),
     stopBtn: createElement({ style: { display: "none" } }),
     yoloToggle: createElement({ checked: true }),

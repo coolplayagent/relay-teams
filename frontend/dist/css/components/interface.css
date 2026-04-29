@@ -162,8 +162,8 @@
     animation: sessionItemRemove 0.18s ease forwards;
 }
 
-.session-item-activating {
-    animation: sessionItemActivate 0.14s ease;
+.session-item-switch-target {
+    animation: sessionItemSwitchTarget 0.18s ease;
 }
 
 .chat-container.is-session-switching .chat-scroll {
@@ -208,6 +208,49 @@
     border-top-color: color-mix(in srgb, var(--primary) 84%, var(--text-primary));
     border-radius: 999px;
     animation: sessionSwitchSpinner 0.72s linear infinite;
+}
+
+.session-run-start-placeholder {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    width: min(100%, 880px);
+    margin: 0.9rem auto 0;
+    padding: 0.75rem 0.9rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+    color: var(--text-secondary);
+}
+
+.session-run-start-spinner {
+    flex: 0 0 auto;
+    width: 0.86rem;
+    height: 0.86rem;
+    margin-top: 0.18rem;
+    border: 1.5px solid color-mix(in srgb, var(--text-secondary) 24%, transparent);
+    border-top-color: color-mix(in srgb, var(--primary) 82%, var(--text-primary));
+    border-radius: 50%;
+    animation: sessionSwitchSpinner 0.72s linear infinite;
+}
+
+.session-run-start-body {
+    min-width: 0;
+}
+
+.session-run-start-title {
+    color: var(--text-primary);
+    font-size: 0.84rem;
+    font-weight: 600;
+}
+
+.session-run-start-intent {
+    margin-top: 0.18rem;
+    max-width: 68ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
 }
 
 .current-session-id-badge {
@@ -259,20 +302,6 @@
     }
 }
 
-@keyframes sessionItemActivate {
-    0% {
-        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
-    }
-
-    50% {
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 10%, transparent);
-    }
-
-    100% {
-        box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
-    }
-}
-
 @keyframes sessionSwitchSpinner {
     to {
         transform: rotate(360deg);
@@ -289,12 +318,26 @@
     }
 }
 
+@keyframes sessionItemSwitchTarget {
+    from {
+        background: color-mix(in srgb, var(--primary) 12%, transparent);
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 24%, transparent);
+    }
+
+    to {
+        background: inherit;
+        box-shadow: none;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .session-item-entering,
     .session-item-removing,
-    .session-item-activating,
+    .session-item-switch-target,
+    .projects-list .session-item.session-item-switch-target::after,
     .chat-container.is-session-switch-ready .chat-scroll,
-    .session-switch-loading-spinner {
+    .session-switch-loading-spinner,
+    .session-run-start-spinner {
         animation: none;
     }
 
@@ -398,6 +441,10 @@
 }
 
 #prompt-input:not(:placeholder-shown) ~ .input-footer-hint {
+    opacity: 0;
+}
+
+.input-footer-hint.is-hidden {
     opacity: 0;
 }
 
