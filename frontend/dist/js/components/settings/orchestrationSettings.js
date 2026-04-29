@@ -42,18 +42,21 @@ export function bindOrchestrationSettingsHandlers() {
 
 export async function loadOrchestrationSettingsPanel(preferredOrchestrationId = '') {
     try {
-        const [config, roleSummaries] = await Promise.all([
+        const [config, roleSummaries, roleOptionsResult] = await Promise.all([
             fetchOrchestrationConfig(),
             fetchRoleConfigs(),
+            fetchRoleConfigOptions()
+                .then(value => ({ status: 'fulfilled', value }))
+                .catch(reason => ({ status: 'rejected', reason })),
         ]);
         let roleOptions = null;
-        try {
-            roleOptions = await fetchRoleConfigOptions();
-        } catch (error) {
+        if (roleOptionsResult.status === 'fulfilled') {
+            roleOptions = roleOptionsResult.value;
+        } else {
             logError(
                 'frontend.orchestration_settings.role_options_failed',
                 'Failed to load role options',
-                errorToPayload(error),
+                errorToPayload(roleOptionsResult.reason),
             );
         }
         orchestrationConfig = normalizeOrchestrationConfig(config);

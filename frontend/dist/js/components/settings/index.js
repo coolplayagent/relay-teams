@@ -30,12 +30,22 @@ import { bindWorkspaceSettingsHandlers, loadWorkspaceSettingsPanel } from './wor
 import { bindWebSettingsHandlers, loadWebSettingsPanel } from './webSettings.js';
 import { bindSystemStatusHandlers, loadMcpStatusPanel, loadSkillsStatusPanel } from './systemStatus.js';
 import { bindAppearanceHandlers, loadAppearancePanel, initAppearanceOnStartup } from './appearanceSettings.js';
+import {
+    fetchModelProfiles,
+    fetchOrchestrationConfig,
+    fetchRoleConfigOptions,
+    fetchRoleConfigs,
+} from '../../core/api.js';
 import { t, translateDocument } from '../../utils/i18n.js';
+import { errorToPayload, logError } from '../../utils/logger.js';
 
 let settingsModal = null;
 let currentTab = 'appearance';
 let initialized = false;
 let overlayPointerDown = false;
+let actionOwnershipObserver = null;
+let panelLoadRequestId = 0;
+let settingsWarmupPromise = null;
 
 const TAB_METADATA = {
     appearance: {
@@ -90,6 +100,49 @@ const TAB_METADATA = {
         titleKey: 'settings.panel.environment.title',
         descriptionKey: 'settings.panel.environment.description',
     },
+};
+
+const ACTION_TAB_OWNERS = {
+    'add-profile-btn': 'model',
+    'save-profile-btn': 'model',
+    'cancel-profile-btn': 'model',
+    'test-profile-btn': 'model',
+    'profile-probe-inline-status': 'model',
+    'add-ssh-profile-btn': 'workspace',
+    'save-ssh-profile-btn': 'workspace',
+    'cancel-ssh-profile-btn': 'workspace',
+    'test-ssh-profile-btn': 'workspace',
+    'delete-ssh-profile-btn': 'workspace',
+    'test-agent-btn': 'agents',
+    'add-agent-btn': 'agents',
+    'save-agent-btn': 'agents',
+    'delete-agent-btn': 'agents',
+    'cancel-agent-btn': 'agents',
+    'add-command-btn': 'commands',
+    'preview-command-btn': 'commands',
+    'save-command-btn': 'commands',
+    'cancel-command-btn': 'commands',
+    'add-hook-btn': 'hooks',
+    'validate-hooks-btn': 'hooks',
+    'save-hooks-btn': 'hooks',
+    'add-role-btn': 'roles',
+    'validate-role-btn': 'roles',
+    'save-role-btn': 'roles',
+    'cancel-role-btn': 'roles',
+    'add-orchestration-preset-btn': 'orchestration',
+    'save-orchestration-btn': 'orchestration',
+    'cancel-orchestration-btn': 'orchestration',
+    'add-env-btn': 'environment',
+    'save-env-btn': 'environment',
+    'cancel-env-btn': 'environment',
+    'save-notifications-btn': 'notifications',
+    'save-web-btn': 'web',
+    'save-proxy-btn': 'proxy',
+    'add-mcp-server-btn': 'mcp',
+    'save-mcp-server-btn': 'mcp',
+    'cancel-mcp-server-btn': 'mcp',
+    'reload-mcp-btn': 'mcp',
+    'reset-appearance-btn': 'appearance',
 };
 
 export function initSettings() {
@@ -864,6 +917,7 @@ function createModal() {
     `;
     document.body.appendChild(settingsModal);
     translateDocument(settingsModal);
+    setupSettingsActionOwnership();
 }
 
 function setupEventListeners() {
@@ -887,7 +941,7 @@ function setupEventListeners() {
     document.querySelectorAll('.settings-tab').forEach(tab => {
         tab.onclick = () => {
             currentTab = tab.dataset.tab;
-            showPanel(currentTab);
+            return showPanel(currentTab);
         };
     });
 
@@ -916,6 +970,7 @@ function setupEventListeners() {
 }
 
 async function showPanel(tab) {
+    const requestId = ++panelLoadRequestId;
     document.querySelectorAll('.settings-tab').forEach(button => {
         button.classList.toggle('active', button.dataset.tab === tab);
     });
@@ -927,7 +982,7 @@ async function showPanel(tab) {
     });
 
     updatePanelHeading(tab);
-    renderPanelActions(tab);
+    clearPanelActions(tab);
     bindModelProfileHandlers();
     bindCommandsSettingsHandlers();
     bindHooksSettingsHandlers();
@@ -940,6 +995,14 @@ async function showPanel(tab) {
     bindWorkspaceSettingsHandlers();
     bindSystemStatusHandlers();
 
+    await loadSettingsPanel(tab);
+    if (requestId !== panelLoadRequestId || currentTab !== tab) {
+        return;
+    }
+    renderPanelActions(tab);
+}
+
+async function loadSettingsPanel(tab) {
     if (tab === 'model') {
         await loadModelProfilesPanel();
     } else if (tab === 'hooks') {
@@ -977,70 +1040,174 @@ function updatePanelHeading(tab) {
     document.getElementById('settings-panel-description').textContent = t(meta.descriptionKey);
 }
 
+function clearPanelActions(tab) {
+    const actions = document.getElementById('settings-panel-actions');
+    const actionsBar = document.getElementById('settings-actions-bar');
+    if (!actions) {
+        return;
+    }
+    if (actionsBar) {
+        actionsBar.dataset.activeTab = tab;
+    }
+    hideAllSettingsActions();
+    setPanelActionsLoading(tab, false);
+    enforceSettingsActionOwnership();
+}
+
 function renderPanelActions(tab) {
     const actions = document.getElementById('settings-panel-actions');
     const actionsBar = document.getElementById('settings-actions-bar');
     if (!actions) {
         return;
     }
-    actions.querySelectorAll('.settings-action').forEach(button => {
-        button.style.display = 'none';
-    });
+    if (actionsBar) {
+        actionsBar.dataset.activeTab = tab;
+    }
+    hideAllSettingsActions();
     if (actionsBar) actionsBar.style.display = 'flex';
     if (tab === 'model') {
         document.getElementById('add-profile-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'hooks') {
+    } else if (tab === 'hooks') {
         syncHooksSettingsActions();
-        return;
-    }
-    if (tab === 'agents') {
+    } else if (tab === 'agents') {
         document.getElementById('add-agent-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'roles') {
+    } else if (tab === 'roles') {
         document.getElementById('add-role-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'orchestration') {
+    } else if (tab === 'orchestration') {
         document.getElementById('add-orchestration-preset-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'environment') {
+    } else if (tab === 'environment') {
         document.getElementById('add-env-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'notifications') {
+    } else if (tab === 'notifications') {
         document.getElementById('save-notifications-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'web') {
+    } else if (tab === 'web') {
         document.getElementById('save-web-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'proxy') {
+    } else if (tab === 'proxy') {
         document.getElementById('save-proxy-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'workspace') {
+    } else if (tab === 'workspace') {
         document.getElementById('add-ssh-profile-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'mcp') {
+    } else if (tab === 'mcp') {
         document.getElementById('add-mcp-server-btn').style.display = 'inline-flex';
         document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
-        return;
-    }
-    if (tab === 'commands') {
+    } else if (tab === 'commands') {
         syncCommandsSettingsActions();
-        return;
-    }
-    if (tab === 'appearance') {
+    } else if (tab === 'appearance') {
         document.getElementById('reset-appearance-btn').style.display = 'inline-flex';
+    } else if (actionsBar) {
+        actionsBar.style.display = 'none';
+    }
+    setPanelActionsLoading(tab, false);
+    enforceSettingsActionOwnership();
+}
+
+function warmSettingsHeavyData() {
+    if (settingsWarmupPromise) {
+        return settingsWarmupPromise;
+    }
+    settingsWarmupPromise = Promise.allSettled([
+        fetchRoleConfigs(),
+        fetchRoleConfigOptions(),
+        fetchModelProfiles(),
+        fetchOrchestrationConfig(),
+    ])
+        .then(results => {
+            results.forEach((result, index) => {
+                if (result.status !== 'rejected') {
+                    return;
+                }
+                logError(
+                    'frontend.settings.warmup_failed',
+                    'Failed to warm settings data',
+                    {
+                        dependency: [
+                            'role_configs',
+                            'role_options',
+                            'model_profiles',
+                            'orchestration_config',
+                        ][index],
+                        ...errorToPayload(result.reason),
+                    },
+                );
+            });
+        })
+        .finally(() => {
+            settingsWarmupPromise = null;
+        });
+    return settingsWarmupPromise;
+}
+
+function setPanelActionsLoading(tab, loading) {
+    Object.entries(ACTION_TAB_OWNERS).forEach(([id, ownerTab]) => {
+        if (ownerTab !== tab) {
+            return;
+        }
+        const action = document.getElementById(id);
+        if (!action || !('disabled' in action)) {
+            return;
+        }
+        action.disabled = loading;
+        action.dataset.settingsActionLoading = loading ? 'true' : 'false';
+    });
+}
+
+function hideAllSettingsActions() {
+    Object.keys(ACTION_TAB_OWNERS).forEach(id => {
+        const action = document.getElementById(id);
+        if (action) {
+            action.style.display = 'none';
+        }
+    });
+}
+
+function setupSettingsActionOwnership() {
+    annotateSettingsActions();
+    installSettingsActionOwnershipObserver();
+}
+
+function annotateSettingsActions() {
+    Object.entries(ACTION_TAB_OWNERS).forEach(([id, tab]) => {
+        const action = document.getElementById(id);
+        if (action) {
+            action.dataset.settingsActionTab = tab;
+        }
+    });
+}
+
+function installSettingsActionOwnershipObserver() {
+    if (actionOwnershipObserver || typeof MutationObserver !== 'function') {
         return;
     }
-    if (actionsBar) actionsBar.style.display = 'none';
+    const actions = document.getElementById('settings-panel-actions');
+    if (!actions) {
+        return;
+    }
+    let enforcing = false;
+    actionOwnershipObserver = new MutationObserver(() => {
+        if (enforcing) {
+            return;
+        }
+        enforcing = true;
+        try {
+            enforceSettingsActionOwnership();
+        } finally {
+            enforcing = false;
+        }
+    });
+    actionOwnershipObserver.observe(actions, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden'],
+    });
+}
+
+function enforceSettingsActionOwnership() {
+    const actionsBar = document.getElementById('settings-actions-bar');
+    const activeTab = String(actionsBar?.dataset.activeTab || currentTab || '').trim();
+    Object.entries(ACTION_TAB_OWNERS).forEach(([id, tab]) => {
+        const action = document.getElementById(id);
+        if (action && tab !== activeTab) {
+            action.style.display = 'none';
+        }
+    });
 }
 
 export function openSettings(tab = null) {
@@ -1051,7 +1218,8 @@ export function openSettings(tab = null) {
     }
     settingsModal.style.display = 'flex';
     settingsModal.classList.add('settings-modal-visible');
-    showPanel(currentTab);
+    void warmSettingsHeavyData();
+    return showPanel(currentTab);
 }
 
 export function closeSettings() {

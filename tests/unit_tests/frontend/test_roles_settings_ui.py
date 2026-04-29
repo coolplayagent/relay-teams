@@ -79,6 +79,36 @@ console.log(JSON.stringify({
     assert fetch_calls == ["reviewer"]
 
 
+def test_role_settings_initial_load_starts_summary_and_dependency_requests_in_parallel(
+    tmp_path: Path,
+) -> None:
+    payload = _run_roles_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadRoleSettingsPanel } from "./rolesSettings.mjs";
+
+installGlobals(createElements());
+await loadRoleSettingsPanel();
+
+console.log(JSON.stringify({
+    requestOrder: globalThis.__requestOrder,
+    roleSummaryCalls: globalThis.__fetchRoleConfigsCount,
+    roleConfigOptionsCalls: globalThis.__fetchRoleConfigOptionsCount,
+    modelProfileCalls: globalThis.__fetchModelProfilesCount,
+}));
+""".strip(),
+    )
+
+    assert payload["requestOrder"] == [
+        "fetchRoleConfigs:start",
+        "fetchRoleConfigOptions:start",
+        "fetchModelProfiles:start",
+    ]
+    assert payload["roleSummaryCalls"] == 1
+    assert payload["roleConfigOptionsCalls"] == 1
+    assert payload["modelProfileCalls"] == 1
+
+
 def test_role_settings_validate_save_and_add_role_use_controlled_options(
     tmp_path: Path,
 ) -> None:
@@ -1891,6 +1921,7 @@ function getRoleRecords() {
 
 export async function fetchRoleConfigs() {
     globalThis.__fetchRoleConfigsCount += 1;
+    globalThis.__requestOrder.push("fetchRoleConfigs:start");
     return Object.values(getRoleRecords()).map(record => ({
         role_id: record.role_id,
         name: record.name,
@@ -1905,6 +1936,7 @@ export async function fetchRoleConfigs() {
 
 export async function fetchRoleConfigOptions() {
     globalThis.__fetchRoleConfigOptionsCount += 1;
+    globalThis.__requestOrder.push("fetchRoleConfigOptions:start");
     if (globalThis.__roleConfigOptionsErrorMessage) {
         throw new Error(globalThis.__roleConfigOptionsErrorMessage);
     }
@@ -1945,6 +1977,7 @@ export async function fetchRoleConfigOptions() {
 
 export async function fetchModelProfiles() {
     globalThis.__fetchModelProfilesCount += 1;
+    globalThis.__requestOrder.push("fetchModelProfiles:start");
     return globalThis.__modelProfilesOverride || {
         default: { model: "gpt-4o-mini" },
         editor: { model: "gpt-4.1" },
@@ -2436,6 +2469,7 @@ function installGlobals(elements) {{
     globalThis.__fetchRoleConfigOptionsCount = 0;
     globalThis.__fetchRoleConfigCalls = [];
     globalThis.__fetchModelProfilesCount = 0;
+    globalThis.__requestOrder = [];
     globalThis.__validateCalls = [];
     globalThis.__validatePayload = null;
     globalThis.__saveCalls = [];

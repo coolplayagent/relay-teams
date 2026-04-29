@@ -83,8 +83,10 @@ export function bindRoleSettingsHandlers() {
 
 export async function loadRoleSettingsPanel(preferredRoleId = '') {
     try {
-        const summaries = await fetchRoleConfigs();
-        await refreshRoleSettingsDependencies();
+        const [summaries] = await Promise.all([
+            fetchRoleConfigs(),
+            refreshRoleSettingsDependencies(),
+        ]);
         roleSummaries = Array.isArray(summaries) ? summaries.map(normalizeRoleSummary) : [];
         renderRolesList();
         if (roleSummaries.length === 0) {

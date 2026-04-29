@@ -4,6 +4,10 @@
  */
 import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
+function invalidateRoleOptionDependencies() {
+    invalidateManagedRequests('roles:');
+}
+
 export async function fetchConfigStatus(options = {}) {
     return requestJson('/api/system/configs', { signal: options.signal }, 'Failed to fetch config status');
 }
@@ -222,7 +226,7 @@ export async function fetchExternalAgent(agentId) {
 }
 
 export async function saveExternalAgent(agentId, payload) {
-    return requestJson(
+    const result = await requestJson(
         `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
         {
             method: 'PUT',
@@ -231,14 +235,18 @@ export async function saveExternalAgent(agentId, payload) {
         },
         'Failed to save agent config',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function deleteExternalAgent(agentId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
         { method: 'DELETE' },
         'Failed to delete agent config',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function testExternalAgent(agentId) {
@@ -302,7 +310,7 @@ export async function fetchClawHubSkill(skillId) {
 }
 
 export async function saveClawHubSkill(skillId, payload) {
-    return requestJson(
+    const result = await requestJson(
         `/api/system/configs/clawhub/skills/${encodeURIComponent(skillId)}`,
         {
             method: 'PUT',
@@ -311,14 +319,18 @@ export async function saveClawHubSkill(skillId, payload) {
         },
         'Failed to save ClawHub skill',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function deleteClawHubSkill(skillId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/system/configs/clawhub/skills/${encodeURIComponent(skillId)}`,
         { method: 'DELETE' },
         'Failed to delete ClawHub skill',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function fetchSystemHealth() {
@@ -439,6 +451,7 @@ export async function saveModelProfile(name, profile) {
         'Failed to save model profile',
     );
     invalidateManagedRequests('system:model-profiles');
+    invalidateRoleOptionDependencies();
     return result;
 }
 
@@ -449,6 +462,7 @@ export async function deleteModelProfile(name) {
         'Failed to delete model profile',
     );
     invalidateManagedRequests('system:model-profiles');
+    invalidateRoleOptionDependencies();
     return result;
 }
 
@@ -519,11 +533,13 @@ export async function saveGitHubConfig(config) {
 }
 
 export async function reloadMcpConfig() {
-    return requestJson(
+    const result = await requestJson(
         '/api/system/configs/mcp:reload',
         { method: 'POST' },
         'Failed to reload MCP config',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function fetchMcpServers() {
@@ -531,7 +547,7 @@ export async function fetchMcpServers() {
 }
 
 export async function addMcpServer(payload) {
-    return requestJson(
+    const result = await requestJson(
         '/api/mcp/servers',
         {
             method: 'POST',
@@ -540,6 +556,8 @@ export async function addMcpServer(payload) {
         },
         'Failed to add MCP server',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function fetchMcpServer(serverName) {
@@ -551,7 +569,7 @@ export async function fetchMcpServer(serverName) {
 }
 
 export async function updateMcpServer(serverName, payload) {
-    return requestJson(
+    const result = await requestJson(
         `/api/mcp/servers/${encodeURIComponent(serverName)}`,
         {
             method: 'PUT',
@@ -560,6 +578,8 @@ export async function updateMcpServer(serverName, payload) {
         },
         `Failed to update MCP server ${serverName}`,
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function testMcpServerConnection(serverName) {
@@ -571,7 +591,7 @@ export async function testMcpServerConnection(serverName) {
 }
 
 export async function setMcpServerEnabled(serverName, enabled) {
-    return requestJson(
+    const result = await requestJson(
         `/api/mcp/servers/${encodeURIComponent(serverName)}/enabled`,
         {
             method: 'PUT',
@@ -580,6 +600,8 @@ export async function setMcpServerEnabled(serverName, enabled) {
         },
         `Failed to update MCP server ${serverName}`,
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function fetchMcpServerTools(serverName) {
@@ -591,11 +613,13 @@ export async function fetchMcpServerTools(serverName) {
 }
 
 export async function reloadSkillsConfig() {
-    return requestJson(
+    const result = await requestJson(
         '/api/system/configs/skills:reload',
         { method: 'POST' },
         'Failed to reload skills config',
     );
+    invalidateRoleOptionDependencies();
+    return result;
 }
 
 export async function fetchNotificationConfig() {
@@ -603,10 +627,12 @@ export async function fetchNotificationConfig() {
 }
 
 export async function fetchOrchestrationConfig(options = {}) {
-    return requestJson(
+    return requestJsonManaged(
+        'system:orchestration-config',
         '/api/system/configs/orchestration',
         { signal: options.signal },
         'Failed to fetch orchestration config',
+        { ttlMs: 30000 },
     );
 }
 
@@ -623,7 +649,7 @@ export async function saveNotificationConfig(config) {
 }
 
 export async function saveOrchestrationConfig(config) {
-    return requestJson(
+    const result = await requestJson(
         '/api/system/configs/orchestration',
         {
             method: 'PUT',
@@ -632,6 +658,8 @@ export async function saveOrchestrationConfig(config) {
         },
         'Failed to save orchestration config',
     );
+    invalidateManagedRequests('system:orchestration-config');
+    return result;
 }
 
 export async function probeWebConnectivity(payload) {

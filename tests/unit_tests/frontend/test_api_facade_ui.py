@@ -255,6 +255,324 @@ export function invalidateManagedRequests(prefix) {
     ]
 
 
+def test_role_config_reads_use_managed_requests_and_writes_invalidate_cache(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "roles.js"
+    module_under_test_path = tmp_path / "roles.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequests.push({
+        url,
+        options,
+        errorMessage,
+    });
+    return { status: 'ok' };
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return { status: 'ok' };
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__capturedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchRoleConfigs(); "
+                "await mod.fetchRoleConfigOptions(); "
+                "await mod.saveRoleConfig('Writer', { role_id: 'Writer' }); "
+                "await mod.deleteRoleConfig('Writer'); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "requests: globalThis.__capturedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["managedRequests"] == [
+        {
+            "key": "roles:configs",
+            "url": "/api/roles/configs",
+            "options": {},
+            "errorMessage": "Failed to fetch role configs",
+            "config": {"ttlMs": 30000},
+        },
+        {
+            "key": "roles:options",
+            "url": "/api/roles:options",
+            "options": {},
+            "errorMessage": "Failed to fetch role options",
+            "config": {"ttlMs": 30000},
+        },
+    ]
+    assert payload["requests"][0]["url"] == "/api/roles/configs/Writer"
+    assert payload["requests"][0]["options"]["method"] == "PUT"
+    assert payload["requests"][1]["url"] == "/api/roles/configs/Writer"
+    assert payload["requests"][1]["options"] == {"method": "DELETE"}
+    assert payload["invalidatedPrefixes"] == ["roles:", "roles:"]
+
+
+def test_orchestration_config_uses_managed_request_and_save_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "system.js"
+    module_under_test_path = tmp_path / "system.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequests.push({
+        url,
+        options,
+        errorMessage,
+    });
+    return { status: 'ok' };
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return { status: 'ok' };
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__capturedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchOrchestrationConfig(); "
+                "await mod.saveOrchestrationConfig({ presets: [] }); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "requests: globalThis.__capturedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["managedRequests"] == [
+        {
+            "key": "system:orchestration-config",
+            "url": "/api/system/configs/orchestration",
+            "options": {},
+            "errorMessage": "Failed to fetch orchestration config",
+            "config": {"ttlMs": 30000},
+        }
+    ]
+    assert payload["requests"][0]["url"] == "/api/system/configs/orchestration"
+    assert payload["requests"][0]["options"] == {
+        "method": "PUT",
+        "headers": {"Content-Type": "application/json"},
+        "body": '{"config":{"presets":[]}}',
+    }
+    assert payload["invalidatedPrefixes"] == ["system:orchestration-config"]
+
+
+def test_role_option_dependency_writes_invalidate_role_option_cache(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "system.js"
+    module_under_test_path = tmp_path / "system.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson(url, options, errorMessage) {
+    globalThis.__capturedRequests.push({
+        url,
+        options,
+        errorMessage,
+    });
+    return { status: 'ok' };
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return { status: 'ok' };
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__capturedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.saveExternalAgent('local-agent', { name: 'Local Agent' }); "
+                "await mod.deleteExternalAgent('local-agent'); "
+                "await mod.saveModelProfile('vision-profile', { model: 'vision-model' }); "
+                "await mod.deleteModelProfile('vision-profile'); "
+                "await mod.saveClawHubSkill('writer', { name: 'Writer' }); "
+                "await mod.deleteClawHubSkill('writer'); "
+                "await mod.reloadMcpConfig(); "
+                "await mod.addMcpServer({ name: 'filesystem' }); "
+                "await mod.updateMcpServer('filesystem', { config: {} }); "
+                "await mod.setMcpServerEnabled('filesystem', true); "
+                "await mod.reloadSkillsConfig(); "
+                "console.log(JSON.stringify({"
+                "requests: globalThis.__capturedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert [request["url"] for request in payload["requests"]] == [
+        "/api/system/configs/agents/local-agent",
+        "/api/system/configs/agents/local-agent",
+        "/api/system/configs/model/profiles/vision-profile",
+        "/api/system/configs/model/profiles/vision-profile",
+        "/api/system/configs/clawhub/skills/writer",
+        "/api/system/configs/clawhub/skills/writer",
+        "/api/system/configs/mcp:reload",
+        "/api/mcp/servers",
+        "/api/mcp/servers/filesystem",
+        "/api/mcp/servers/filesystem/enabled",
+        "/api/system/configs/skills:reload",
+    ]
+    assert payload["invalidatedPrefixes"] == [
+        "roles:",
+        "roles:",
+        "system:model-profiles",
+        "roles:",
+        "system:model-profiles",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+    ]
+
+
 def test_core_api_facade_exports_legacy_dispatch_human_task_alias() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     api_module_path = repo_root / "frontend" / "dist" / "js" / "core" / "api.js"
