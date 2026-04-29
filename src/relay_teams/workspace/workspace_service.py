@@ -53,6 +53,9 @@ from relay_teams.workspace.workspace_repository import WorkspaceRepository
 
 _NON_WORKSPACE_ID_CHARS = re.compile(r"[^a-z0-9]+")
 _GIT_TIMEOUT_SECONDS = 30.0
+_DEFAULT_FORK_REMOTE = "origin"
+_DEFAULT_FORK_REMOTE_REF = "main"
+_DEFAULT_FORK_START_REF = f"{_DEFAULT_FORK_REMOTE}/{_DEFAULT_FORK_REMOTE_REF}"
 _BINARY_DIFF_MESSAGE = "Binary file changed"
 _SSH_TREE_LIST_TIMEOUT_SECONDS = 30.0
 _SSH_TREE_ENTRY_SEPARATOR = "\t"
@@ -104,6 +107,20 @@ for path do
 done
 ' sh {} +
 """
+
+
+def _is_default_fork_fetch_timeout(error: ValueError) -> bool:
+    return "timed out" in str(error).lower()
+
+
+def _is_default_fork_missing_remote_error(error: ValueError) -> bool:
+    message = str(error).lower()
+    return (
+        f"'{_DEFAULT_FORK_REMOTE}' does not appear to be a git repository" in message
+        or f"no such remote '{_DEFAULT_FORK_REMOTE}'" in message
+    )
+
+
 _WORKSPACE_IMAGE_MEDIA_TYPES = frozenset(
     {
         "image/avif",
@@ -1088,30 +1105,15 @@ class WorkspaceService:
 
         repository_root = self._git_worktree_client.ensure_repository(source_root)
         if start_ref is None:
-            try:
-                self._git_worktree_client.fetch_ref(
-                    repository_root, remote="origin", ref="main"
-                )
-            except ValueError as exc:
-                if "timed out" not in str(exc).lower():
-                    raise
-                log_event(
-                    _logger,
-                    30,
-                    event="workspace.fork.fetch_ref_timeout_fallback",
-                    message="Falling back to cached origin/main after git fetch timeout",
-                    payload={
-                        "repository_root": str(repository_root),
-                        "source_workspace_id": source_workspace_id,
-                    },
-                )
-            resolved_start_ref = "origin/main"
+            start_point = self._resolve_default_fork_start_point(
+                repository_root=repository_root,
+                source_workspace_id=source_workspace_id,
+            )
         else:
-            resolved_start_ref = start_ref
-        start_point = self._git_worktree_client.resolve_ref(
-            repository_root,
-            resolved_start_ref,
-        )
+            start_point = self._git_worktree_client.resolve_ref(
+                repository_root,
+                start_ref,
+            )
         target_path = self._workspace_storage_dir(normalized_workspace_id) / "worktree"
         if path_exists(target_path):
             raise ValueError(f"Workspace root already exists: {target_path}")
@@ -1151,6 +1153,66 @@ class WorkspaceService:
                 self._workspace_storage_dir(normalized_workspace_id),
                 ignore_errors=True,
             )
+            raise
+
+    def _resolve_default_fork_start_point(
+        self,
+        *,
+        repository_root: Path,
+        source_workspace_id: str,
+    ) -> str:
+        fetch_timed_out = False
+        try:
+            self._git_worktree_client.fetch_ref(
+                repository_root,
+                remote=_DEFAULT_FORK_REMOTE,
+                ref=_DEFAULT_FORK_REMOTE_REF,
+            )
+        except ValueError as exc:
+            fetch_timed_out = _is_default_fork_fetch_timeout(exc)
+            if fetch_timed_out:
+                log_event(
+                    _logger,
+                    30,
+                    event="workspace.fork.fetch_ref_timeout_cached_fallback",
+                    message="Falling back to cached default fork ref after fetch timeout",
+                    payload={
+                        "repository_root": str(repository_root),
+                        "source_workspace_id": source_workspace_id,
+                        "remote": _DEFAULT_FORK_REMOTE,
+                        "ref": _DEFAULT_FORK_REMOTE_REF,
+                        "error": str(exc),
+                    },
+                )
+            elif _is_default_fork_missing_remote_error(exc):
+                log_event(
+                    _logger,
+                    30,
+                    event="workspace.fork.fetch_ref_unavailable_fallback",
+                    message="Falling back after default fork remote is unavailable",
+                    payload={
+                        "repository_root": str(repository_root),
+                        "source_workspace_id": source_workspace_id,
+                        "remote": _DEFAULT_FORK_REMOTE,
+                        "ref": _DEFAULT_FORK_REMOTE_REF,
+                        "error": str(exc),
+                    },
+                )
+                return self._git_worktree_client.current_head(repository_root)
+            else:
+                raise
+
+        try:
+            return self._git_worktree_client.resolve_ref(
+                repository_root,
+                _DEFAULT_FORK_START_REF,
+            )
+        except ValueError as exc:
+            if fetch_timed_out:
+                raise ValueError(
+                    "Git fetch timed out and cached default fork ref is unavailable: "
+                    f"{_DEFAULT_FORK_START_REF}"
+                ) from exc
             raise
 
     def require_workspace(self, workspace_id: str) -> WorkspaceRecord:

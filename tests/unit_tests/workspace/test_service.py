@@ -58,6 +58,7 @@ class FakeGitWorktreeClient(GitWorktreeClient):
         self.remove_calls: list[tuple[Path, Path]] = []
         self.prune_calls: list[Path] = []
         self.fetch_error: ValueError | None = None
+        self.resolve_error: ValueError | None = None
 
     def ensure_repository(self, repository_root: Path) -> Path:
         self.ensure_calls.append(repository_root)
@@ -80,6 +81,8 @@ class FakeGitWorktreeClient(GitWorktreeClient):
 
     def resolve_ref(self, repository_root: Path, ref_name: str) -> str:
         self.resolve_ref_calls.append((repository_root, ref_name))
+        if self.resolve_error is not None:
+            raise self.resolve_error
         return f"resolved:{ref_name}"
 
     def add_worktree(
@@ -375,6 +378,7 @@ def test_workspace_service_fork_workspace_falls_back_to_cached_origin_main_after
     assert created.workspace_id == "alpha-project-fork"
     assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
     assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/main")]
+    assert git_client.head_calls == []
     assert git_client.add_calls == [
         (
             root_path.resolve(),
@@ -383,6 +387,205 @@ def test_workspace_service_fork_workspace_falls_back_to_cached_origin_main_after
             "resolved:origin/main",
         )
     ]
+
+
+def test_workspace_service_fork_workspace_raises_when_timeout_has_no_cached_origin_main(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    git_client.fetch_error = ValueError("Git command timed out")
+    git_client.resolve_error = ValueError(
+        "Git command failed: fatal: ambiguous argument 'origin/main': unknown "
+        "revision or path not in the working tree."
+    )
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="cached default fork ref"):
+        _ = service.fork_workspace(
+            source_workspace_id="project-alpha",
+            name="Alpha Project Fork",
+        )
+
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/main")]
+    assert git_client.head_calls == []
+    assert git_client.add_calls == []
+
+
+def test_workspace_service_fork_workspace_raises_when_remote_main_is_missing(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    git_client.fetch_error = ValueError(
+        "Git command failed: fatal: couldn't find remote ref main"
+    )
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="remote ref main"):
+        _ = service.fork_workspace(
+            source_workspace_id="project-alpha",
+            name="Alpha Project Fork",
+        )
+
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == []
+    assert git_client.head_calls == []
+    assert git_client.add_calls == []
+
+
+def test_workspace_service_fork_workspace_falls_back_to_current_head_when_origin_main_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    git_client.fetch_error = ValueError(
+        "Git command failed: fatal: 'origin' does not appear to be a git repository"
+    )
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    created = service.fork_workspace(
+        source_workspace_id="project-alpha",
+        name="Alpha Project Fork",
+    )
+
+    assert created.workspace_id == "alpha-project-fork"
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == []
+    assert git_client.head_calls == [root_path.resolve()]
+    assert git_client.add_calls == [
+        (
+            root_path.resolve(),
+            "fork/alpha-project-fork",
+            (tmp_path / "storage" / "alpha-project-fork" / "worktree").resolve(),
+            "abc123",
+        )
+    ]
+
+
+def test_workspace_service_fork_workspace_raises_when_origin_main_ref_is_missing(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    git_client.resolve_error = ValueError(
+        "Git command failed: fatal: ambiguous argument 'origin/main': unknown "
+        "revision or path not in the working tree."
+    )
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="origin/main"):
+        _ = service.fork_workspace(
+            source_workspace_id="project-alpha",
+            name="Alpha Project Fork",
+        )
+
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/main")]
+    assert git_client.head_calls == []
+    assert git_client.add_calls == []
+
+
+def test_workspace_service_fork_workspace_raises_when_origin_main_resolve_times_out(
+    tmp_path: Path,
+) -> None:
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    git_client = FakeGitWorktreeClient()
+    git_client.resolve_error = ValueError("Git command timed out")
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+        git_worktree_client=git_client,
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    with pytest.raises(ValueError, match="timed out"):
+        _ = service.fork_workspace(
+            source_workspace_id="project-alpha",
+            name="Alpha Project Fork",
+        )
+
+    assert git_client.fetch_calls == [(root_path.resolve(), "origin", "main")]
+    assert git_client.resolve_ref_calls == [(root_path.resolve(), "origin/main")]
+    assert git_client.head_calls == []
+    assert git_client.add_calls == []
+
+
+@pytest.mark.timeout(30)
+def test_workspace_service_forks_local_git_repository_without_origin(
+    tmp_path: Path,
+) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git is required for workspace fork regression coverage")
+
+    root_path = tmp_path / "workspace-root"
+    root_path.mkdir()
+    _run_git_command(root_path, "init")
+    _run_git_command(root_path, "config", "user.name", "Workspace Test")
+    _run_git_command(root_path, "config", "user.email", "workspace@example.com")
+    (root_path / "README.md").write_text("hello\n", encoding="utf-8")
+    _run_git_command(root_path, "add", ".")
+    _run_git_command(root_path, "commit", "-m", "initial")
+    service = StorageScopedWorkspaceService(
+        repository=WorkspaceRepository(tmp_path / "workspace.db"),
+        storage_root=tmp_path / "storage",
+    )
+    _ = service.create_workspace(
+        workspace_id="project-alpha",
+        root_path=root_path,
+    )
+
+    created = service.fork_workspace(
+        source_workspace_id="project-alpha",
+        name="Alpha Project Fork",
+    )
+
+    assert created.workspace_id == "alpha-project-fork"
+    assert created.root_path is not None
+    assert (created.root_path / "README.md").read_text(encoding="utf-8") == "hello\n"
+    assert created.profile.file_scope.branch_name == "fork/alpha-project-fork"
+    assert created.profile.file_scope.source_root_path == str(root_path.resolve())
 
 
 def test_workspace_service_deletes_git_worktree_when_requested(tmp_path: Path) -> None:
@@ -1266,4 +1469,21 @@ def test_workspace_service_rejects_missing_diff_file(tmp_path: Path) -> None:
         _ = service.get_workspace_diff_file(
             "project-alpha",
             path="missing.py",
+        )
+
+
+def _run_git_command(workspace_root: Path, *args: str) -> None:
+    command = ("git", *args)
+    completed = subprocess.run(
+        command,
+        cwd=workspace_root,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    if completed.returncode != 0:
+        pytest.fail(
+            "Git command failed: "
+            f"{' '.join(command)}\n{completed.stderr or completed.stdout}"
         )
