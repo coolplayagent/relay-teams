@@ -8,6 +8,7 @@ import pytest
 
 from relay_teams.env.proxy_env import ProxyEnvConfig
 from relay_teams.providers import model_catalog
+from relay_teams.providers.model_config import ProviderType
 from relay_teams.providers.model_catalog import ModelCatalogService
 
 
@@ -75,7 +76,7 @@ def test_model_catalog_fetches_models_dev_payload(
     )
     service = ModelCatalogService(
         config_dir=tmp_path,
-        get_proxy_config=lambda: ProxyEnvConfig(),
+        get_proxy_config=ProxyEnvConfig,
     )
 
     result = service.get_catalog(refresh=True)
@@ -85,11 +86,115 @@ def test_model_catalog_fetches_models_dev_payload(
     assert len(result.providers) == 1
     provider = result.providers[0]
     assert provider.id == "openai"
+    assert provider.runtime_provider == ProviderType.OPENAI_COMPATIBLE
     assert provider.api == "https://api.openai.com/v1"
     assert provider.env == ("OPENAI_API_KEY",)
     assert provider.models[0].id == "gpt-4o"
     assert provider.models[0].context_window == 128000
     assert provider.models[0].input_modalities[0].value == "image"
+
+
+def test_model_catalog_marks_anthropic_compatible_marketplace_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeCatalogClient(
+        httpx.Response(
+            200,
+            json={
+                "minimax": {
+                    "name": "MiniMax",
+                    "npm": "@ai-sdk/anthropic",
+                    "api": "https://api.minimax.io/anthropic/v1",
+                    "models": {
+                        "MiniMax-M2.7": {
+                            "name": "MiniMax-M2.7",
+                            "limit": {"context": 204800, "output": 131072},
+                        }
+                    },
+                }
+            },
+        )
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_sync_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=ProxyEnvConfig,
+    )
+
+    result = service.get_catalog(refresh=True)
+
+    assert result.ok is True
+    assert result.providers[0].runtime_provider == ProviderType.ANTHROPIC
+    assert result.providers[0].models[0].context_window == 204800
+
+
+def test_model_catalog_marks_anthropic_api_path_as_anthropic_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeCatalogClient(
+        httpx.Response(
+            200,
+            json={
+                "custom-provider": {
+                    "name": "Custom Anthropic",
+                    "api": "https://api.example.test/anthropic/v1",
+                    "models": {"custom-claude": {"name": "Custom Claude"}},
+                }
+            },
+        )
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_sync_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=ProxyEnvConfig,
+    )
+
+    result = service.get_catalog(refresh=True)
+
+    assert result.ok is True
+    assert result.providers[0].runtime_provider == ProviderType.ANTHROPIC
+
+
+def test_model_catalog_marks_anthropic_api_root_as_anthropic_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeCatalogClient(
+        httpx.Response(
+            200,
+            json={
+                "custom-provider": {
+                    "name": "Custom Anthropic",
+                    "api": "https://api.example.test/anthropic",
+                    "models": {"custom-claude": {"name": "Custom Claude"}},
+                }
+            },
+        )
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_sync_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=ProxyEnvConfig,
+    )
+
+    result = service.get_catalog(refresh=True)
+
+    assert result.ok is True
+    assert result.providers[0].runtime_provider == ProviderType.ANTHROPIC
 
 
 def test_model_catalog_uses_proxy_config_and_30_second_timeout(

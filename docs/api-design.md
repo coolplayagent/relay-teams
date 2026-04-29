@@ -183,13 +183,13 @@ The response body is a root object whose keys are profile ids and whose values u
 Returns normalized model profiles.
 Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, `fallback_priority` to rank it as a fallback candidate, structured `capabilities.input/output.*`, and a derived `input_modalities[]` compatibility field so the UI can label profiles that accept direct media input.
 Profiles created from the shared model directory may also include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata. These fields are descriptive and do not change provider transport selection.
-`provider` currently supports `openai_compatible`, `bigmodel`, `minimax`, `maas`, `codeagent`, and the internal/testing-only `echo`. MAAS profiles return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. CodeAgent profiles return `codeagent_auth`; `auth_method = "sso"` exposes `has_access_token` and `has_refresh_token`, while `auth_method = "password"` exposes `username` and `has_password`. The MaaS login endpoint and `app-id`, and the CodeAgent OAuth/login endpoints and inference base URL, are fixed by the backend.
+`provider` currently supports `openai_compatible`, `anthropic`, `bigmodel`, `minimax`, `maas`, `codeagent`, and the internal/testing-only `echo`. `anthropic` means the profile uses an Anthropic Messages API-compatible transport, including marketplace providers such as MiniMax entries that publish an `/anthropic/v1` API. MAAS profiles return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. CodeAgent profiles return `codeagent_auth`; `auth_method = "sso"` exposes `has_access_token` and `has_refresh_token`, while `auth_method = "password"` exposes `username` and `has_password`. The MaaS login endpoint and `app-id`, and the CodeAgent OAuth/login endpoints and inference base URL, are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `GET /system/configs/model/catalog`
 
 Returns the shared provider/model directory used by the settings UI to prefill model profiles.
-The backend fetches `https://models.dev/api.json`, normalizes provider entries and model metadata, and caches the result in the app config directory.
+The backend fetches `https://models.dev/api.json`, normalizes provider entries and model metadata, adds `runtime_provider` for transport selection, and caches the result in the app config directory.
 When a cache exists, the default `GET` path returns it immediately, even after the five-minute freshness window. The settings UI uses this cache-first path only from the add-profile editor, then starts a background refresh. The add-profile catalog also exposes a manual refresh button that calls the forced refresh endpoint.
 Query field:
 - `refresh`: optional boolean. When `true`, bypasses the cache-first path and attempts to fetch the remote directory.
@@ -216,7 +216,7 @@ Selecting a catalog model in the UI only pre-fills the add-profile editor; persi
 Upserts a model profile.
 Request body may include optional `source_name` to rename an existing profile while preserving its stored API key and secret headers when `api_key` and `headers` are omitted.
 If `source_name` does not exist, the backend returns `404`. Profile-level semantic validation failures that occur after request parsing, such as invalid secret-header state or missing MAAS password on first configuration, return `400`.
-`provider` accepts `openai_compatible`, `bigmodel`, `minimax`, `maas`, `codeagent`, and `echo`.
+`provider` accepts `openai_compatible`, `anthropic`, `bigmodel`, `minimax`, `maas`, `codeagent`, and `echo`.
 Profiles may also include optional `ssl_verify` to override the global outbound TLS verification default for that model only.
 Profiles may include `is_default` to promote that profile to the runtime default; saving one default clears the flag from all others.
 Profiles may include optional `context_window` to declare the total model context limit separately from `max_tokens`, which remains the output-token cap when explicitly set. If `max_tokens` is omitted, the backend preserves that unset state and lets the provider decide the default output cap for primary LLM requests.
@@ -272,15 +272,17 @@ Fetches the available model catalog for a saved profile and/or draft override.
 Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`. For `provider = "codeagent"`, the override must provide `codeagent_auth`; the backend still forces the fixed CodeAgent base URL.
 When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
-`openai_compatible`, `bigmodel`, and `minimax` map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated. `maas` maps this call to the fixed PromptCenter discovery endpoint after MAAS login, using the returned `X-Auth-Token` plus department info from `userInfo` to build the discovery request payload. `codeagent` resolves a CodeAgent token through either saved SSO credentials or username/password login, then calls the fixed CodeAgent model-discovery endpoint.
+Optional `metadata_policy = "endpoint_only"` disables built-in model-name inference for discovery metadata; this is used by custom endpoint drafts so only provider-returned model metadata is auto-filled. The default `metadata_policy = "allow_inference"` preserves the existing built-in fallback behavior.
+`openai_compatible`, `bigmodel`, and `minimax` map this call to `GET {base_url}/models` and return the normalized `models` list sorted and deduplicated. `anthropic` maps this call to `GET {base_url}/models` using Anthropic-compatible request headers. `maas` maps this call to the fixed PromptCenter discovery endpoint after MAAS login, using the returned `X-Auth-Token` plus department info from `userInfo` to build the discovery request payload. `codeagent` resolves a CodeAgent token through either saved SSO credentials or username/password login, then calls the fixed CodeAgent model-discovery endpoint.
 For `maas`, the backend merges model ids from top-level `user_model_list` and nested `plugin_config[].config` payloads, filters invalid ids, then returns sorted deduplicated ids in `models[]` and `model_entries[]`.
 When the provider exposes per-model context-limit metadata in the catalog payload, the response also includes `model_entries[]` with:
 - `model`
 - optional `context_window`
+- optional `output_limit`
 - `capabilities`
 - `input_modalities[]`
 
-The settings UI uses `model_entries[].context_window` to auto-fill the profile context window field after model discovery. Providers that return only model ids will still populate `models[]`, but `context_window` remains user-specified.
+The settings UI uses `model_entries[].context_window`, `model_entries[].output_limit`, and image-input capability metadata to auto-fill empty profile advanced fields after model discovery. Providers that return only model ids will still populate `models[]`, but those advanced fields remain user-specified.
 For a small set of known provider/model pairs, the backend also applies a built-in context-window fallback when the provider returns only model ids.
 
 ### `POST /system/configs/model/codeagent/auth:verify`

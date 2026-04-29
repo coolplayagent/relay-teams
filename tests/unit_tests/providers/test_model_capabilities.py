@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from relay_teams.providers.known_model_context_windows import infer_known_context_window
 from relay_teams.providers.model_capabilities import resolve_model_capabilities
 from relay_teams.providers.model_config import ProviderType
 
@@ -107,3 +108,34 @@ def test_resolve_model_capabilities_uses_heuristics_when_image_override_is_null(
     assert capabilities.input.text is True
     assert capabilities.input.image is True
     assert capabilities.output.text is True
+
+
+def test_infer_known_context_window_supports_anthropic_families() -> None:
+    assert (
+        infer_known_context_window(
+            provider=ProviderType.ANTHROPIC,
+            model="claude-opus-4-6-preview",
+        )
+        == 1_000_000
+    )
+    assert (
+        infer_known_context_window(
+            provider=ProviderType.ANTHROPIC,
+            model="claude-sonnet-4-5",
+        )
+        == 200_000
+    )
+    assert (
+        infer_known_context_window(
+            provider=ProviderType.ANTHROPIC,
+            model="minimax-m2.7",
+        )
+        == 204_800
+    )
+    assert (
+        infer_known_context_window(
+            provider=ProviderType.ANTHROPIC,
+            model="custom-model",
+        )
+        is None
+    )

@@ -5,23 +5,22 @@ import logging
 from collections.abc import Mapping
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModelSettings
-from pydantic_ai.profiles.openai import OpenAIModelProfile
+from pydantic_ai.settings import ModelSettings
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
-from relay_teams.agents.execution.recoverable_openai_chat_model import (
-    RecoverableOpenAIChatModel as OpenAIChatModel,
+from relay_teams.agents.execution.model_builder import (
+    build_runtime_chat_model,
 )
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.model_config import (
     CodeAgentAuthConfig,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     MaaSAuthConfig,
+    ModelEndpointConfig,
     ModelRequestHeader,
     ProviderType,
 )
-from relay_teams.providers.openai_support import build_openai_provider_for_endpoint
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
@@ -41,8 +40,7 @@ def build_coordination_agent(
     codeagent_auth: CodeAgentAuthConfig | None = None,
     system_prompt: str,
     allowed_tools: tuple[str, ...],
-    model_settings: OpenAIChatModelSettings | None = None,
-    model_profile: OpenAIModelProfile | None = None,
+    model_settings: ModelSettings | None = None,
     ssl_verify: bool | None = None,
     connect_timeout_seconds: float = DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     merged_env: Mapping[str, str] | None = None,
@@ -114,20 +112,20 @@ def build_coordination_agent(
         cache_scope=llm_http_client_cache_scope,
         ssl_verify=ssl_verify,
     )
-    model = OpenAIChatModel(
-        model_name,
-        provider=build_openai_provider_for_endpoint(
+    model = build_runtime_chat_model(
+        config=ModelEndpointConfig(
+            provider=provider_type,
+            model=model_name,
             base_url=base_url,
             api_key=api_key,
             headers=headers,
-            provider_type=provider_type,
             maas_auth=maas_auth,
             codeagent_auth=codeagent_auth,
             ssl_verify=ssl_verify,
             connect_timeout_seconds=connect_timeout_seconds,
-            http_client=llm_http_client,
         ),
-        profile=model_profile,
+        http_client=llm_http_client,
+        recoverable_openai=True,
     )
     agent: Agent[ToolDeps, str] = Agent(
         model=model,

@@ -28,6 +28,7 @@ from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config import (
     CodeAgentAuthMethod,
     CodeAgentAuthConfig,
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
     LlmRetryConfig,
@@ -236,6 +237,8 @@ def load_llm_profile_state(
         provider = ProviderType(provider_raw)
         if provider == ProviderType.MAAS:
             base_url = DEFAULT_MAAS_BASE_URL
+        elif provider == ProviderType.ANTHROPIC and not _string_is_configured(base_url):
+            base_url = DEFAULT_ANTHROPIC_BASE_URL
         maas_auth = _resolve_profile_maas_auth(
             config_dir=config_dir,
             profile_name=name,
@@ -681,6 +684,10 @@ def _coerce_optional_ssl_verify(value: object, *, profile_name: str) -> bool | N
     raise ValueError(
         f"Invalid profile '{profile_name}': ssl_verify must be true, false, or null."
     )
+
+
+def _string_is_configured(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _resolve_path(config_dir: Path, raw_path: str) -> Path:

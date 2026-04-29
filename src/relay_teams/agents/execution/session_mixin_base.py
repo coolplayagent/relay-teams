@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import JsonValue
 from pydantic_ai.exceptions import ModelAPIError
-from pydantic_ai.models.openai import OpenAIChatModelSettings
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -221,7 +221,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
-    ) -> OpenAIChatModelSettings:
+    ) -> ModelSettings:
         raise NotImplementedError
 
     def _validate_request_input_capabilities(self, request: LLMRequest) -> None:

@@ -48,13 +48,16 @@ let languageBound = false;
 let draftBaseUrlExpanded = false;
 let draftModelInputExpanded = false;
 let draftProviderMode = 'external';
+let draftImageCapabilityManualOverride = false;
 
 const DEFAULT_MAAS_BASE_URL = 'http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/';
 const DEFAULT_CODEAGENT_BASE_URL = 'https://codeagentcli.rnd.huawei.com/codeAgentPro';
+const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
 const PROVIDER_DEFAULT_BASE_URLS = {
     maas: DEFAULT_MAAS_BASE_URL,
     codeagent: DEFAULT_CODEAGENT_BASE_URL,
+    anthropic: DEFAULT_ANTHROPIC_BASE_URL,
 };
 const IMAGE_CAPABILITY_MODES = {
     FOLLOW_DETECTION: 'follow_detection',
@@ -146,6 +149,10 @@ export function bindModelProfileHandlers() {
         providerInput.oninput = handleDraftEndpointChanged;
         providerInput.onchange = handleDraftEndpointChanged;
     }
+    const customProviderInput = getOptionalElement('profile-custom-provider');
+    if (customProviderInput) {
+        customProviderInput.onchange = handleCustomProviderChanged;
+    }
     document.querySelectorAll('[data-provider-value]').forEach(button => {
         button.onclick = () => handleProviderChoice(button.dataset.providerMode || button.dataset.providerValue);
     });
@@ -223,6 +230,10 @@ export function bindModelProfileHandlers() {
     const contextWindowInput = document.getElementById('profile-context-window');
     if (contextWindowInput) {
         contextWindowInput.oninput = handleContextWindowInputChanged;
+    }
+    const maxTokensInput = document.getElementById('profile-max-tokens');
+    if (maxTokensInput) {
+        maxTokensInput.oninput = handleMaxTokensInputChanged;
     }
 
     const modelInput = document.getElementById('profile-model');
@@ -792,11 +803,12 @@ function handleCatalogModelPicked(providerId, modelId) {
     if (!provider || !model) {
         return;
     }
-    const providerApi = String(provider.api || '').trim();
     const runtimeProvider = mapCatalogProviderToRuntimeProvider(provider.id);
+    const catalogProviderApi = String(provider.api || '').trim();
+    const providerApi = catalogProviderApi || getProviderDefaultBaseUrl(runtimeProvider);
     const catalogMaasProvider = isMaaSProvider(runtimeProvider);
     draftProviderMode = catalogMaasProvider ? PROVIDER_MODES.MAAS : PROVIDER_MODES.EXTERNAL;
-    draftBaseUrlExpanded = !catalogMaasProvider && !providerApi;
+    draftBaseUrlExpanded = !catalogMaasProvider && !catalogProviderApi;
     draftModelInputExpanded = catalogMaasProvider;
     catalogProviderSearch = '';
     catalogModelSearch = '';
@@ -822,7 +834,9 @@ function handleCatalogModelPicked(providerId, modelId) {
     document.getElementById('profile-max-tokens').value = model.output_limit ? String(model.output_limit) : '';
     document.getElementById('profile-context-window').value = model.context_window ? String(model.context_window) : '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
+    delete document.getElementById('profile-max-tokens').dataset.autofilledModel;
     draftImageCapabilityMode = deriveImageCapabilityMode(model.capabilities, model.input_modalities);
+    draftImageCapabilityManualOverride = false;
     draftDiscoveredModels = [normalizeCatalogModelForDraft(model)];
 
     renderDraftApiKeyField();
@@ -840,6 +854,7 @@ function normalizeCatalogModelForDraft(model) {
     return {
         model: model.id,
         context_window: Number.isInteger(model.context_window) ? model.context_window : null,
+        output_limit: Number.isInteger(model.output_limit) ? model.output_limit : null,
         capabilities: normalizeModelCapabilities(model.capabilities, model.input_modalities),
         input_modalities: normalizeInputModalities(model.input_modalities, model.capabilities),
     };
@@ -865,7 +880,16 @@ function buildCatalogProfileName(providerId, modelId) {
 }
 
 function mapCatalogProviderToRuntimeProvider(providerId) {
+    const provider = findCatalogProvider(providerId);
+    const runtimeProvider = String(provider?.runtime_provider || '').trim();
+    if (runtimeProvider) {
+        return runtimeProvider;
+    }
     const normalized = String(providerId || '').trim().toLowerCase();
+    const providerApi = String(provider?.api || '').trim().toLowerCase();
+    if (normalized === 'anthropic' || providerApi.includes('/anthropic/')) {
+        return 'anthropic';
+    }
     if (normalized === 'maas' || normalized.includes('maas')) {
         return 'maas';
     }
@@ -960,6 +984,7 @@ function handleAddProfile() {
     document.getElementById('profile-max-tokens').value = '';
     document.getElementById('profile-context-window').value = '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
+    delete document.getElementById('profile-max-tokens').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = '15';
     document.getElementById('profile-ssl-verify').value = '';
     document.getElementById('profile-fallback-policy').value = '';
@@ -1059,12 +1084,14 @@ function handleEditProfile(name) {
     document.getElementById('profile-max-tokens').value = profile.max_tokens || '';
     document.getElementById('profile-context-window').value = profile.context_window || '';
     delete document.getElementById('profile-context-window').dataset.autofilledModel;
+    delete document.getElementById('profile-max-tokens').dataset.autofilledModel;
     document.getElementById('profile-connect-timeout').value = profile.connect_timeout_seconds || 15;
     document.getElementById('profile-ssl-verify').value = serializeTriStateValue(profile.ssl_verify);
     document.getElementById('profile-fallback-policy').value = profile.fallback_policy_id || '';
     document.getElementById('profile-fallback-priority').value = String(profile.fallback_priority || 0);
     draftCatalogSelection = buildDraftCatalogSelection(profile);
     draftImageCapabilityMode = deriveImageCapabilityMode(profile.capabilities);
+    draftImageCapabilityManualOverride = draftImageCapabilityMode !== IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     draftProviderMode = isMaaSProvider(profile.provider)
         ? PROVIDER_MODES.MAAS
         : isCodeAgentProvider(profile.provider)
@@ -1895,6 +1922,9 @@ function buildDraftModelDiscoveryPayload() {
         override,
         timeout_ms: Math.round(connectTimeoutSeconds * 1000),
     };
+    if (draftProviderMode === PROVIDER_MODES.CUSTOM) {
+        payload.metadata_policy = 'endpoint_only';
+    }
     if (editingProfile) {
         payload.profile_name = editingProfile;
     }
@@ -2252,13 +2282,13 @@ function applyDiscoveredModelSelection() {
     }
     const currentModel = String(modelInput.dataset.currentValue || modelInput.value || '').trim();
     if (currentModel && findDiscoveredModelEntry(currentModel)) {
-        applyDiscoveredContextWindow(currentModel);
+        applyDiscoveredModelMetadata(currentModel);
         renderDiscoveredModels();
         return;
     }
     if (!currentModel && draftDiscoveredModels.length > 0) {
         setDraftModelValue(draftDiscoveredModels[0].model);
-        applyDiscoveredContextWindow(draftDiscoveredModels[0].model);
+        applyDiscoveredModelMetadata(draftDiscoveredModels[0].model);
     }
     renderDiscoveredModels();
 }
@@ -2269,6 +2299,15 @@ function handleContextWindowInputChanged() {
         return;
     }
     delete contextInput.dataset.autofilledModel;
+    renderProfileEditorState();
+}
+
+function handleMaxTokensInputChanged() {
+    const maxTokensInput = document.getElementById('profile-max-tokens');
+    if (!maxTokensInput) {
+        return;
+    }
+    delete maxTokensInput.dataset.autofilledModel;
     renderProfileEditorState();
 }
 
@@ -2294,7 +2333,7 @@ function syncDraftModelSelection() {
     }
     const normalized = String(modelInput.value || '').trim();
     modelInput.dataset.currentValue = normalized;
-    applyDiscoveredContextWindow(normalized);
+    applyDiscoveredModelMetadata(normalized);
     renderDiscoveredModels();
     renderProfileEditorState();
     if (draftDiscoveredModels.length > 0) {
@@ -2304,7 +2343,7 @@ function syncDraftModelSelection() {
 
 function handleDiscoveredModelPicked(modelName) {
     setDraftModelValue(modelName || '');
-    applyDiscoveredContextWindow(modelName || '');
+    applyDiscoveredModelMetadata(modelName || '');
     renderDiscoveredModels();
     setModelMenuOpen(false);
 }
@@ -2350,6 +2389,7 @@ function normalizeDiscoveredModels(result) {
             .map(entry => ({
                 model: String(entry.model || '').trim(),
                 context_window: Number.isInteger(entry.context_window) ? entry.context_window : null,
+                output_limit: Number.isInteger(entry.output_limit) ? entry.output_limit : null,
                 capabilities: normalizeModelCapabilities(entry.capabilities, entry.input_modalities),
                 input_modalities: normalizeInputModalities(
                     entry.input_modalities,
@@ -2367,6 +2407,7 @@ function normalizeDiscoveredModels(result) {
         .map(model => ({
             model,
             context_window: null,
+            output_limit: null,
             capabilities: normalizeModelCapabilities(null, []),
             input_modalities: [],
         }));
@@ -2380,21 +2421,51 @@ function findDiscoveredModelEntry(modelName) {
     return draftDiscoveredModels.find(entry => entry.model === normalized) || null;
 }
 
-function applyDiscoveredContextWindow(modelName) {
-    const contextInput = document.getElementById('profile-context-window');
-    if (!contextInput) {
+function applyDiscoveredModelMetadata(modelName) {
+    const entry = findDiscoveredModelEntry(modelName);
+    applyDiscoveredNumberField({
+        elementId: 'profile-context-window',
+        modelName,
+        value: entry?.context_window,
+    });
+    applyDiscoveredNumberField({
+        elementId: 'profile-max-tokens',
+        modelName,
+        value: entry?.output_limit,
+    });
+    applyDiscoveredImageCapability(entry);
+}
+
+function applyDiscoveredNumberField({ elementId, modelName, value }) {
+    const input = document.getElementById(elementId);
+    if (!input) {
         return;
     }
-    const entry = findDiscoveredModelEntry(modelName);
-    if (!entry || !Number.isInteger(entry.context_window) || entry.context_window <= 0) {
-        if (String(contextInput.dataset.autofilledModel || '').trim()) {
-            contextInput.value = '';
-            delete contextInput.dataset.autofilledModel;
+    const wasAutofilled = Boolean(
+        String(input.dataset.autofilledModel || '').trim(),
+    );
+    const currentValue = String(input.value || '').trim();
+    if (!Number.isInteger(value) || value <= 0) {
+        if (wasAutofilled) {
+            input.value = '';
+            delete input.dataset.autofilledModel;
         }
         return;
     }
-    contextInput.value = String(entry.context_window);
-    contextInput.dataset.autofilledModel = entry.model;
+    if (!currentValue || wasAutofilled) {
+        input.value = String(value);
+        input.dataset.autofilledModel = modelName;
+    }
+}
+
+function applyDiscoveredImageCapability(entry) {
+    if (draftImageCapabilityManualOverride) {
+        return;
+    }
+    draftImageCapabilityMode = entry
+        ? deriveImageCapabilityMode(entry.capabilities, entry.input_modalities)
+        : IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+    renderDraftImageCapability();
 }
 
 function resetDraftEditorState() {
@@ -2407,6 +2478,7 @@ function resetDraftEditorState() {
     draftCodeAgentAuthState = createDraftCodeAgentAuthState();
     draftCatalogSelection = null;
     draftImageCapabilityMode = IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
+    draftImageCapabilityManualOverride = false;
     isModelMenuOpen = false;
     draftBaseUrlExpanded = false;
     draftModelInputExpanded = false;
@@ -2473,6 +2545,7 @@ function deriveImageCapabilityMode(capabilities, inputModalities = []) {
 function syncDraftImageCapabilityMode() {
     const imageCapabilityInput = document.getElementById('profile-image-capability');
     draftImageCapabilityMode = normalizeImageCapabilityMode(imageCapabilityInput?.value);
+    draftImageCapabilityManualOverride = draftImageCapabilityMode !== IMAGE_CAPABILITY_MODES.FOLLOW_DETECTION;
     renderDraftImageCapability();
     renderProfileEditorState();
 }
@@ -2499,16 +2572,14 @@ function normalizeImageCapabilityMode(value) {
 function buildDraftProfileCapabilities(discoveredModelEntry) {
     const baseCapabilities = resolveDraftCapabilityBase(discoveredModelEntry);
     const imageCapabilityMode = normalizeImageCapabilityMode(draftImageCapabilityMode);
-    const imageCapability = imageCapabilityMode === IMAGE_CAPABILITY_MODES.SUPPORTED
-        ? true
-        : imageCapabilityMode === IMAGE_CAPABILITY_MODES.UNSUPPORTED
-            ? false
-            : null;
+    const inputCapabilities = { ...baseCapabilities.input };
+    if (imageCapabilityMode === IMAGE_CAPABILITY_MODES.SUPPORTED) {
+        inputCapabilities.image = true;
+    } else if (imageCapabilityMode === IMAGE_CAPABILITY_MODES.UNSUPPORTED) {
+        inputCapabilities.image = false;
+    }
     return {
-        input: {
-            ...baseCapabilities.input,
-            image: imageCapability,
-        },
+        input: inputCapabilities,
         output: {
             ...baseCapabilities.output,
         },
@@ -2550,7 +2621,9 @@ function handleProviderChoice(provider) {
         ? 'maas'
         : nextMode === PROVIDER_MODES.CODEAGENT
             ? 'codeagent'
-            : 'openai_compatible';
+            : nextMode === PROVIDER_MODES.CUSTOM
+                ? normalizeCustomProvider(getDraftProvider())
+                : 'openai_compatible';
     draftProviderMode = nextMode;
     catalogPickerOpen = null;
     setDraftProviderValue(nextProvider);
@@ -2569,6 +2642,8 @@ function handleProviderChoice(provider) {
         draftModelInputExpanded = true;
         draftBaseUrlExpanded = true;
         setModelCatalogPanelVisible(false);
+        syncCustomProviderInput();
+        syncDraftBaseUrlDefaultSource();
     } else {
         draftModelInputExpanded = false;
         draftBaseUrlExpanded = false;
@@ -2578,6 +2653,32 @@ function handleProviderChoice(provider) {
         }
     }
     handleDraftEndpointChanged();
+}
+
+function handleCustomProviderChanged() {
+    const previousProvider = getDraftProvider();
+    const nextProvider = normalizeCustomProvider(
+        getOptionalElement('profile-custom-provider')?.value,
+    );
+    draftProviderMode = PROVIDER_MODES.CUSTOM;
+    draftCatalogSelection = null;
+    draftModelInputExpanded = true;
+    draftBaseUrlExpanded = true;
+    setDraftProviderValue(nextProvider);
+    syncCustomProviderInput();
+    if (shouldClearDraftProviderDefaultBaseUrl(previousProvider, nextProvider)) {
+        const baseUrlInput = getOptionalElement('profile-base-url');
+        if (baseUrlInput) {
+            baseUrlInput.value = '';
+        }
+    }
+    syncDraftBaseUrlDefaultSource();
+    handleDraftEndpointChanged();
+}
+
+function normalizeCustomProvider(provider) {
+    const normalized = String(provider || '').trim();
+    return normalized === 'anthropic' ? 'anthropic' : 'openai_compatible';
 }
 
 function normalizeProviderMode(value) {
@@ -2790,6 +2891,26 @@ function setDraftBaseUrlDefaultSource(provider, baseUrl) {
     delete baseUrlInput.dataset.defaultSourceProvider;
 }
 
+function shouldClearDraftProviderDefaultBaseUrl(previousProvider, nextProvider) {
+    if (previousProvider === nextProvider) {
+        return false;
+    }
+    const baseUrlInput = document.getElementById('profile-base-url');
+    if (!baseUrlInput) {
+        return false;
+    }
+    const currentBaseUrl = String(baseUrlInput.value || '').trim();
+    return Boolean(currentBaseUrl && isProviderDefaultBaseUrl(previousProvider, currentBaseUrl));
+}
+
+function isProviderDefaultBaseUrl(provider, baseUrl) {
+    const defaultBaseUrl = getProviderDefaultBaseUrl(provider);
+    if (defaultBaseUrl && baseUrl === defaultBaseUrl) {
+        return true;
+    }
+    return isAnthropicProvider(provider) && baseUrl === DEFAULT_ANTHROPIC_BASE_URL;
+}
+
 function syncDraftBaseUrlDefaultSource() {
     const baseUrlInput = document.getElementById('profile-base-url');
     if (!baseUrlInput) {
@@ -2812,6 +2933,10 @@ function isCodeAgentProvider(provider) {
     return String(provider || '').trim() === 'codeagent';
 }
 
+function isAnthropicProvider(provider) {
+    return String(provider || '').trim() === 'anthropic';
+}
+
 function getDraftProvider() {
     const providerInput = document.getElementById('profile-provider');
     return providerInput ? String(providerInput.value || '').trim() || 'openai_compatible' : 'openai_compatible';
@@ -2825,6 +2950,14 @@ function setDraftProviderValue(provider) {
     const normalized = String(provider || '').trim() || 'openai_compatible';
     ensureProviderOption(providerInput, normalized);
     providerInput.value = normalized;
+}
+
+function syncCustomProviderInput() {
+    const customProviderInput = getOptionalElement('profile-custom-provider');
+    if (!customProviderInput) {
+        return;
+    }
+    customProviderInput.value = normalizeCustomProvider(getDraftProvider());
 }
 
 function ensureProviderOption(providerInput, value) {
@@ -3134,7 +3267,9 @@ function renderDraftProviderFields() {
     const provider = getDraftProvider();
     const maasProvider = isMaaSProvider(provider);
     const codeagentProvider = isCodeAgentProvider(provider);
+    const customMode = draftProviderMode === PROVIDER_MODES.CUSTOM;
     const apiKeyGroup = document.getElementById('profile-api-key-group');
+    const customProviderGroup = getOptionalElement('profile-custom-provider-group');
     const maasFields = document.getElementById('profile-maas-auth-fields');
     const codeagentFields = document.getElementById('profile-codeagent-auth-fields');
     const passwordInput = document.getElementById('profile-maas-password');
@@ -3144,6 +3279,10 @@ function renderDraftProviderFields() {
     if (apiKeyGroup) {
         apiKeyGroup.style.display = (maasProvider || codeagentProvider) ? 'none' : 'block';
     }
+    if (customProviderGroup) {
+        customProviderGroup.style.display = customMode ? 'block' : 'none';
+    }
+    syncCustomProviderInput();
     if (maasFields) {
         maasFields.style.display = maasProvider ? 'grid' : 'none';
     }
@@ -3161,6 +3300,9 @@ function renderDraftProviderFields() {
         } else {
             baseUrlInput.title = '';
         }
+        baseUrlInput.placeholder = isAnthropicProvider(provider)
+            ? t('settings.model.custom_base_url_placeholder_anthropic')
+            : t('settings.model.custom_base_url_placeholder');
     }
     if (baseUrlGroup) {
         baseUrlGroup.style.display = codeagentProvider ? 'none' : 'block';
@@ -3589,6 +3731,9 @@ function findProfileCard(name) {
 function formatProviderLabel(provider) {
     if (provider === 'openai_compatible') {
         return 'OpenAI Compatible';
+    }
+    if (provider === 'anthropic') {
+        return 'Anthropic';
     }
     if (provider === 'maas') {
         return 'MAAS';

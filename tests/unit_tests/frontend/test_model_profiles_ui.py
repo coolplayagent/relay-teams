@@ -810,6 +810,57 @@ console.log(JSON.stringify({
     assert saved_profile_body["base_url"] == "https://manual.example/v1"
 
 
+def test_catalog_anthropic_without_provider_api_uses_default_base_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("add-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+document.getElementById("model-catalog-provider-list").querySelectorAll(".model-catalog-provider-btn")[0].onclick();
+document.getElementById("model-catalog-model-list").querySelectorAll(".model-catalog-model-btn")[0].onclick();
+
+console.log(JSON.stringify({
+    provider: document.getElementById("profile-provider").value,
+    baseUrl: document.getElementById("profile-base-url").value,
+    baseUrlFieldsDisplay: document.getElementById("profile-base-url-fields").style.display,
+}));
+""".strip(),
+        mock_api_source=DEFAULT_MOCK_API_SOURCE.replace(
+            'id: "openai"',
+            'id: "anthropic"',
+            1,
+        )
+        .replace(
+            'name: "OpenAI"',
+            'name: "Anthropic"',
+            1,
+        )
+        .replace(
+            'api: "https://api.openai.com/v1",',
+            'api: "",',
+            1,
+        ),
+    )
+
+    assert payload == {
+        "provider": "anthropic",
+        "baseUrl": "https://api.anthropic.com",
+        "baseUrlFieldsDisplay": "block",
+    }
+
+
 def test_saving_after_leaving_catalog_clears_catalog_metadata(
     tmp_path: Path,
 ) -> None:
@@ -2077,7 +2128,7 @@ console.log(JSON.stringify({
     saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
     capabilities = cast(dict[str, JsonValue], saved_profile_body["capabilities"])
     input_capabilities = cast(dict[str, JsonValue], capabilities["input"])
-    assert input_capabilities["image"] is None
+    assert input_capabilities["image"] is True
     assert input_capabilities["text"] is True
 
 
@@ -2121,6 +2172,55 @@ console.log(JSON.stringify({
     dispatched_events = cast(list[str], payload["dispatchedEvents"])
     assert input_capabilities["image"] is True
     assert "agent-teams-model-profiles-updated" in dispatched_events
+
+
+def test_follow_detection_image_capability_resumes_discovered_updates(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-name").value = "follow-detection-profile";
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+document.getElementById("profile-model").value = "reasoning-model";
+document.getElementById("profile-model").onchange();
+document.getElementById("profile-image-capability").value = "unsupported";
+document.getElementById("profile-image-capability").onchange();
+document.getElementById("profile-image-capability").value = "follow_detection";
+document.getElementById("profile-image-capability").onchange();
+const afterFollow = document.getElementById("profile-image-capability").value;
+document.getElementById("profile-model").value = "fake-chat-model";
+document.getElementById("profile-model").onchange();
+
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    afterFollow,
+    finalImageCapability: document.getElementById("profile-image-capability").value,
+    savedProfile: globalThis.__savedProfile,
+}));
+""".strip(),
+    )
+
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    saved_profile_body = cast(dict[str, JsonValue], saved_profile["profile"])
+    capabilities = cast(dict[str, JsonValue], saved_profile_body["capabilities"])
+    input_capabilities = cast(dict[str, JsonValue], capabilities["input"])
+    assert payload["afterFollow"] == "follow_detection"
+    assert payload["finalImageCapability"] == "supported"
+    assert input_capabilities["image"] is True
 
 
 def test_editing_profile_restores_manual_image_capability_override(
@@ -2213,6 +2313,90 @@ export async function deleteModelProfile(name) {
 
     assert payload["modelValue"] == "fake-chat-model"
     assert payload["contextWindowValue"] == "256000"
+
+
+def test_custom_discovery_prefills_endpoint_metadata_without_overriding_manual_values(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider-custom-btn").onclick();
+document.getElementById("profile-base-url").value = "https://draft.test/v1";
+document.getElementById("profile-api-key").value = "draft-api-key";
+document.getElementById("profile-context-window").value = "1000";
+document.getElementById("profile-context-window").oninput();
+
+await document.getElementById("fetch-profile-models-btn").onclick();
+
+console.log(JSON.stringify({
+    discoverPayload: globalThis.__discoverPayload,
+    modelValue: document.getElementById("profile-model").value,
+    contextWindowValue: document.getElementById("profile-context-window").value,
+    maxTokensValue: document.getElementById("profile-max-tokens").value,
+    imageCapabilityValue: document.getElementById("profile-image-capability").value,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {};
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42 };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return {
+        ok: true,
+        latency_ms: 37,
+        models: ["custom-model"],
+        model_entries: [
+            {
+                model: "custom-model",
+                context_window: 256000,
+                output_limit: 8192,
+                capabilities: {
+                    input: { text: true, image: true, audio: false, video: false, pdf: false },
+                    output: { text: true, image: false, audio: false, video: false, pdf: false },
+                },
+                input_modalities: ["image"],
+            },
+        ],
+    };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+
+export async function deleteModelProfile(name) {
+    globalThis.__deletedProfileName = name;
+}
+""".strip(),
+    )
+
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    assert discover_payload["metadata_policy"] == "endpoint_only"
+    assert payload["modelValue"] == "custom-model"
+    assert payload["contextWindowValue"] == "1000"
+    assert payload["maxTokensValue"] == "8192"
+    assert payload["imageCapabilityValue"] == "supported"
 
 
 def test_saving_model_profile_preserves_bigmodel_provider_value(tmp_path: Path) -> None:
@@ -2469,6 +2653,42 @@ console.log(JSON.stringify({
     )
 
     assert payload["baseUrlValue"] == "https://custom.example/v1"
+
+
+def test_switching_custom_protocol_clears_anthropic_default_base_url(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+document.getElementById("add-profile-btn").onclick();
+document.getElementById("profile-provider-custom-btn").onclick();
+document.getElementById("profile-custom-provider").value = "anthropic";
+document.getElementById("profile-custom-provider").onchange();
+document.getElementById("profile-base-url").value = "https://api.anthropic.com";
+document.getElementById("profile-base-url").oninput();
+document.getElementById("profile-custom-provider").value = "openai_compatible";
+document.getElementById("profile-custom-provider").onchange();
+
+console.log(JSON.stringify({
+    providerValue: document.getElementById("profile-provider").value,
+    customProviderValue: document.getElementById("profile-custom-provider").value,
+    baseUrlValue: document.getElementById("profile-base-url").value,
+}));
+""".strip(),
+    )
+
+    assert payload["providerValue"] == "openai_compatible"
+    assert payload["customProviderValue"] == "openai_compatible"
+    assert payload["baseUrlValue"] == ""
 
 
 def test_edit_bigmodel_profile_non_provider_changes_do_not_reset_custom_base_url(
@@ -5177,6 +5397,8 @@ function createElements() {{
             ["profile-editor-title", createElement("block", "profile-editor-title")],
             ["profile-name", createElement("block", "profile-name")],
             ["profile-provider", createElement("block", "profile-provider")],
+            ["profile-custom-provider-group", createElement("none", "profile-custom-provider-group")],
+            ["profile-custom-provider", createElement("block", "profile-custom-provider")],
             ["profile-provider-options", createElement("block", "profile-provider-options")],
             ["profile-provider-external-btn", createElement("block", "profile-provider-external-btn")],
             ["profile-provider-maas-btn", createElement("block", "profile-provider-maas-btn")],

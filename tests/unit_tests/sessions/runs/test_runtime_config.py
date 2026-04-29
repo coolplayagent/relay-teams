@@ -14,6 +14,7 @@ from relay_teams.providers.codeagent_auth import (
 from relay_teams.providers.model_header_utils import model_header_secret_field_name
 from relay_teams.providers.maas_auth import maas_password_secret_field_name
 from relay_teams.providers.model_config import (
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
@@ -187,6 +188,30 @@ def test_load_llm_configs_reads_bigmodel_provider_field(tmp_path: Path) -> None:
     profiles = runtime_config.load_llm_configs(tmp_path, {})
 
     assert profiles["default"].provider.value == "bigmodel"
+
+
+def test_load_llm_configs_defaults_anthropic_base_url_when_blank(
+    tmp_path: Path,
+) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "default": {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-5",
+                    "base_url": " ",
+                    "api_key": "plain-text-key",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    assert profiles["default"].provider.value == "anthropic"
+    assert profiles["default"].base_url == DEFAULT_ANTHROPIC_BASE_URL
 
 
 def test_load_runtime_config_reads_explicit_default_profile_name(

@@ -66,6 +66,23 @@ def test_create_default_provider_registry_has_minimax_support() -> None:
     assert isinstance(provider, EchoProvider)
 
 
+def test_create_default_provider_registry_has_anthropic_support() -> None:
+    registry = create_default_provider_registry(
+        openai_compatible_builder=lambda _config: EchoProvider()
+    )
+
+    provider = registry.create(
+        ModelEndpointConfig(
+            provider=ProviderType.ANTHROPIC,
+            model="MiniMax-M2.7",
+            base_url="https://api.minimax.io/anthropic/v1",
+            api_key="unused",
+        )
+    )
+
+    assert isinstance(provider, EchoProvider)
+
+
 def test_create_default_provider_registry_has_echo_support() -> None:
     registry = create_default_provider_registry(
         openai_compatible_builder=lambda _config: EchoProvider()

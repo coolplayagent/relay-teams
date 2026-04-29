@@ -198,6 +198,10 @@ class OpenAICompatibleProvider(LLMProvider):
     def capabilities(self) -> ProviderCapabilities:
         if self._config.provider in {ProviderType.MAAS, ProviderType.CODEAGENT}:
             return ProviderCapabilities()
+        if self._config.provider == ProviderType.ANTHROPIC:
+            return ProviderCapabilities(
+                input_modalities=self._config.capabilities.supported_input_modalities(),
+            )
         return ProviderCapabilities(
             input_modalities=self._config.capabilities.supported_input_modalities(),
             conversation_output_modalities=(

@@ -19,6 +19,7 @@ from relay_teams.providers.model_capabilities import resolve_model_capabilities
 from relay_teams.providers.model_config import (
     CodeAgentAuthMethod,
     CodeAgentAuthConfig,
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
@@ -1633,7 +1634,15 @@ def _normalize_profile_provider_defaults(
         normalized_profile["base_url"] = DEFAULT_MAAS_BASE_URL
     elif provider_raw == ProviderType.CODEAGENT.value:
         normalized_profile["base_url"] = DEFAULT_CODEAGENT_BASE_URL
+    elif provider_raw == ProviderType.ANTHROPIC.value and not _string_is_configured(
+        normalized_profile.get("base_url")
+    ):
+        normalized_profile["base_url"] = DEFAULT_ANTHROPIC_BASE_URL
     return normalized_profile
+
+
+def _string_is_configured(value: JsonValue | None) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _normalize_profile_context_window(

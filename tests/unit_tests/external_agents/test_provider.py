@@ -1557,3 +1557,29 @@ def test_resolve_transport_agent_config_rejects_codeagent_model_profile(
             role=_build_role(),
             request=_build_request(),
         )
+
+
+def test_resolve_transport_agent_config_rejects_anthropic_model_profile(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(
+        prompt_text="hello",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        resolve_model_config=lambda _role, _request: ModelEndpointConfig(
+            provider=ProviderType.ANTHROPIC,
+            model="claude-sonnet-4-5",
+            base_url="https://api.anthropic.com",
+            api_key="anthropic-key",
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Anthropic model profiles are not supported for external ACP agents.",
+    ):
+        manager._resolve_transport_agent_config(
+            agent=_build_agent(command="opencode"),
+            role=_build_role(),
+            request=_build_request(),
+        )

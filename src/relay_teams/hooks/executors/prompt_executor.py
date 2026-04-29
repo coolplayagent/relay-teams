@@ -3,18 +3,20 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pydantic_ai import Agent, ModelRequestNode
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
-from pydantic_ai.profiles.openai import OpenAIModelProfile
+from pydantic_ai.models.anthropic import AnthropicModelSettings
+from pydantic_ai.models.openai import OpenAIChatModelSettings
+from pydantic_ai.settings import ModelSettings
 
+from relay_teams.agents.execution.model_builder import (
+    RuntimeChatModel,
+    build_runtime_chat_model,
+    is_anthropic_provider,
+)
 from relay_teams.hooks.hook_event_models import HookEventInput
 from relay_teams.hooks.hook_models import HookDecision, HookHandlerConfig
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.llm_retry import run_with_llm_retry
 from relay_teams.providers.model_config import LlmRetryConfig, ModelEndpointConfig
-from relay_teams.providers.openai_model_profiles import (
-    resolve_openai_chat_model_profile,
-)
-from relay_teams.providers.openai_support import build_openai_provider
 
 
 class PromptHookExecutor:
@@ -78,33 +80,31 @@ async def _run_streaming_prompt(
         return agent_run.result.output
 
 
-def _build_model(config: ModelEndpointConfig) -> OpenAIChatModel:
-    profile: OpenAIModelProfile | None = resolve_openai_chat_model_profile(
-        base_url=config.base_url,
-        model_name=config.model,
-    )
-    return OpenAIChatModel(
-        config.model,
-        provider=build_openai_provider(
-            config=config,
-            http_client=build_llm_http_client(
-                connect_timeout_seconds=config.connect_timeout_seconds,
-                ssl_verify=config.ssl_verify,
-            ),
+def _build_model(config: ModelEndpointConfig) -> RuntimeChatModel:
+    return build_runtime_chat_model(
+        config=config,
+        http_client=build_llm_http_client(
+            connect_timeout_seconds=config.connect_timeout_seconds,
+            ssl_verify=config.ssl_verify,
         ),
-        profile=profile,
     )
 
 
-def _model_settings(config: ModelEndpointConfig) -> OpenAIChatModelSettings:
+def _model_settings(config: ModelEndpointConfig) -> ModelSettings:
     configured_max_tokens = config.sampling.max_tokens
     max_tokens = (
         600 if configured_max_tokens is None else min(configured_max_tokens, 600)
     )
-    return {
+    if is_anthropic_provider(config.provider):
+        anthropic_settings: AnthropicModelSettings = {
+            "max_tokens": max_tokens,
+        }
+        return anthropic_settings
+    openai_settings: OpenAIChatModelSettings = {
         "temperature": min(config.sampling.temperature, 0.2),
         "top_p": config.sampling.top_p,
         "max_tokens": max_tokens,
         "openai_continuous_usage_stats": True,
         "extra_body": {"response_format": {"type": "json_object"}},
     }
+    return openai_settings

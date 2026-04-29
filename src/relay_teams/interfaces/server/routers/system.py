@@ -110,6 +110,7 @@ from relay_teams.notifications.notification_settings_service import (
 )
 from relay_teams.providers.model_config import (
     CodeAgentAuthConfig,
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_CODEAGENT_CLIENT_ID,
     DEFAULT_CODEAGENT_SCOPE,
@@ -450,7 +451,10 @@ async def save_model_profile(
                 if req.provider == ProviderType.MAAS
                 else DEFAULT_CODEAGENT_BASE_URL
                 if req.provider == ProviderType.CODEAGENT
-                else req.base_url
+                else DEFAULT_ANTHROPIC_BASE_URL
+                if req.provider == ProviderType.ANTHROPIC
+                and (req.base_url is None or not req.base_url.strip())
+                else req.base_url or ""
             ),
             "temperature": req.temperature,
             "top_p": req.top_p,
