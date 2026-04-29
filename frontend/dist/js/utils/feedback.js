@@ -169,14 +169,20 @@ function renderNextDialog() {
                                 const placeholder = escapeHtml(field.placeholder || '');
                                 const fieldValue = field.value ?? '';
                                 const fieldType = String(field.type || '').trim().toLowerCase();
+                                const compactClass = field.compact === true ? ' feedback-dialog-field-compact' : '';
+                                const fieldError = `<span class="feedback-dialog-field-error" data-feedback-field-error="${escapeHtml(fieldId)}" hidden></span>`;
                                 if (fieldType === 'checkbox') {
+                                    const checkboxCopy = field.description === undefined
+                                        ? t('feedback.enable_after_creation')
+                                        : String(field.description || '');
                                     return `
-                                        <label class="feedback-dialog-input-wrap feedback-dialog-checkbox-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                        <label class="feedback-dialog-input-wrap feedback-dialog-checkbox-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             <span class="feedback-dialog-checkbox">
                                                 <input type="checkbox" class="feedback-dialog-checkbox-input" data-feedback-form-input="${escapeHtml(fieldId)}" ${fieldValue === true ? 'checked' : ''} />
-                                                <span class="feedback-dialog-checkbox-copy">${escapeHtml(field.description || t('feedback.enable_after_creation'))}</span>
+                                                ${checkboxCopy ? `<span class="feedback-dialog-checkbox-copy">${escapeHtml(checkboxCopy)}</span>` : ''}
                                             </span>
+                                            ${fieldError}
                                         </label>
                                     `;
                                 }
@@ -202,7 +208,7 @@ function renderNextDialog() {
                                         }).length
                                         : options.length;
                                     return `
-                                        <div class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                        <div class="feedback-dialog-input-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <details class="feedback-dialog-multiselect" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="multiselect" data-feedback-multiselect-placeholder="${placeholder}" data-feedback-multiselect-summary-mode="${escapeHtml(summaryMode)}" data-feedback-multiselect-summary-key="${escapeHtml(summaryKey)}" data-feedback-multiselect-summary-all-value="${escapeHtml(summaryAllValue)}" data-feedback-multiselect-summary-none-value="${escapeHtml(summaryNoneValue)}" data-feedback-multiselect-summary-none-label="${escapeHtml(summaryNoneLabel)}" data-feedback-multiselect-summary-option-count="${escapeHtml(summaryOptionCount)}">
@@ -221,13 +227,14 @@ function renderNextDialog() {
                                                     }).join('')}
                                                 </div>
                                             </details>
+                                            ${fieldError}
                                         </div>
                                     `;
                                 }
                                 if (fieldType === 'select') {
                                     const options = Array.isArray(field.options) ? field.options : [];
                                     return `
-                                        <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                        <label class="feedback-dialog-input-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <select class="feedback-dialog-input feedback-dialog-select" data-feedback-form-input="${escapeHtml(fieldId)}">
@@ -238,15 +245,34 @@ function renderNextDialog() {
                                                     return `<option value="${escapeHtml(optionValue)}" ${selected}>${optionLabel}</option>`;
                                                 }).join('')}
                                             </select>
+                                            ${fieldError}
+                                        </label>
+                                    `;
+                                }
+                                if (fieldType === 'copyable') {
+                                    const copyLabel = escapeHtml(field.copyLabel || t('feedback.copy'));
+                                    return `
+                                        <label class="feedback-dialog-input-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                            <span class="feedback-dialog-input-label">${inputLabel}</span>
+                                            ${fieldCopy}
+                                            <div class="feedback-dialog-copyable-row">
+                                                <input type="text" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-copyable-input="${escapeHtml(fieldId)}" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" readonly />
+                                                <button class="secondary-btn feedback-dialog-copy-btn" data-feedback-copyable-button="${escapeHtml(fieldId)}" type="button">${copyLabel}</button>
+                                            </div>
+                                            ${fieldError}
                                         </label>
                                     `;
                                 }
                                 if (String(field.multiline || '').trim() === 'true' || field.multiline === true || fieldType === 'textarea') {
+                                    const rows = normalizeTextareaRows(field.rows);
+                                    const rowsAttribute = rows ? ` rows="${escapeHtml(rows)}"` : '';
+                                    const textareaClass = `feedback-dialog-input feedback-dialog-textarea${field.compact === true ? ' feedback-dialog-textarea-compact' : ''}`;
                                     return `
-                                        <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                        <label class="feedback-dialog-input-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
-                                            <textarea class="feedback-dialog-input feedback-dialog-textarea" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}">${escapeHtml(fieldValue)}</textarea>
+                                            <textarea class="${textareaClass}" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}"${rowsAttribute}>${escapeHtml(fieldValue)}</textarea>
+                                            ${fieldError}
                                         </label>
                                     `;
                                 }
@@ -256,23 +282,25 @@ function renderNextDialog() {
                                     const hasValue = String(fieldValue ?? '').trim().length > 0;
                                     const allowEmptyReveal = field.allowEmptyReveal === true;
                                     return `
-                                        <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                        <label class="feedback-dialog-input-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                             <span class="feedback-dialog-input-label">${inputLabel}</span>
                                             ${fieldCopy}
                                             <div class="secure-input-row feedback-dialog-secure-row">
                                                 <input type="password" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" data-feedback-form-type="password" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" autocomplete="${escapeHtml(field.autocomplete || 'current-password')}" />
-                                                <button class="secure-input-btn feedback-dialog-secure-toggle" data-feedback-password-toggle="${escapeHtml(fieldId)}" data-feedback-show-label="${showLabel}" data-feedback-hide-label="${hideLabel}" data-feedback-allow-empty-reveal="${allowEmptyReveal ? 'true' : 'false'}" type="button" title="${showLabel}" aria-label="${showLabel}"${hasValue || allowEmptyReveal ? '' : ' style="display:none;"'}>
+                                                <button class="secure-input-btn feedback-dialog-secure-toggle" data-feedback-password-toggle="${escapeHtml(fieldId)}" data-feedback-show-label="${showLabel}" data-feedback-hide-label="${hideLabel}" data-feedback-allow-empty-reveal="${allowEmptyReveal ? 'true' : 'false'}" data-feedback-masked-value="${escapeHtml(field.maskedValue || '')}" type="button" title="${showLabel}" aria-label="${showLabel}"${hasValue || allowEmptyReveal ? '' : ' style="display:none;"'}>
                                                     ${renderSecureInputIcon()}
                                                 </button>
                                             </div>
+                                            ${fieldError}
                                         </label>
                                     `;
                                 }
                                 return `
-                                    <label class="feedback-dialog-input-wrap" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
+                                    <label class="feedback-dialog-input-wrap${compactClass}" data-feedback-form-field data-feedback-field-id="${escapeHtml(fieldId)}">
                                         <span class="feedback-dialog-input-label">${inputLabel}</span>
                                         ${fieldCopy}
                                         <input type="text" class="feedback-dialog-input" data-feedback-form-input="${escapeHtml(fieldId)}" placeholder="${placeholder}" value="${escapeHtml(fieldValue)}" />
+                                        ${fieldError}
                                     </label>
                                 `;
                             }).join('')}
@@ -300,7 +328,8 @@ function renderNextDialog() {
     const formInputs = Array.from(hosts.dialogRoot.querySelectorAll('[data-feedback-form-input]'));
     const submitError = hosts.dialogRoot.querySelector('[data-feedback-submit-error]');
     bindMultiselectControls(hosts.dialogRoot);
-    bindPasswordInputControls(hosts.dialogRoot);
+    bindPasswordInputControls(hosts.dialogRoot, activeDialog.fields);
+    bindCopyableControls(hosts.dialogRoot);
     bindConditionalFieldVisibility(hosts.dialogRoot, activeDialog.fields, formInputs);
     if (confirmBtn) {
         confirmBtn.onclick = async () => {
@@ -313,10 +342,7 @@ function renderNextDialog() {
             }
             if (activeDialog?.kind === 'form') {
                 const payload = collectFormDialogValues(formInputs);
-                if (submitError) {
-                    submitError.textContent = '';
-                    submitError.hidden = true;
-                }
+                clearDialogErrors(hosts.dialogRoot, submitError);
                 if (typeof activeDialog?.submitHandler === 'function') {
                     setDialogSubmittingState({
                         activeDialog,
@@ -335,10 +361,7 @@ function renderNextDialog() {
                             cancelBtn,
                             formInputs,
                         }, false);
-                        if (submitError) {
-                            submitError.textContent = String(error?.message || error || '');
-                            submitError.hidden = false;
-                        }
+                        showDialogSubmitError(hosts.dialogRoot, submitError, error);
                         return;
                     }
                 }
@@ -357,8 +380,13 @@ function renderNextDialog() {
         };
     }
     if (backdrop) {
+        let pointerDownStartedOnBackdrop = false;
+        backdrop.onpointerdown = event => {
+            pointerDownStartedOnBackdrop = event.target === backdrop;
+        };
         backdrop.onclick = event => {
-            if (event.target !== backdrop) return;
+            if (event.target !== backdrop || !pointerDownStartedOnBackdrop) return;
+            pointerDownStartedOnBackdrop = false;
             if (activeDialog?.submitting === true) return;
             if (activeDialog?.kind === 'alert') {
                 settleDialog(true);
@@ -378,6 +406,8 @@ function renderNextDialog() {
         input.select?.();
     } else if (formInputs.length > 0) {
         formInputs.forEach(node => {
+            node.addEventListener?.('input', () => clearDialogFieldErrorForInput(node));
+            node.addEventListener?.('change', () => clearDialogFieldErrorForInput(node));
             node.onkeydown = event => {
                 const tagName = String(node.tagName || '').toUpperCase();
                 const formType = String(node.getAttribute?.('data-feedback-form-type') || '').trim();
@@ -458,6 +488,79 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#39;');
+}
+
+function cssEscape(value) {
+    if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+        return CSS.escape(String(value || ''));
+    }
+    return String(value || '').replaceAll('"', '\\"').replaceAll('\\', '\\\\');
+}
+
+function normalizeTextareaRows(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+        return '';
+    }
+    return String(Math.max(1, Math.floor(numericValue)));
+}
+
+function clearDialogErrors(dialogNode, submitError) {
+    if (submitError) {
+        submitError.textContent = '';
+        submitError.hidden = true;
+    }
+    if (!dialogNode) {
+        return;
+    }
+    dialogNode.querySelectorAll('[data-feedback-field-error]').forEach(node => {
+        node.textContent = '';
+        node.hidden = true;
+    });
+    dialogNode.querySelectorAll('[data-feedback-form-input][aria-invalid="true"]').forEach(node => {
+        node.removeAttribute('aria-invalid');
+    });
+}
+
+function clearDialogFieldErrorForInput(input) {
+    const fieldId = String(input?.getAttribute?.('data-feedback-form-input') || '').trim();
+    if (!fieldId) {
+        return;
+    }
+    const wrapper = input.closest?.('[data-feedback-form-field]');
+    const errorNode = wrapper?.querySelector?.(`[data-feedback-field-error="${cssEscape(fieldId)}"]`);
+    if (errorNode) {
+        errorNode.textContent = '';
+        errorNode.hidden = true;
+    }
+    input.removeAttribute?.('aria-invalid');
+}
+
+function showDialogSubmitError(dialogNode, submitError, error) {
+    const fieldId = String(error?.fieldId || error?.field_id || '').trim();
+    if (fieldId && dialogNode) {
+        const errorNode = dialogNode.querySelector(`[data-feedback-field-error="${cssEscape(fieldId)}"]`);
+        const inputNode = dialogNode.querySelector(`[data-feedback-form-input="${cssEscape(fieldId)}"]`);
+        const wrapper = inputNode?.closest?.('[data-feedback-form-field]') || errorNode?.closest?.('[data-feedback-form-field]');
+        if (errorNode) {
+            errorNode.textContent = String(error?.message || error || '');
+            errorNode.hidden = false;
+            inputNode?.setAttribute?.('aria-invalid', 'true');
+            if (wrapper instanceof HTMLElement) {
+                wrapper.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+            }
+            inputNode?.focus?.();
+            if (submitError) {
+                submitError.textContent = '';
+                submitError.hidden = true;
+            }
+            return;
+        }
+    }
+    if (submitError) {
+        submitError.textContent = String(error?.message || error || '');
+        submitError.hidden = false;
+    }
 }
 
 function collectFormDialogValues(formInputs) {
@@ -787,8 +890,16 @@ function bindMultiselectControls(dialogNode) {
     });
 }
 
-function bindPasswordInputControls(dialogNode) {
+function bindPasswordInputControls(dialogNode, fields = []) {
     const formInputs = Array.from(dialogNode.querySelectorAll('[data-feedback-form-input]'));
+    const fieldConfigs = new Map(
+        (Array.isArray(fields) ? fields : [])
+            .map((field, index) => {
+                const fieldId = String(field?.id || `field_${index}`).trim();
+                return fieldId ? [fieldId, field] : null;
+            })
+            .filter(Boolean),
+    );
     Array.from(dialogNode.querySelectorAll('[data-feedback-password-toggle]')).forEach(toggleBtn => {
         if (!(toggleBtn instanceof HTMLButtonElement)) {
             return;
@@ -804,6 +915,10 @@ function bindPasswordInputControls(dialogNode) {
         const showLabel = String(toggleBtn.getAttribute('data-feedback-show-label') || t('feedback.show_sensitive')).trim();
         const hideLabel = String(toggleBtn.getAttribute('data-feedback-hide-label') || t('feedback.hide_sensitive')).trim();
         const allowEmptyReveal = toggleBtn.getAttribute('data-feedback-allow-empty-reveal') === 'true';
+        const fieldConfig = fieldConfigs.get(fieldId) || {};
+        const maskedValue = String(toggleBtn.getAttribute('data-feedback-masked-value') || '').trim();
+        let revealedValue = '';
+        let inputEditedAfterReveal = false;
         const renderToggle = () => {
             const hasValue = Boolean(String(matchedInput.value || '').trim());
             const revealed = toggleBtn.getAttribute('data-feedback-revealed') === 'true';
@@ -823,16 +938,48 @@ function bindPasswordInputControls(dialogNode) {
             }
             toggleBtn.setAttribute('aria-label', toggleBtn.title);
         };
-        toggleBtn.onclick = () => {
+        toggleBtn.onclick = async () => {
             if (!String(matchedInput.value || '').trim() && !allowEmptyReveal) {
                 return;
             }
             const nextRevealed = toggleBtn.getAttribute('data-feedback-revealed') !== 'true';
+            if (nextRevealed && typeof fieldConfig.revealHandler === 'function') {
+                toggleBtn.disabled = true;
+                try {
+                    const loadedValue = await fieldConfig.revealHandler();
+                    revealedValue = String(loadedValue || '');
+                    inputEditedAfterReveal = false;
+                    matchedInput.value = revealedValue;
+                    clearDialogFieldErrorForInput(matchedInput);
+                } catch (error) {
+                    const revealError = new Error(formatMessage('feedback.reveal_sensitive_failed', {
+                        error: String(error?.message || error || t('feedback.notification')),
+                    }));
+                    revealError.fieldId = fieldId;
+                    showDialogSubmitError(
+                        dialogNode,
+                        dialogNode.querySelector('[data-feedback-submit-error]'),
+                        revealError,
+                    );
+                    return;
+                } finally {
+                    toggleBtn.disabled = false;
+                }
+            } else if (nextRevealed) {
+                revealedValue = String(matchedInput.value || '');
+                inputEditedAfterReveal = false;
+            }
+            if (!nextRevealed && maskedValue && !inputEditedAfterReveal) {
+                matchedInput.value = maskedValue;
+            }
             toggleBtn.setAttribute('data-feedback-revealed', nextRevealed ? 'true' : 'false');
             renderToggle();
             matchedInput.focus?.();
         };
         const handleInput = () => {
+            if (toggleBtn.getAttribute('data-feedback-revealed') === 'true') {
+                inputEditedAfterReveal = String(matchedInput.value || '') !== revealedValue;
+            }
             if (!String(matchedInput.value || '').trim() && !allowEmptyReveal) {
                 toggleBtn.setAttribute('data-feedback-revealed', 'false');
             }
@@ -841,6 +988,32 @@ function bindPasswordInputControls(dialogNode) {
         matchedInput.addEventListener('input', handleInput);
         matchedInput.addEventListener('change', handleInput);
         renderToggle();
+    });
+}
+
+function bindCopyableControls(dialogNode) {
+    Array.from(dialogNode.querySelectorAll('[data-feedback-copyable-button]')).forEach(button => {
+        if (!(button instanceof HTMLButtonElement)) {
+            return;
+        }
+        const fieldId = String(button.getAttribute('data-feedback-copyable-button') || '').trim();
+        const input = dialogNode.querySelector(`[data-feedback-copyable-input="${cssEscape(fieldId)}"]`);
+        if (!(input instanceof HTMLInputElement)) {
+            return;
+        }
+        button.onclick = async () => {
+            const value = String(input.value || '').trim();
+            if (!value) {
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(value);
+            } catch (_error) {
+                input.focus();
+                input.select();
+                document.execCommand?.('copy');
+            }
+        };
     });
 }
 

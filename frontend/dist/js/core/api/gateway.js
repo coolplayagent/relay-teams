@@ -32,6 +32,22 @@ export async function createXiaolubanGatewayAccount(payload) {
     );
 }
 
+export async function prepareXiaolubanGatewayAccount() {
+    return requestJson(
+        '/api/gateway/xiaoluban/accounts:prepare',
+        { method: 'POST' },
+        'Failed to prepare Xiaoluban account',
+    );
+}
+
+export async function revealXiaolubanGatewayAccountToken(accountId) {
+    return requestJson(
+        `/api/gateway/xiaoluban/accounts/${encodeURIComponent(accountId)}:reveal-token`,
+        { method: 'POST' },
+        'Failed to reveal Xiaoluban token',
+    );
+}
+
 export async function startWeChatGatewayLogin(payload = {}) {
     return requestJson(
         '/api/gateway/wechat/login/start',

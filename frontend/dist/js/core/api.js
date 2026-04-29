@@ -140,6 +140,8 @@ export {
     rotateTriggerToken,
     startWeChatGatewayLogin,
     createXiaolubanGatewayAccount,
+    prepareXiaolubanGatewayAccount,
+    revealXiaolubanGatewayAccountToken,
     updateGitHubTriggerAccount,
     updateGitHubRepoSubscription,
     updateGitHubTriggerRule,

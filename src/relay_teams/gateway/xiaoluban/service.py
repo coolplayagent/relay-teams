@@ -31,6 +31,7 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanImConfigUpdateInput,
     XiaolubanInboundMessage,
     XiaolubanSecretStatus,
+    XiaolubanTokenRevealResponse,
 )
 from relay_teams.gateway.xiaoluban.notification_format import (
     format_help_text,
@@ -63,6 +64,9 @@ from relay_teams.validation import require_force_delete
 LOGGER = get_logger(__name__)
 _IM_REPLY_POLL_INTERVAL_SECONDS = 2.0
 _IM_TERMINAL_SUPPRESSION_TTL_SECONDS = 24 * 60 * 60
+_XIAOLUBAN_ACCOUNT_ID_HEX_LENGTH = 12
+_XIAOLUBAN_ACCOUNT_ID_PREFIX = "xlb_"
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 class WorkspaceLookup(Protocol):
@@ -117,6 +121,8 @@ class XiaolubanGatewayService:
         self._validate_notification_workspaces(request.notification_workspace_ids)
         normalized_token = _validate_token(request.token)
         derived_uid = derive_uid_from_token(normalized_token)
+        account_id = request.account_id or self.prepare_account_id()
+        self._validate_new_account_id(account_id)
         if "im_config" in request.model_fields_set:
             im_config = self._resolve_im_config(
                 request.im_config,
@@ -126,7 +132,7 @@ class XiaolubanGatewayService:
             im_config = _default_im_config()
         now = datetime.now(tz=timezone.utc)
         record = XiaolubanAccountRecord(
-            account_id=f"xlb_{uuid4().hex[:12]}",
+            account_id=account_id,
             display_name=request.display_name,
             base_url=_normalize_base_url(request.base_url),
             status=(
@@ -136,7 +142,8 @@ class XiaolubanGatewayService:
             ),
             derived_uid=derived_uid,
             notification_workspace_ids=request.notification_workspace_ids,
-            notification_receiver=request.notification_receiver,
+            notification_receivers=request.notification_receivers,
+            notify_self=True,
             im_config=im_config,
             created_at=now,
             updated_at=now,
@@ -190,11 +197,12 @@ class XiaolubanGatewayService:
                 ),
                 "derived_uid": derived_uid,
                 "notification_workspace_ids": notification_workspace_ids,
-                "notification_receiver": (
-                    request.notification_receiver
-                    if "notification_receiver" in request.model_fields_set
-                    else existing.notification_receiver
+                "notification_receivers": (
+                    request.notification_receivers
+                    if request.notification_receivers is not None
+                    else existing.notification_receivers
                 ),
+                "notify_self": True,
                 "im_config": im_config,
                 "updated_at": datetime.now(tz=timezone.utc),
             }
@@ -203,6 +211,21 @@ class XiaolubanGatewayService:
             self._secret_store.set_token(self._config_dir, account_id, token)
         saved = self._repository.upsert_account(updated)
         return self._with_secret_status(saved)
+
+    def prepare_account_id(self) -> str:
+        for _index in range(100):
+            account_id = f"xlb_{uuid4().hex[:12]}"
+            try:
+                _ = self._repository.get_account(account_id)
+            except KeyError:
+                return account_id
+        raise RuntimeError("xiaoluban_account_id_generation_failed")
+
+    def reveal_token(self, account_id: str) -> XiaolubanTokenRevealResponse:
+        _ = self._repository.get_account(account_id)
+        return XiaolubanTokenRevealResponse(
+            token=self._secret_store.get_token(self._config_dir, account_id)
+        )
 
     def update_im_config(
         self,
@@ -319,12 +342,15 @@ class XiaolubanGatewayService:
         token = self._secret_store.get_token(self._config_dir, account_id)
         if token is None:
             raise RuntimeError("missing_xiaoluban_token")
+        default_targets = _effective_notification_targets(account)
+        target = (
+            receiver_uid
+            or (default_targets[0] if default_targets else "")
+            or account.derived_uid
+        ).strip() or account.derived_uid
         response = self._client.send_text_message(
             text=text,
-            receiver_uid=(
-                receiver_uid or account.notification_receiver or account.derived_uid
-            ).strip()
-            or account.derived_uid,
+            receiver_uid=target,
             auth_token=token,
             base_url=account.base_url,
         )
@@ -346,11 +372,44 @@ class XiaolubanGatewayService:
             status=status,
             body=body,
         )
-        return self.send_text_message(
-            account_id=account_id,
-            text=text,
-            receiver_uid=receiver_uid,
-        )
+        account = self._repository.get_account(account_id)
+        targets = (
+            (receiver_uid.strip(),) if receiver_uid and receiver_uid.strip() else ()
+        ) or _effective_notification_targets(account)
+        if not targets:
+            raise RuntimeError("missing_xiaoluban_notification_receivers")
+        sent_message_ids: list[str] = []
+        failures: list[str] = []
+        for target in targets:
+            try:
+                sent_message_ids.append(
+                    self.send_text_message(
+                        account_id=account_id,
+                        text=text,
+                        receiver_uid=target,
+                    )
+                )
+            except (RuntimeError, OSError, KeyError, ValueError) as exc:
+                failures.append(str(exc))
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="gateway.xiaoluban.notification_target.failed",
+                    message="Failed to send Xiaoluban notification to one target",
+                    payload={
+                        "account_id": account_id,
+                        "receiver_uid": target,
+                        "workspace_id": workspace_id,
+                        "session_id": session_id,
+                        "error": str(exc),
+                    },
+                )
+        if not sent_message_ids:
+            error = (
+                failures[0] if failures else "missing_xiaoluban_notification_receivers"
+            )
+            raise RuntimeError(error)
+        return sent_message_ids[0]
 
     def has_usable_credentials(self, account_id: str) -> bool:
         try:
@@ -400,6 +459,20 @@ class XiaolubanGatewayService:
                 )
             }
         )
+
+    def _validate_new_account_id(self, account_id: str) -> None:
+        suffix = account_id.removeprefix(_XIAOLUBAN_ACCOUNT_ID_PREFIX)
+        if (
+            suffix == account_id
+            or len(suffix) != _XIAOLUBAN_ACCOUNT_ID_HEX_LENGTH
+            or any(char not in _HEX_DIGITS for char in suffix)
+        ):
+            raise ValueError("account_id must match xlb_ followed by 12 hex chars")
+        try:
+            _ = self._repository.get_account(account_id)
+        except KeyError:
+            return
+        raise ValueError(f"Xiaoluban account_id already exists: {account_id}")
 
     def _validate_notification_workspaces(self, workspace_ids: tuple[str, ...]) -> None:
         if self._workspace_lookup is None:
@@ -1223,6 +1296,20 @@ def derive_uid_from_token(token: str) -> str:
 
 def _default_im_config() -> XiaolubanImConfig:
     return XiaolubanImConfig()
+
+
+def _effective_notification_targets(account: XiaolubanAccountRecord) -> tuple[str, ...]:
+    targets: list[str] = [account.derived_uid]
+    targets.extend(account.notification_receivers)
+    seen: set[str] = set()
+    result: list[str] = []
+    for target in targets:
+        normalized = str(target or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return tuple(result)
 
 
 def _extract_im_text(content: str) -> str:

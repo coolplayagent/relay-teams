@@ -11,7 +11,7 @@ Current scope:
 - personal token based account setup
 - server-side secret storage through the shared secret store/keyring path
 - automation `started`, `completed`, and `failed` notifications
-- delivery to the account owner's derived UID or a configured Xiaoluban receiver/group ID
+- delivery to the account owner's derived UID, one or more configured Xiaoluban groups, or both
 - workspace-scoped run completion notifications from selected workspaces
 - Xiaoluban IM forwarding for the current token owner
 - inbound WeLink messages forwarded through Xiaoluban's manual forwarding mode
@@ -36,7 +36,9 @@ Each Xiaoluban account stores:
 - `status`
 - `derived_uid`
 - `notification_workspace_ids`
-- `notification_receiver`
+- `notification_receivers`
+- `notify_self`
+- `notification_receiver` (legacy compatibility field)
 - `im_config.workspace_id`
 - `created_at`
 - `updated_at`
@@ -71,7 +73,7 @@ The Xiaoluban section supports:
 - create account
 - edit account display name / token
 - choose workspaces that should send run completion notifications
-- set an optional notification recipient/group ID
+- set optional extra notification group IDs, separated by new lines, commas, or semicolons
 - set the required Xiaoluban IM workspace from the account create/edit dialog
 - enable or disable account
 - delete account
@@ -81,13 +83,16 @@ The UI only asks for:
 - `display_name`, prefilled as `小鲁班`
 - personal token, which can be obtained by sending `获取发送token` to Xiaoluban in WeLink
 - notification workspaces, defaulting to none selected
-- optional notification recipient/group ID
+- optional extra notification group IDs
 - IM workspace, required for inbound IM-triggered tasks
+
+When a selected workspace sends a Xiaoluban completion notification, the token owner is always included as a recipient. Notification groups are additional recipients, not a replacement for notifying yourself.
 
 The delivery endpoint is fixed to `http://xiaoluban.rnd.huawei.com:80/` and is not exposed for editing in the UI.
 
-Editing an existing account allows leaving the token field empty to keep the current stored token.
-Saving the account form persists the Xiaoluban account and IM settings in one request. The UI shows the Xiaoluban forwarding command the user must send manually in WeLink.
+Editing an existing account shows a masked token by default. Clicking the reveal control fetches the saved token from the server secret store; hiding restores the masked value. Leaving the token field unchanged keeps the current stored token.
+
+Creating a new account first prepares an unused `account_id` without writing to the database. The account form can therefore show the future account id and the Xiaoluban forwarding command before save. Saving the account form persists the Xiaoluban account and IM settings in one request. The forwarding command is shown as a copyable read-only field.
 
 ### Xiaoluban IM Forwarding
 
@@ -97,6 +102,11 @@ The first version exposes:
 
 - IM workspace, required for inbound IM-triggered tasks
 - read-only forwarding command, for example `http://10.88.1.23:9009/{account_id} g`
+
+Important URL rule:
+
+- The forwarding URL shown in the UI, returned by gateway APIs, copied by the copy button, and sent by the user to WeLink Xiaoluban must not contain a query string. Use `http://10.88.1.23:9009/{account_id} g`, never `http://10.88.1.23:9009/{account_id}?auth=... g`.
+- Xiaoluban manual forwarding does not support query-string callback URLs reliably. Do not add `?auth=...` or any other query parameters to user-visible forwarding commands, even if an internal listener callback helper later grows an auth query.
 
 Forwarding uses the dedicated Xiaoluban IM listener, not the main Relay Teams
 web port. The listener binds to `0.0.0.0:9009` by default and generates a
@@ -135,7 +145,7 @@ The `Binding and Notifications` section now uses the shared delivery provider pi
 For Xiaoluban candidates:
 
 - provider is `xiaoluban`
-- the candidate label is `发送给自己（uid）` or `发送给 {receiver}` when a recipient/group is configured
+- the candidate label describes the effective targets, for example `发送给自己（uid）` or `发送给自己（uid）和 2 个群`
 - binding does not require an IM session
 
 ## Delivery Semantics
@@ -148,7 +158,8 @@ IM replies.
 Provider behavior in this phase:
 
 - `supports_bound_session_reuse = false`
-- notifications are sent to the account's `notification_receiver` when configured, otherwise to `derived_uid`
+- notifications fan out to the effective target list: always `derived_uid`, plus every normalized `notification_receivers` group ID
+- a failed target does not block delivery to later targets; if every attempted target fails, the send call raises the first delivery error
 - automation delivery bindings do not require or reuse an IM session
 - Xiaoluban notification bodies are prefixed through the shared Xiaoluban formatter:
 
@@ -236,10 +247,12 @@ acknowledgement, so the user does not receive a misleading "processing" message.
 Gateway APIs:
 
 - `GET /api/gateway/xiaoluban/accounts`
+- `POST /api/gateway/xiaoluban/accounts:prepare`
 - `POST /api/gateway/xiaoluban/accounts`
 - `PATCH /api/gateway/xiaoluban/accounts/{account_id}`
 - `PATCH /api/gateway/xiaoluban/accounts/{account_id}/im`
 - `GET /api/gateway/xiaoluban/accounts/{account_id}/im:forwarding-command`
+- `POST /api/gateway/xiaoluban/accounts/{account_id}:reveal-token`
 - `POST /api/gateway/xiaoluban/accounts/{account_id}:enable`
 - `POST /api/gateway/xiaoluban/accounts/{account_id}:disable`
 - `DELETE /api/gateway/xiaoluban/accounts/{account_id}`

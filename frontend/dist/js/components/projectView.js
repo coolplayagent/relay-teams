@@ -261,6 +261,38 @@ function mapXiaolubanGatewayError(error) {
     return t('settings.gateway.xiaoluban_save_failed_message');
 }
 
+function createFormFieldError(fieldId, message) {
+    const error = new Error(message);
+    error.fieldId = fieldId;
+    return error;
+}
+
+function isXiaolubanTokenErrorDetail(detail) {
+    return detail === 'token format is invalid'
+        || detail === 'token must be a personal Xiaoluban token'
+        || detail === 'token must not be empty'
+        || detail === t('settings.gateway.xiaoluban_token_invalid')
+        || detail === t('settings.gateway.xiaoluban_personal_token_only')
+        || detail === t('settings.gateway.xiaoluban_missing_token');
+}
+
+function mapXiaolubanAccountFormError(error) {
+    const detail = readErrorDetail(error);
+    if (isXiaolubanTokenErrorDetail(detail)) {
+        const message = detail.startsWith('token ')
+            ? mapXiaolubanGatewayError(error)
+            : detail;
+        return createFormFieldError('token', message);
+    }
+    if (
+        detail === t('settings.gateway.xiaoluban_im_missing_workspace_options')
+        || detail === t('settings.gateway.xiaoluban_im_workspace_required')
+    ) {
+        return new Error(detail);
+    }
+    return new Error(mapXiaolubanGatewayError(error));
+}
+
 function mapAutomationEditorError(error) {
     const detail = readErrorDetail(error);
     if (
@@ -1787,6 +1819,12 @@ function normalizeXiaolubanAccounts(payload) {
             notification_workspace_ids: Array.isArray(account?.notification_workspace_ids)
                 ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
                 : [],
+            notification_receivers: normalizeXiaolubanNotificationReceivers(
+                Array.isArray(account?.notification_receivers)
+                    ? account.notification_receivers
+                    : String(account?.notification_receiver || '').trim(),
+            ),
+            notify_self: true,
             notification_receiver: String(account?.notification_receiver || '').trim(),
             im_config: normalizeXiaolubanImConfig(account?.im_config),
             secret_status: account?.secret_status && typeof account.secret_status === 'object'
@@ -1925,6 +1963,67 @@ function normalizeXiaolubanNotificationWorkspaceSelection(values, options) {
     return selected.filter(value => workspaceSet.has(value));
 }
 
+function normalizeXiaolubanNotificationReceivers(value) {
+    const rawItems = Array.isArray(value)
+        ? value.flatMap(item => splitXiaolubanReceivers(String(item || '')))
+        : splitXiaolubanReceivers(String(value || ''));
+    const seen = new Set();
+    const receivers = [];
+    rawItems.forEach(item => {
+        const normalized = String(item || '').trim();
+        if (!normalized || seen.has(normalized)) {
+            return;
+        }
+        seen.add(normalized);
+        receivers.push(normalized);
+    });
+    return receivers;
+}
+
+function splitXiaolubanReceivers(value) {
+    return String(value || '')
+        .replaceAll('，', ',')
+        .replaceAll('；', ';')
+        .split(/[\n,;]+/u)
+        .map(item => item.trim());
+}
+
+function normalizeXiaolubanReceiversForDisplay(account) {
+    const receivers = Array.isArray(account?.notification_receivers)
+        ? account.notification_receivers
+        : normalizeXiaolubanNotificationReceivers(String(account?.notification_receiver || '').trim());
+    return normalizeXiaolubanNotificationReceivers(receivers).join('\n');
+}
+
+function normalizeXiaolubanTokenFormValue(value) {
+    const token = String(value || '').trim();
+    return token === '************' ? '' : token;
+}
+
+function normalizeXiaolubanForwardingCommand(value) {
+    const command = String(value || '').trim();
+    if (!command) {
+        return '';
+    }
+    const parts = command.split(/\s+/u);
+    const url = stripXiaolubanForwardingUrlQuery(parts[0]);
+    return [url, ...parts.slice(1)].filter(Boolean).join(' ');
+}
+
+function stripXiaolubanForwardingUrlQuery(value) {
+    const urlText = String(value || '').trim();
+    if (!urlText) {
+        return '';
+    }
+    try {
+        const parsed = new URL(urlText);
+        parsed.search = '';
+        return parsed.toString();
+    } catch (_error) {
+        return urlText.replace(/\?[^#\s]*/u, '');
+    }
+}
+
 function resolveXiaolubanImWorkspaceOptions(workspaces) {
     return resolveWorkspaceOptionValues(workspaces);
 }
@@ -1951,7 +2050,7 @@ async function fetchXiaolubanImForwardingCommandText(accountId) {
         if (!result?.listener_running) {
             return '';
         }
-        return String(result?.forwarding_command || '').trim();
+        return normalizeXiaolubanForwardingCommand(result?.forwarding_command);
     } catch (error) {
         logWarn('Failed to fetch Xiaoluban IM forwarding command', error);
         return '';
@@ -3045,7 +3144,16 @@ async function requestWeChatAccountInput(account) {
 
 async function requestXiaolubanAccountInput(account, submitHandler = null) {
     const isEditing = String(account?.account_id || '').trim().length > 0;
-    const accountId = String(account?.account_id || '').trim();
+    const xiaolubanExtraApi = await loadXiaolubanExtraGatewayApi();
+    let preparedAccount = null;
+    if (!isEditing) {
+        try {
+            preparedAccount = await xiaolubanExtraApi.prepareXiaolubanGatewayAccount();
+        } catch (error) {
+            logWarn('Failed to prepare Xiaoluban account', error);
+        }
+    }
+    const accountId = String(account?.account_id || preparedAccount?.account_id || '').trim();
     const tokenConfigured = account?.secret_status?.token_configured === true;
     const fallbackDisplayName = String(
         account?.display_name || t('settings.gateway.xiaoluban_title'),
@@ -3059,16 +3167,16 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
     const imConfig = getXiaolubanImConfig(account);
     const imWorkspaceId = imConfig.workspace_id || imWorkspaceOptions[0]?.value || '';
     const imForwardingCommand = accountId
-        ? await fetchXiaolubanImForwardingCommandText(accountId)
+        ? (isEditing
+            ? await fetchXiaolubanImForwardingCommandText(accountId)
+            : (preparedAccount?.listener_running === true
+                ? normalizeXiaolubanForwardingCommand(preparedAccount?.forwarding_command)
+                : ''))
         : '';
-    const imWorkspaceDescription = [
-        t('settings.gateway.xiaoluban_im_workspace_copy'),
-        imForwardingCommand
-            ? formatMessage('settings.gateway.xiaoluban_im_forwarding_copy', {
-                command: imForwardingCommand,
-            })
-            : t('settings.gateway.xiaoluban_im_forwarding_after_save_copy'),
-    ].filter(Boolean).join('\n');
+    const imWorkspaceDescription = t('settings.gateway.xiaoluban_im_workspace_copy');
+    const imForwardingDescription = imForwardingCommand
+        ? t('settings.gateway.xiaoluban_im_forwarding_copy')
+        : t('settings.gateway.xiaoluban_im_forwarding_after_save_copy');
     const selectedWorkspaceIds = Array.isArray(account?.notification_workspace_ids)
         ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
         : [];
@@ -3098,13 +3206,24 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
             {
                 id: 'token',
                 label: t('settings.gateway.xiaoluban_token'),
-                value: '',
+                type: 'password',
+                value: isEditing && tokenConfigured ? '************' : '',
+                maskedValue: isEditing && tokenConfigured ? '************' : '',
                 placeholder: isEditing && tokenConfigured
                     ? t('settings.gateway.xiaoluban_token_edit_placeholder')
                     : 'uid_xxx...',
                 description: isEditing && tokenConfigured
                     ? t('settings.gateway.xiaoluban_token_edit_copy')
                     : t('settings.gateway.xiaoluban_token_copy'),
+                allowEmptyReveal: isEditing && tokenConfigured,
+                showLabel: t('feedback.show_sensitive'),
+                hideLabel: t('feedback.hide_sensitive'),
+                revealHandler: isEditing && tokenConfigured
+                    ? async () => {
+                        const revealed = await xiaolubanExtraApi.revealXiaolubanGatewayAccountToken(accountId);
+                        return String(revealed?.token || '');
+                    }
+                    : null,
             },
             {
                 id: 'notification_workspace_ids',
@@ -3120,11 +3239,14 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
                 summaryNoneValue: XIAOLUBAN_NO_WORKSPACES_VALUE,
             },
             {
-                id: 'notification_receiver',
-                label: t('settings.gateway.xiaoluban_notification_receiver'),
-                value: String(account?.notification_receiver || '').trim(),
-                placeholder: t('settings.gateway.xiaoluban_notification_receiver_placeholder'),
-                description: t('settings.gateway.xiaoluban_notification_receiver_copy'),
+                id: 'notification_receivers',
+                label: t('settings.gateway.xiaoluban_notification_receivers'),
+                type: 'textarea',
+                value: normalizeXiaolubanReceiversForDisplay(account),
+                placeholder: t('settings.gateway.xiaoluban_notification_receivers_placeholder'),
+                description: t('settings.gateway.xiaoluban_notification_receivers_copy'),
+                rows: 2,
+                compact: true,
             },
             {
                 id: 'xiaoluban_im_workspace_id',
@@ -3134,21 +3256,34 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
                 options: imWorkspaceOptions,
                 description: imWorkspaceDescription,
             },
+            ...(imForwardingCommand
+                ? [
+                    {
+                        id: 'forwarding_command',
+                        label: t('settings.gateway.xiaoluban_im_forwarding_command'),
+                        type: 'copyable',
+                        value: imForwardingCommand,
+                        copyLabel: t('feedback.copy'),
+                        description: imForwardingDescription,
+                    },
+                ]
+                : []),
         ],
         submitHandler: typeof submitHandler === 'function'
             ? async formValues => {
-                const payload = buildXiaolubanAccountFormSubmission({
-                    account,
-                    values: formValues,
-                    fallbackDisplayName,
-                    isEditing,
-                    workspaceOptions,
-                    imWorkspaceOptions,
-                });
                 try {
+                    const payload = buildXiaolubanAccountFormSubmission({
+                        account,
+                        values: formValues,
+                        fallbackDisplayName,
+                        isEditing,
+                        workspaceOptions,
+                        imWorkspaceOptions,
+                        accountId,
+                    });
                     return await submitHandler(payload);
                 } catch (error) {
-                    throw new Error(mapXiaolubanGatewayError(error));
+                    throw mapXiaolubanAccountFormError(error);
                 }
             }
             : null,
@@ -3169,7 +3304,20 @@ async function requestXiaolubanAccountInput(account, submitHandler = null) {
         isEditing,
         workspaceOptions,
         imWorkspaceOptions,
+        accountId,
     });
+}
+
+async function loadXiaolubanExtraGatewayApi() {
+    const api = await import('../core/api.js');
+    return {
+        prepareXiaolubanGatewayAccount: typeof api.prepareXiaolubanGatewayAccount === 'function'
+            ? api.prepareXiaolubanGatewayAccount
+            : async () => null,
+        revealXiaolubanGatewayAccountToken: typeof api.revealXiaolubanGatewayAccountToken === 'function'
+            ? api.revealXiaolubanGatewayAccountToken
+            : async () => ({ token: '' }),
+    };
 }
 
 function buildXiaolubanAccountFormSubmission({
@@ -3179,9 +3327,10 @@ function buildXiaolubanAccountFormSubmission({
     isEditing,
     workspaceOptions,
     imWorkspaceOptions,
+    accountId,
 }) {
     const displayName = String(values.display_name || '').trim() || fallbackDisplayName;
-    const token = String(values.token || '').trim();
+    const token = normalizeXiaolubanTokenFormValue(values.token);
     const notificationWorkspaceIds = normalizeXiaolubanNotificationWorkspaceSelection(
         values.notification_workspace_ids,
         workspaceOptions,
@@ -3199,8 +3348,12 @@ function buildXiaolubanAccountFormSubmission({
     const accountPayload = {
         display_name: displayName,
         notification_workspace_ids: notificationWorkspaceIds,
-        notification_receiver: String(values.notification_receiver || '').trim() || null,
+        notification_receivers: normalizeXiaolubanNotificationReceivers(values.notification_receivers),
+        notify_self: true,
     };
+    if (!isEditing && accountId) {
+        accountPayload.account_id = accountId;
+    }
     if (token) {
         accountPayload.token = token;
     }
@@ -4737,8 +4890,7 @@ function renderGatewayXiaolubanRecords(accounts) {
                 const workspaceIds = Array.isArray(account?.notification_workspace_ids)
                     ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
                     : [];
-                const receiver = String(account?.notification_receiver || '').trim();
-                const receiverLabel = receiver || t('settings.gateway.xiaoluban_notification_receiver_self');
+                const receiverLabel = formatXiaolubanReceiverSummary(account);
                 const imStatus = getXiaolubanImStatus(account);
                 return `
                     <div class="role-record gateway-feature-record" data-feature-xiaoluban-record="${escapeHtml(accountId)}">
@@ -4768,6 +4920,20 @@ function renderGatewayXiaolubanRecords(accounts) {
             }).join('')}
         </div>
     `;
+}
+
+function formatXiaolubanReceiverSummary(account) {
+    const receivers = Array.isArray(account?.notification_receivers)
+        ? account.notification_receivers.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const parts = [];
+    parts.push(t('settings.gateway.xiaoluban_notification_receiver_self'));
+    if (receivers.length > 0) {
+        parts.push(formatMessage('settings.gateway.xiaoluban_notification_group_count', {
+            count: receivers.length,
+        }));
+    }
+    return parts.join(' + ') || t('settings.gateway.xiaoluban_notification_receiver_none');
 }
 
 function ensureGatewayModalRoot() {
@@ -5715,7 +5881,7 @@ async function handleCreateXiaolubanFeatureAccount() {
             title: t('settings.gateway.xiaoluban_saved_title'),
             message: result.forwarding_command
                 ? formatMessage('settings.gateway.xiaoluban_im_forwarding_saved_message', {
-                    command: String(result.forwarding_command || ''),
+                    command: normalizeXiaolubanForwardingCommand(result.forwarding_command),
                 })
                 : t('settings.gateway.xiaoluban_saved_message'),
             tone: 'success',
@@ -5747,7 +5913,7 @@ async function handleEditXiaolubanFeatureAccount(accountId) {
             title: t('settings.gateway.xiaoluban_saved_title'),
             message: result.forwarding_command
                 ? formatMessage('settings.gateway.xiaoluban_im_forwarding_saved_message', {
-                    command: String(result.forwarding_command || ''),
+                    command: normalizeXiaolubanForwardingCommand(result.forwarding_command),
                 })
                 : t('settings.gateway.xiaoluban_saved_message'),
             tone: 'success',

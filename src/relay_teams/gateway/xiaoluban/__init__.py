@@ -24,6 +24,8 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanSecretStatus,
     XiaolubanSendTextRequest,
     XiaolubanSendTextResponse,
+    XiaolubanTokenRevealResponse,
+    normalize_xiaoluban_notification_receivers,
 )
 from relay_teams.gateway.xiaoluban.notification_delivery import (
     CompositeXiaolubanTerminalNotificationSuppressor,
@@ -64,7 +66,9 @@ __all__ = [
     "XiaolubanSecretStore",
     "XiaolubanSendTextRequest",
     "XiaolubanSendTextResponse",
+    "XiaolubanTokenRevealResponse",
     "derive_uid_from_token",
     "format_xiaoluban_notification_text",
     "get_xiaoluban_secret_store",
+    "normalize_xiaoluban_notification_receivers",
 ]

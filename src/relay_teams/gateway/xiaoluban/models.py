@@ -45,6 +45,8 @@ class XiaolubanAccountRecord(BaseModel):
     status: XiaolubanAccountStatus = XiaolubanAccountStatus.ENABLED
     derived_uid: RequiredIdentifierStr
     notification_workspace_ids: tuple[RequiredIdentifierStr, ...] = ()
+    notification_receivers: tuple[str, ...] = ()
+    notify_self: bool = True
     notification_receiver: Optional[str] = None
     im_config: XiaolubanImConfig = Field(default_factory=XiaolubanImConfig)
     secret_status: XiaolubanSecretStatus = Field(default_factory=XiaolubanSecretStatus)
@@ -65,15 +67,36 @@ class XiaolubanAccountRecord(BaseModel):
     def _normalize_receiver(cls, value: Optional[str]) -> Optional[str]:
         return normalize_optional_string(value, field_name="notification_receiver")
 
+    @field_validator("notification_receivers", mode="before")
+    @classmethod
+    def _normalize_receivers(cls, value: object) -> tuple[str, ...]:
+        return normalize_xiaoluban_notification_receivers(value)
+
+    @model_validator(mode="after")
+    def _sync_legacy_receiver(self) -> XiaolubanAccountRecord:
+        if "notification_receiver" in self.model_fields_set:
+            if self.notification_receiver and not self.notification_receivers:
+                self.notification_receivers = (self.notification_receiver,)
+            elif not self.notification_receiver and not self.notification_receivers:
+                self.notify_self = True
+        self.notify_self = True
+        self.notification_receiver = (
+            self.notification_receivers[0] if self.notification_receivers else None
+        )
+        return self
+
 
 class XiaolubanAccountCreateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    account_id: OptionalIdentifierStr = None
     display_name: str = Field(min_length=1)
     token: str = Field(min_length=1)
     base_url: str = Field(min_length=1, default=DEFAULT_XIAOLUBAN_BASE_URL)
     enabled: bool = True
     notification_workspace_ids: tuple[RequiredIdentifierStr, ...] = ()
+    notification_receivers: tuple[str, ...] = ()
+    notify_self: bool = True
     notification_receiver: Optional[str] = None
     im_config: XiaolubanImConfig = Field(default_factory=XiaolubanImConfig)
 
@@ -99,6 +122,24 @@ class XiaolubanAccountCreateInput(BaseModel):
     def _normalize_receiver(cls, value: Optional[str]) -> Optional[str]:
         return normalize_optional_string(value, field_name="notification_receiver")
 
+    @field_validator("notification_receivers", mode="before")
+    @classmethod
+    def _normalize_receivers(cls, value: object) -> tuple[str, ...]:
+        return normalize_xiaoluban_notification_receivers(value)
+
+    @model_validator(mode="after")
+    def _sync_legacy_receiver(self) -> XiaolubanAccountCreateInput:
+        if "notification_receiver" in self.model_fields_set:
+            if self.notification_receiver:
+                self.notification_receivers = (self.notification_receiver,)
+            else:
+                self.notification_receivers = ()
+        self.notify_self = True
+        self.notification_receiver = (
+            self.notification_receivers[0] if self.notification_receivers else None
+        )
+        return self
+
 
 class XiaolubanAccountUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -108,6 +149,8 @@ class XiaolubanAccountUpdateInput(BaseModel):
     base_url: Optional[str] = None
     enabled: Optional[bool] = None
     notification_workspace_ids: Optional[tuple[RequiredIdentifierStr, ...]] = None
+    notification_receivers: Optional[tuple[str, ...]] = None
+    notify_self: Optional[bool] = None
     notification_receiver: Optional[str] = None
     im_config: Optional[XiaolubanImConfig] = None
 
@@ -124,8 +167,22 @@ class XiaolubanAccountUpdateInput(BaseModel):
             field_name="notification_workspace_ids",
         )
 
+    @field_validator("notification_receivers", mode="before")
+    @classmethod
+    def _normalize_receivers(cls, value: object) -> Optional[tuple[str, ...]]:
+        if value is None:
+            return None
+        return normalize_xiaoluban_notification_receivers(value)
+
     @model_validator(mode="after")
     def _validate_patch(self) -> XiaolubanAccountUpdateInput:
+        if (
+            "notification_receiver" in self.model_fields_set
+            and self.notification_receiver
+        ):
+            self.notification_receivers = (self.notification_receiver,)
+        if "notify_self" in self.model_fields_set:
+            self.notify_self = True
         require_non_empty_patch(self)
         return self
 
@@ -148,6 +205,12 @@ class XiaolubanImForwardingCommandResponse(BaseModel):
     forwarding_url: str = Field(min_length=1)
     forwarding_command: str = Field(min_length=1)
     listener_running: bool = False
+
+
+class XiaolubanTokenRevealResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: Optional[str] = None
 
 
 class XiaolubanInboundMessage(BaseModel):
@@ -192,6 +255,38 @@ class XiaolubanSendTextResponse(BaseModel):
     raw_response: Optional[str] = None
 
 
+def normalize_xiaoluban_notification_receivers(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    raw_items: list[str] = []
+    if isinstance(value, str):
+        raw_items = _split_notification_receivers(value)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            if isinstance(item, str):
+                raw_items.extend(_split_notification_receivers(item))
+            else:
+                raw_items.append(str(item))
+    else:
+        raw_items = [str(value)]
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in raw_items:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return tuple(result)
+
+
+def _split_notification_receivers(value: str) -> list[str]:
+    normalized = value.replace("，", ",").replace("；", ";")
+    for separator in ("\r\n", "\r", "\n", ",", ";"):
+        normalized = normalized.replace(separator, "\n")
+    return [item.strip() for item in normalized.split("\n")]
+
+
 class XiaolubanAutomationBindingPreview(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -219,4 +314,6 @@ __all__ = [
     "XiaolubanSecretStatus",
     "XiaolubanSendTextRequest",
     "XiaolubanSendTextResponse",
+    "XiaolubanTokenRevealResponse",
+    "normalize_xiaoluban_notification_receivers",
 ]

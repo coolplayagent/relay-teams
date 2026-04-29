@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 import relay_teams.gateway.xiaoluban.client as xiaoluban_client_module
+import relay_teams.gateway.xiaoluban.service as xiaoluban_service_module
 from relay_teams.gateway.xiaoluban import (
     DEFAULT_XIAOLUBAN_BASE_URL,
     XiaolubanAccountCreateInput,
@@ -21,6 +22,7 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanGatewayService,
     XiaolubanSendTextResponse,
     derive_uid_from_token,
+    normalize_xiaoluban_notification_receivers,
 )
 from relay_teams.secrets import AppSecretStore
 
@@ -48,6 +50,7 @@ class _FakeXiaolubanSecretStore(XiaolubanSecretStore):
 class _FakeXiaolubanClient(XiaolubanClient):
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
+        self.fail_receiver_uids: set[str] = set()
 
     def send_text_message(
         self,
@@ -58,6 +61,8 @@ class _FakeXiaolubanClient(XiaolubanClient):
         base_url: str = "",
         sender: str | None = None,
     ) -> XiaolubanSendTextResponse:
+        if receiver_uid in self.fail_receiver_uids:
+            raise RuntimeError(f"send_failed:{receiver_uid}")
         self.calls.append(
             {
                 "text": text,
@@ -204,6 +209,152 @@ def test_create_account_persists_token_and_derived_uid(tmp_path: Path) -> None:
     assert (
         secret_store.tokens[record.account_id] == "uid_1234567890abcdef1234567890abcdef"
     )
+
+
+def test_prepare_account_id_returns_unused_xlb_identifier(tmp_path: Path) -> None:
+    service, _secret_store, _client = _build_service(tmp_path)
+
+    account_id = service.prepare_account_id()
+
+    assert account_id.startswith("xlb_")
+    assert len(account_id) == 16
+
+
+def test_create_account_accepts_prepared_account_id_and_rejects_duplicate(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, _client = _build_service(tmp_path)
+    account_id = service.prepare_account_id()
+
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            account_id=account_id,
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+        )
+    )
+
+    assert created.account_id == account_id
+    with pytest.raises(ValueError, match="already exists"):
+        _ = service.create_account(
+            XiaolubanAccountCreateInput(
+                account_id=account_id,
+                display_name="小鲁班重复账号",
+                token="uid_1234567890abcdef1234567890abcdef",
+            )
+        )
+
+
+def test_create_account_rejects_invalid_prepared_account_id(tmp_path: Path) -> None:
+    service, _secret_store, _client = _build_service(tmp_path)
+
+    for account_id in ("bad_account", "xlb_test", "xlb_zzzzzzzzzzzz"):
+        with pytest.raises(ValueError, match="account_id must match"):
+            _ = service.create_account(
+                XiaolubanAccountCreateInput(
+                    account_id=account_id,
+                    display_name="小鲁班主账号",
+                    token="uid_1234567890abcdef1234567890abcdef",
+                )
+            )
+
+
+def test_prepare_account_id_raises_after_repeated_collisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _secret_store, _client = _build_service(tmp_path)
+    existing = service.create_account(
+        XiaolubanAccountCreateInput(
+            account_id="xlb_aaaaaaaaaaaa",
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+        )
+    )
+
+    class _FixedUuid:
+        hex = "aaaaaaaaaaaa00000000000000000000"
+
+    monkeypatch.setattr(xiaoluban_service_module, "uuid4", lambda: _FixedUuid())
+
+    with pytest.raises(RuntimeError, match="xiaoluban_account_id_generation_failed"):
+        _ = service.prepare_account_id()
+    assert existing.account_id == "xlb_aaaaaaaaaaaa"
+
+
+def test_reveal_token_returns_saved_token(tmp_path: Path) -> None:
+    service, _secret_store, _client = _build_service(tmp_path)
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+        )
+    )
+
+    revealed = service.reveal_token(created.account_id)
+
+    assert revealed.token == "uid_1234567890abcdef1234567890abcdef"
+
+
+def test_notification_receivers_are_normalized_and_notify_self_is_forced(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, _client = _build_service(tmp_path)
+
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+            notification_receivers=(" group-1 ", "group-1", "group-2"),
+            notify_self=False,
+        )
+    )
+
+    loaded = service.get_account(created.account_id)
+    assert loaded.notification_receivers == ("group-1", "group-2")
+    assert loaded.notify_self is True
+    assert loaded.notification_receiver == "group-1"
+
+
+def test_account_input_legacy_receiver_fields_drive_receivers() -> None:
+    created = XiaolubanAccountCreateInput(
+        display_name="小鲁班主账号",
+        token="uid_1234567890abcdef1234567890abcdef",
+        notification_receiver=None,
+        notify_self=False,
+    )
+    updated = XiaolubanAccountUpdateInput(
+        notification_receiver=None,
+        notify_self=False,
+    )
+
+    assert created.notification_receivers == ()
+    assert created.notify_self is True
+    assert updated.notification_receivers is None
+    assert updated.notify_self is True
+
+
+def test_update_input_preserves_receiver_list_when_legacy_receiver_is_null() -> None:
+    updated = XiaolubanAccountUpdateInput(
+        notification_receiver=None,
+        notification_receivers=(" group-1 ", "group-2"),
+    )
+
+    assert updated.notification_receivers == ("group-1", "group-2")
+
+
+def test_normalize_xiaoluban_notification_receivers_accepts_common_shapes() -> None:
+    assert normalize_xiaoluban_notification_receivers(None) == ()
+    assert normalize_xiaoluban_notification_receivers(" group-1,group-2；group-1 ") == (
+        "group-1",
+        "group-2",
+    )
+    assert normalize_xiaoluban_notification_receivers(["group-1\ngroup-2", 123]) == (
+        "group-1",
+        "group-2",
+        "123",
+    )
+    assert normalize_xiaoluban_notification_receivers(456) == ("456",)
 
 
 def test_update_account_replaces_token_and_derived_uid(tmp_path: Path) -> None:
@@ -372,7 +523,102 @@ def test_send_notification_message_formats_text_once(tmp_path: Path) -> None:
     assert client.calls[0]["receiver_uid"] == "uid"
 
 
-def test_send_text_message_uses_configured_notification_receiver(
+def test_send_notification_message_delivers_to_self_and_multiple_groups(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, client = _build_service(tmp_path)
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+            notification_receivers=("group-1", "group-2"),
+            notify_self=True,
+        )
+    )
+
+    _ = service.send_notification_message(
+        account_id=created.account_id,
+        workspace_id="workspace-1",
+        session_id="session-1",
+        status="completed",
+        body="done",
+    )
+
+    assert [call["receiver_uid"] for call in client.calls] == [
+        "uid",
+        "group-1",
+        "group-2",
+    ]
+
+
+def test_effective_notification_targets_skip_blank_and_duplicate_targets() -> None:
+    account = XiaolubanAccountRecord.model_construct(
+        account_id="xlb_dirty",
+        display_name="Dirty",
+        status=XiaolubanAccountStatus.ENABLED,
+        derived_uid="",
+        notification_receivers=("group-1", "", "group-1", "group-2"),
+        notify_self=True,
+    )
+
+    assert xiaoluban_service_module._effective_notification_targets(account) == (
+        "group-1",
+        "group-2",
+    )
+
+
+def test_send_notification_message_continues_after_single_target_failure(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, client = _build_service(tmp_path)
+    client.fail_receiver_uids.add("uid")
+    client.fail_receiver_uids.add("group-1")
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+            notification_receivers=("group-1", "group-2"),
+            notify_self=False,
+        )
+    )
+
+    message_id = service.send_notification_message(
+        account_id=created.account_id,
+        workspace_id="workspace-1",
+        session_id="session-1",
+        status="completed",
+        body="done",
+    )
+
+    assert message_id == "xlbmsg_1"
+    assert [call["receiver_uid"] for call in client.calls] == ["group-2"]
+
+
+def test_send_notification_message_raises_when_all_targets_fail(
+    tmp_path: Path,
+) -> None:
+    service, _secret_store, client = _build_service(tmp_path)
+    client.fail_receiver_uids.update({"uid", "group-1", "group-2"})
+    created = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="小鲁班主账号",
+            token="uid_1234567890abcdef1234567890abcdef",
+            notification_receivers=("group-1", "group-2"),
+            notify_self=False,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="send_failed"):
+        _ = service.send_notification_message(
+            account_id=created.account_id,
+            workspace_id="workspace-1",
+            session_id="session-1",
+            status="completed",
+            body="done",
+        )
+
+
+def test_send_text_message_uses_self_before_configured_notification_receiver(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, client = _build_service(tmp_path)
@@ -389,7 +635,7 @@ def test_send_text_message_uses_configured_notification_receiver(
         text="started",
     )
 
-    assert client.calls[0]["receiver_uid"] == "group-123"
+    assert client.calls[0]["receiver_uid"] == "uid"
 
 
 def test_send_text_message_rejects_disabled_or_missing_token(
@@ -476,6 +722,60 @@ def test_im_config_from_json_rejects_non_dict() -> None:
 
     with pytest.raises(ValueError, match="Invalid persisted im_config_json"):
         account_repo_module._im_config_from_json("[]")
+
+
+def test_notification_receivers_from_json_validates_and_deduplicates() -> None:
+    import relay_teams.gateway.xiaoluban.account_repository as account_repo_module
+
+    assert account_repo_module._notification_receivers_from_json(
+        '["group-1", "", "group-1", "group-2"]'
+    ) == ("group-1", "group-2")
+    with pytest.raises(
+        ValueError, match="Invalid persisted notification_receivers_json"
+    ):
+        _ = account_repo_module._notification_receivers_from_json("{}")
+
+
+def test_account_repository_reads_legacy_notification_receiver(
+    tmp_path: Path,
+) -> None:
+    repository = XiaolubanAccountRepository(tmp_path / "xiaoluban_legacy_receiver.db")
+    now = repository.utcnow().isoformat()
+    repository._conn.execute(
+        """
+        INSERT INTO xiaoluban_accounts(
+            account_id,
+            display_name,
+            base_url,
+            status,
+            derived_uid,
+            notification_receiver,
+            notification_receivers_json,
+            notify_self,
+            created_at,
+            updated_at
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "xlb_legacy",
+            "Legacy",
+            DEFAULT_XIAOLUBAN_BASE_URL,
+            XiaolubanAccountStatus.ENABLED.value,
+            "uid",
+            "group-legacy",
+            "[]",
+            0,
+            now,
+            now,
+        ),
+    )
+
+    loaded = repository.get_account("xlb_legacy")
+
+    assert loaded.notification_receivers == ("group-legacy",)
+    assert loaded.notify_self is True
+    assert loaded.notification_receiver == "group-legacy"
 
 
 def test_account_repository_skips_invalid_rows_and_raises_for_invalid_get(
