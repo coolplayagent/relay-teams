@@ -715,7 +715,15 @@ export function getCoordinatorStreamOverlay() {
     return null;
 }
 
+export function bindCopyButton() {
+    return null;
+}
+
 export function renderHistoricalMessageList() {
+    return undefined;
+}
+
+export function syncLastAnswerCopyButton() {
     return undefined;
 }
 

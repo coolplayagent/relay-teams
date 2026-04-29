@@ -12,6 +12,7 @@ import {
     setToolStatus,
     setToolValidationFailureState,
 } from '../messageRenderer/helpers.js';
+import { syncLastAnswerCopyButton } from '../messageRenderer/messageActions.js';
 
 export function renderTimelineStream(container, stream, options = {}) {
     if (!container || !stream) return null;
@@ -20,6 +21,7 @@ export function renderTimelineStream(container, stream, options = {}) {
     if (!wrapper) {
         wrapper = document.createElement('div');
         wrapper.className = 'message';
+        wrapper.dataset.role = 'model';
         wrapper.dataset.timelineStreamId = stream.id;
         wrapper.dataset.streamKey = stream.scope?.streamKey || '';
         wrapper.dataset.runId = stream.scope?.runId || '';
@@ -36,6 +38,7 @@ export function renderTimelineStream(container, stream, options = {}) {
     const contentEl = wrapper.querySelector('.msg-content');
     if (!contentEl) return wrapper;
     syncParts(contentEl, stream.parts || [], stream.scope || {});
+    syncLastAnswerCopyButton(container);
     return wrapper;
 }
 

@@ -73,6 +73,17 @@ export function t(key) {
     )
 
 
+def _write_mock_message_actions(temp_dir: Path) -> None:
+    (temp_dir / "mockMessageActions.mjs").write_text(
+        """
+export function syncLastAnswerCopyButton() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 def test_stream_overlay_keeps_unpersisted_cache_after_terminal_events(
     tmp_path: Path,
 ) -> None:
@@ -686,9 +697,11 @@ def test_history_overlay_renders_live_cursor_placeholder_for_stream_tail(
     (temp_dir / "history.js").write_text(
         source.replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
-        .replace("./helpers.js", "./mockHelpers.mjs"),
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs"),
         encoding="utf-8",
     )
+    _write_mock_message_actions(temp_dir)
     (temp_dir / "mockState.mjs").write_text(
         """
 export function isRunPrimaryRoleId(roleId, runId) {
@@ -877,9 +890,11 @@ def test_history_overlay_renders_live_cursor_placeholder_for_idle_gap(
     (temp_dir / "history.js").write_text(
         source.replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
-        .replace("./helpers.js", "./mockHelpers.mjs"),
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs"),
         encoding="utf-8",
     )
+    _write_mock_message_actions(temp_dir)
     (temp_dir / "mockState.mjs").write_text(
         """
 export function isRunPrimaryRoleId(roleId, runId) {
@@ -1032,9 +1047,11 @@ def test_history_overlay_does_not_replay_parts_already_persisted_in_history(
     (temp_dir / "history.js").write_text(
         source.replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
-        .replace("./helpers.js", "./mockHelpers.mjs"),
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs"),
         encoding="utf-8",
     )
+    _write_mock_message_actions(temp_dir)
     (temp_dir / "mockState.mjs").write_text(
         """
 export function isRunPrimaryRoleId() {
@@ -1308,9 +1325,11 @@ def test_history_overlay_renders_media_refs_from_stream_overlay(
     (temp_dir / "history.js").write_text(
         source.replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
-        .replace("./helpers.js", "./mockHelpers.mjs"),
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs"),
         encoding="utf-8",
     )
+    _write_mock_message_actions(temp_dir)
     (temp_dir / "mockState.mjs").write_text(
         """
 export function isRunPrimaryRoleId(roleId, runId) {
@@ -1487,9 +1506,11 @@ def test_history_overlay_can_render_as_separate_live_message(
     (temp_dir / "history.js").write_text(
         source.replace("../../core/state.js", "./mockState.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
-        .replace("./helpers.js", "./mockHelpers.mjs"),
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs"),
         encoding="utf-8",
     )
+    _write_mock_message_actions(temp_dir)
     (temp_dir / "mockState.mjs").write_text(
         """
 export function isRunPrimaryRoleId() {

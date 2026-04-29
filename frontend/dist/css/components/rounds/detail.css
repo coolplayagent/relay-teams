@@ -1,4 +1,6 @@
 .round-detail-header {
+    position: relative;
+    z-index: 1;
     padding: 0.9rem 1.15rem;
     margin-bottom: 1rem;
     margin-left: -0.35rem;
@@ -60,6 +62,8 @@
 }
 
 .round-detail-intent {
+    position: relative;
+    z-index: 1;
     font-size: 0.875rem;
     color: var(--text-primary);
 }
@@ -120,6 +124,20 @@
     color: var(--text-primary);
 }
 
+.round-detail-intent-summary-actions {
+    position: relative;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.round-detail-intent-copy {
+    flex: 0 0 auto;
+}
+
 .round-detail-intent-body {
     padding: 0.5rem 0 0;
 }
@@ -139,8 +157,12 @@
 }
 
 .round-detail-intent-actions {
+    position: relative;
+    z-index: 2;
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    gap: 0.35rem;
     margin-top: 0.35rem;
 }
 

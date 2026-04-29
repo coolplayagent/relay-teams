@@ -4,6 +4,7 @@
  */
 import { isRunPrimaryRoleId } from '../../core/state.js';
 import { formatMessage } from '../../utils/i18n.js';
+import { syncLastAnswerCopyButton } from './messageActions.js';
 import {
     applyToolReturn,
     appendMessageText,
@@ -169,6 +170,7 @@ export function renderHistoricalMessageList(container, messages, options = {}) {
     if (shouldCollapseIntermediateMessages(filteredOverlayEntry, options)) {
         collapseIntermediateMessages(container);
     }
+    syncLastAnswerCopyButton(container);
     forceScrollBottom(container);
 }
 

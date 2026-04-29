@@ -43,6 +43,7 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     assert "function appendUserPromptText(contentEl, text) {" in block_script
     assert "function updateUserPromptText(promptEl, text) {" in block_script
     assert "function updateThinkingText(textEl, text, options = {}) {" in block_script
+    assert "bindCopyButton," in timeline_script
     assert "appendPromptContentBlock(contentEl, text, {" in block_script
     assert "return updatePromptContentBlock(promptEl, text, {" in block_script
     assert (
@@ -86,8 +87,23 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     assert "return safeRunId;" in timeline_script
     assert "function hasStructuredIntentContent(parts) {" in timeline_script
     assert "block.dataset.hasStructuredContent" in timeline_script
+    assert (
+        "block.dataset.intentTextLength = String(normalized.length);" in timeline_script
+    )
+    assert (
+        "block.dataset.intentLineCount = String(normalized.split('\\n').length);"
+        in timeline_script
+    )
     assert "function rememberRoundIntentOpenState(block) {" in timeline_script
-    assert "function forgetRoundIntentOpenState(block) {" in timeline_script
+    assert (
+        "function isRoundIntentSummaryInteractiveTarget(target, summaryEl) {"
+        in timeline_script
+    )
+    assert (
+        "if (isRoundIntentSummaryInteractiveTarget(event.target, summaryEl)) {"
+        in timeline_script
+    )
+    assert "if (event.target !== summaryEl) return;" in timeline_script
     assert "return `parts:${JSON.stringify(normalizedParts)}`;" in timeline_script
     assert "function normalizeRoundIntentText(intentText) {" in timeline_script
     assert "function normalizeRoundIntentParts(promptPayload) {" in timeline_script
@@ -96,6 +112,16 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
         in timeline_script
     )
     assert "renderPromptTokenizedText(previewEl, normalized)" in timeline_script
+    assert "round-detail-intent-summary-actions" in timeline_script
+    assert (
+        'class="round-detail-intent-copy" data-intent-copy-placement="summary"'
+        in timeline_script
+    )
+    assert (
+        'class="round-detail-intent-copy" data-intent-copy-placement="body"'
+        in timeline_script
+    )
+    assert "bindCopyButton(button, normalized)" in timeline_script
     assert (
         "renderPromptTokenizedText(textEl, String(part.text || ''))" in timeline_script
     )
@@ -130,6 +156,7 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     assert "t('rounds.expand')" in timeline_script
     assert "t('rounds.collapse')" in timeline_script
     assert "block.dataset.overflow = 'pending';" in timeline_script
+    assert "block.open = true;" in timeline_script
     assert (
         "function scheduleRoundIntentOverflowMeasure(block, attempt = 0) {"
         in timeline_script
@@ -142,7 +169,17 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
         "const hasStructuredContent = block.dataset.hasStructuredContent === 'true';"
         in timeline_script
     )
+    assert (
+        "const fallbackOverflow = hasRoundIntentFallbackOverflow(block);"
+        in timeline_script
+    )
     assert "|| scrollHeight > clientHeight + 1" in timeline_script
+    assert "function hasRoundIntentFallbackOverflow(block) {" in timeline_script
+    assert (
+        "function applyRoundIntentOverflowState(block, hasOverflow) {"
+        in timeline_script
+    )
+    assert "function syncRoundIntentToggleText(block) {" in timeline_script
     assert (
         "const shouldRestoreOpen = block.dataset.restoreOpen === 'true';"
         in timeline_script
@@ -150,18 +187,29 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     assert "block.dataset.overflow = hasOverflow ? 'true' : 'false';" in timeline_script
     assert "if (hasOverflow && shouldRestoreOpen) {" in timeline_script
     assert "delete block.dataset.restoreOpen;" in timeline_script
-    assert "forgetRoundIntentOpenState(block);" in timeline_script
+    assert "forgetRoundIntentOpenState(block);" not in timeline_script
     assert "summaryEl.tabIndex = hasOverflow ? 0 : -1;" in timeline_script
     assert (
         "summaryEl.setAttribute('aria-disabled', hasOverflow ? 'false' : 'true');"
         in timeline_script
     )
     assert "if (block.dataset.overflow !== 'true') {" in timeline_script
+    assert "if (block.dataset.overflow === 'false') {" in timeline_script
     assert "'rounds.expand': 'Expand'," in i18n_script
     assert "'rounds.collapse': 'Collapse'," in i18n_script
     assert "'rounds.expand': '展开'," in i18n_script
     assert "'rounds.collapse': '收起'," in i18n_script
     assert ".round-detail-intent-summary {" in components_css
+    assert (
+        ".round-detail-header {\n    position: relative;\n    z-index: 1;"
+        in components_css
+    )
+    assert (
+        ".round-detail-intent {\n    position: relative;\n    z-index: 1;"
+        in components_css
+    )
+    assert ".round-detail-intent-summary-actions {" in components_css
+    assert ".round-detail-intent-copy {" in components_css
     assert ".round-detail-intent-preview {" in components_css
     assert ".round-detail-intent-body {" in components_css
     assert ".round-detail-intent-actions {" in components_css

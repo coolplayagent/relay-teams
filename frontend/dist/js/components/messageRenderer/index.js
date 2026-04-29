@@ -16,6 +16,11 @@ export {
 export { applyRunEventToTimeline } from '../messageTimeline/actions.js';
 export { renderTimelineStream } from '../messageTimeline/renderer.js';
 export {
+    bindCopyButton,
+    extractMessageCopyText,
+    syncLastAnswerCopyButton,
+} from './messageActions.js';
+export {
     computeVisibleRoundWindow,
     shouldMountRound,
 } from '../messageTimeline/virtualList.js';
