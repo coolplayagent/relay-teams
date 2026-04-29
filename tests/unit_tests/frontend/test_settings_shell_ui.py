@@ -20,7 +20,7 @@ def test_settings_modal_uses_flat_content_stacks_and_switches_tabs(
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings();
+await openSettings();
 
 const tabs = document.querySelectorAll(".settings-tab");
 const notificationsTab = tabs.find(tab => tab.dataset.tab === "notifications");
@@ -92,7 +92,7 @@ def test_settings_panel_actions_use_primary_buttons_for_add_and_reload(
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings();
+await openSettings();
 
 const tabs = document.querySelectorAll(".settings-tab");
 const rolesTab = tabs.find(tab => tab.dataset.tab === "roles");
@@ -156,7 +156,7 @@ def test_hooks_settings_tab_shows_add_validate_and_save_actions(
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings("hooks");
+await openSettings("hooks");
 
 console.log(JSON.stringify({
     panelTitle: document.getElementById("settings-panel-title").textContent,
@@ -176,6 +176,109 @@ console.log(JSON.stringify({
     assert payload["validateHooksDisplay"] == "inline-flex"
     assert payload["saveHooksDisplay"] == "inline-flex"
     assert load_calls["hooks"] == 1
+
+
+def test_settings_action_ownership_hides_inactive_tab_actions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+await openSettings("hooks");
+
+console.log(JSON.stringify({
+    activeTab: document.getElementById("settings-actions-bar").dataset.activeTab,
+    hooksSaveDisplay: document.getElementById("save-hooks-btn").style.display,
+    profileSaveDisplay: document.getElementById("save-profile-btn").style.display,
+    profileActionOwner: document.getElementById("save-profile-btn").dataset.settingsActionTab,
+    hooksActionOwner: document.getElementById("save-hooks-btn").dataset.settingsActionTab,
+}));
+""".strip(),
+    )
+
+    assert payload["activeTab"] == "hooks"
+    assert payload["hooksSaveDisplay"] == "inline-flex"
+    assert payload["profileSaveDisplay"] == "none"
+    assert payload["profileActionOwner"] == "model"
+    assert payload["hooksActionOwner"] == "hooks"
+
+
+def test_settings_actions_are_hidden_until_active_tab_loads(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+let releaseRolesLoad;
+globalThis.__rolesLoadBlocker = new Promise(resolve => {
+    releaseRolesLoad = resolve;
+});
+
+initSettings();
+const openPromise = openSettings("roles");
+await Promise.resolve();
+
+const addRoleDuringLoad = document.getElementById("add-role-btn");
+const duringLoadDisplay = addRoleDuringLoad.style.display;
+const duringLoadDisabled = addRoleDuringLoad.disabled;
+
+releaseRolesLoad();
+await openPromise;
+
+const addRoleAfterLoad = document.getElementById("add-role-btn");
+console.log(JSON.stringify({
+    duringLoadDisplay,
+    duringLoadDisabled,
+    afterLoadDisplay: addRoleAfterLoad.style.display,
+    afterLoadDisabled: addRoleAfterLoad.disabled,
+    loadCalls: globalThis.__loadCalls,
+}));
+""".strip(),
+    )
+
+    load_calls = cast(dict[str, JsonValue], payload["loadCalls"])
+    assert payload["duringLoadDisplay"] == "none"
+    assert payload["duringLoadDisabled"] is False
+    assert payload["afterLoadDisplay"] == "inline-flex"
+    assert payload["afterLoadDisabled"] is False
+    assert load_calls["roles"] == 1
+
+
+def test_settings_open_warms_role_and_orchestration_dependencies(
+    tmp_path: Path,
+) -> None:
+    payload = _run_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { initSettings, openSettings } = await import("./index.mjs");
+
+initSettings();
+await openSettings();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    warmupCalls: globalThis.__warmupCalls,
+    loggedErrors: globalThis.__loggedErrors,
+    activeTab: document.getElementById("settings-actions-bar").dataset.activeTab,
+    appearanceResetDisplay: document.getElementById("reset-appearance-btn").style.display,
+}));
+""".strip(),
+    )
+
+    assert payload["warmupCalls"] == [
+        "role_configs",
+        "role_options",
+        "model_profiles",
+        "orchestration_config",
+    ]
+    assert payload["loggedErrors"] == []
+    assert payload["activeTab"] == "appearance"
+    assert payload["appearanceResetDisplay"] == "inline-flex"
 
 
 def test_settings_tab_order_and_labels_are_simplified() -> None:
@@ -281,6 +384,22 @@ def test_settings_layout_uses_scrolling_body_with_footer_actions() -> None:
     assert ".profiles-list::-webkit-scrollbar {" in components_css
 
 
+def test_settings_action_bar_css_hides_inactive_tab_owned_actions() -> None:
+    components_css = load_components_css()
+
+    assert (
+        '.settings-actions-bar[data-active-tab="model"] '
+        '[data-settings-action-tab]:not([data-settings-action-tab="model"])'
+        in components_css
+    )
+    assert (
+        '.settings-actions-bar[data-active-tab="roles"] '
+        '[data-settings-action-tab]:not([data-settings-action-tab="roles"])'
+        in components_css
+    )
+    assert "display: none !important;" in components_css
+
+
 def test_model_profile_editor_labels_max_output_tokens_and_uses_short_footer_labels(
     tmp_path: Path,
 ) -> None:
@@ -290,7 +409,7 @@ def test_model_profile_editor_labels_max_output_tokens_and_uses_short_footer_lab
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings();
+await openSettings();
 
 console.log(JSON.stringify({
     modalHtml: document.getElementById("settings-modal").innerHTML,
@@ -502,6 +621,8 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_github_settings_path = tmp_path / "mockGitHubSettings.mjs"
     mock_system_status_path = tmp_path / "mockSystemStatus.mjs"
     mock_appearance_path = tmp_path / "mockAppearanceSettings.mjs"
+    mock_api_path = tmp_path / "mockApi.mjs"
+    mock_logger_path = tmp_path / "mockLogger.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     module_under_test_path = tmp_path / "index.mjs"
     runner_path = tmp_path / "runner.mjs"
@@ -571,6 +692,7 @@ export function syncHooksSettingsActions() {
     document.getElementById('add-hook-btn').style.display = 'inline-flex';
     document.getElementById('validate-hooks-btn').style.display = 'inline-flex';
     document.getElementById('save-hooks-btn').style.display = 'inline-flex';
+    document.getElementById('save-profile-btn').style.display = 'inline-flex';
 }
 """.strip(),
         encoding="utf-8",
@@ -619,6 +741,9 @@ export function bindRoleSettingsHandlers() {
 
 export async function loadRoleSettingsPanel() {
     globalThis.__loadCalls.roles += 1;
+    if (globalThis.__rolesLoadBlocker) {
+        await globalThis.__rolesLoadBlocker;
+    }
 }
 """.strip(),
         encoding="utf-8",
@@ -771,6 +896,42 @@ export function translateDocument() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_api_path.write_text(
+        """
+export async function fetchRoleConfigs() {
+    globalThis.__warmupCalls.push('role_configs');
+    return [];
+}
+
+export async function fetchRoleConfigOptions() {
+    globalThis.__warmupCalls.push('role_options');
+    return {};
+}
+
+export async function fetchModelProfiles() {
+    globalThis.__warmupCalls.push('model_profiles');
+    return {};
+}
+
+export async function fetchOrchestrationConfig() {
+    globalThis.__warmupCalls.push('orchestration_config');
+    return {};
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_logger_path.write_text(
+        """
+export function errorToPayload(error) {
+    return { message: String(error?.message || error || '') };
+}
+
+export function logError(eventName, message, payload) {
+    globalThis.__loggedErrors.push({ eventName, message, payload });
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
     source_text = (
         source_path.read_text(encoding="utf-8")
@@ -791,7 +952,9 @@ export function translateDocument() {
         .replace("./rolesSettings.js", "./mockRolesSettings.mjs")
         .replace("./systemStatus.js", "./mockSystemStatus.mjs")
         .replace("./appearanceSettings.js", "./mockAppearanceSettings.mjs")
+        .replace("../../core/api.js", "./mockApi.mjs")
         .replace("../../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../../utils/logger.js", "./mockLogger.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
@@ -844,6 +1007,7 @@ function createElement(tagName = "div") {{
         style: {{}},
         dataset: {{}},
         children: [],
+        disabled: false,
         textContent: "",
         onclick: null,
         parentNode: null,
@@ -989,6 +1153,8 @@ globalThis.__loadCalls = {{
     mcp: 0,
     skills: 0,
 }};
+globalThis.__warmupCalls = [];
+globalThis.__loggedErrors = [];
 
 globalThis.document = createDocument();
 globalThis.window = {{}};
@@ -1027,7 +1193,7 @@ def test_environment_settings_tab_uses_add_variable_action(
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings();
+await openSettings();
 
 const tabs = document.querySelectorAll(".settings-tab");
 const environmentTab = tabs.find(tab => tab.dataset.tab === "environment");
@@ -1058,7 +1224,7 @@ def test_workspace_settings_tab_uses_add_ssh_profile_action(
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings("workspace");
+await openSettings("workspace");
 
 console.log(JSON.stringify({
     panelTitle: document.getElementById("settings-panel-title").textContent,
@@ -1083,7 +1249,7 @@ def test_settings_modal_only_closes_for_direct_overlay_click(tmp_path: Path) -> 
 const { initSettings, openSettings } = await import("./index.mjs");
 
 initSettings();
-openSettings();
+await openSettings();
 
 const settingsModal = document.getElementById("settings-modal");
 const modalContent = settingsModal.children[0];
@@ -1092,7 +1258,7 @@ settingsModal.onmousedown({ target: modalContent });
 settingsModal.onclick({ target: settingsModal });
 const afterDraggedReleaseDisplay = settingsModal.style.display;
 
-openSettings();
+await openSettings();
 settingsModal.onmousedown({ target: settingsModal });
 settingsModal.onclick({ target: settingsModal });
 const afterDirectOverlayClickDisplay = settingsModal.style.display;

@@ -2,14 +2,26 @@
  * core/api/roles.js
  * Role document settings API wrappers.
  */
-import { requestJson } from './request.js';
+import { invalidateManagedRequests, requestJson, requestJsonManaged } from './request.js';
 
-export async function fetchRoleConfigs() {
-    return requestJson('/api/roles/configs', undefined, 'Failed to fetch role configs');
+export async function fetchRoleConfigs(options = {}) {
+    return requestJsonManaged(
+        'roles:configs',
+        '/api/roles/configs',
+        { signal: options.signal },
+        'Failed to fetch role configs',
+        { ttlMs: 30000 },
+    );
 }
 
 export async function fetchRoleConfigOptions(options = {}) {
-    return requestJson('/api/roles:options', { signal: options.signal }, 'Failed to fetch role options');
+    return requestJsonManaged(
+        'roles:options',
+        '/api/roles:options',
+        { signal: options.signal },
+        'Failed to fetch role options',
+        { ttlMs: 30000 },
+    );
 }
 
 export async function fetchRoleConfig(roleId) {
@@ -17,17 +29,19 @@ export async function fetchRoleConfig(roleId) {
 }
 
 export async function deleteRoleConfig(roleId) {
-    return requestJson(
+    const result = await requestJson(
         `/api/roles/configs/${roleId}`,
         {
             method: 'DELETE',
         },
         'Failed to delete role config',
     );
+    invalidateManagedRequests('roles:');
+    return result;
 }
 
 export async function saveRoleConfig(roleId, payload) {
-    return requestJson(
+    const result = await requestJson(
         `/api/roles/configs/${roleId}`,
         {
             method: 'PUT',
@@ -36,6 +50,8 @@ export async function saveRoleConfig(roleId, payload) {
         },
         'Failed to save role config',
     );
+    invalidateManagedRequests('roles:');
+    return result;
 }
 
 export async function validateRoleConfig(payload) {

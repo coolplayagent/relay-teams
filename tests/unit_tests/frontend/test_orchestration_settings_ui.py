@@ -99,6 +99,32 @@ console.log(JSON.stringify({
     assert payload["editorDisplay"] == "none"
 
 
+def test_orchestration_initial_load_starts_config_role_and_option_requests_in_parallel(
+    tmp_path: Path,
+) -> None:
+    payload = _run_orchestration_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { loadOrchestrationSettingsPanel } from "./orchestrationSettings.mjs";
+
+installGlobals(createElements());
+await loadOrchestrationSettingsPanel();
+
+console.log(JSON.stringify({
+    requestOrder: globalThis.__requestOrder,
+    listDisplay: document.getElementById("orchestration-preset-list").style.display,
+}));
+""".strip(),
+    )
+
+    assert payload["requestOrder"] == [
+        "fetchOrchestrationConfig:start",
+        "fetchRoleConfigs:start",
+        "fetchRoleConfigOptions:start",
+    ]
+    assert payload["listDisplay"] == "block"
+
+
 def _run_orchestration_settings_script(
     tmp_path: Path, runner_source: str
 ) -> dict[str, object]:
@@ -143,6 +169,7 @@ let orchestrationConfig = {
 };
 
 export async function fetchOrchestrationConfig() {
+    globalThis.__requestOrder.push("fetchOrchestrationConfig:start");
     return JSON.parse(JSON.stringify(orchestrationConfig));
 }
 
@@ -153,6 +180,7 @@ export async function saveOrchestrationConfig(config) {
 }
 
 export async function fetchRoleConfigs() {
+    globalThis.__requestOrder.push("fetchRoleConfigs:start");
     return [
         { role_id: "Writer", name: "Writer" },
         { role_id: "Reviewer", name: "Reviewer" },
@@ -162,6 +190,7 @@ export async function fetchRoleConfigs() {
 }
 
 export async function fetchRoleConfigOptions() {
+    globalThis.__requestOrder.push("fetchRoleConfigOptions:start");
     if (globalThis.__roleConfigOptionsErrorMessage) {
         throw new Error(globalThis.__roleConfigOptionsErrorMessage);
     }
@@ -430,6 +459,7 @@ function installGlobals(elements) {{
     globalThis.__confirmResult = true;
     globalThis.__saveCalls = [];
     globalThis.__roleConfigOptionsErrorMessage = "";
+    globalThis.__requestOrder = [];
     globalThis.__syncEditorFields = html => {{
         const idMatch = html.match(/id="orchestration-id-input" value="([^"]*)"/);
         const nameMatch = html.match(/id="orchestration-name-input" value="([^"]*)"/);
