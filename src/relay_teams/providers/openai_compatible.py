@@ -141,6 +141,7 @@ class OpenAICompatibleProvider(LLMProvider):
         computer_runtime: ComputerRuntime | None = None,
         hook_service: HookService | None = None,
         reminder_service: SystemReminderService | None = None,
+        auto_harness_service: object | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
@@ -200,6 +201,7 @@ class OpenAICompatibleProvider(LLMProvider):
             computer_runtime=computer_runtime,
             hook_service=hook_service,
             reminder_service=reminder_service,
+            auto_harness_service=auto_harness_service,
         )
 
     @override

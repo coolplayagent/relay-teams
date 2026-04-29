@@ -706,6 +706,45 @@ def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
     )
 
 
+def test_execute_tool_force_approval_uses_approval_flow_even_when_yolo_enabled() -> (
+    None
+):
+    manager = _FakeApprovalManager(wait_result=("approve", ""))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            timeout_seconds=0.01,
+        ),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-force-approval"
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com"},
+            action=lambda: {"enabled": True},
+            force_approval=True,
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-force-approval",
+    )
+    assert result["ok"] is True
+    assert manager.last_open is not None
+    assert state is not None
+    assert state.run_yolo is True
+    assert state.approval_mode == ToolApprovalMode.APPROVAL_FLOW
+    assert any(
+        event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
+        for event in deps.run_event_hub.events
+    )
+
+
 def test_execute_tool_returns_denied_error_when_approval_rejected() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("deny", "not safe")),
@@ -1467,6 +1506,36 @@ def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
     assert state is not None
     assert state.result_envelope is not None
     assert state.call_state == {}
+
+
+def test_execute_tool_call_allows_tool_return_passthrough() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.media_asset_service = SimpleNamespace()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-wrapper"
+
+    result = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=lambda path: ToolResultProjection(
+                visible_data={"path": path},
+                tool_content_parts=(TextContentPart(text="attached image"),),
+            ),
+            raw_args={"ctx": ctx, "path": "docs/relay_teams.png"},
+            allow_tool_return=True,
+        )
+    )
+
+    assert isinstance(result, ToolReturn)
+    assert result.content == "attached image"
+    assert cast(dict[str, JsonValue], result.return_value)["data"] == {
+        "path": "docs/relay_teams.png"
+    }
 
 
 def test_execute_tool_reuses_duplicate_tool_return_content() -> None:

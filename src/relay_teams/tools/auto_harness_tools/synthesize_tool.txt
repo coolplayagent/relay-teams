@@ -1,0 +1,11 @@
+Synthesize a small deterministic JSON utility tool for the current role.
+
+Use this only when the existing tools cannot express a repeatable data transformation or validation step. Provide:
+- `tool_name`: short identifier; the runtime will normalize it to `generated_<name>`.
+- `description`: what the generated tool does.
+- `input_schema`: JSON Schema object for the single `tool_input` object.
+- `behavior`: exact deterministic behavior and edge cases.
+- `test_cases`: examples with `input` and optional `expected`.
+- `target_role_id`: optional persistent role that should own the tool.
+
+The tool is only written as a pending role asset. It is not callable until `auto_harness_enable_tool` approves and enables the generated implementation.

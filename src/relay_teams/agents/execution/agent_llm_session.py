@@ -147,6 +147,7 @@ class AgentLlmSession(
         shell_approval_repo: ShellApprovalRepository | None = None,
         hook_service: HookService | None = None,
         reminder_service: SystemReminderService | None = None,
+        auto_harness_service: object | None = None,
     ) -> None:
         self._config = config
         self._profile_name = (
@@ -203,6 +204,7 @@ class AgentLlmSession(
         self._shell_approval_repo = shell_approval_repo
         self._hook_service = hook_service
         self._reminder_service = reminder_service
+        self._auto_harness_service = auto_harness_service
         self._mcp_tool_context_token_cache: dict[str, int] = {}
 
 

@@ -3,19 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
-from typing import TYPE_CHECKING, Protocol, TypeAlias, cast
+from typing import Protocol, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai import Agent
 
 from relay_teams.logger import get_logger, log_event
+from relay_teams.tools.runtime.context import ToolDeps
 
-if TYPE_CHECKING:
-    from relay_teams.tools.runtime.context import ToolDeps
-
-    ToolRegister: TypeAlias = Callable[[Agent[ToolDeps, str]], None]
-else:
-    ToolRegister = Callable[[Agent], None]
+ToolRegister: TypeAlias = Callable[[Agent[ToolDeps, str]], None]
 
 
 LOGGER = get_logger(__name__)
@@ -68,6 +64,28 @@ class ToolRegistry:
 
     def register_implicit_resolver(self, resolver: ToolImplicitResolver) -> None:
         self._implicit_resolvers.append(resolver)
+
+    def register_tool(self, name: str, register: ToolRegister) -> None:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Tool name must not be empty")
+        availability = _probe_tool_availability(
+            name=normalized_name,
+            register=register,
+        )
+        if availability is not None:
+            self._unavailable_tools[normalized_name] = availability
+            self._tools.pop(normalized_name, None)
+            return
+        self._unavailable_tools.pop(normalized_name, None)
+        self._tools[normalized_name] = register
+
+    def unregister_tool(self, name: str) -> None:
+        normalized_name = name.strip()
+        if not normalized_name:
+            raise ValueError("Tool name must not be empty")
+        self._tools.pop(normalized_name, None)
+        self._unavailable_tools.pop(normalized_name, None)
 
     def require(
         self,
@@ -192,8 +210,30 @@ class ToolRegistry:
 
 
 class _RegistrationProbeAgent:
-    def tool(self, *, description: str | None = None):
-        _ = description
+    def tool(
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        retries: int | None = None,
+        strict: bool | None = None,
+        sequential: bool = False,
+        requires_approval: bool = False,
+        metadata: dict[str, object] | None = None,
+        timeout: float | None = None,
+        **kwargs: object,
+    ) -> Callable[[object], object]:
+        _ = (
+            name,
+            description,
+            retries,
+            strict,
+            sequential,
+            requires_approval,
+            metadata,
+            timeout,
+            kwargs,
+        )
 
         def _decorator(func: object) -> object:
             return func
@@ -207,7 +247,10 @@ def _probe_tool_availability(
     register: ToolRegister,
 ) -> ToolAvailabilityRecord | None:
     try:
-        register(cast("Agent[ToolDeps, str]", _RegistrationProbeAgent()))
+        probe_agent = cast(
+            Agent[ToolDeps, str], cast(object, _RegistrationProbeAgent())
+        )
+        register(probe_agent)
     except Exception as exc:
         return ToolAvailabilityRecord(
             name=name,

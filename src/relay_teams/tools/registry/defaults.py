@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from relay_teams.tools.auto_harness_tools import TOOLS as AUTO_HARNESS_TOOLS
 from relay_teams.tools.computer_tools import TOOLS as COMPUTER_TOOLS
 from relay_teams.tools.im_tools.im_send import register as register_im_send
 from relay_teams.tools.notify_tools import TOOLS as NOTIFY_TOOLS
@@ -28,6 +29,7 @@ def build_default_registry() -> ToolRegistry:
         **WORKSPACE_TOOLS,
         **COMPUTER_TOOLS,
         **NOTIFY_TOOLS,
+        **AUTO_HARNESS_TOOLS,
         **IM_TOOLS,
     }
     return ToolRegistry(

@@ -152,3 +152,53 @@ def test_registry_marks_unavailable_tools_and_filters_them_from_runtime_resoluti
     )
 
     assert resolved == ("alpha",)
+
+
+def test_registry_register_tool_adds_tool_after_construction() -> None:
+    registry = ToolRegistry({"alpha": _register_alpha})
+
+    registry.register_tool("beta", _register_beta)
+
+    assert registry.list_names() == ("alpha", "beta")
+    assert registry.require(("beta",)) == (_register_beta,)
+
+
+def test_registry_unregister_tool_removes_dynamic_tool() -> None:
+    registry = ToolRegistry({"alpha": _register_alpha})
+    registry.register_tool("beta", _register_beta)
+
+    registry.unregister_tool("beta")
+
+    assert registry.list_names() == ("alpha",)
+    with pytest.raises(ValueError, match="Unknown tools"):
+        registry.require(("beta",))
+
+
+def test_registry_unregister_tool_rejects_empty_name() -> None:
+    registry = ToolRegistry({"alpha": _register_alpha})
+
+    with pytest.raises(ValueError, match="Tool name must not be empty"):
+        registry.unregister_tool("  ")
+
+
+def test_registry_register_tool_rejects_empty_name() -> None:
+    registry = ToolRegistry({"alpha": _register_alpha})
+
+    with pytest.raises(ValueError, match="Tool name must not be empty"):
+        registry.register_tool("  ", _register_beta)
+
+
+def test_registry_register_tool_records_unavailable_dynamic_tool() -> None:
+    registry = ToolRegistry({"alpha": _register_alpha})
+
+    registry.register_tool("legacy", _register_unavailable)
+
+    assert registry.list_names() == ("alpha",)
+    unavailable_tools = registry.list_unavailable_tools()
+    assert len(unavailable_tools) == 1
+    assert unavailable_tools[0].name == "legacy"
+    assert registry.resolve_known(("legacy",), strict=False) == ()
+
+    registry.unregister_tool("legacy")
+
+    assert registry.list_unavailable_tools() == ()

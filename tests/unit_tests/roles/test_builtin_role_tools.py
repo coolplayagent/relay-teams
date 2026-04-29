@@ -42,6 +42,8 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "todo_read" in main_agent.tools
     assert "webfetch" in crafter.tools
     assert "websearch" in crafter.tools
+    assert "auto_harness_synthesize_tool" in crafter.tools
+    assert "auto_harness_enable_tool" in crafter.tools
     assert background_task_tools.issubset(set(crafter.tools))
     assert background_task_tools.issubset(set(gater.tools))
     assert background_task_tools.issubset(set(main_agent.tools))
@@ -59,6 +61,8 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert daily_ai_report.mode == RoleMode.SUBAGENT
     assert "webfetch" in main_agent.tools
     assert "websearch" in main_agent.tools
+    assert "auto_harness_synthesize_tool" in main_agent.tools
+    assert "auto_harness_enable_tool" in main_agent.tools
     assert main_agent.skills == ("*",)
     assert coordinator.skills == ("*",)
     assert crafter.skills == ("*",)

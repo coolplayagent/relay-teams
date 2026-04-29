@@ -200,6 +200,7 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.registry.defaults import build_default_registry
+from relay_teams.tools.generated_tools import AutoHarnessService
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
@@ -354,6 +355,20 @@ class ServerContainer:
             app_config_dir=app_config_dir
         )
         self.tool_registry: ToolRegistry = build_default_registry()
+        self.auto_harness_service = AutoHarnessService(
+            config_dir=app_config_dir,
+            roles_dir=runtime.paths.roles_dir,
+            builtin_roles_dir=get_builtin_roles_dir(),
+            tool_registry=self.tool_registry,
+            get_role_registry=lambda: self.role_registry,
+            resolve_model_config=self._resolve_autoharness_model_config,
+            on_roles_reloaded=self._on_roles_reloaded,
+            resolve_role_instance_id=lambda session_id, role_id: (
+                self.agent_repo.get_session_role_instance_id(session_id, role_id)
+            ),
+            retry_config=runtime.llm_retry,
+        )
+        self.auto_harness_service.register_enabled_tools()
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
         self.mcp_service: McpService = McpService(
             registry=self.mcp_registry,
@@ -1119,6 +1134,7 @@ class ServerContainer:
             session_model_profile_lookup=self._session_model_profile_lookup,
             hook_service=self.hook_service,
             reminder_service=self.reminder_service,
+            auto_harness_service=self.auto_harness_service,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,
@@ -1191,6 +1207,32 @@ class ServerContainer:
             resolve_model_profile_name(
                 runtime=self.runtime,
                 profile_name=profile_name,
+            ),
+        )
+
+    def _resolve_autoharness_model_config(
+        self,
+        role: RoleDefinition,
+        session_id: str | None,
+    ) -> Tuple[Optional[ModelEndpointConfig], Optional[str]]:
+        runtime_to_use = self.runtime
+        if (
+            session_id
+            and self._session_model_profile_lookup is not None
+            and (override := self._session_model_profile_lookup(session_id)) is not None
+        ):
+            runtime_to_use = apply_default_model_profile_override(
+                runtime=runtime_to_use,
+                override=override,
+            )
+        return (
+            resolve_model_profile_config(
+                runtime=runtime_to_use,
+                profile_name=role.model_profile,
+            ),
+            resolve_model_profile_name(
+                runtime=runtime_to_use,
+                profile_name=role.model_profile,
             ),
         )
 

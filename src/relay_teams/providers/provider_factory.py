@@ -124,6 +124,7 @@ def create_provider_factory(
     | None = None,
     hook_service: HookService | None = None,
     reminder_service: SystemReminderService | None = None,
+    auto_harness_service: object | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
     fallback_cooldown_registries: dict[tuple[str, ...], ProfileCooldownRegistry] = {}
     fallback_cooldown_registry_lock = Lock()
@@ -263,6 +264,7 @@ def create_provider_factory(
                 ),
                 hook_service=hook_service,
                 reminder_service=reminder_service,
+                auto_harness_service=auto_harness_service,
             ),
         )
         return provider_registry.create(config_to_use)

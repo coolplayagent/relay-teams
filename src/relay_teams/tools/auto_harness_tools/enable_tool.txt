@@ -1,0 +1,5 @@
+Enable a pending AutoHarness generated tool after human approval.
+
+Pass the `tool_name` and `code_hash` returned by `auto_harness_synthesize_tool`. The runtime revalidates the stored implementation, reruns its test cases, attaches the tool to the persistent target role, registers it, and refreshes the current run's tool catalog when the current role owns the tool.
+
+This action always requires approval because it changes role capabilities.
