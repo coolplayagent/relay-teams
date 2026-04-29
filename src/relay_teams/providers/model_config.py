@@ -27,6 +27,7 @@ DEFAULT_LLM_RETRY_BACKOFF_MULTIPLIER = 2.0
 
 class ProviderType(StrEnum):
     OPENAI_COMPATIBLE = "openai_compatible"
+    ANTHROPIC = "anthropic"
     BIGMODEL = "bigmodel"
     MINIMAX = "minimax"
     MAAS = "maas"
@@ -71,6 +72,7 @@ DEFAULT_CODEAGENT_BASE_URL = "https://codeagentcli.rnd.huawei.com/codeAgentPro"
 DEFAULT_CODEAGENT_CLIENT_ID = "com.huawei.devmind.codebot.apibot"
 DEFAULT_CODEAGENT_SCOPE = "1000:1002"
 DEFAULT_CODEAGENT_SCOPE_RESOURCE = "devuc"
+DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 
 class CodeAgentAuthConfig(BaseModel):
@@ -350,7 +352,7 @@ class ModelProfileConfigPayload(BaseModel):
     provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
     is_default: Optional[bool] = None
     model: str = Field(min_length=1)
-    base_url: str = Field(min_length=1)
+    base_url: str | None = Field(default=None, min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
     headers: tuple[ModelRequestHeader, ...] | None = None
     maas_auth: MaaSAuthConfig | None = None
@@ -387,6 +389,18 @@ class ModelProfileConfigPayload(BaseModel):
             normalized = value.strip()
             return normalized or None
         return value
+
+    @model_validator(mode="after")
+    def _validate_base_url_for_provider(self) -> "ModelProfileConfigPayload":
+        if self.provider in {
+            ProviderType.MAAS,
+            ProviderType.CODEAGENT,
+            ProviderType.ANTHROPIC,
+        }:
+            return self
+        if self.base_url is None or not self.base_url.strip():
+            raise ValueError("base_url is required for this provider.")
+        return self
 
 
 class ModelConfigPayload(

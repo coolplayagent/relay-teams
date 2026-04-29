@@ -7,16 +7,12 @@ import pytest
 
 import relay_teams.agents.execution.coordination_agent_builder as coordination_agent
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.workspace_tools import register_spawn_subagent
-
-
-class _FakeOpenAIProvider:
-    def __init__(self, **kwargs: object) -> None:
-        self.kwargs = kwargs
 
 
 class _FakeOpenAIChatModel:
@@ -129,6 +125,28 @@ class _MarkedFailedMcpRegistry(_FakeMcpRegistry):
         return tuple(f"toolset:{name}" for name in server_names)
 
 
+def _patch_runtime_chat_model_builder(
+    monkeypatch: pytest.MonkeyPatch,
+    captured: dict[str, object],
+) -> None:
+    def _fake_runtime_chat_model(
+        *,
+        config: ModelEndpointConfig,
+        http_client: object,
+        recoverable_openai: bool = False,
+    ) -> _FakeOpenAIChatModel:
+        captured["model_config"] = config
+        captured["model_http_client"] = http_client
+        captured["recoverable_openai"] = recoverable_openai
+        return _FakeOpenAIChatModel(config.model, http_client)
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_runtime_chat_model",
+        _fake_runtime_chat_model,
+    )
+
+
 def test_build_coordination_agent_passes_proxy_http_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -149,21 +167,6 @@ def test_build_coordination_agent_passes_proxy_http_client(
         captured["merged_env"] = merged_env
         return sentinel_client
 
-    def _fake_openai_provider(**kwargs: object) -> _FakeOpenAIProvider:
-        provider = _FakeOpenAIProvider(**kwargs)
-        captured["provider"] = provider
-        return provider
-
-    def _fake_openai_chat_model(
-        model_name: str,
-        provider: object,
-        profile: object | None = None,
-    ) -> _FakeOpenAIChatModel:
-        model = _FakeOpenAIChatModel(model_name, provider)
-        captured["model"] = model
-        captured["profile"] = profile
-        return model
-
     def _fake_agent(**kwargs: object) -> _FakeAgent:
         agent = _FakeAgent(**kwargs)
         captured["agent"] = agent
@@ -174,16 +177,7 @@ def test_build_coordination_agent_passes_proxy_http_client(
         "build_llm_http_client",
         _fake_build_llm_http_client,
     )
-    monkeypatch.setattr(
-        coordination_agent,
-        "build_openai_provider_for_endpoint",
-        lambda **kwargs: _fake_openai_provider(**kwargs),
-    )
-    monkeypatch.setattr(
-        coordination_agent,
-        "OpenAIChatModel",
-        _fake_openai_chat_model,
-    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
     monkeypatch.setattr(
         coordination_agent,
         "Agent",
@@ -200,12 +194,12 @@ def test_build_coordination_agent_passes_proxy_http_client(
         tool_registry=cast(ToolRegistry, fake_tool_registry),
     )
 
-    provider = captured["provider"]
-    assert isinstance(provider, _FakeOpenAIProvider)
-    assert provider.kwargs["base_url"] == "https://example.test/v1"
-    assert provider.kwargs["api_key"] == "secret"
-    assert provider.kwargs["headers"] == ()
-    assert provider.kwargs["http_client"] is sentinel_client
+    model_config = cast(ModelEndpointConfig, captured["model_config"])
+    assert model_config.base_url == "https://example.test/v1"
+    assert model_config.api_key == "secret"
+    assert model_config.headers == ()
+    assert captured["model_http_client"] is sentinel_client
+    assert captured["recoverable_openai"] is True
     assert captured["connect_timeout_seconds"] == 22.0
     assert captured["cache_scope"] is None
     assert captured["ssl_verify"] is None
@@ -236,18 +230,7 @@ def test_build_coordination_agent_ignores_unknown_skills(
         "build_llm_http_client",
         lambda **_: object(),
     )
-    monkeypatch.setattr(
-        coordination_agent,
-        "build_openai_provider_for_endpoint",
-        _FakeOpenAIProvider,
-    )
-    monkeypatch.setattr(
-        coordination_agent,
-        "OpenAIChatModel",
-        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
-            model_name, provider
-        ),
-    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
 
     def _fake_agent(**kwargs: object) -> _FakeAgent:
         agent = _FakeAgent(**kwargs)
@@ -288,18 +271,7 @@ def test_build_coordination_agent_ignores_unknown_tools_and_mcp_servers(
     monkeypatch.setattr(
         coordination_agent, "build_llm_http_client", lambda **_: object()
     )
-    monkeypatch.setattr(
-        coordination_agent,
-        "build_openai_provider_for_endpoint",
-        _FakeOpenAIProvider,
-    )
-    monkeypatch.setattr(
-        coordination_agent,
-        "OpenAIChatModel",
-        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
-            model_name, provider
-        ),
-    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
 
     def _fake_agent(**kwargs: object) -> _FakeAgent:
         agent = _FakeAgent(**kwargs)
@@ -343,18 +315,7 @@ def test_build_coordination_agent_skips_mcp_toolsets_that_fail_to_initialize(
         "build_llm_http_client",
         lambda **_: object(),
     )
-    monkeypatch.setattr(
-        coordination_agent,
-        "build_openai_provider_for_endpoint",
-        _FakeOpenAIProvider,
-    )
-    monkeypatch.setattr(
-        coordination_agent,
-        "OpenAIChatModel",
-        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
-            model_name, provider
-        ),
-    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
 
     def _fake_agent(**kwargs: object) -> _FakeAgent:
         agent = _FakeAgent(**kwargs)
@@ -391,18 +352,7 @@ def test_build_coordination_agent_skips_mcp_servers_marked_runtime_failed(
         "build_llm_http_client",
         lambda **_: object(),
     )
-    monkeypatch.setattr(
-        coordination_agent,
-        "build_openai_provider_for_endpoint",
-        _FakeOpenAIProvider,
-    )
-    monkeypatch.setattr(
-        coordination_agent,
-        "OpenAIChatModel",
-        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
-            model_name, provider
-        ),
-    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
 
     def _fake_agent(**kwargs: object) -> _FakeAgent:
         agent = _FakeAgent(**kwargs)
@@ -451,18 +401,7 @@ def test_build_coordination_agent_injects_subagent_capabilities_into_spawn_subag
     monkeypatch.setattr(
         coordination_agent, "build_llm_http_client", lambda **_: object()
     )
-    monkeypatch.setattr(
-        coordination_agent,
-        "build_openai_provider_for_endpoint",
-        _FakeOpenAIProvider,
-    )
-    monkeypatch.setattr(
-        coordination_agent,
-        "OpenAIChatModel",
-        lambda model_name, provider, profile=None: _FakeOpenAIChatModel(
-            model_name, provider
-        ),
-    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
 
     def _fake_agent(**kwargs: object) -> _FakeAgent:
         agent = _FakeAgent(**kwargs)

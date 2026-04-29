@@ -17,6 +17,8 @@ def infer_known_context_window(
         return _infer_openai_compatible_context_window(normalized_model)
     if provider == ProviderType.BIGMODEL:
         return _infer_bigmodel_context_window(normalized_model)
+    if provider == ProviderType.ANTHROPIC:
+        return _infer_anthropic_context_window(normalized_model)
     return None
 
 
@@ -33,4 +35,14 @@ def _infer_openai_compatible_context_window(model: str) -> int | None:
 def _infer_bigmodel_context_window(model: str) -> int | None:
     if model.startswith("glm-"):
         return 128_000
+    return None
+
+
+def _infer_anthropic_context_window(model: str) -> int | None:
+    if model.startswith("claude-opus-4-6"):
+        return 1_000_000
+    if model.startswith("claude-"):
+        return 200_000
+    if model.startswith("minimax-m2"):
+        return 204_800
     return None

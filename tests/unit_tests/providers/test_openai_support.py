@@ -6,9 +6,12 @@ import asyncio
 import httpx
 import pytest
 
+from relay_teams.media import MediaModality
 from relay_teams.providers.model_config import (
     CodeAgentAuthConfig,
+    ModelCapabilities,
     ModelEndpointConfig,
+    ModelModalityMatrix,
     ProviderType,
 )
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
@@ -91,4 +94,22 @@ def test_openai_compatible_provider_capabilities_are_empty_for_codeagent() -> No
     capabilities = provider.capabilities()
 
     assert capabilities.input_modalities == ()
+    assert capabilities.conversation_output_modalities == ()
+
+
+def test_openai_compatible_provider_capabilities_for_anthropic_are_chat_only() -> None:
+    provider = object.__new__(OpenAICompatibleProvider)
+    provider._config_ref = ModelEndpointConfig(
+        provider=ProviderType.ANTHROPIC,
+        model="claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
+        api_key="anthropic-key",
+        capabilities=ModelCapabilities(
+            input=ModelModalityMatrix(text=True, image=True),
+        ),
+    )
+
+    capabilities = provider.capabilities()
+
+    assert capabilities.input_modalities == (MediaModality.IMAGE,)
     assert capabilities.conversation_output_modalities == ()

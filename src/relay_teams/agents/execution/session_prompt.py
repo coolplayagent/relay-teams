@@ -6,7 +6,9 @@ from collections.abc import Sequence
 from typing import cast
 
 from pydantic import JsonValue
+from pydantic_ai.models.anthropic import AnthropicModelSettings
 from pydantic_ai.models.openai import OpenAIChatModelSettings
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.messages import (
     ModelRequest,
     ModelRequestPart,
@@ -40,8 +42,8 @@ from relay_teams.computer import (
 from relay_teams.media import UserPromptContent
 from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.providers.provider_contracts import LLMRequest
-from relay_teams.providers.openai_model_profiles import (
-    resolve_openai_chat_model_profile,
+from relay_teams.agents.execution.model_builder import (
+    is_anthropic_provider,
 )
 from relay_teams.tools.runtime.persisted_state import (
     load_tool_call_state,
@@ -218,10 +220,6 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             system_prompt=prepared_system_prompt,
             allowed_tools=allowed_tools,
             model_settings=model_settings,
-            model_profile=resolve_openai_chat_model_profile(
-                base_url=self._config.base_url,
-                model_name=self._config.model,
-            ),
             ssl_verify=self._config.ssl_verify,
             connect_timeout_seconds=self._config.connect_timeout_seconds,
             merged_env=(
@@ -312,12 +310,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
-    ) -> OpenAIChatModelSettings:
-        model_settings: OpenAIChatModelSettings = {
-            "openai_continuous_usage_stats": True,
-            "temperature": self._config.sampling.temperature,
-            "top_p": self._config.sampling.top_p,
-        }
+    ) -> ModelSettings:
         max_tokens = await self._safe_max_output_tokens(
             request=request,
             history=history,
@@ -327,11 +320,23 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,
         )
+        if is_anthropic_provider(self._config.provider):
+            anthropic_settings: AnthropicModelSettings = {}
+            if max_tokens is not None:
+                anthropic_settings["max_tokens"] = max_tokens
+            if request.thinking.enabled and request.thinking.effort is not None:
+                anthropic_settings["thinking"] = request.thinking.effort
+            return anthropic_settings
+        openai_settings: OpenAIChatModelSettings = {
+            "openai_continuous_usage_stats": True,
+            "temperature": self._config.sampling.temperature,
+            "top_p": self._config.sampling.top_p,
+        }
         if max_tokens is not None:
-            model_settings["max_tokens"] = max_tokens
+            openai_settings["max_tokens"] = max_tokens
         if request.thinking.enabled and request.thinking.effort is not None:
-            model_settings["openai_reasoning_effort"] = request.thinking.effort
-        return model_settings
+            openai_settings["openai_reasoning_effort"] = request.thinking.effort
+        return openai_settings
 
     async def _safe_max_output_tokens(
         self,

@@ -21,6 +21,7 @@ from relay_teams.providers.codeagent_auth import (
     save_codeagent_oauth_tokens,
 )
 from relay_teams.providers.model_config import (
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_BASE_URL,
@@ -680,6 +681,31 @@ def test_save_model_profile_stores_maas_password_in_secret_store(
         "storage": "file",
         "value": "relay-password",
     } in secrets_payload["entries"]
+
+
+def test_save_model_profile_defaults_anthropic_base_url_when_blank(
+    tmp_path: Path,
+) -> None:
+    manager = ModelConfigManager(
+        config_dir=tmp_path,
+        secret_store=_FileOnlySecretStore(),
+    )
+
+    manager.save_model_profile(
+        "anthropic-profile",
+        {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-5",
+            "base_url": " ",
+            "api_key": "secret-key",
+        },
+    )
+
+    profiles = manager.get_model_profiles()
+    model_payload = json.loads((tmp_path / "model.json").read_text(encoding="utf-8"))
+
+    assert profiles["anthropic-profile"]["base_url"] == DEFAULT_ANTHROPIC_BASE_URL
+    assert model_payload["anthropic-profile"]["base_url"] == DEFAULT_ANTHROPIC_BASE_URL
 
 
 def test_save_model_profile_preserves_existing_maas_password_when_blank(

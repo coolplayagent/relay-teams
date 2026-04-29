@@ -1014,6 +1014,10 @@ class ExternalAcpSessionManager:
             raise RuntimeError(
                 "CodeAgent model profiles are not supported for external ACP agents. Use the local runtime provider path instead."
             )
+        if model_config.provider == ProviderType.ANTHROPIC:
+            raise RuntimeError(
+                "Anthropic model profiles are not supported for external ACP agents. Use the local runtime provider path instead."
+            )
         return _apply_opencode_model_config(
             agent=agent,
             model_config=model_config,

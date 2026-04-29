@@ -96,6 +96,7 @@ from relay_teams.providers.model_connectivity import (
     ModelDiscoveryResult,
 )
 from relay_teams.providers.model_config import (
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_CODEAGENT_CLIENT_ID,
     DEFAULT_MAAS_BASE_URL,
@@ -2922,6 +2923,48 @@ def test_save_model_profile_accepts_minimax_provider() -> None:
     assert service.saved_model_profile is not None
     _, saved_profile, _ = service.saved_model_profile
     assert saved_profile["provider"] == ProviderType.MINIMAX.value
+
+
+def test_save_model_profile_defaults_blank_anthropic_base_url() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/anthropic",
+        json={
+            "provider": ProviderType.ANTHROPIC.value,
+            "model": "claude-sonnet-4-5",
+            "base_url": "",
+            "api_key": "secret",
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "max_tokens": 4096,
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["provider"] == ProviderType.ANTHROPIC.value
+    assert saved_profile["base_url"] == DEFAULT_ANTHROPIC_BASE_URL
+
+
+def test_save_model_profile_rejects_blank_openai_compatible_base_url() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/openai",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "gpt-4o-mini",
+            "base_url": "",
+            "api_key": "secret",
+        },
+    )
+
+    assert response.status_code == 422
+    assert service.saved_model_profile is None
 
 
 def test_save_model_profile_accepts_maas_provider() -> None:

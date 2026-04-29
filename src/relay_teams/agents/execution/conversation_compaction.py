@@ -22,8 +22,9 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
-from pydantic_ai.profiles.openai import OpenAIModelProfile
+from pydantic_ai.models.anthropic import AnthropicModelSettings
+from pydantic_ai.models.openai import OpenAIChatModelSettings
+from pydantic_ai.settings import ModelSettings
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
@@ -38,10 +39,11 @@ from relay_teams.providers.model_fallback import (
     DisabledLlmFallbackMiddleware,
     LlmFallbackMiddleware,
 )
-from relay_teams.providers.openai_model_profiles import (
-    resolve_openai_chat_model_profile,
+from relay_teams.agents.execution.model_builder import (
+    RuntimeChatModel,
+    build_runtime_chat_model,
+    is_anthropic_provider,
 )
-from relay_teams.providers.openai_support import build_openai_provider
 from relay_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerRecord,
     SessionHistoryMarkerType,
@@ -763,36 +765,34 @@ class ConversationCompactionService:
             latest_marker = marker
         return latest_marker
 
-    def _build_model(self) -> OpenAIChatModel:
-        profile: OpenAIModelProfile | None = resolve_openai_chat_model_profile(
-            base_url=self._config.base_url,
-            model_name=self._config.model,
-        )
-        return OpenAIChatModel(
-            self._config.model,
-            provider=build_openai_provider(
-                config=self._config,
-                http_client=build_llm_http_client(
-                    connect_timeout_seconds=self._config.connect_timeout_seconds,
-                    ssl_verify=self._config.ssl_verify,
-                ),
+    def _build_model(self) -> RuntimeChatModel:
+        return build_runtime_chat_model(
+            config=self._config,
+            http_client=build_llm_http_client(
+                connect_timeout_seconds=self._config.connect_timeout_seconds,
+                ssl_verify=self._config.ssl_verify,
             ),
-            profile=profile,
         )
 
-    def _model_settings(self) -> OpenAIChatModelSettings:
+    def _model_settings(self) -> ModelSettings:
         configured_max_tokens = self._config.sampling.max_tokens
         max_tokens = (
             _SUMMARY_RESPONSE_MAX_TOKENS
             if configured_max_tokens is None
             else min(configured_max_tokens, _SUMMARY_RESPONSE_MAX_TOKENS)
         )
-        return {
+        if is_anthropic_provider(self._config.provider):
+            anthropic_settings: AnthropicModelSettings = {
+                "max_tokens": max_tokens,
+            }
+            return anthropic_settings
+        openai_settings: OpenAIChatModelSettings = {
             "temperature": min(self._config.sampling.temperature, _SUMMARY_TEMPERATURE),
             "top_p": self._config.sampling.top_p,
             "max_tokens": max_tokens,
             "openai_continuous_usage_stats": True,
         }
+        return openai_settings
 
 
 def _render_transcript(

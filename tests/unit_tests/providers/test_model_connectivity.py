@@ -245,6 +245,36 @@ def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
     assert payload["top_p"] == pytest.approx(0.95)
 
 
+def test_probe_preserves_zero_valued_usage_fields(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "id": "cmpl-test",
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "input_tokens": 8,
+                        "completion_tokens": 0,
+                        "output_tokens": 2,
+                    },
+                },
+            ),
+        ),
+    )
+
+    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.token_usage is not None
+    assert result.token_usage.prompt_tokens == 0
+    assert result.token_usage.completion_tokens == 0
+    assert result.token_usage.total_tokens == 0
+
+
 def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
     monkeypatch,
 ) -> None:
@@ -466,6 +496,122 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
         captured["url"]
         == "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
     )
+
+
+def test_probe_supports_anthropic_provider(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.ANTHROPIC,
+            model="MiniMax-M2.7",
+            base_url="https://api.minimax.io/anthropic/v1",
+            api_key="minimax-key",
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                response=httpx.Response(
+                    200,
+                    json={
+                        "content": [{"type": "text", "text": "pong"}],
+                        "usage": {"input_tokens": 3, "output_tokens": 1},
+                    },
+                ),
+                captured=captured,
+            )
+        ),
+    )
+
+    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+
+    assert result.ok is True
+    assert result.provider == ProviderType.ANTHROPIC
+    assert result.token_usage is not None
+    assert result.token_usage.prompt_tokens == 3
+    assert result.token_usage.completion_tokens == 1
+    assert captured["url"] == "https://api.minimax.io/anthropic/v1/messages"
+    payload = cast(dict[str, object], captured["json"])
+    assert "temperature" not in payload
+    assert "top_p" not in payload
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["x-api-key"] == "minimax-key"
+    assert headers["anthropic-version"] == "2023-06-01"
+
+
+def test_probe_anthropic_profile_override_preserves_saved_base_url(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(
+        get_runtime=lambda: _runtime_config(
+            provider=ProviderType.ANTHROPIC,
+            model="MiniMax-M2.7",
+            base_url="https://api.minimax.io/anthropic/v1",
+            api_key="minimax-key",
+        )
+    )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                response=httpx.Response(
+                    200,
+                    json={
+                        "content": [{"type": "text", "text": "pong"}],
+                        "usage": {"input_tokens": 3, "output_tokens": 1},
+                    },
+                ),
+                captured=captured,
+            )
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            profile_name="default",
+            override=ModelConnectivityProbeOverride(temperature=0.2),
+        )
+    )
+
+    assert result.ok is True
+    assert captured["url"] == "https://api.minimax.io/anthropic/v1/messages"
+    payload = cast(dict[str, object], captured["json"])
+    assert payload["temperature"] == 0.2
+
+
+def test_probe_anthropic_returns_network_error_for_request_exception(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            error=httpx.ConnectError("failed to reach anthropic endpoint"),
+        ),
+    )
+
+    result = service.probe(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.ANTHROPIC,
+                model="claude-sonnet-4-5",
+                base_url="https://api.anthropic.com",
+                api_key="draft-api-key",
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.provider == ProviderType.ANTHROPIC
+    assert result.error_code == "network_error"
+    assert result.retryable is True
 
 
 def test_probe_allows_header_only_override(monkeypatch) -> None:
@@ -2787,6 +2933,271 @@ def test_discover_models_extracts_context_window_when_provider_returns_it(
     assert result.model_entries[1].context_window == 128000
 
 
+def test_discover_models_extracts_endpoint_only_metadata(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {"id": "gpt-4o-mini"},
+                        {
+                            "id": "rich-model",
+                            "context_window": 256000,
+                            "limits": {"output": 8192},
+                            "input_modalities": ["image"],
+                            "capabilities": {"output": True},
+                        },
+                        {
+                            "id": "bool-limit-model",
+                            "context_window": True,
+                            "limits": {"output": True, "context": True},
+                        },
+                    ],
+                },
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            profile_name="default",
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("bool-limit-model", "gpt-4o-mini", "rich-model")
+    entries = {entry.model: entry for entry in result.model_entries}
+    assert entries["gpt-4o-mini"].context_window is None
+    assert entries["gpt-4o-mini"].output_limit is None
+    assert entries["gpt-4o-mini"].capabilities.input.image is None
+    assert entries["rich-model"].context_window == 256000
+    assert entries["rich-model"].output_limit == 8192
+    assert entries["rich-model"].input_modalities == (MediaModality.IMAGE,)
+    assert entries["rich-model"].capabilities.input.image is True
+    assert entries["bool-limit-model"].context_window is None
+    assert entries["bool-limit-model"].output_limit is None
+
+
+def test_discover_models_extracts_moonshot_endpoint_only_metadata(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "moonshot-v1-auto",
+                            "object": "model",
+                            "owned_by": "moonshot",
+                            "context_length": 131072,
+                        },
+                        {
+                            "id": "kimi-k2.5",
+                            "object": "model",
+                            "owned_by": "moonshot",
+                            "supports_image_in": True,
+                            "supports_video_in": True,
+                            "supports_reasoning": True,
+                            "context_length": 262144,
+                        },
+                    ],
+                },
+            ),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.OPENAI_COMPATIBLE,
+                base_url="https://api.moonshot.cn/v1",
+                api_key="draft-api-key",
+            ),
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("kimi-k2.5", "moonshot-v1-auto")
+    assert result.model_entries[0].context_window == 262144
+    assert result.model_entries[0].output_limit is None
+    assert result.model_entries[0].input_modalities == (
+        MediaModality.IMAGE,
+        MediaModality.VIDEO,
+    )
+    assert result.model_entries[0].capabilities.input.image is True
+    assert result.model_entries[0].capabilities.input.video is True
+    assert result.model_entries[1].context_window == 131072
+    assert result.model_entries[1].output_limit is None
+    assert result.model_entries[1].input_modalities == ()
+
+
+def test_discover_models_leaves_minimax_openai_endpoint_only_metadata_empty(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "MiniMax-M2.7",
+                            "object": "model",
+                            "created": 1773799200,
+                            "owned_by": "minimax",
+                        },
+                        {
+                            "id": "MiniMax-M2.7-highspeed",
+                            "object": "model",
+                            "created": 1773799200,
+                            "owned_by": "minimax",
+                        },
+                    ],
+                },
+            ),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.OPENAI_COMPATIBLE,
+                base_url="https://api.minimaxi.com/v1",
+                api_key="draft-api-key",
+            ),
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("MiniMax-M2.7", "MiniMax-M2.7-highspeed")
+    for entry in result.model_entries:
+        assert entry.context_window is None
+        assert entry.output_limit is None
+        assert entry.input_modalities == ()
+        assert entry.capabilities.input.image is None
+
+
+def test_discover_models_leaves_xiaomi_mimo_endpoint_only_metadata_empty(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "mimo-v2-flash",
+                            "object": "model",
+                            "owned_by": "xiaomi",
+                        },
+                        {
+                            "id": "mimo-v2-omni",
+                            "object": "model",
+                            "owned_by": "xiaomi",
+                        },
+                        {
+                            "id": "mimo-v2.5-pro",
+                            "object": "model",
+                            "owned_by": "xiaomi",
+                        },
+                    ],
+                },
+            ),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.OPENAI_COMPATIBLE,
+                base_url="https://api.xiaomimimo.com/v1",
+                api_key="draft-api-key",
+            ),
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("mimo-v2-flash", "mimo-v2-omni", "mimo-v2.5-pro")
+    for entry in result.model_entries:
+        assert entry.context_window is None
+        assert entry.output_limit is None
+        assert entry.input_modalities == ()
+        assert entry.capabilities.input.image is None
+
+
+def test_discover_models_leaves_bigmodel_endpoint_only_metadata_empty(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "glm-4.6",
+                            "object": "model",
+                            "created": 1759276800,
+                            "owned_by": "z-ai",
+                        },
+                        {
+                            "id": "glm-5.1",
+                            "object": "model",
+                            "created": 1774620000,
+                            "owned_by": "z-ai",
+                        },
+                    ],
+                },
+            ),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.BIGMODEL,
+                base_url="https://open.bigmodel.cn/api/coding/paas/v4",
+                api_key="draft-api-key",
+            ),
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("glm-4.6", "glm-5.1")
+    for entry in result.model_entries:
+        assert entry.context_window is None
+        assert entry.output_limit is None
+        assert entry.input_modalities == ()
+        assert entry.capabilities.input.image is None
+
+
 def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
@@ -2875,6 +3286,166 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     assert result.provider == ProviderType.BIGMODEL
     assert result.models == ("glm-4.5",)
     assert captured["url"] == "https://open.bigmodel.cn/api/coding/paas/v4/models"
+
+
+def test_discover_models_supports_anthropic_provider(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **kwargs: (
+            captured.update(kwargs)
+            or _FakeHttpClient(
+                captured=captured,
+                response=httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {"id": "MiniMax-M2.7"},
+                            {"id": "MiniMax-M2.7-highspeed"},
+                        ]
+                    },
+                ),
+            )
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.ANTHROPIC,
+                base_url="https://api.minimax.io/anthropic/v1",
+                api_key="draft-api-key",
+            )
+        )
+    )
+
+    assert result.ok is True
+    assert result.provider == ProviderType.ANTHROPIC
+    assert result.models == ("MiniMax-M2.7", "MiniMax-M2.7-highspeed")
+    assert captured["url"] == "https://api.minimax.io/anthropic/v1/models"
+    headers = cast(dict[str, str], captured["headers"])
+    assert headers["x-api-key"] == "draft-api-key"
+
+
+def test_discover_models_anthropic_returns_network_error_for_request_exception(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            error=httpx.ConnectError("failed to reach anthropic model list"),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.ANTHROPIC,
+                base_url="https://api.anthropic.com",
+                api_key="draft-api-key",
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.provider == ProviderType.ANTHROPIC
+    assert result.error_code == "network_error"
+    assert result.retryable is True
+
+
+def test_discover_models_supports_anthropic_endpoint_only_metadata(monkeypatch) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "MiniMax-M2.7",
+                            "context_window": 204800,
+                            "max_output_tokens": 8192,
+                        }
+                    ]
+                },
+            ),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.ANTHROPIC,
+                base_url="https://api.minimax.io/anthropic/v1",
+                api_key="draft-api-key",
+            ),
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("MiniMax-M2.7",)
+    assert result.model_entries[0].context_window == 204800
+    assert result.model_entries[0].output_limit == 8192
+
+
+def test_discover_models_leaves_minimax_anthropic_endpoint_only_metadata_empty(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "MiniMax-M2.7",
+                            "type": "model",
+                            "display_name": "MiniMax-M2.7",
+                            "created_at": "2026-03-18T02:00:00Z",
+                        },
+                        {
+                            "id": "MiniMax-M2.7-highspeed",
+                            "type": "model",
+                            "display_name": "MiniMax-M2.7-Highspeed",
+                            "created_at": "2026-03-18T02:00:00Z",
+                        },
+                    ],
+                    "first_id": "MiniMax-M2.7",
+                    "last_id": "MiniMax-M2.7-highspeed",
+                    "has_more": False,
+                },
+            ),
+        ),
+    )
+
+    result = service.discover_models(
+        ModelDiscoveryRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.ANTHROPIC,
+                base_url="https://api.minimaxi.com/anthropic/v1",
+                api_key="draft-api-key",
+            ),
+            metadata_policy="endpoint_only",
+        )
+    )
+
+    assert result.ok is True
+    assert result.models == ("MiniMax-M2.7", "MiniMax-M2.7-highspeed")
+    for entry in result.model_entries:
+        assert entry.context_window is None
+        assert entry.output_limit is None
+        assert entry.input_modalities == ()
+        assert entry.capabilities.input.image is None
 
 
 def test_discover_models_allows_header_only_override(monkeypatch) -> None:

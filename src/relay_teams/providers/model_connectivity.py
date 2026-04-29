@@ -30,6 +30,7 @@ from relay_teams.providers.known_model_context_windows import (
 from relay_teams.providers.model_config import (
     CodeAgentAuthMethod,
     CodeAgentAuthConfig,
+    DEFAULT_ANTHROPIC_BASE_URL,
     DEFAULT_CODEAGENT_BASE_URL,
     DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
     DEFAULT_MAAS_APP_ID,
@@ -46,7 +47,13 @@ from relay_teams.providers.model_config import (
     ProviderType,
     SamplingConfig,
 )
+from relay_teams.providers.anthropic_support import (
+    anthropic_api_endpoint,
+    build_anthropic_request_headers,
+)
 from relay_teams.providers.model_capabilities import (
+    extract_input_modalities_from_payload,
+    extract_model_capabilities_from_payload,
     resolve_model_capabilities,
     resolve_model_input_modalities,
 )
@@ -57,6 +64,7 @@ from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 _INVALID_RESPONSE_PAYLOAD = object()
 _EVENT_STREAM_PLAIN_TEXT_SUCCESS = object()
 _MAX_PROBE_TIMEOUT_MS = 300_000
+ModelDiscoveryMetadataPolicy = Literal["allow_inference", "endpoint_only"]
 
 LOGGER = get_logger(__name__)
 
@@ -67,6 +75,10 @@ def _uses_openai_compatible_transport(provider: ProviderType) -> bool:
         ProviderType.BIGMODEL,
         ProviderType.MINIMAX,
     )
+
+
+def _uses_anthropic_transport(provider: ProviderType) -> bool:
+    return provider == ProviderType.ANTHROPIC
 
 
 class ModelConnectivityProbeOverride(BaseModel):
@@ -98,6 +110,7 @@ class ModelDiscoveryRequest(BaseModel):
 
     profile_name: str | None = Field(default=None, min_length=1)
     override: ModelConnectivityProbeOverride | None = None
+    metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference"
     timeout_ms: int | None = Field(default=None, ge=1000, le=_MAX_PROBE_TIMEOUT_MS)
 
 
@@ -137,6 +150,7 @@ class ModelDiscoveryEntry(BaseModel):
 
     model: str = Field(min_length=1)
     context_window: int | None = Field(default=None, ge=1)
+    output_limit: int | None = Field(default=None, ge=1)
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     input_modalities: tuple[MediaModality, ...] = ()
 
@@ -253,6 +267,17 @@ class ModelConnectivityProbeService:
                 config=resolved_config,
                 timeout_ms=timeout_ms,
             )
+        if _uses_anthropic_transport(resolved_config.provider):
+            return self._probe_anthropic(
+                config=resolved_config,
+                temperature=(
+                    request.override.temperature
+                    if request.override is not None
+                    and request.override.temperature is not None
+                    else None
+                ),
+                timeout_ms=timeout_ms,
+            )
         raise ValueError(
             f"Connectivity probe is not supported for provider '{resolved_config.provider.value}'."
         )
@@ -284,16 +309,25 @@ class ModelConnectivityProbeService:
             return self._discover_maas_models(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
+                metadata_policy=request.metadata_policy,
             )
         if resolved_config.provider == ProviderType.CODEAGENT:
             return self._discover_codeagent_models(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
+                metadata_policy=request.metadata_policy,
             )
         if _uses_openai_compatible_transport(resolved_config.provider):
             return self._discover_openai_compatible_models(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
+                metadata_policy=request.metadata_policy,
+            )
+        if _uses_anthropic_transport(resolved_config.provider):
+            return self._discover_anthropic_models(
+                config=resolved_config,
+                timeout_ms=timeout_ms,
+                metadata_policy=request.metadata_policy,
             )
         raise ValueError(
             f"Model discovery is not supported for provider '{resolved_config.provider.value}'."
@@ -428,10 +462,10 @@ class ModelConnectivityProbeService:
             missing_fields: list[str] = []
             if override.model is None:
                 missing_fields.append("model")
-            if (
-                override.base_url is None
-                and override_provider != ProviderType.CODEAGENT
-            ):
+            if override.base_url is None and override_provider not in {
+                ProviderType.CODEAGENT,
+                ProviderType.ANTHROPIC,
+            }:
                 missing_fields.append("base_url")
             if override_provider == ProviderType.MAAS:
                 if override.maas_auth is None:
@@ -450,6 +484,9 @@ class ModelConnectivityProbeService:
             override_base_url = (
                 DEFAULT_CODEAGENT_BASE_URL
                 if override_provider == ProviderType.CODEAGENT
+                else DEFAULT_ANTHROPIC_BASE_URL
+                if override_provider == ProviderType.ANTHROPIC
+                and override.base_url is None
                 else cast(str, override.base_url)
             )
             return ModelEndpointConfig(
@@ -516,10 +553,10 @@ class ModelConnectivityProbeService:
                 )
             override_provider = override.provider or ProviderType.OPENAI_COMPATIBLE
             missing_fields: list[str] = []
-            if (
-                override.base_url is None
-                and override_provider != ProviderType.CODEAGENT
-            ):
+            if override.base_url is None and override_provider not in {
+                ProviderType.CODEAGENT,
+                ProviderType.ANTHROPIC,
+            }:
                 missing_fields.append("base_url")
             if override_provider == ProviderType.MAAS:
                 if override.maas_auth is None:
@@ -539,6 +576,9 @@ class ModelConnectivityProbeService:
                 base_url=(
                     DEFAULT_CODEAGENT_BASE_URL
                     if override_provider == ProviderType.CODEAGENT
+                    else DEFAULT_ANTHROPIC_BASE_URL
+                    if override_provider == ProviderType.ANTHROPIC
+                    and override.base_url is None
                     else cast(str, override.base_url)
                 ),
                 api_key=override.api_key,
@@ -551,13 +591,20 @@ class ModelConnectivityProbeService:
 
         resolved_override = override or ModelConnectivityProbeOverride()
         resolved_provider = resolved_override.provider or base_config.provider
+        resolved_base_url = (
+            DEFAULT_CODEAGENT_BASE_URL
+            if resolved_provider == ProviderType.CODEAGENT
+            else DEFAULT_ANTHROPIC_BASE_URL
+            if (
+                resolved_provider == ProviderType.ANTHROPIC
+                and resolved_override.base_url is None
+                and base_config.provider != ProviderType.ANTHROPIC
+            )
+            else resolved_override.base_url or base_config.base_url
+        )
         return ModelDiscoveryResolvedConfig(
             provider=resolved_provider,
-            base_url=(
-                DEFAULT_CODEAGENT_BASE_URL
-                if resolved_provider == ProviderType.CODEAGENT
-                else resolved_override.base_url or base_config.base_url
-            ),
+            base_url=resolved_base_url,
             api_key=resolved_override.api_key or base_config.api_key,
             headers=resolved_override.headers or base_config.headers,
             maas_auth=self._merge_maas_auth(
@@ -589,6 +636,12 @@ class ModelConnectivityProbeService:
         resolved_base_url = (
             DEFAULT_CODEAGENT_BASE_URL
             if resolved_provider == ProviderType.CODEAGENT
+            else DEFAULT_ANTHROPIC_BASE_URL
+            if (
+                resolved_provider == ProviderType.ANTHROPIC
+                and override.base_url is None
+                and base_config.provider != ProviderType.ANTHROPIC
+            )
             else override.base_url or base_config.base_url
         )
         return ModelEndpointConfig(
@@ -985,6 +1038,45 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
+    def _probe_anthropic(
+        self,
+        *,
+        config: ModelEndpointConfig,
+        temperature: float | None,
+        timeout_ms: int,
+    ) -> ModelConnectivityProbeResult:
+        endpoint = anthropic_api_endpoint(config.base_url, "messages")
+        headers = build_anthropic_request_headers(
+            config,
+            extra_headers={"Content-Type": "application/json"},
+        )
+        payload = {
+            "model": config.model,
+            "messages": [{"role": "user", "content": "reply with pong"}],
+            "max_tokens": 1,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        response = self._post_probe_request(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            payload=payload,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelConnectivityProbeResult):
+            return response
+        return self._build_probe_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
+        )
+
     def _probe_codeagent(
         self,
         *,
@@ -1066,6 +1158,7 @@ class ModelConnectivityProbeService:
         *,
         config: ModelDiscoveryResolvedConfig,
         timeout_ms: int,
+        metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference",
     ) -> ModelDiscoveryResult:
         if config.maas_auth is None:
             raise ValueError("MAAS model discovery requires maas_auth configuration.")
@@ -1138,6 +1231,7 @@ class ModelConnectivityProbeService:
             response=response,
             checked_at=checked_at,
             started=started,
+            metadata_policy=metadata_policy,
         )
 
     def _discover_openai_compatible_models(
@@ -1145,6 +1239,7 @@ class ModelConnectivityProbeService:
         *,
         config: ModelDiscoveryResolvedConfig,
         timeout_ms: int,
+        metadata_policy: ModelDiscoveryMetadataPolicy,
     ) -> ModelDiscoveryResult:
         endpoint = f"{config.base_url.rstrip('/')}/models"
         headers = build_model_request_headers(
@@ -1238,6 +1333,7 @@ class ModelConnectivityProbeService:
         model_entries = self._extract_model_entries(
             payload=response_payload,
             provider=config.provider,
+            metadata_policy=metadata_policy,
         )
         if model_entries is None:
             return ModelDiscoveryResult(
@@ -1271,11 +1367,50 @@ class ModelConnectivityProbeService:
             model_entries=model_entries,
         )
 
+    def _discover_anthropic_models(
+        self,
+        *,
+        config: ModelDiscoveryResolvedConfig,
+        timeout_ms: int,
+        metadata_policy: ModelDiscoveryMetadataPolicy,
+    ) -> ModelDiscoveryResult:
+        endpoint = anthropic_api_endpoint(config.base_url, "models")
+        headers = build_anthropic_request_headers(
+            ModelEndpointConfig(
+                provider=config.provider,
+                model="discovery",
+                base_url=config.base_url,
+                api_key=config.api_key,
+                headers=config.headers,
+                ssl_verify=config.ssl_verify,
+            ),
+        )
+        started = perf_counter()
+        checked_at = datetime.now(timezone.utc)
+        response = self._get_model_discovery_request(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelDiscoveryResult):
+            return response
+        return self._build_model_discovery_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
+            metadata_policy=metadata_policy,
+        )
+
     def _discover_codeagent_models(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
         timeout_ms: int,
+        metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference",
     ) -> ModelDiscoveryResult:
         if config.codeagent_auth is None:
             raise ValueError(
@@ -1328,6 +1463,7 @@ class ModelConnectivityProbeService:
             response=response,
             checked_at=checked_at,
             started=started,
+            metadata_policy=metadata_policy,
         )
 
     def _get_maas_model_discovery_auth_context(
@@ -1509,6 +1645,7 @@ class ModelConnectivityProbeService:
         response: httpx.Response,
         checked_at: datetime,
         started: float,
+        metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference",
     ) -> ModelDiscoveryResult:
         latency_ms = self._latency_ms(started)
         response_payload = self._response_payload(response)
@@ -1561,6 +1698,7 @@ class ModelConnectivityProbeService:
         model_entries = self._extract_model_entries(
             payload=response_payload,
             provider=config.provider,
+            metadata_policy=metadata_policy,
         )
         if model_entries is None:
             return ModelDiscoveryResult(
@@ -2336,13 +2474,21 @@ class ModelConnectivityProbeService:
         self,
         usage_payload: object,
     ) -> ModelConnectivityTokenUsage:
-        usage_dict = (
-            cast(dict[str, object], usage_payload)
-            if isinstance(usage_payload, dict)
-            else {}
+        usage_dict = usage_payload if isinstance(usage_payload, dict) else {}
+        prompt_value = (
+            usage_dict["prompt_tokens"]
+            if "prompt_tokens" in usage_dict
+            else usage_dict.get("input_tokens")
         )
-        prompt_tokens = self._safe_int(usage_dict.get("prompt_tokens"))
-        completion_tokens = self._safe_int(usage_dict.get("completion_tokens"))
+        completion_value = (
+            usage_dict["completion_tokens"]
+            if "completion_tokens" in usage_dict
+            else usage_dict.get("output_tokens")
+        )
+        prompt_tokens = self._safe_int(
+            prompt_value,
+        )
+        completion_tokens = self._safe_int(completion_value)
         total_tokens = self._safe_int(usage_dict.get("total_tokens"))
         return ModelConnectivityTokenUsage(
             prompt_tokens=prompt_tokens,
@@ -2380,11 +2526,18 @@ class ModelConnectivityProbeService:
         *,
         payload: dict[str, object] | list[object],
         provider: ProviderType,
+        metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference",
     ) -> tuple[ModelDiscoveryEntry, ...] | None:
         if provider == ProviderType.CODEAGENT:
-            return self._extract_codeagent_model_entries(payload)
+            return self._extract_codeagent_model_entries(
+                payload,
+                metadata_policy=metadata_policy,
+            )
         if provider == ProviderType.MAAS:
-            return self._extract_maas_model_entries(payload)
+            return self._extract_maas_model_entries(
+                payload,
+                metadata_policy=metadata_policy,
+            )
         if not isinstance(payload, dict):
             return None
         data = payload.get("data")
@@ -2402,27 +2555,32 @@ class ModelConnectivityProbeService:
             if not normalized or normalized in seen_model_ids:
                 continue
             seen_model_ids.add(normalized)
+            context_window = self._extract_context_window(entry)
+            if context_window is None and self._metadata_policy_allows_inference(
+                metadata_policy
+            ):
+                context_window = infer_known_context_window(
+                    provider=provider,
+                    model=normalized,
+                )
             model_entries.append(
                 ModelDiscoveryEntry(
                     model=normalized,
-                    context_window=(
-                        self._extract_context_window(entry)
-                        or infer_known_context_window(
-                            provider=provider,
-                            model=normalized,
-                        )
-                    ),
-                    capabilities=resolve_model_capabilities(
+                    context_window=context_window,
+                    output_limit=self._extract_output_limit(entry),
+                    capabilities=self._resolve_discovery_capabilities(
                         provider=provider,
                         base_url="",
                         model_name=normalized,
                         metadata=entry,
+                        metadata_policy=metadata_policy,
                     ),
-                    input_modalities=resolve_model_input_modalities(
+                    input_modalities=self._resolve_discovery_input_modalities(
                         provider=provider,
                         base_url="",
                         model_name=normalized,
                         metadata=entry,
+                        metadata_policy=metadata_policy,
                     ),
                 )
             )
@@ -2432,6 +2590,8 @@ class ModelConnectivityProbeService:
     def _extract_codeagent_model_entries(
         self,
         payload: dict[str, object] | list[object],
+        *,
+        metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference",
     ) -> tuple[ModelDiscoveryEntry, ...] | None:
         entries_payload: list[object] | None = None
         if isinstance(payload, list):
@@ -2460,24 +2620,45 @@ class ModelConnectivityProbeService:
             if model_id is None or not model_id or model_id in seen_model_ids:
                 continue
             seen_model_ids.add(model_id)
+            metadata_mapping = (
+                cast(dict[str, object], metadata)
+                if isinstance(metadata, dict)
+                else None
+            )
+            context_window = (
+                self._extract_context_window(metadata_mapping)
+                if metadata_mapping is not None
+                else None
+            )
+            if context_window is None and self._metadata_policy_allows_inference(
+                metadata_policy
+            ):
+                context_window = infer_known_context_window(
+                    provider=ProviderType.CODEAGENT,
+                    model=model_id,
+                )
             model_entries.append(
                 ModelDiscoveryEntry(
                     model=model_id,
-                    context_window=infer_known_context_window(
-                        provider=ProviderType.CODEAGENT,
-                        model=model_id,
+                    context_window=context_window,
+                    output_limit=(
+                        self._extract_output_limit(metadata_mapping)
+                        if metadata_mapping is not None
+                        else None
                     ),
-                    capabilities=resolve_model_capabilities(
+                    capabilities=self._resolve_discovery_capabilities(
                         provider=ProviderType.CODEAGENT,
                         base_url="",
                         model_name=model_id,
                         metadata=metadata,
+                        metadata_policy=metadata_policy,
                     ),
-                    input_modalities=resolve_model_input_modalities(
+                    input_modalities=self._resolve_discovery_input_modalities(
                         provider=ProviderType.CODEAGENT,
                         base_url="",
                         model_name=model_id,
                         metadata=metadata,
+                        metadata_policy=metadata_policy,
                     ),
                 )
             )
@@ -2487,6 +2668,8 @@ class ModelConnectivityProbeService:
     def _extract_maas_model_entries(
         self,
         payload: dict[str, object] | list[object],
+        *,
+        metadata_policy: ModelDiscoveryMetadataPolicy = "allow_inference",
     ) -> tuple[ModelDiscoveryEntry, ...] | None:
         if not isinstance(payload, dict):
             return None
@@ -2538,15 +2721,19 @@ class ModelConnectivityProbeService:
         return tuple(
             ModelDiscoveryEntry(
                 model=model_id,
-                capabilities=resolve_model_capabilities(
+                capabilities=self._resolve_discovery_capabilities(
                     provider=ProviderType.MAAS,
                     base_url="",
                     model_name=model_id,
+                    metadata=None,
+                    metadata_policy=metadata_policy,
                 ),
-                input_modalities=resolve_model_input_modalities(
+                input_modalities=self._resolve_discovery_input_modalities(
                     provider=ProviderType.MAAS,
                     base_url="",
                     model_name=model_id,
+                    metadata=None,
+                    metadata_policy=metadata_policy,
                 ),
             )
             for model_id in sorted(model_ids)
@@ -2605,6 +2792,51 @@ class ModelConnectivityProbeService:
             return False
         return True
 
+    @staticmethod
+    def _metadata_policy_allows_inference(
+        metadata_policy: ModelDiscoveryMetadataPolicy,
+    ) -> bool:
+        return metadata_policy == "allow_inference"
+
+    def _resolve_discovery_capabilities(
+        self,
+        *,
+        provider: ProviderType,
+        base_url: str,
+        model_name: str,
+        metadata: object | None,
+        metadata_policy: ModelDiscoveryMetadataPolicy,
+    ) -> ModelCapabilities:
+        if self._metadata_policy_allows_inference(metadata_policy):
+            return resolve_model_capabilities(
+                provider=provider,
+                base_url=base_url,
+                model_name=model_name,
+                metadata=metadata,
+            )
+        capabilities, has_signal = extract_model_capabilities_from_payload(metadata)
+        if has_signal:
+            return capabilities
+        return ModelCapabilities()
+
+    def _resolve_discovery_input_modalities(
+        self,
+        *,
+        provider: ProviderType,
+        base_url: str,
+        model_name: str,
+        metadata: object | None,
+        metadata_policy: ModelDiscoveryMetadataPolicy,
+    ) -> tuple[MediaModality, ...]:
+        if self._metadata_policy_allows_inference(metadata_policy):
+            return resolve_model_input_modalities(
+                provider=provider,
+                base_url=base_url,
+                model_name=model_name,
+                metadata=metadata,
+            )
+        return extract_input_modalities_from_payload(metadata)
+
     def _extract_context_window(self, entry: dict[str, object]) -> int | None:
         direct_keys = (
             "context_window",
@@ -2618,19 +2850,64 @@ class ModelConnectivityProbeService:
         )
         for key in direct_keys:
             value = entry.get(key)
-            if isinstance(value, int) and value > 0:
-                return value
+            if (limit := self._positive_int(value)) is not None:
+                return limit
         for nested_key in ("limits", "limit", "capabilities", "metadata"):
             nested = entry.get(nested_key)
             if not isinstance(nested, dict):
                 continue
             for key in direct_keys:
                 value = nested.get(key)
-                if isinstance(value, int) and value > 0:
-                    return value
+                if (limit := self._positive_int(value)) is not None:
+                    return limit
             context_limit = nested.get("context")
-            if isinstance(context_limit, int) and context_limit > 0:
-                return context_limit
+            if (limit := self._positive_int(context_limit)) is not None:
+                return limit
+        return None
+
+    @staticmethod
+    def _extract_output_limit(entry: dict[str, object]) -> int | None:
+        direct_keys = (
+            "output_limit",
+            "outputLimit",
+            "max_output_tokens",
+            "maxOutputTokens",
+            "max_completion_tokens",
+            "maxCompletionTokens",
+            "max_tokens",
+            "maxTokens",
+            "completion_token_limit",
+            "completionTokenLimit",
+            "output_token_limit",
+            "outputTokenLimit",
+        )
+        for key in direct_keys:
+            value = entry.get(key)
+            if (
+                limit := ModelConnectivityProbeService._positive_int(value)
+            ) is not None:
+                return limit
+        for nested_key in ("limits", "limit", "capabilities", "metadata"):
+            nested = entry.get(nested_key)
+            if not isinstance(nested, dict):
+                continue
+            for key in direct_keys:
+                value = nested.get(key)
+                if (
+                    limit := ModelConnectivityProbeService._positive_int(value)
+                ) is not None:
+                    return limit
+            output_limit = nested.get("output")
+            if (
+                limit := ModelConnectivityProbeService._positive_int(output_limit)
+            ) is not None:
+                return limit
+        return None
+
+    @staticmethod
+    def _positive_int(value: object) -> int | None:
+        if type(value) is int and value > 0:
+            return value
         return None
 
     def _response_payload(self, response: httpx.Response) -> object:

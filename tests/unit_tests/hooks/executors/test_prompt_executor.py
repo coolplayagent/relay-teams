@@ -24,7 +24,11 @@ from relay_teams.hooks.hook_models import (
     HookHandlerType,
 )
 from relay_teams.providers.llm_retry import LlmRetryConfig
-from relay_teams.providers.model_config import ModelEndpointConfig, SamplingConfig
+from relay_teams.providers.model_config import (
+    ModelEndpointConfig,
+    ProviderType,
+    SamplingConfig,
+)
 
 
 class _FakeModelRequestNode:
@@ -137,6 +141,21 @@ def _config(
     return ModelEndpointConfig(
         model="gpt-test",
         base_url="https://example.test/v1",
+        api_key="secret",
+        sampling=SamplingConfig(
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ),
+    )
+
+
+def _anthropic_config(
+    *, max_tokens: int | None = None, temperature: float = 0.7
+) -> ModelEndpointConfig:
+    return ModelEndpointConfig(
+        provider=ProviderType.ANTHROPIC,
+        model="claude-sonnet-4-5",
+        base_url="https://api.anthropic.com",
         api_key="secret",
         sampling=SamplingConfig(
             temperature=temperature,
@@ -261,43 +280,37 @@ async def test_run_streaming_prompt_ignores_non_model_nodes_and_drains_stream(
     assert result.decision == HookDecisionType.ALLOW
 
 
-def test_build_model_wires_provider_http_client_and_profile(
+def test_build_model_wires_runtime_http_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
 
-    class _FakeOpenAIChatModel:
-        def __init__(
-            self, model_name: str, *, provider: object, profile: object
-        ) -> None:
-            captured["model_name"] = model_name
-            captured["provider"] = provider
-            captured["profile"] = profile
-
-    monkeypatch.setattr(
-        prompt_module,
-        "resolve_openai_chat_model_profile",
-        lambda **kwargs: ("profile", kwargs),
-    )
     monkeypatch.setattr(
         prompt_module,
         "build_llm_http_client",
         lambda **kwargs: ("client", kwargs),
     )
+
+    def _fake_build_runtime_chat_model(
+        *,
+        config: ModelEndpointConfig,
+        http_client: object,
+    ) -> object:
+        captured["config"] = config
+        captured["http_client"] = http_client
+        return ("model", config.model)
+
     monkeypatch.setattr(
         prompt_module,
-        "build_openai_provider",
-        lambda **kwargs: ("provider", kwargs),
+        "build_runtime_chat_model",
+        _fake_build_runtime_chat_model,
     )
-    monkeypatch.setattr(prompt_module, "OpenAIChatModel", _FakeOpenAIChatModel)
 
     _ = _build_model(_config())
 
-    assert captured["model_name"] == "gpt-test"
-    provider = cast(tuple[str, dict[str, object]], captured["provider"])
-    profile = cast(tuple[str, dict[str, object]], captured["profile"])
-    assert provider[0] == "provider"
-    assert profile[0] == "profile"
+    config = cast(ModelEndpointConfig, captured["config"])
+    assert config.model == "gpt-test"
+    assert cast(tuple[str, dict[str, object]], captured["http_client"])[0] == "client"
 
 
 def test_model_settings_caps_max_tokens_and_temperature() -> None:
@@ -306,3 +319,12 @@ def test_model_settings_caps_max_tokens_and_temperature() -> None:
     assert settings.get("max_tokens") == 600
     assert settings.get("temperature") == 0.2
     assert settings.get("openai_continuous_usage_stats") is True
+
+
+def test_model_settings_supports_anthropic_provider() -> None:
+    settings = _model_settings(_anthropic_config(max_tokens=1200, temperature=0.9))
+
+    assert settings.get("max_tokens") == 600
+    assert "temperature" not in settings
+    assert "top_p" not in settings
+    assert "openai_continuous_usage_stats" not in settings

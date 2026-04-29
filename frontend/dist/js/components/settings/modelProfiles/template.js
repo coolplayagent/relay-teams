@@ -83,8 +83,16 @@ export function renderModelProfilesPanelMarkup() {
                                         <label for="profile-provider" data-i18n="settings.model.provider">Provider</label>
                                         <select id="profile-provider" aria-hidden="true" tabindex="-1">
                                             <option value="openai_compatible">openai_compatible</option>
+                                            <option value="anthropic">anthropic</option>
                                             <option value="maas">maas</option>
                                             <option value="codeagent">codeagent</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group model-profile-collapsible-field" id="profile-custom-provider-group" style="display:none;">
+                                        <label for="profile-custom-provider" data-i18n="settings.model.custom_transport">API Protocol</label>
+                                        <select id="profile-custom-provider">
+                                            <option value="openai_compatible" data-i18n="settings.model.custom_transport_openai">OpenAI compatible</option>
+                                            <option value="anthropic" data-i18n="settings.model.custom_transport_anthropic">Anthropic compatible</option>
                                         </select>
                                     </div>
                                     <div class="form-group model-profile-collapsible-field" id="profile-base-url-fields" style="display:none;">

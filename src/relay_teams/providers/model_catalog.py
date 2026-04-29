@@ -51,6 +51,7 @@ class ModelCatalogProvider(BaseModel):
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    runtime_provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
     api: Optional[str] = None
     doc: Optional[str] = None
     env: tuple[str, ...] = ()
@@ -285,6 +286,10 @@ def _parse_provider(
     payload: Mapping[str, object],
 ) -> Optional[ModelCatalogProvider]:
     name = _string_field(payload.get("name")) or provider_id
+    runtime_provider = _resolve_catalog_runtime_provider(
+        provider_id=provider_id,
+        payload=payload,
+    )
     models_payload = payload.get("models")
     if not isinstance(models_payload, Mapping):
         return None
@@ -294,13 +299,19 @@ def _parse_provider(
             raw_model_payload, Mapping
         ):
             continue
-        model = _parse_model(provider_id, raw_model_id, raw_model_payload)
+        model = _parse_model(
+            provider_id,
+            raw_model_id,
+            raw_model_payload,
+            runtime_provider=runtime_provider,
+        )
         if model is not None:
             models.append(model)
     models.sort(key=lambda item: (item.name.casefold(), item.id.casefold()))
     return ModelCatalogProvider(
         id=provider_id,
         name=name,
+        runtime_provider=runtime_provider,
         api=_string_field(payload.get("api")),
         doc=_string_field(payload.get("doc")),
         env=_string_tuple(payload.get("env")),
@@ -312,6 +323,8 @@ def _parse_model(
     provider_id: str,
     model_id: str,
     payload: Mapping[str, object],
+    *,
+    runtime_provider: ProviderType,
 ) -> Optional[ModelCatalogModel]:
     normalized_model_id = model_id.strip()
     if not normalized_model_id:
@@ -319,7 +332,7 @@ def _parse_model(
     model_name = _string_field(payload.get("name")) or normalized_model_id
     context_window, output_limit = _extract_limits(payload.get("limit"))
     capabilities = resolve_model_capabilities(
-        provider=ProviderType.OPENAI_COMPATIBLE,
+        provider=runtime_provider,
         base_url="",
         model_name=normalized_model_id,
         metadata=_metadata_payload(provider_id=provider_id, payload=payload),
@@ -340,6 +353,23 @@ def _parse_model(
         capabilities=capabilities,
         input_modalities=capabilities.supported_input_modalities(),
     )
+
+
+def _resolve_catalog_runtime_provider(
+    *,
+    provider_id: str,
+    payload: Mapping[str, object],
+) -> ProviderType:
+    normalized_id = provider_id.strip().lower()
+    api = (_string_field(payload.get("api")) or "").lower()
+    npm = (_string_field(payload.get("npm")) or "").lower()
+    if normalized_id == "anthropic" or npm == "@ai-sdk/anthropic":
+        return ProviderType.ANTHROPIC
+    if "/anthropic/" in api or api.endswith("/anthropic"):
+        return ProviderType.ANTHROPIC
+    if normalized_id == "maas" or "maas" in normalized_id:
+        return ProviderType.MAAS
+    return ProviderType.OPENAI_COMPATIBLE
 
 
 def _metadata_payload(
