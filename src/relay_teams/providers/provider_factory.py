@@ -61,6 +61,10 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.reminders import SystemReminderService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
+from relay_teams.tools.runtime.context import (
+    GatewaySessionLookupLike,
+    XiaolubanNotifyServiceLike,
+)
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
@@ -111,6 +115,10 @@ def create_provider_factory(
     token_usage_repo: TokenUsageRepository | None = None,
     metric_recorder: MetricRecorder | None = None,
     im_tool_service: ImToolService | None = None,
+    get_xiaoluban_notify_service: Callable[[], XiaolubanNotifyServiceLike | None]
+    | None = None,
+    get_gateway_session_lookup: Callable[[], GatewaySessionLookupLike | None]
+    | None = None,
     external_agent_session_manager: ExternalAcpSessionManager | None = None,
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
@@ -243,6 +251,16 @@ def create_provider_factory(
                 retry_config=runtime_to_use.llm_retry,
                 fallback_middleware=profile_fallback_middleware,
                 im_tool_service=im_tool_service,
+                xiaoluban_notify_service=(
+                    get_xiaoluban_notify_service()
+                    if get_xiaoluban_notify_service is not None
+                    else None
+                ),
+                gateway_session_lookup=(
+                    get_gateway_session_lookup()
+                    if get_gateway_session_lookup is not None
+                    else None
+                ),
                 hook_service=hook_service,
                 reminder_service=reminder_service,
             ),

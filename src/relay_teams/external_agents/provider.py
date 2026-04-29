@@ -56,6 +56,10 @@ from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.tools.runtime.context import (
+    GatewaySessionLookupLike,
+    XiaolubanNotifyServiceLike,
+)
 from relay_teams.workspace import WorkspaceManager
 
 if TYPE_CHECKING:
@@ -176,6 +180,12 @@ class ExternalAcpSessionManager:
         media_asset_service: MediaAssetService | None = None,
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
+        get_xiaoluban_notify_service: (
+            Callable[[], XiaolubanNotifyServiceLike | None] | None
+        ) = None,
+        get_gateway_session_lookup: (
+            Callable[[], GatewaySessionLookupLike | None] | None
+        ) = None,
         computer_runtime: ComputerRuntime | None = None,
         reminder_service: SystemReminderService | None = None,
     ) -> None:
@@ -215,6 +225,8 @@ class ExternalAcpSessionManager:
         self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
+        self._get_xiaoluban_notify_service = get_xiaoluban_notify_service
+        self._get_gateway_session_lookup = get_gateway_session_lookup
         self._computer_runtime = computer_runtime
         self._reminder_service = reminder_service
         self._conversations: dict[str, _ConversationHandle] = {}
@@ -988,6 +1000,16 @@ class ExternalAcpSessionManager:
             resolve_model_config=self._resolve_model_config,
             metric_recorder=self._metric_recorder,
             im_tool_service=self._im_tool_service,
+            xiaoluban_notify_service=(
+                self._get_xiaoluban_notify_service()
+                if self._get_xiaoluban_notify_service is not None
+                else None
+            ),
+            gateway_session_lookup=(
+                self._get_gateway_session_lookup()
+                if self._get_gateway_session_lookup is not None
+                else None
+            ),
             computer_runtime=self._computer_runtime,
             reminder_service=self._reminder_service,
         )

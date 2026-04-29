@@ -77,6 +77,10 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.context import (
+    GatewaySessionLookupLike,
+    XiaolubanNotifyServiceLike,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
@@ -132,6 +136,8 @@ class OpenAICompatibleProvider(LLMProvider):
         | DisabledLlmFallbackMiddleware
         | None = None,
         im_tool_service: ImToolService | None = None,
+        xiaoluban_notify_service: XiaolubanNotifyServiceLike | None = None,
+        gateway_session_lookup: GatewaySessionLookupLike | None = None,
         computer_runtime: ComputerRuntime | None = None,
         hook_service: HookService | None = None,
         reminder_service: SystemReminderService | None = None,
@@ -189,6 +195,8 @@ class OpenAICompatibleProvider(LLMProvider):
             retry_config=retry_config,
             fallback_middleware=fallback_middleware,
             im_tool_service=im_tool_service,
+            xiaoluban_notify_service=xiaoluban_notify_service,
+            gateway_session_lookup=gateway_session_lookup,
             computer_runtime=computer_runtime,
             hook_service=hook_service,
             reminder_service=reminder_service,

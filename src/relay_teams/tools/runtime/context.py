@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from pydantic_ai import RunContext
@@ -15,6 +15,7 @@ from relay_teams.agents.orchestration.task_contracts import (
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.computer import ComputerRuntime
+from relay_teams.gateway.gateway_models import GatewaySessionRecord
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.metrics import MetricRecorder
 from relay_teams.media import MediaAssetService
@@ -61,6 +62,52 @@ class ImToolServiceLike(Protocol):
         file_path: Path,
         run_id: str | None = None,
     ) -> str: ...
+
+
+@runtime_checkable
+class GatewaySessionLookupLike(Protocol):
+    def get_by_internal_session_id(
+        self,
+        internal_session_id: str,
+    ) -> GatewaySessionRecord | None:
+        raise NotImplementedError  # pragma: no cover
+
+
+class XiaolubanSecretStatusLike(Protocol):
+    token_configured: bool
+
+
+class XiaolubanNotifyAccountLike(Protocol):
+    account_id: str
+    display_name: str
+    status: object
+    derived_uid: str
+    notification_receivers: tuple[str, ...]
+    secret_status: XiaolubanSecretStatusLike
+
+
+@runtime_checkable
+class XiaolubanNotifyServiceLike(Protocol):
+    def list_accounts(self) -> tuple[XiaolubanNotifyAccountLike, ...]:
+        raise NotImplementedError  # pragma: no cover
+
+    def get_account(self, account_id: str) -> XiaolubanNotifyAccountLike:
+        raise NotImplementedError  # pragma: no cover
+
+    def has_usable_credentials(self, account_id: str) -> bool:
+        raise NotImplementedError  # pragma: no cover
+
+    def send_notification_message(
+        self,
+        *,
+        account_id: str,
+        workspace_id: str,
+        session_id: str,
+        status: str,
+        body: str,
+        receiver_uid: str | None = None,
+    ) -> str:
+        raise NotImplementedError  # pragma: no cover
 
 
 class SkillRegistryLike(Protocol):
@@ -123,6 +170,8 @@ class ToolDeps(BaseModel):
     metric_recorder: SkipValidation[MetricRecorder | None] = None
     notification_service: SkipValidation[NotificationService | None] = None
     im_tool_service: SkipValidation[ImToolServiceLike | None] = None
+    xiaoluban_notify_service: XiaolubanNotifyServiceLike | None = None
+    gateway_session_lookup: GatewaySessionLookupLike | None = None
     hook_service: SkipValidation[HookService | None] = None
     reminder_service: SkipValidation[SystemReminderService | None] = None
     model_capabilities: SkipValidation[ModelCapabilities] = Field(

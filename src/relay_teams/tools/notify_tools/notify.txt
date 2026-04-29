@@ -1,0 +1,10 @@
+Use `notify` to proactively send a short text notification through a configured provider.
+
+Parameters:
+- `provider`: currently only `"xiaoluban"`.
+- `message`: required notification text.
+- `target`: optional. Defaults to `"owner"` and sends only to the Xiaoluban token owner. Use `"configured_groups"` for all configured notification groups, `"owner_and_configured_groups"` for both yourself and configured groups, or `"explicit"` when the user provided exact group IDs.
+- `account`: optional Xiaoluban account selector. Use an account ID or a unique display name only when automatic account selection is ambiguous.
+- `recipients`: optional group ID candidates. For Xiaoluban, explicit group IDs are always filtered through that account's configured notification group whitelist.
+
+Prefer the default `target="owner"` when the user asks you to notify them. Do not ask the user to remember group IDs; use `configured_groups` or `owner_and_configured_groups` for configured group delivery. Group delivery requires approval; owner-only delivery does not.

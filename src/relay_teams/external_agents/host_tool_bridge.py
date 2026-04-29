@@ -59,7 +59,11 @@ from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
-from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.context import (
+    GatewaySessionLookupLike,
+    ToolDeps,
+    XiaolubanNotifyServiceLike,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
@@ -188,6 +192,8 @@ class ExternalAcpHostToolBridge:
         media_asset_service: MediaAssetService | None = None,
         metric_recorder: MetricRecorder | None = None,
         im_tool_service: ImToolService | None = None,
+        xiaoluban_notify_service: XiaolubanNotifyServiceLike | None = None,
+        gateway_session_lookup: GatewaySessionLookupLike | None = None,
         computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         reminder_service: SystemReminderService | None = None,
@@ -224,6 +230,8 @@ class ExternalAcpHostToolBridge:
         self._resolve_model_config = resolve_model_config
         self._metric_recorder = metric_recorder
         self._im_tool_service = im_tool_service
+        self._xiaoluban_notify_service = xiaoluban_notify_service
+        self._gateway_session_lookup = gateway_session_lookup
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
         self._reminder_service = reminder_service
@@ -560,6 +568,16 @@ class ExternalAcpHostToolBridge:
             metric_recorder=self._metric_recorder,
             notification_service=self._get_notification_service(),
             im_tool_service=self._im_tool_service,
+            xiaoluban_notify_service=getattr(
+                self,
+                "_xiaoluban_notify_service",
+                None,
+            ),
+            gateway_session_lookup=getattr(
+                self,
+                "_gateway_session_lookup",
+                None,
+            ),
             reminder_service=getattr(self, "_reminder_service", None),
             model_capabilities=self._resolve_request_model_capabilities(
                 request=request

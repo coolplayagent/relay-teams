@@ -80,7 +80,11 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.context import (
+    GatewaySessionLookupLike,
+    ToolDeps,
+    XiaolubanNotifyServiceLike,
+)
 from relay_teams.tools.runtime.persisted_state import PersistedToolCallState
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
@@ -131,6 +135,8 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     _retry_config: LlmRetryConfig
     _fallback_middleware: LlmFallbackMiddleware | DisabledLlmFallbackMiddleware
     _im_tool_service: ImToolService | None
+    _xiaoluban_notify_service: XiaolubanNotifyServiceLike | None
+    _gateway_session_lookup: GatewaySessionLookupLike | None
     _computer_runtime: ComputerRuntime | None
     _shell_approval_repo: ShellApprovalRepository | None
     _hook_service: HookService | None

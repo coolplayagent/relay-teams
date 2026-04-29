@@ -33,6 +33,7 @@ MUTATING_TOOLS = frozenset(
         "edit",
         "im_send",
         "notebook_edit",
+        "notify",
         "shell",
         "spawn_subagent",
         "stop_background_task",
