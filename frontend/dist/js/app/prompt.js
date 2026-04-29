@@ -2,17 +2,19 @@
  * app/prompt.js
  * Prompt send flow: live round bootstrap and SSE stream start.
  */
+import * as roundsTimeline from "../components/rounds/timeline.js";
 import {
-  clearPendingRunStartPlaceholder,
-  createLiveRound,
-  showPendingRunStartPlaceholder,
-} from "../components/rounds/timeline.js";
+  removeRuntimeInjectMessage,
+  upsertRuntimeInjectMessage,
+} from "../components/runtimeInjectQueue.js";
 import { refreshVisibleContextIndicators } from "../components/contextIndicators.js";
 import { clearAllStreamState } from "../components/messageRenderer.js";
 import {
   fetchRoleConfigOptions,
   fetchCommands,
   fetchOrchestrationConfig,
+  injectMessage,
+  forceQueuedInject,
   resolveCommandPrompt,
   searchWorkspacePaths,
   updateSessionTopology,
@@ -44,6 +46,7 @@ import { startIntentStream } from "../core/stream.js";
 import {
   beginForegroundSubmission,
   finishForegroundSubmission,
+  hasActiveForegroundSubmission,
   isForegroundSubmissionActive,
 } from "../core/submission.js";
 import { els } from "../utils/dom.js";
@@ -264,15 +267,17 @@ export async function refreshRoleConfigOptions({ refreshControls = true } = {}) 
   }
 }
 
-export async function handleSend() {
+export async function handleSend(options = {}) {
   const rawText = els.promptInput.value.trim();
   const hasAttachments = promptAttachments.length > 0;
   if (!rawText && !hasAttachments) return;
   if (state.isGenerating) {
-    sysLog(
-      t("composer.warning.run_in_progress"),
-      "log-info",
-    );
+    if (hasActiveForegroundSubmission() && !String(state.activeRunId || "").trim()) {
+      return;
+    }
+    await handleRuntimeInject(rawText, {
+      hasAttachments,
+    });
     return;
   }
   if (!state.currentSessionId && !isNewSessionDraftActive()) {
@@ -401,7 +406,7 @@ export async function handleSend() {
   refreshSessionTopologyControls();
   refreshVisibleContextIndicators({ immediate: true });
   clearAllStreamState({ preserveOverlay: true });
-  showPendingRunStartPlaceholder(
+  roundsTimeline.showPendingRunStartPlaceholder(
     state.currentSessionId,
     promptPreviewText,
     displayInputParts,
@@ -433,13 +438,115 @@ export async function handleSend() {
           state.currentSessionCanSwitchMode = false;
           refreshSessionTopologyControls();
           emitSessionTitlePreview(state.currentSessionId, promptPreviewText);
-          createLiveRound(run.run_id, promptPreviewText, displayInputParts);
+          roundsTimeline.createLiveRound(run.run_id, promptPreviewText, displayInputParts);
         },
       },
     );
   } finally {
-    clearPendingRunStartPlaceholder();
+    roundsTimeline.clearPendingRunStartPlaceholder();
     finishForegroundSubmission(submission);
+  }
+}
+
+async function handleRuntimeInject(rawText, { hasAttachments }) {
+  const runId = String(state.activeRunId || "").trim();
+  if (!runId) {
+    sysLog(t("composer.warning.run_in_progress"), "log-info");
+    return;
+  }
+  if (hasAttachments) {
+    const message = t("inject.queue.error.text_only");
+    setPromptComposerStatus(message, { tone: "danger" });
+    showToast({
+      title: t("composer.toast.send_blocked_title"),
+      message,
+      tone: "warning",
+    });
+    return;
+  }
+  const content = String(rawText || "").trim();
+  if (!content) return;
+  const clientMessageId = buildRuntimeInjectClientMessageId(runId);
+  const localMessage = {
+    message_id: clientMessageId,
+    client_message_id: clientMessageId,
+    run_id: runId,
+    source: "user",
+    mode: "queued",
+    status: "sending",
+    content,
+    content_parts: buildPromptInputParts(content),
+    queued_at: new Date().toISOString(),
+  };
+  upsertRuntimeInjectMessage(runId, localMessage);
+  if (els.sendBtn) els.sendBtn.disabled = true;
+  resetPromptComposer();
+  setPromptComposerStatus(t("inject.queue.status.queued"), { tone: "info" });
+  try {
+    const result = await injectMessage(runId, content, {
+      mode: "queued",
+      clientMessageId,
+    });
+    const queuedMessage = {
+      ...result,
+      message_id: result?.message_id || localMessage.message_id,
+      client_message_id: result?.client_message_id || clientMessageId,
+      mode: result?.delivery_mode || "queued",
+      status: "queued",
+      content,
+    };
+    upsertRuntimeInjectMessage(runId, queuedMessage);
+  } catch (error) {
+    const message = error?.message || t("inject.queue.error.queue_failed");
+    const failedMessage = {
+      ...localMessage,
+      status: "failed",
+    };
+    upsertRuntimeInjectMessage(runId, failedMessage);
+    if (els.promptInput) {
+      els.promptInput.value = content;
+      els.promptInput.style.height = "auto";
+      els.promptInput.focus?.();
+    }
+    setPromptComposerStatus(message, { tone: "danger" });
+    sysLog(message, "log-error");
+  } finally {
+    if (els.sendBtn) els.sendBtn.disabled = false;
+    handlePromptComposerInput();
+  }
+}
+
+function buildRuntimeInjectClientMessageId(runId) {
+  const randomPart = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `inject-client-${runId}-${randomPart}`;
+}
+
+export async function handleRuntimeForceInject(runId = state.activeRunId) {
+  const sourceRunId = String(runId || "").trim();
+  if (!sourceRunId) return;
+  setPromptComposerStatus(t("inject.queue.status.inserting"), { tone: "info" });
+  try {
+    const result = await forceQueuedInject(sourceRunId);
+    const content = String(result?.content || "").trim();
+    if (!content) {
+      throw new Error(t("inject.queue.error.insert_failed"));
+    }
+    removeRuntimeInjectMessage(sourceRunId, result, { render: false });
+    upsertRuntimeInjectMessage(sourceRunId, {
+      ...result,
+      mode: "interrupt",
+      status: "interrupting",
+      content,
+    });
+    clearPromptComposerStatus();
+  } catch (error) {
+    const message = error?.message || t("inject.queue.error.insert_failed");
+    setPromptComposerStatus(message, { tone: "danger" });
+    sysLog(message, "log-error");
+  } finally {
+    handlePromptComposerInput();
   }
 }
 

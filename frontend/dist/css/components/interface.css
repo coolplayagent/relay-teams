@@ -1,4 +1,4 @@
-/* Interface refresh, animations, composer, input controls, light theme overrides */
+﻿/* Interface refresh, animations, composer, input controls, light theme overrides */
 
 /* Interface refresh */
 .new-session-glow::before {
@@ -1076,6 +1076,105 @@ body.light-theme .project-session-toggle-btn {
     margin: 0;
 }
 
+#input-container .runtime-inject-queue {
+    display: grid;
+    gap: 6px;
+    max-height: 112px;
+    margin: 0 0 8px;
+    padding: 0 2px;
+    overflow-y: auto;
+}
+
+#input-container .runtime-inject-queue[hidden] {
+    display: none;
+}
+
+#input-container .runtime-inject-item {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto 28px;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    padding: 5px 8px;
+    border: 1px solid #dfe5e1;
+    border-radius: 8px;
+    background: #f8fbf9;
+    color: #25332d;
+    font-size: 12px;
+    line-height: 1.25;
+}
+
+#input-container .runtime-inject-item.is-interrupt {
+    border-color: #ead7c5;
+    background: #fff9f2;
+    color: #6f4b2d;
+}
+
+#input-container .runtime-inject-item.is-applied {
+    border-color: #cfe1d7;
+    background: #f6faf7;
+    color: #2f6f5b;
+}
+
+#input-container .runtime-inject-item.is-failed {
+    border-color: #efd0ca;
+    background: #fff8f7;
+    color: #a34f46;
+}
+
+#input-container .runtime-inject-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+}
+
+#input-container .runtime-inject-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+#input-container .runtime-inject-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#input-container .runtime-inject-state {
+    color: #6b7280;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+#input-container .runtime-inject-flush {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 1px solid rgba(47, 111, 91, 0.24);
+    border-radius: 7px;
+    background: #ffffff;
+    color: #2f6f5b;
+    cursor: pointer;
+    transition:
+        background-color 0.14s ease,
+        border-color 0.14s ease,
+        color 0.14s ease;
+}
+
+#input-container .runtime-inject-flush:hover {
+    border-color: rgba(47, 111, 91, 0.42);
+    background: #edf6f1;
+    color: #285f4f;
+}
+
+#input-container .runtime-inject-flush svg {
+    width: 15px;
+    height: 15px;
+}
+
 #input-container .input-wrapper {
     min-height: 72px;
     border: 1px solid #cfd6dc;
@@ -1496,6 +1595,33 @@ body:not(.light-theme) #input-container .prompt-input-status {
     color: var(--text-primary);
 }
 
+body:not(.light-theme) #input-container .runtime-inject-item {
+    border-color: color-mix(in srgb, var(--border-color) 86%, #ffffff 14%);
+    background: color-mix(in srgb, var(--bg-surface-muted) 86%, #ffffff 6%);
+    color: var(--text-primary);
+}
+
+body:not(.light-theme) #input-container .runtime-inject-item.is-interrupt {
+    border-color: color-mix(in srgb, #b87945 44%, var(--border-color));
+    background: color-mix(in srgb, #b87945 12%, var(--bg-surface));
+    color: color-mix(in srgb, #f0c095 78%, var(--text-primary));
+}
+
+body:not(.light-theme) #input-container .runtime-inject-item.is-applied {
+    border-color: color-mix(in srgb, var(--primary) 34%, var(--border-color));
+    color: var(--primary-hover);
+}
+
+body:not(.light-theme) #input-container .runtime-inject-item.is-failed {
+    border-color: color-mix(in srgb, var(--danger) 44%, var(--border-color));
+    background: color-mix(in srgb, var(--danger) 12%, var(--bg-surface));
+    color: color-mix(in srgb, var(--danger) 76%, var(--text-primary));
+}
+
+body:not(.light-theme) #input-container .runtime-inject-state {
+    color: var(--text-secondary);
+}
+
 body:not(.light-theme) #input-container .composer-preset-select,
 body:not(.light-theme) #input-container .composer-mode-inline-select {
     background:
@@ -1583,6 +1709,8 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
         height: 18px;
     }
 
+
+
     #input-container #stop-btn,
     #input-container #resume-run-btn {
         right: 62px;
@@ -1637,6 +1765,12 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
         width: 17px;
         height: 17px;
     }
+
+    #input-container .runtime-inject-queue {
+        max-height: 92px;
+    }
+
+
 
     #input-container #stop-btn,
     #input-container #resume-run-btn {
@@ -1729,6 +1863,8 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
         height: 18px;
     }
 
+
+
     #input-container #stop-btn,
     #input-container #resume-run-btn {
         right: 62px;
@@ -1752,5 +1888,11 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
     #input-container .composer-mode-inline {
         display: none;
     }
+}
+
+@media (max-width: 1120px) {
+}
+
+@media (max-width: 640px) {
 }
 

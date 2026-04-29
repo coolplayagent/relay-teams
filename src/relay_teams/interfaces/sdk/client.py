@@ -439,11 +439,28 @@ class AsyncAgentTeamsClient:
             payload,
         )
 
-    async def inject_message(self, run_id: str, content: str) -> dict[str, JsonValue]:
+    async def inject_message(
+        self,
+        run_id: str,
+        content: str,
+        *,
+        mode: str = "queued",
+        client_message_id: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {"content": content, "mode": mode}
+        if client_message_id is not None:
+            payload["client_message_id"] = client_message_id
         return await self._request_json(
             "POST",
             f"/api/runs/{run_id}/inject",
-            {"content": content},
+            payload,
+        )
+
+    async def force_queued_inject(self, run_id: str) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "POST",
+            f"/api/runs/{run_id}/inject:force",
+            {},
         )
 
     async def stop_run(self, run_id: str) -> dict[str, JsonValue]:

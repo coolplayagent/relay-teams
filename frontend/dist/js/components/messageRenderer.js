@@ -24,6 +24,7 @@ export {
     syncLastAnswerCopyButton,
     getOrCreateStreamBlock,
     appendStreamChunk,
+    appendStreamInjectionMarker,
     appendStreamOutputParts,
     finalizeStream,
     clearStreamState,

@@ -112,15 +112,21 @@ def test_streaming_messages_render_a_terminal_cursor_until_finalize() -> None:
         "updateThinkingText(entry.textEl, entry.raw, { streaming: false });"
         not in stream_script
     )
-    assert "appendThinkingText(contentEl, String(part.content || '')," in history_script
+    assert (
+        "appendThinkingText(ensureContentEl(), String(part.content || ''),"
+        in history_script
+    )
     assert "const flushText = (streaming = false) => {" in history_script
     assert (
-        "appendMessageText(contentEl, streaming ? safeText : safeText.trim(), { streaming });"
+        "appendMessageText(ensureContentEl(), streaming ? safeText : safeText.trim(), { streaming });"
         in history_script
     )
     assert "flushText(false);" in history_script
     assert "flushText(hasLiveTextTail && !!trailingTextPart);" in history_script
-    assert "appendMessageText(contentEl, '', { streaming: true });" in history_script
+    assert (
+        "appendMessageText(ensureContentEl(), '', { streaming: true });"
+        in history_script
+    )
 
 
 def test_streaming_cursor_styles_are_declared_in_shared_frontend_css() -> None:

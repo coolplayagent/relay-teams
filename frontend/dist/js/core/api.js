@@ -1,4 +1,4 @@
-/**
+﻿/**
  * core/api.js
  * Backward-compatible facade. New implementation lives under ./api/.
  */
@@ -28,6 +28,7 @@ export {
     listUserQuestions,
     dispatchHumanTask,
     injectMessage,
+    forceQueuedInject,
     injectSubagentMessage,
     resumeRun,
     stopBackgroundTask,

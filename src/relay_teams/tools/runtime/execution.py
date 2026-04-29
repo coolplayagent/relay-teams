@@ -826,7 +826,7 @@ async def _publish_tool_result_event_async(
         JsonValue,
         sanitize_task_status_payload(visible_envelope),
     )
-    is_error = bool(visible_envelope.get("ok") is False)
+    is_error = _visible_tool_result_is_error(visible_envelope)
     return await publish_run_event_async(
         ctx.deps.run_event_hub,
         RunEvent(
@@ -866,6 +866,19 @@ def _mark_tool_result_event_state(
     envelope_meta["tool_result_durably_recorded"] = True
     envelope_meta["tool_result_event_published"] = published
     visible_envelope["meta"] = envelope_meta
+
+
+def _visible_tool_result_is_error(visible_envelope: dict[str, JsonValue]) -> bool:
+    if visible_envelope.get("ok") is False:
+        return True
+    data = visible_envelope.get("data")
+    if not isinstance(data, dict):
+        return False
+    status = data.get("status")
+    if isinstance(status, str) and status.strip().lower() in {"failed", "error"}:
+        return True
+    exit_code = data.get("exit_code")
+    return type(exit_code) is int and exit_code != 0
 
 
 async def _persist_and_publish_tool_result_async(

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from collections.abc import AsyncIterator, Sequence
-from json import dumps
+from json import dumps, loads
 from typing import Protocol, cast
 
 from pydantic_ai._agent_graph import CallToolsNode, ModelRequestNode
@@ -14,7 +14,9 @@ from pydantic_ai.messages import (
     FunctionToolResultEvent,
     ModelMessage,
     ModelRequest,
+    ModelRequestPart,
     ModelResponse,
+    ModelResponsePart,
     PartEndEvent,
     RetryPromptPart,
     TextPart,
@@ -41,9 +43,10 @@ from relay_teams.metrics.adapters import (
     record_session_step_async,
     record_token_usage_async,
 )
+from relay_teams.media import user_prompt_content_to_text
 from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
-from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.injection_classification import (
     INJECTION_CLASSIFIER,
@@ -52,7 +55,7 @@ from relay_teams.sessions.runs.injection_classification import (
     public_injection_payload_json,
 )
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.agents.execution.recovery_flow import FallbackAttemptState
@@ -60,6 +63,10 @@ from relay_teams.workspace import build_conversation_id
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
+
+
+class _InjectionRestartApplied(Exception):
+    pass
 
 
 class AgentRunResult(Protocol):
@@ -528,7 +535,254 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             max_request_input_tokens = 0
             saw_request_level_usage = False
             streamed_tool_calls: dict[int, ToolCallPart | ToolCallPartDelta] = {}
+            observed_stream_messages: list[ModelRequest | ModelResponse] = []
             latest_streamed_text = ""
+
+            async def apply_injections(
+                injections: tuple[InjectionMessage, ...],
+                *,
+                interrupted_current_step: bool,
+                restart_scope: str,
+                supersedes_pending_tool_calls: bool = False,
+                final_answer_ready: bool = False,
+            ) -> bool:
+                nonlocal history
+                nonlocal prepared_prompt
+                nonlocal agent_system_prompt
+                nonlocal coordination_agent
+                nonlocal seen_count
+                nonlocal buffered_messages
+                nonlocal attempt_messages_committed
+
+                boundary_context = InjectionBoundaryContext(
+                    final_answer_ready=final_answer_ready,
+                )
+                applied_injections = [
+                    injection
+                    for injection in injections
+                    if INJECTION_CLASSIFIER.disposition(
+                        injection,
+                        context=boundary_context,
+                    )
+                    == InjectionDisposition.APPLY
+                ]
+                if not applied_injections:
+                    return False
+                applied_injections = _coalesce_user_followup_injections(
+                    applied_injections
+                )
+                history_size_before_injection_commit = len(history)
+                (
+                    history,
+                    buffered_messages,
+                    _tool_events_published,
+                    _tool_validation_failures,
+                ) = await self._commit_all_safe_messages_async(
+                    request=request,
+                    history=history,
+                    pending_messages=buffered_messages,
+                    published_tool_outcome_ids=published_tool_outcome_ids,
+                )
+                if len(history) > history_size_before_injection_commit:
+                    attempt_messages_committed = True
+                for injection, applied_injection_ids in applied_injections:
+                    await publish_run_event_async(
+                        self._run_event_hub,
+                        RunEvent(
+                            session_id=request.session_id,
+                            run_id=request.run_id,
+                            trace_id=request.trace_id,
+                            task_id=request.task_id,
+                            instance_id=request.instance_id,
+                            role_id=request.role_id,
+                            event_type=RunEventType.INJECTION_APPLIED,
+                            payload_json=_injection_payload_json(
+                                injection,
+                                interrupted_current_step=interrupted_current_step,
+                                restart_scope=restart_scope,
+                                supersedes_pending_tool_calls=(
+                                    supersedes_pending_tool_calls
+                                ),
+                                applied_injection_ids=applied_injection_ids,
+                            ),
+                        ),
+                    )
+                    await self._message_repo.append_user_prompt_if_missing_async(
+                        session_id=request.session_id,
+                        workspace_id=resolved_workspace_id,
+                        conversation_id=resolved_conversation_id,
+                        agent_role_id=request.role_id,
+                        instance_id=request.instance_id,
+                        task_id=request.task_id,
+                        trace_id=request.trace_id,
+                        content=injection.content,
+                    )
+                attempt_messages_committed = True
+                (
+                    prepared_prompt,
+                    history,
+                    agent_system_prompt,
+                    rebuilt_agent,
+                ) = await self._build_agent_iteration_context(
+                    request=request,
+                    conversation_id=resolved_conversation_id,
+                    system_prompt=request.system_prompt,
+                    reserve_user_prompt_tokens=False,
+                    allowed_tools=allowed_tools,
+                    allowed_mcp_servers=self._allowed_mcp_servers,
+                    allowed_skills=self._allowed_skills,
+                )
+                coordination_agent = cast(CoordinationAgent, rebuilt_agent)
+                seen_count = 0
+                buffered_messages = []
+                return True
+
+            async def apply_interrupt_injections() -> bool:
+                if not isinstance(self._injection_manager, RunInjectionManager):
+                    return False
+                interrupt_injections = self._injection_manager.drain_interrupt(
+                    request.run_id,
+                    request.instance_id,
+                )
+                if not interrupt_injections:
+                    return False
+                return await apply_injections(
+                    tuple(interrupt_injections),
+                    interrupted_current_step=True,
+                    restart_scope="interrupt",
+                    supersedes_pending_tool_calls=True,
+                )
+
+            async def apply_queued_injections_at_boundary(
+                *,
+                restart_scope: str = "turn_boundary",
+                final_answer_ready: bool = False,
+            ) -> bool:
+                queued_injections = self._injection_manager.drain_at_boundary(
+                    request.run_id,
+                    request.instance_id,
+                )
+                if not queued_injections:
+                    return False
+                return await apply_injections(
+                    tuple(queued_injections),
+                    interrupted_current_step=False,
+                    restart_scope=restart_scope,
+                    final_answer_ready=final_answer_ready,
+                )
+
+            async def process_safe_boundary(
+                boundary_agent_run: AgentRun,
+                *,
+                streamed_node_text: str,
+                final_answer_ready: bool = False,
+            ) -> bool:
+                nonlocal history
+                nonlocal prepared_prompt
+                nonlocal agent_system_prompt
+                nonlocal coordination_agent
+                nonlocal seen_count
+                nonlocal buffered_messages
+                nonlocal boundary_checked_after_latest_batch
+                nonlocal active_retry_number
+                nonlocal attempt_tool_call_event_emitted
+                nonlocal attempt_tool_outcome_event_emitted
+                nonlocal attempt_messages_committed
+                nonlocal observed_stream_messages
+
+                boundary_new_messages = boundary_agent_run.new_messages()
+                new_batch = list(boundary_new_messages)[seen_count:]
+                new_to_process = self._drop_duplicate_leading_request(
+                    history=provider_history,
+                    new_messages=new_batch,
+                )
+                new_to_process = self._apply_streamed_text_fallback(
+                    new_to_process,
+                    streamed_text=streamed_node_text,
+                )
+                boundary_missing_observed = _missing_stream_observed_messages(
+                    [*history, *buffered_messages, *new_to_process],
+                    observed_stream_messages,
+                )
+                if boundary_missing_observed:
+                    new_to_process.extend(boundary_missing_observed)
+                    observed_stream_messages = []
+                boundary_has_activity = bool(buffered_messages or new_to_process)
+                if new_to_process:
+                    if active_retry_number > 0:
+                        active_retry_number = 0
+                    boundary_tool_call_events_emitted = (
+                        await self._publish_tool_call_events_from_messages_async(
+                            request=request,
+                            messages=new_to_process,
+                            published_tool_call_ids=published_tool_call_ids,
+                        )
+                    )
+                    if boundary_tool_call_events_emitted:
+                        attempt_tool_call_event_emitted = True
+                    self._normalize_tool_call_args_for_replay(new_to_process)
+                    buffered_messages.extend(new_to_process)
+                    history_size_before_ready_commit = len(history)
+                    (
+                        history,
+                        buffered_messages,
+                        boundary_committed_tool_events_published,
+                        boundary_committed_tool_validation_failures,
+                    ) = await self._commit_ready_messages_async(
+                        request=request,
+                        history=history,
+                        pending_messages=buffered_messages,
+                        published_tool_outcome_ids=published_tool_outcome_ids,
+                    )
+                    if boundary_committed_tool_events_published:
+                        attempt_tool_outcome_event_emitted = True
+                    if len(history) > history_size_before_ready_commit:
+                        attempt_messages_committed = True
+                    if boundary_committed_tool_validation_failures:
+                        log_event(
+                            LOGGER,
+                            logging.INFO,
+                            event="llm.tool_input_validation.continue_after_failure",
+                            message=(
+                                "Restarting agent iteration after tool input validation failure"
+                            ),
+                            payload={
+                                "role_id": request.role_id,
+                                "instance_id": request.instance_id,
+                            },
+                        )
+                        (
+                            prepared_prompt,
+                            history,
+                            agent_system_prompt,
+                            rebuilt_agent_after_validation,
+                        ) = await self._build_agent_iteration_context(
+                            request=request,
+                            conversation_id=resolved_conversation_id,
+                            system_prompt=request.system_prompt,
+                            reserve_user_prompt_tokens=False,
+                            allowed_tools=allowed_tools,
+                            allowed_mcp_servers=self._allowed_mcp_servers,
+                            allowed_skills=self._allowed_skills,
+                        )
+                        coordination_agent = cast(
+                            CoordinationAgent,
+                            rebuilt_agent_after_validation,
+                        )
+                        seen_count = 0
+                        buffered_messages = []
+                        return True
+                seen_count += len(new_batch)
+
+                if self._has_pending_tool_calls(buffered_messages):
+                    return False
+                if not boundary_has_activity and not final_answer_ready:
+                    return False
+                boundary_checked_after_latest_batch = True
+                return await apply_queued_injections_at_boundary(
+                    final_answer_ready=final_answer_ready
+                    or _messages_include_final_answer(new_to_process),
+                )
         except BaseException:
             await self._close_run_scoped_llm_http_client(request=request)
             raise
@@ -537,6 +791,10 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             try:
                 while True:
                     control_ctx.raise_if_cancelled()
+                    if await apply_interrupt_injections():
+                        continue
+                    if await apply_queued_injections_at_boundary():
+                        continue
                     restarted = False
                     provider_history = self._provider_history_for_model_turn(
                         request=request,
@@ -548,282 +806,202 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                         message_history=provider_history,
                         usage_limits=UsageLimits(request_limit=LLM_REQUEST_LIMIT),
                     ) as agent_run:
+                        boundary_checked_after_latest_batch = False
+                        observed_stream_messages = []
                         async for node in agent_run:
-                            control_ctx.raise_if_cancelled()
-                            if isinstance(node, ModelRequestNode):
-                                streamable_node = cast(StreamableModelRequestNode, node)
-                                streamed_tool_calls = cast(
-                                    dict[int, ToolCallPart | ToolCallPartDelta],
-                                    {},
-                                )
-                                active_tool_call_batch_id = (
-                                    f"toolbatch_{uuid4().hex[:16]}"
-                                )
-                                streamed_text_start = len(emitted_text_chunks)
-                                usage_before = deepcopy(agent_run.usage())
-                                async with streamable_node.stream(
-                                    agent_run.ctx
-                                ) as stream:
-                                    stream_iter = getattr(stream, "__aiter__", None)
-                                    if callable(stream_iter):
-                                        text_lengths: dict[int, int] = {}
-                                        thinking_lengths: dict[int, int] = {}
-                                        started_thinking_parts: set[int] = set()
-                                        async for stream_event in stream:
-                                            control_ctx.raise_if_cancelled()
-                                            text_emitted = await self._handle_model_stream_event_async(
-                                                request=request,
-                                                stream_event=stream_event,
-                                                emitted_text_chunks=emitted_text_chunks,
-                                                text_lengths=text_lengths,
-                                                thinking_lengths=thinking_lengths,
-                                                started_thinking_parts=started_thinking_parts,
-                                                streamed_tool_calls=streamed_tool_calls,
-                                            )
-                                            if isinstance(
-                                                stream_event, PartEndEvent
-                                            ) and isinstance(
-                                                stream_event.part, ToolCallPart
-                                            ):
-                                                tool_call_event_emitted = await self._event_publishing_service().publish_observed_tool_call_event_async(
+                            try:
+                                control_ctx.raise_if_cancelled()
+                                if await apply_interrupt_injections():
+                                    raise _InjectionRestartApplied
+                                if await process_safe_boundary(
+                                    agent_run,
+                                    streamed_node_text="",
+                                ):
+                                    raise _InjectionRestartApplied
+                                if isinstance(node, ModelRequestNode):
+                                    streamable_node = cast(
+                                        StreamableModelRequestNode,
+                                        cast(object, node),
+                                    )
+                                    streamed_tool_calls = {}
+                                    active_tool_call_batch_id = (
+                                        f"toolbatch_{uuid4().hex[:16]}"
+                                    )
+                                    streamed_text_start = len(emitted_text_chunks)
+                                    usage_before = deepcopy(agent_run.usage())
+                                    async with streamable_node.stream(
+                                        agent_run.ctx
+                                    ) as stream:
+                                        stream_iter = getattr(stream, "__aiter__", None)
+                                        if callable(stream_iter):
+                                            text_lengths: dict[int, int] = {}
+                                            thinking_lengths: dict[int, int] = {}
+                                            started_thinking_parts: set[int] = set()
+                                            async for stream_event in stream:
+                                                control_ctx.raise_if_cancelled()
+                                                if await apply_interrupt_injections():
+                                                    raise _InjectionRestartApplied
+                                                text_emitted = await self._handle_model_stream_event_async(
                                                     request=request,
-                                                    part=stream_event.part,
-                                                    batch_id=active_tool_call_batch_id,
-                                                    batch_index=stream_event.index,
-                                                    batch_size=0,
-                                                    published_tool_call_ids=published_tool_call_ids,
+                                                    stream_event=stream_event,
+                                                    emitted_text_chunks=emitted_text_chunks,
+                                                    text_lengths=text_lengths,
+                                                    thinking_lengths=thinking_lengths,
+                                                    started_thinking_parts=started_thinking_parts,
+                                                    streamed_tool_calls=streamed_tool_calls,
                                                 )
-                                                if tool_call_event_emitted:
-                                                    attempt_tool_call_event_emitted = (
-                                                        True
+                                                if isinstance(
+                                                    stream_event, PartEndEvent
+                                                ) and isinstance(
+                                                    stream_event.part, ToolCallPart
+                                                ):
+                                                    observed_stream_messages.append(
+                                                        ModelResponse(
+                                                            parts=[stream_event.part]
+                                                        )
                                                     )
-                                            if text_emitted:
-                                                printed_any = True
-                                                attempt_text_emitted = True
-                                                if active_retry_number > 0:
-                                                    active_retry_number = 0
-                                    else:
-                                        async for text_delta in stream.stream_text(
-                                            delta=True
-                                        ):
-                                            control_ctx.raise_if_cancelled()
-                                            if text_delta:
-                                                log_model_stream_chunk(
-                                                    request.role_id,
-                                                    text_delta,
-                                                )
-                                                printed_any = True
-                                                attempt_text_emitted = True
-                                                if active_retry_number > 0:
-                                                    active_retry_number = 0
-                                                emitted_text_chunks.append(text_delta)
-                                                await self._publish_text_delta_event_async(
-                                                    request=request,
-                                                    text=text_delta,
-                                                )
-                                usage_after = stream.usage()
-                                input_tokens_delta = self._usage_delta_int(
-                                    after=usage_after,
-                                    before=usage_before,
-                                    field_name="input_tokens",
-                                )
-                                request_level_input_tokens += input_tokens_delta
-                                if input_tokens_delta > 0:
-                                    latest_request_input_tokens = input_tokens_delta
-                                    max_request_input_tokens = max(
-                                        max_request_input_tokens,
-                                        input_tokens_delta,
-                                    )
-                                request_level_cached_input_tokens += (
-                                    self._usage_delta_int(
+                                                    tool_call_event_emitted = await self._event_publishing_service().publish_observed_tool_call_event_async(
+                                                        request=request,
+                                                        part=stream_event.part,
+                                                        batch_id=active_tool_call_batch_id,
+                                                        batch_index=stream_event.index,
+                                                        batch_size=0,
+                                                        published_tool_call_ids=published_tool_call_ids,
+                                                    )
+                                                    if tool_call_event_emitted:
+                                                        attempt_tool_call_event_emitted = True
+                                                if text_emitted:
+                                                    printed_any = True
+                                                    attempt_text_emitted = True
+                                                    if active_retry_number > 0:
+                                                        active_retry_number = 0
+                                        else:
+                                            async for text_delta in stream.stream_text(
+                                                delta=True
+                                            ):
+                                                control_ctx.raise_if_cancelled()
+                                                if await apply_interrupt_injections():
+                                                    raise _InjectionRestartApplied
+                                                if text_delta:
+                                                    log_model_stream_chunk(
+                                                        request.role_id,
+                                                        text_delta,
+                                                    )
+                                                    printed_any = True
+                                                    attempt_text_emitted = True
+                                                    if active_retry_number > 0:
+                                                        active_retry_number = 0
+                                                    emitted_text_chunks.append(
+                                                        text_delta
+                                                    )
+                                                    await self._publish_text_delta_event_async(
+                                                        request=request,
+                                                        text=text_delta,
+                                                    )
+                                    if await apply_interrupt_injections():
+                                        raise _InjectionRestartApplied
+                                    usage_after = stream.usage()
+                                    input_tokens_delta = self._usage_delta_int(
                                         after=usage_after,
                                         before=usage_before,
-                                        field_name="cache_read_tokens",
+                                        field_name="input_tokens",
                                     )
-                                )
-                                request_level_output_tokens += self._usage_delta_int(
-                                    after=usage_after,
-                                    before=usage_before,
-                                    field_name="output_tokens",
-                                )
-                                request_level_reasoning_output_tokens += (
-                                    self._usage_detail_delta_int(
-                                        after=usage_after,
-                                        before=usage_before,
-                                        detail_name="reasoning_tokens",
-                                    )
-                                )
-                                request_level_requests += self._usage_delta_int(
-                                    after=usage_after,
-                                    before=usage_before,
-                                    field_name="requests",
-                                )
-                                saw_request_level_usage = True
-                                streamed_node_text = "".join(
-                                    emitted_text_chunks[streamed_text_start:]
-                                )
-                                latest_streamed_text = streamed_node_text
-                            elif isinstance(node, CallToolsNode):
-                                tool_node = cast(
-                                    StreamableToolCallNode, cast(object, node)
-                                )
-                                async with tool_node.stream(
-                                    agent_run.ctx
-                                ) as tool_stream:
-                                    async for tool_stream_event in tool_stream:
-                                        control_ctx.raise_if_cancelled()
-                                        tool_outcome_emitted = await self._publish_tool_outcome_event_from_stream_async(
-                                            request=request,
-                                            stream_event=tool_stream_event,
-                                            published_tool_outcome_ids=published_tool_outcome_ids,
+                                    request_level_input_tokens += input_tokens_delta
+                                    if input_tokens_delta > 0:
+                                        latest_request_input_tokens = input_tokens_delta
+                                        max_request_input_tokens = max(
+                                            max_request_input_tokens,
+                                            input_tokens_delta,
                                         )
-                                        if tool_outcome_emitted:
-                                            attempt_tool_outcome_event_emitted = True
-                                streamed_node_text = ""
-                            else:
-                                streamed_node_text = ""
-
-                            all_new = agent_run.new_messages()
-                            new_batch = list(all_new)[seen_count:]
-                            new_to_process = self._drop_duplicate_leading_request(
-                                history=provider_history,
-                                new_messages=new_batch,
-                            )
-                            new_to_process = self._apply_streamed_text_fallback(
-                                new_to_process,
-                                streamed_text=streamed_node_text,
-                            )
-                            if new_to_process:
-                                if active_retry_number > 0:
-                                    active_retry_number = 0
-                                tool_call_events_emitted = await self._publish_tool_call_events_from_messages_async(
-                                    request=request,
-                                    messages=new_to_process,
-                                    published_tool_call_ids=published_tool_call_ids,
-                                )
-                                if tool_call_events_emitted:
-                                    attempt_tool_call_event_emitted = True
-                                self._normalize_tool_call_args_for_replay(
-                                    new_to_process
-                                )
-                                buffered_messages.extend(new_to_process)
-                                previous_history_size = len(history)
-                                (
-                                    history,
-                                    buffered_messages,
-                                    committed_tool_events_published,
-                                    committed_tool_validation_failures,
-                                ) = await self._commit_ready_messages_async(
-                                    request=request,
-                                    history=history,
-                                    pending_messages=buffered_messages,
-                                    published_tool_outcome_ids=published_tool_outcome_ids,
-                                )
-                                if committed_tool_events_published:
-                                    attempt_tool_outcome_event_emitted = True
-                                if len(history) > previous_history_size:
-                                    attempt_messages_committed = True
-                                if committed_tool_validation_failures:
-                                    log_event(
-                                        LOGGER,
-                                        logging.INFO,
-                                        event="llm.tool_input_validation.continue_after_failure",
-                                        message=(
-                                            "Restarting agent iteration after tool input validation failure"
-                                        ),
-                                        payload={
-                                            "role_id": request.role_id,
-                                            "instance_id": request.instance_id,
-                                        },
+                                    request_level_cached_input_tokens += (
+                                        self._usage_delta_int(
+                                            after=usage_after,
+                                            before=usage_before,
+                                            field_name="cache_read_tokens",
+                                        )
                                     )
-                                    (
-                                        prepared_prompt,
-                                        history,
-                                        agent_system_prompt,
-                                        agent,
-                                    ) = await self._build_agent_iteration_context(
-                                        request=request,
-                                        conversation_id=resolved_conversation_id,
-                                        system_prompt=request.system_prompt,
-                                        reserve_user_prompt_tokens=False,
-                                        allowed_tools=allowed_tools,
-                                        allowed_mcp_servers=self._allowed_mcp_servers,
-                                        allowed_skills=self._allowed_skills,
+                                    request_level_output_tokens += (
+                                        self._usage_delta_int(
+                                            after=usage_after,
+                                            before=usage_before,
+                                            field_name="output_tokens",
+                                        )
                                     )
-                                    coordination_agent = cast(CoordinationAgent, agent)
-                                    seen_count = 0
-                                    buffered_messages = []
-                                    restarted = True
-                                    break
-                            seen_count += len(new_batch)
-
-                            if self._has_pending_tool_calls(buffered_messages):
-                                continue
-                            injections = self._injection_manager.drain_at_boundary(
-                                request.run_id, request.instance_id
-                            )
-                            if injections:
-                                boundary_context = InjectionBoundaryContext(
-                                    final_answer_ready=_messages_include_final_answer(
-                                        new_to_process
-                                    ),
-                                )
-                                applied_injections = [
-                                    msg
-                                    for msg in injections
-                                    if INJECTION_CLASSIFIER.disposition(
-                                        msg, context=boundary_context
+                                    request_level_reasoning_output_tokens += (
+                                        self._usage_detail_delta_int(
+                                            after=usage_after,
+                                            before=usage_before,
+                                            detail_name="reasoning_tokens",
+                                        )
                                     )
-                                    == InjectionDisposition.APPLY
-                                ]
-                                if not applied_injections:
-                                    continue
-                                for msg in applied_injections:
-                                    await publish_run_event_async(
-                                        self._run_event_hub,
-                                        RunEvent(
-                                            session_id=request.session_id,
-                                            run_id=request.run_id,
-                                            trace_id=request.trace_id,
-                                            task_id=request.task_id,
-                                            instance_id=request.instance_id,
-                                            role_id=request.role_id,
-                                            event_type=RunEventType.INJECTION_APPLIED,
-                                            payload_json=public_injection_payload_json(
-                                                msg
-                                            ),
-                                        ),
+                                    request_level_requests += self._usage_delta_int(
+                                        after=usage_after,
+                                        before=usage_before,
+                                        field_name="requests",
                                     )
-                                    await self._message_repo.append_user_prompt_if_missing_async(
-                                        session_id=request.session_id,
-                                        workspace_id=resolved_workspace_id,
-                                        conversation_id=resolved_conversation_id,
-                                        agent_role_id=request.role_id,
-                                        instance_id=request.instance_id,
-                                        task_id=request.task_id,
-                                        trace_id=request.trace_id,
-                                        content=msg.content,
+                                    saw_request_level_usage = True
+                                    current_streamed_node_text = "".join(
+                                        emitted_text_chunks[streamed_text_start:]
                                     )
-                                attempt_messages_committed = True
-                                (
-                                    prepared_prompt,
-                                    history,
-                                    agent_system_prompt,
-                                    agent,
-                                ) = await self._build_agent_iteration_context(
-                                    request=request,
-                                    conversation_id=resolved_conversation_id,
-                                    system_prompt=request.system_prompt,
-                                    reserve_user_prompt_tokens=False,
-                                    allowed_tools=allowed_tools,
-                                    allowed_mcp_servers=self._allowed_mcp_servers,
-                                    allowed_skills=self._allowed_skills,
-                                )
-                                coordination_agent = cast(CoordinationAgent, agent)
-                                seen_count = 0
-                                buffered_messages = []
+                                    latest_streamed_text = current_streamed_node_text
+                                elif isinstance(node, CallToolsNode):
+                                    tool_node = cast(
+                                        StreamableToolCallNode, cast(object, node)
+                                    )
+                                    async with tool_node.stream(
+                                        agent_run.ctx
+                                    ) as tool_stream:
+                                        async for tool_stream_event in tool_stream:
+                                            control_ctx.raise_if_cancelled()
+                                            if await apply_interrupt_injections():
+                                                raise _InjectionRestartApplied
+                                            observed_result = (
+                                                _observed_tool_result_message(
+                                                    tool_stream_event
+                                                )
+                                            )
+                                            if observed_result is not None:
+                                                observed_result_ids = _tool_result_ids(
+                                                    [observed_result]
+                                                )
+                                                if not observed_result_ids.intersection(
+                                                    published_tool_outcome_ids
+                                                ):
+                                                    observed_stream_messages.append(
+                                                        observed_result
+                                                    )
+                                            tool_outcome_emitted = await self._publish_tool_outcome_event_from_stream_async(
+                                                request=request,
+                                                stream_event=tool_stream_event,
+                                                published_tool_outcome_ids=published_tool_outcome_ids,
+                                            )
+                                            if tool_outcome_emitted:
+                                                attempt_tool_outcome_event_emitted = (
+                                                    True
+                                                )
+                                    if await apply_interrupt_injections():
+                                        raise _InjectionRestartApplied
+                                    current_streamed_node_text = ""
+                                else:
+                                    current_streamed_node_text = ""
+                            except _InjectionRestartApplied:
                                 restarted = True
                                 break
+
+                            if await process_safe_boundary(
+                                agent_run,
+                                streamed_node_text=current_streamed_node_text,
+                            ):
+                                restarted = True
+                                break
+
+                    if not restarted and await apply_interrupt_injections():
+                        restarted = True
+
+                    if not restarted and not boundary_checked_after_latest_batch:
+                        restarted = await apply_queued_injections_at_boundary(
+                            final_answer_ready=True,
+                        )
 
                     if not restarted:
                         maybe_result = agent_run.result
@@ -841,6 +1019,12 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             to_save,
                             streamed_text=latest_streamed_text,
                         )
+                        missing_observed = _missing_stream_observed_messages(
+                            [*history, *buffered_messages, *to_save],
+                            observed_stream_messages,
+                        )
+                        if missing_observed:
+                            to_save.extend(missing_observed)
                         if to_save:
                             tool_call_events_emitted = await self._publish_tool_call_events_from_messages_async(
                                 request=request,
@@ -851,7 +1035,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                 attempt_tool_call_event_emitted = True
                             self._normalize_tool_call_args_for_replay(to_save)
                             buffered_messages.extend(to_save)
-                        previous_history_size = len(history)
+                        history_size_before_final_commit = len(history)
                         (
                             history,
                             buffered_messages,
@@ -865,7 +1049,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                         )
                         if committed_tool_events_published:
                             attempt_tool_outcome_event_emitted = True
-                        if len(history) > previous_history_size:
+                        if len(history) > history_size_before_final_commit:
                             attempt_messages_committed = True
                         usage = maybe_result.usage()
                         input_tokens = request_level_input_tokens
@@ -1111,6 +1295,146 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             return text
         finally:
             await self._close_run_scoped_llm_http_client(request=request)
+
+
+def _observed_tool_result_message(
+    stream_event: object,
+) -> ModelRequest | None:
+    if not isinstance(stream_event, FunctionToolResultEvent):
+        return None
+    result = stream_event.result
+    if isinstance(result, RetryPromptPart):
+        if not result.tool_name:
+            return None
+        return ModelRequest(parts=[result])
+    if isinstance(result, ToolReturnPart):
+        return ModelRequest(parts=[result])
+    return None
+
+
+def _missing_stream_observed_messages(
+    existing_messages: Sequence[ModelRequest | ModelResponse],
+    observed_messages: Sequence[ModelRequest | ModelResponse],
+) -> list[ModelRequest | ModelResponse]:
+    tool_call_ids = _tool_call_ids(existing_messages)
+    tool_result_ids = _tool_result_ids(existing_messages)
+    missing: list[ModelRequest | ModelResponse] = []
+    for message in observed_messages:
+        if isinstance(message, ModelResponse):
+            missing_parts: list[ModelResponsePart] = []
+            for part in message.parts:
+                if not isinstance(part, ToolCallPart):
+                    continue
+                tool_call_id = str(part.tool_call_id or "").strip()
+                if not tool_call_id or tool_call_id in tool_call_ids:
+                    continue
+                missing_parts.append(part)
+                tool_call_ids.add(tool_call_id)
+            if missing_parts:
+                missing.append(ModelResponse(parts=missing_parts))
+            continue
+        missing_request_parts: list[ModelRequestPart] = []
+        for part in message.parts:
+            if not isinstance(part, (ToolReturnPart, RetryPromptPart)):
+                continue
+            tool_call_id = str(part.tool_call_id or "").strip()
+            if not tool_call_id or tool_call_id in tool_result_ids:
+                continue
+            missing_request_parts.append(part)
+            tool_result_ids.add(tool_call_id)
+        if missing_request_parts:
+            missing.append(ModelRequest(parts=missing_request_parts))
+    return missing
+
+
+def _tool_call_ids(
+    messages: Sequence[ModelRequest | ModelResponse],
+) -> set[str]:
+    ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolCallPart):
+                continue
+            tool_call_id = str(part.tool_call_id or "").strip()
+            if tool_call_id:
+                ids.add(tool_call_id)
+    return ids
+
+
+def _tool_result_ids(
+    messages: Sequence[ModelRequest | ModelResponse],
+) -> set[str]:
+    ids: set[str] = set()
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, (ToolReturnPart, RetryPromptPart)):
+                continue
+            tool_call_id = str(part.tool_call_id or "").strip()
+            if tool_call_id:
+                ids.add(tool_call_id)
+    return ids
+
+
+def _injection_payload_json(
+    message: InjectionMessage,
+    *,
+    interrupted_current_step: bool,
+    restart_scope: str,
+    supersedes_pending_tool_calls: bool,
+    applied_injection_ids: Sequence[str],
+) -> str:
+    payload = loads(public_injection_payload_json(message))
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["applied_injection_ids"] = list(applied_injection_ids)
+    payload["interrupted_current_step"] = interrupted_current_step
+    payload["restart_scope"] = restart_scope
+    payload["supersedes_pending_tool_calls"] = supersedes_pending_tool_calls
+    return dumps(payload)
+
+
+def _coalesce_user_followup_injections(
+    messages: list[InjectionMessage],
+) -> list[tuple[InjectionMessage, tuple[str, ...]]]:
+    user_messages = [
+        message
+        for message in messages
+        if message.source == InjectionSource.USER and message.visibility == "public"
+    ]
+    if len(user_messages) <= 1:
+        return [(message, _applied_injection_ids(message)) for message in messages]
+    user_ids = {id(message) for message in user_messages}
+    first_user = user_messages[0]
+    merged_injection_ids = tuple(
+        injection_id
+        for message in user_messages
+        for injection_id in _applied_injection_ids(message)
+    )
+    merged_content = "\n\n".join(
+        text
+        for message in user_messages
+        if (text := user_prompt_content_to_text(message.content).strip())
+    ).strip()
+    merged_user = first_user.model_copy(update={"content": merged_content})
+    result: list[tuple[InjectionMessage, tuple[str, ...]]] = []
+    inserted_user = False
+    for message in messages:
+        if id(message) not in user_ids:
+            result.append((message, _applied_injection_ids(message)))
+            continue
+        if not inserted_user:
+            result.append((merged_user, merged_injection_ids))
+            inserted_user = True
+    return result
+
+
+def _applied_injection_ids(message: InjectionMessage) -> tuple[str, ...]:
+    ordered_ids = [*message.superseded_injection_ids, message.injection_id]
+    return tuple(dict.fromkeys(ordered_ids))
 
 
 def _messages_include_final_answer(

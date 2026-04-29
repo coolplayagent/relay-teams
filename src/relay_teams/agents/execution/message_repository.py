@@ -14,8 +14,12 @@ from pathlib import Path
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
+    ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
 )
 
 from relay_teams.persistence.db import run_sqlite_write_with_retry
@@ -1052,8 +1056,12 @@ class MessageRepository(SharedSqliteRepository):
             include_cleared=False,
             include_hidden_from_context=False,
         )
+        allowed_ids = _safe_row_ids(rows)
         result: list[ModelMessage] = []
         for row in rows:
+            row_id = row["id"]
+            if not isinstance(row_id, int) or row_id not in allowed_ids:
+                continue
             msgs = _validate_message_row(row)
             result.extend(msgs)
         return _truncate_model_history_to_safe_boundary(result)
@@ -1220,6 +1228,7 @@ class MessageRepository(SharedSqliteRepository):
         filtered_rows = list(rows)
         if not include_cleared:
             filtered_rows = self._filter_rows_for_active_segments(filtered_rows)
+        filtered_rows = _drop_duplicate_tool_outcome_rows(filtered_rows)
         if include_hidden_from_context:
             return filtered_rows
         return self._filter_rows_for_visible_context(filtered_rows)
@@ -1411,6 +1420,30 @@ def _truncate_message_rows_to_safe_boundary(
     ]
 
 
+def _drop_duplicate_tool_outcome_rows(
+    rows: Sequence[sqlite3.Row],
+) -> list[sqlite3.Row]:
+    if not rows:
+        return []
+    history_rows: list[tuple[int, Sequence[ModelMessage]]] = []
+    for row in rows:
+        row_id = row["id"]
+        if not isinstance(row_id, int):
+            continue
+        messages = _validate_message_row(row)
+        if not messages:
+            continue
+        history_rows.append((row_id, messages))
+    duplicate_ids = _duplicate_tool_outcome_row_ids(history_rows)
+    if not duplicate_ids:
+        return list(rows)
+    return [
+        row
+        for row in rows
+        if not isinstance(row["id"], int) or int(row["id"]) not in duplicate_ids
+    ]
+
+
 def _truncate_model_history_to_safe_boundary(
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
@@ -1515,7 +1548,164 @@ def _safe_row_ids(rows: Sequence[sqlite3.Row]) -> set[int]:
         if not messages:
             continue
         history_rows.append((row_id, messages))
-    return collect_safe_row_ids(history_rows)
+    return collect_safe_row_ids(history_rows) - _duplicate_tool_outcome_row_ids(
+        history_rows
+    )
+
+
+ToolCallKey = tuple[str, str]
+ToolCallSignature = tuple[str, str, str]
+
+
+def _duplicate_tool_outcome_row_ids(
+    rows: Sequence[tuple[int, Sequence[ModelMessage]]],
+) -> set[int]:
+    pending_tool_calls: set[ToolCallKey] = set()
+    pending_tool_call_signatures: dict[ToolCallKey, ToolCallSignature] = {}
+    recent_completed_tool_calls: set[ToolCallSignature] = set()
+    pending_duplicate_tool_calls: set[ToolCallKey] = set()
+    duplicate_row_ids: set[int] = set()
+    for row_id, messages in rows:
+        call_signatures = _message_tool_call_signatures(messages)
+        call_keys = _message_tool_call_keys(messages)
+        outcome_keys = _message_tool_outcome_keys(messages)
+        if (
+            call_signatures
+            and _messages_contain_only_tool_calls(messages)
+            and all(
+                signature in recent_completed_tool_calls
+                and _tool_call_signature_key(signature) not in pending_tool_calls
+                for signature in call_signatures
+            )
+        ):
+            duplicate_row_ids.add(row_id)
+            pending_duplicate_tool_calls.update(call_keys)
+            continue
+        if (
+            outcome_keys
+            and _messages_contain_only_tool_outcomes(messages)
+            and all(key in pending_duplicate_tool_calls for key in outcome_keys)
+        ):
+            duplicate_row_ids.add(row_id)
+            pending_duplicate_tool_calls.difference_update(outcome_keys)
+            continue
+
+        if call_signatures:
+            recent_completed_tool_calls.clear()
+        for signature in call_signatures:
+            key = _tool_call_signature_key(signature)
+            pending_tool_calls.add(key)
+            pending_tool_call_signatures[key] = signature
+        for key in outcome_keys:
+            if key in pending_tool_calls:
+                pending_tool_calls.remove(key)
+                signature = pending_tool_call_signatures.pop(key, None)
+                if signature is not None:
+                    recent_completed_tool_calls.add(signature)
+        if _messages_contain_user_prompt(messages):
+            recent_completed_tool_calls.clear()
+
+    return duplicate_row_ids
+
+
+def _messages_contain_only_tool_calls(
+    messages: Sequence[ModelMessage],
+) -> bool:
+    if not messages:
+        return False
+    for message in messages:
+        if not isinstance(message, ModelResponse) or not message.parts:
+            return False
+        if not all(isinstance(part, ToolCallPart) for part in message.parts):
+            return False
+    return True
+
+
+def _messages_contain_only_tool_outcomes(
+    messages: Sequence[ModelMessage],
+) -> bool:
+    if not messages:
+        return False
+    for message in messages:
+        if not isinstance(message, ModelRequest) or not message.parts:
+            return False
+        if not all(
+            isinstance(part, (ToolReturnPart, RetryPromptPart))
+            for part in message.parts
+        ):
+            return False
+    return True
+
+
+def _message_tool_call_keys(
+    messages: Sequence[ModelMessage],
+) -> list[ToolCallKey]:
+    return [
+        _tool_call_signature_key(signature)
+        for signature in _message_tool_call_signatures(messages)
+    ]
+
+
+def _message_tool_call_signatures(
+    messages: Sequence[ModelMessage],
+) -> list[ToolCallSignature]:
+    signatures: list[ToolCallSignature] = []
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolCallPart):
+                continue
+            key = _tool_call_key(part.tool_name, part.tool_call_id)
+            if key is not None:
+                signatures.append((*key, _tool_call_args_key(part.args)))
+    return signatures
+
+
+def _message_tool_outcome_keys(
+    messages: Sequence[ModelMessage],
+) -> list[ToolCallKey]:
+    keys: list[ToolCallKey] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, (ToolReturnPart, RetryPromptPart)):
+                continue
+            key = _tool_call_key(part.tool_name, part.tool_call_id)
+            if key is not None:
+                keys.append(key)
+    return keys
+
+
+def _tool_call_key(tool_name: object, tool_call_id: object) -> ToolCallKey | None:
+    normalized_tool_name = str(tool_name or "").strip()
+    normalized_tool_call_id = str(tool_call_id or "").strip()
+    if not normalized_tool_call_id:
+        return None
+    return normalized_tool_name, normalized_tool_call_id
+
+
+def _tool_call_signature_key(signature: ToolCallSignature) -> ToolCallKey:
+    return signature[0], signature[1]
+
+
+def _tool_call_args_key(args: object) -> str:
+    try:
+        return json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(args)
+
+
+def _messages_contain_user_prompt(
+    messages: Sequence[ModelMessage],
+) -> bool:
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        if any(isinstance(part, UserPromptPart) for part in message.parts):
+            return True
+    return False
 
 
 def _validate_message_row(row: sqlite3.Row) -> list[ModelMessage]:

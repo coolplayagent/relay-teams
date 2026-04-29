@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict
 
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import AgentRuntimeRecord
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -329,6 +333,8 @@ class RunControlManager:
         run_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
     ) -> InjectionMessage:
         agent_repo = self._require_agent_repo()
         created: InjectionMessage | None = None
@@ -341,10 +347,33 @@ class RunControlManager:
                 recipient_instance_id=record.instance_id,
                 source=source,
                 content=content,
+                delivery_mode=delivery_mode,
+                client_message_id=client_message_id,
             )
             self._publish_injection_event(run_id=run_id, record=record, created=created)
         if created is None:
             raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        return created
+
+    def inject_to_coordinator(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
+    ) -> InjectionMessage:
+        record = self._coordinator_injection_recipient(run_id)
+        created = self._require_injection_manager().enqueue(
+            run_id=run_id,
+            recipient_instance_id=record.instance_id,
+            source=source,
+            content=content,
+            delivery_mode=delivery_mode,
+            client_message_id=client_message_id,
+        )
+        self._publish_injection_event(run_id=run_id, record=record, created=created)
         return created
 
     async def inject_to_running_agents_async(
@@ -353,6 +382,8 @@ class RunControlManager:
         run_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
     ) -> InjectionMessage:
         agent_repo = self._require_agent_repo()
         created: InjectionMessage | None = None
@@ -365,12 +396,52 @@ class RunControlManager:
                 recipient_instance_id=record.instance_id,
                 source=source,
                 content=content,
+                delivery_mode=delivery_mode,
+                client_message_id=client_message_id,
             )
             await self._publish_injection_event_async(
                 run_id=run_id, record=record, created=created
             )
         if created is None:
             raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        return created
+
+    async def inject_to_coordinator_async(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
+    ) -> InjectionMessage:
+        record = await self._coordinator_injection_recipient_async(run_id)
+        created = self._require_injection_manager().enqueue(
+            run_id=run_id,
+            recipient_instance_id=record.instance_id,
+            source=source,
+            content=content,
+            delivery_mode=delivery_mode,
+            client_message_id=client_message_id,
+        )
+        await self._publish_injection_event_async(
+            run_id=run_id, record=record, created=created
+        )
+        return created
+
+    async def force_user_queued_injections_async(
+        self,
+        *,
+        run_id: str,
+    ) -> InjectionMessage:
+        record = await self._coordinator_injection_recipient_async(run_id)
+        created = self._require_injection_manager().force_user_queued_to_interrupt(
+            run_id=run_id,
+            recipient_instance_id=record.instance_id,
+        )
+        await self._publish_injection_event_async(
+            run_id=run_id, record=record, created=created
+        )
         return created
 
     def register_instance_task(
@@ -818,6 +889,24 @@ class RunControlManager:
             coordinator_role_id,
         )
 
+    async def get_coordinator_instance_id_async(
+        self, *, run_id: str, session_id: str
+    ) -> str | None:
+        coordinator_role_id = None
+        for record in await self._require_task_repo().list_by_trace_async(run_id):
+            if record.envelope.parent_task_id is not None:
+                continue
+            if record.assigned_instance_id:
+                return record.assigned_instance_id
+            coordinator_role_id = record.envelope.role_id
+            break
+        if coordinator_role_id is None:
+            return None
+        return await self._require_agent_repo().get_session_role_instance_id_async(
+            session_id,
+            coordinator_role_id,
+        )
+
     def get_paused_subagent(
         self, session_id: str, instance_id: str | None = None
     ) -> PausedSubagent | None:
@@ -900,6 +989,46 @@ class RunControlManager:
                 payload_json=created.model_dump_json(),
             )
         )
+
+    def _coordinator_injection_recipient(self, run_id: str) -> AgentRuntimeRecord:
+        runtime = (
+            self._run_runtime_repo.get(run_id)
+            if self._run_runtime_repo is not None
+            else None
+        )
+        if runtime is None:
+            raise KeyError(f"Run {run_id} not found")
+        instance_id = self.get_coordinator_instance_id(
+            run_id=run_id,
+            session_id=runtime.session_id,
+        )
+        if not instance_id:
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        record = self._require_agent_repo().get_instance(instance_id)
+        if record.run_id != run_id or record.status != InstanceStatus.RUNNING:
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        return record
+
+    async def _coordinator_injection_recipient_async(
+        self, run_id: str
+    ) -> AgentRuntimeRecord:
+        runtime = (
+            await self._run_runtime_repo.get_async(run_id)
+            if self._run_runtime_repo is not None
+            else None
+        )
+        if runtime is None:
+            raise KeyError(f"Run {run_id} not found")
+        instance_id = await self.get_coordinator_instance_id_async(
+            run_id=run_id,
+            session_id=runtime.session_id,
+        )
+        if not instance_id:
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        record = await self._require_agent_repo().get_instance_async(instance_id)
+        if record.run_id != run_id or record.status != InstanceStatus.RUNNING:
+            raise KeyError(f"No RUNNING agent for run_id={run_id}")
+        return record
 
     async def _publish_injection_event_async(
         self, *, run_id: str, record: AgentRuntimeRecord, created: InjectionMessage

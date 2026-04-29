@@ -32,6 +32,7 @@ export {
 export {
     getOrCreateStreamBlock,
     appendStreamChunk,
+    appendStreamInjectionMarker,
     appendStreamOutputParts,
     finalizeStream,
     clearStreamState,

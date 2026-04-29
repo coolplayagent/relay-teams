@@ -17,10 +17,15 @@ from relay_teams.media import (
     ContentPart,
     InlineMediaContentPart,
     MediaRefContentPart,
+    user_prompt_content_to_text,
 )
 from relay_teams.monitors import MonitorActionType, MonitorRule, MonitorSourceKind
 from relay_teams.sessions.runs.run_service import SessionRunService
-from relay_teams.sessions.runs.enums import ExecutionMode, InjectionSource
+from relay_teams.sessions.runs.enums import (
+    ExecutionMode,
+    InjectionDeliveryMode,
+    InjectionSource,
+)
 from relay_teams.sessions.runs.user_question_models import (
     UserQuestionAnswerSubmission,
 )
@@ -186,7 +191,9 @@ class InjectMessageRequest(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     source: InjectionSource = InjectionSource.USER
+    mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED
     content: str = Field(min_length=1)
+    client_message_id: OptionalIdentifierStr = None
 
     @field_validator("content")
     @classmethod
@@ -194,6 +201,18 @@ class InjectMessageRequest(BaseModel):
         if not value.strip():
             raise ValueError("Injection content must not be empty")
         return value
+
+
+class ForceInjectResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    status: Literal["ok"]
+    run_id: RequiredIdentifierStr
+    injection_id: RequiredIdentifierStr
+    applied_injection_ids: tuple[RequiredIdentifierStr, ...]
+    superseded_client_message_ids: tuple[RequiredIdentifierStr, ...] = ()
+    content: str
+    delivery_mode: InjectionDeliveryMode
 
 
 class ResolveToolApprovalRequest(BaseModel):
@@ -541,6 +560,8 @@ async def inject_message(
             run_id=run_id,
             source=req.source,
             content=req.content,
+            delivery_mode=req.mode,
+            client_message_id=req.client_message_id,
         )
         with bind_trace_context(trace_id=run_id, run_id=run_id):
             log_event(
@@ -548,13 +569,55 @@ async def inject_message(
                 logging.INFO,
                 event="run.message.injected",
                 message="Message injected to running agents",
-                payload={"source": req.source.value, "length": len(req.content)},
+                payload={
+                    "source": req.source.value,
+                    "mode": req.mode.value,
+                    "length": len(req.content),
+                },
             )
         return result.model_dump()
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
             mappings=((ValueError, 400),),
+        ) from exc
+
+
+@router.post("/{run_id}/inject:force", response_model=ForceInjectResponse)
+async def force_queued_injections(
+    run_id: RequiredIdentifierStr,
+    service: Annotated[SessionRunService, Depends(get_run_service)],
+) -> ForceInjectResponse:
+    try:
+        result = await service.force_queued_injections_async(run_id)
+        applied_injection_ids: list[str] = []
+        for injection_id in (*result.superseded_injection_ids, result.injection_id):
+            if injection_id not in applied_injection_ids:
+                applied_injection_ids.append(injection_id)
+        with bind_trace_context(trace_id=run_id, run_id=run_id):
+            log_event(
+                logger,
+                logging.INFO,
+                event="run.inject.force",
+                message="Queued injections forced to interrupt mode",
+                payload={
+                    "delivery_mode": result.delivery_mode.value,
+                    "length": len(str(result.content)),
+                },
+            )
+        return ForceInjectResponse(
+            status="ok",
+            run_id=result.run_id,
+            injection_id=result.injection_id,
+            applied_injection_ids=tuple(applied_injection_ids),
+            superseded_client_message_ids=result.superseded_client_message_ids,
+            content=user_prompt_content_to_text(result.content),
+            delivery_mode=result.delivery_mode,
+        )
+    except (KeyError, RuntimeError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((RuntimeError, 409), (ValueError, 400)),
         ) from exc
 
 

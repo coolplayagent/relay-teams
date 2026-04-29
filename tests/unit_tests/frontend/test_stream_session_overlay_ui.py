@@ -71,6 +71,168 @@ export function t(key) {
 """.strip(),
         encoding="utf-8",
     )
+    (temp_dir / "injectionMarker.js").write_text(
+        """
+export function injectionContentText(rawMessage) {
+    return String(rawMessage?.content || '').trim();
+}
+
+export function renderInjectionMarker(container, rawMessage) {
+    const marker = {
+        dataset: {
+            status: String(rawMessage?.status || 'applied'),
+            injectionId: String(rawMessage?.injection_id || rawMessage?.message_id || ''),
+        },
+        className: 'message-inject-marker',
+    };
+    container.appendChild?.(marker);
+    return marker;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
+def _write_live_injection_test_modules(temp_dir: Path, source: str) -> None:
+    (temp_dir / "stream.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function getRunPrimaryRoleId(runId) {
+    return runId === "run-primary" ? "main-role" : "";
+}
+
+export function isPrimaryRoleId() {
+    return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(_key, values = {}) {
+    return JSON.stringify(values);
+}
+
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+function makeElement(tagName = "div") {
+  return {
+    tagName,
+    className: "",
+    dataset: {},
+    children: [],
+    textContent: "",
+    nextSibling: null,
+    append(...items) {
+      items.forEach(item => this.appendChild(item));
+    },
+    setAttribute(name, value) {
+      this[name] = value;
+    },
+    appendChild(child) {
+      child.__parent = this;
+      this.children.push(child);
+      return child;
+    },
+    querySelector(selector) {
+      if (selector === ".msg-content") return this.contentEl || null;
+      if (selector === ".msg-role") return { textContent: "" };
+      if (selector === ".tool-status") return { innerHTML: "" };
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector !== ".tool-block") return [];
+      return this.children.filter(child => child?.className === "tool-block");
+    },
+    remove() {
+      const parent = this.__parent;
+      if (!parent?.children) return;
+      const index = parent.children.indexOf(this);
+      if (index !== -1) parent.children.splice(index, 1);
+    },
+  };
+}
+
+export function applyToolReturn(block) {
+  block.dataset.status = "completed";
+}
+export function appendStructuredContentPart(contentEl, part) {
+  const el = makeElement("div");
+  el.kind = part.kind || "structured";
+  contentEl.appendChild(el);
+  return el;
+}
+export function appendThinkingText(contentEl, text) {
+  const el = makeElement("div");
+  el.className = "thinking-block";
+  el.textContent = text;
+  contentEl.appendChild(el);
+  return el;
+}
+export function buildPendingToolBlock(toolName, _args, toolCallId) {
+  const block = makeElement("details");
+  block.className = "tool-block";
+  block.dataset.toolName = toolName;
+  block.dataset.toolCallId = toolCallId || "";
+  block.dataset.status = "running";
+  return block;
+}
+export function findToolBlock(contentEl, toolName, toolCallId) {
+  return contentEl.children.find(child => (
+    child.className === "tool-block"
+    && child.dataset.toolName === toolName
+    && (!toolCallId || child.dataset.toolCallId === toolCallId)
+  )) || null;
+}
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock(pendingToolBlocks, toolBlock, toolName, toolCallId) {
+  if (toolCallId) pendingToolBlocks[`${toolName}:${toolCallId}`] = toolBlock;
+  pendingToolBlocks[`${toolName}:`] = [toolBlock];
+}
+export function renderMessageBlock(container, _role, label, _parts = [], options = {}) {
+  const wrapper = makeElement("div");
+  wrapper.kind = "message";
+  wrapper.dataset = {
+    runId: String(options.runId || ""),
+    roleId: String(options.roleId || ""),
+    instanceId: String(options.instanceId || ""),
+    streamKey: String(options.streamKey || ""),
+    label: String(label || ""),
+  };
+  const contentEl = makeElement("div");
+  contentEl.className = "msg-content";
+  wrapper.contentEl = contentEl;
+  wrapper.appendChild(contentEl);
+  container.appendChild(wrapper);
+  return { wrapper, contentEl };
+}
+export function resolvePendingToolBlock(pendingToolBlocks, toolName, toolCallId) {
+  return pendingToolBlocks[`${toolName}:${toolCallId || ""}`]?.[0]
+    || pendingToolBlocks[`${toolName}:${toolCallId || ""}`]
+    || null;
+}
+export function setToolStatus(block, status) { block.dataset.status = status; }
+export function setToolValidationFailureState(block) { block.dataset.status = "validation_failed"; }
+export function syncStreamingCursor() {}
+export function updateThinkingText(el, text) { el.textContent += text; }
+export function updateMessageText(el, text, options = {}) {
+  if (options.appendDelta) el.textContent += text;
+  else el.textContent = text;
+}
+""".strip(),
+        encoding="utf-8",
+    )
 
 
 def _write_mock_message_actions(temp_dir: Path) -> None:
@@ -248,6 +410,438 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinato
     assert overlay["parts"][0]["content"] == "plan"
     assert overlay["parts"][1]["tool_call_id"] == "call-1"
     assert overlay["parts"][1]["status"] == "completed"
+
+
+def test_stream_overlay_keeps_injection_between_tool_and_next_text(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_injection"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+const options = {
+  runId: "run-primary",
+  instanceId: "primary",
+  roleId: "main-role",
+  label: "Main Agent",
+};
+applyStreamOverlayEvent(
+  "tool_call",
+  { tool_name: "web_search", tool_call_id: "call-1", args: { query: "google" } },
+  { ...options, eventId: "evt-1" },
+);
+applyStreamOverlayEvent(
+  "injection_applied",
+  {
+    injection_id: "inj-1",
+    content: "不要搜索谷歌，搜索 OpenAI",
+    source: "user",
+    status: "applied",
+  },
+  { ...options, eventId: "evt-2" },
+);
+applyStreamOverlayEvent(
+  "text_delta",
+  { text: "收到，改搜 OpenAI。" },
+  { ...options, eventId: "evt-3" },
+);
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinator));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    overlay = json.loads(result.stdout)
+    assert [part["kind"] for part in overlay["parts"]] == [
+        "tool",
+        "injection",
+        "text",
+    ]
+    assert overlay["parts"][1]["injection_id"] == "inj-1"
+    assert overlay["parts"][1]["content"] == "不要搜索谷歌，搜索 OpenAI"
+
+
+def test_stream_overlay_discards_unexecuted_tool_when_inject_supersedes_batch(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_inject_supersedes_tool"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+const options = {
+  runId: "run-primary",
+  instanceId: "primary",
+  roleId: "main-role",
+  label: "Main Agent",
+};
+applyStreamOverlayEvent(
+  "tool_call",
+  { tool_name: "shell", tool_call_id: "call-old", args: { command: "pwd" } },
+  { ...options, eventId: "evt-1" },
+);
+applyStreamOverlayEvent(
+  "injection_applied",
+  {
+    injection_id: "inj-1",
+    content: "改成 ls",
+    source: "user",
+    status: "applied",
+    supersedes_pending_tool_calls: true,
+  },
+  { ...options, eventId: "evt-2" },
+);
+applyStreamOverlayEvent(
+  "tool_call",
+  { tool_name: "shell", tool_call_id: "call-new", args: { command: "ls" } },
+  { ...options, eventId: "evt-3" },
+);
+applyStreamOverlayEvent(
+  "tool_result",
+  { tool_name: "shell", tool_call_id: "call-new", result: { ok: true, data: "done" } },
+  { ...options, eventId: "evt-4" },
+);
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinator));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    overlay = json.loads(result.stdout)
+    assert [part["kind"] for part in overlay["parts"]] == ["injection", "tool"]
+    assert overlay["parts"][0]["content"] == "改成 ls"
+    assert overlay["parts"][1]["tool_call_id"] == "call-new"
+    assert overlay["parts"][1]["status"] == "completed"
+
+
+def test_live_injection_marker_splits_current_stream_segment(tmp_path: Path) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "live_injection_segment_split"
+    temp_dir.mkdir()
+    _write_live_injection_test_modules(temp_dir, source)
+
+    runner = """
+globalThis.document = {
+  createElement(tagName = "div") {
+    return {
+      tagName,
+      className: "",
+      dataset: {},
+      children: [],
+      textContent: "",
+      append(...items) { items.forEach(item => this.appendChild(item)); },
+      setAttribute(name, value) { this[name] = value; },
+      appendChild(child) { child.__parent = this; this.children.push(child); return child; },
+    };
+  },
+};
+const timelineActions = [];
+globalThis.__relayTeamsMessageTimelineApplyAction = action => timelineActions.push(action);
+
+import {
+  appendStreamChunk,
+  appendStreamInjectionMarker,
+  getOrCreateStreamBlock,
+} from "./stream.js";
+
+const container = {
+  children: [],
+  appendChild(child) { child.__parent = this; this.children.push(child); return child; },
+  querySelectorAll(selector) {
+    if (selector !== ".message") return [];
+    return this.children.filter(child => child?.kind === "message");
+  },
+  insertBefore(child, ref) {
+    child.__parent = this;
+    if (!ref) {
+      this.children.push(child);
+      return child;
+    }
+    const index = this.children.indexOf(ref);
+    if (index === -1) this.children.push(child);
+    else this.children.splice(index, 0, child);
+    return child;
+  },
+};
+
+getOrCreateStreamBlock(container, "primary", "main-role", "Main Agent", "run-primary");
+appendStreamChunk("primary", "A", "run-primary", "main-role", "Main Agent");
+appendStreamInjectionMarker(
+  container,
+  "primary",
+  { injection_id: "inj-1", content: "改一下", source: "user", status: "applied" },
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent" },
+);
+appendStreamChunk("primary", "B", "run-primary", "main-role", "Main Agent");
+
+console.log(JSON.stringify(container.children.map(child => {
+  if (String(child.className || "").includes("message-inject-marker")) {
+    return `marker:${child.children[1].textContent}`;
+  }
+  return `message:${child.contentEl.children.map(item => item.textContent).join("")}`;
+})));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    assert json.loads(result.stdout) == ["message:A", "marker:改一下", "message:B"]
+
+
+def test_live_injection_marker_is_idempotent_for_replayed_event(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "live_injection_marker_replay"
+    temp_dir.mkdir()
+    _write_live_injection_test_modules(temp_dir, source)
+
+    runner = """
+globalThis.document = {
+  createElement(tagName = "div") {
+    return {
+      tagName,
+      className: "",
+      dataset: {},
+      children: [],
+      textContent: "",
+      append(...items) { items.forEach(item => this.appendChild(item)); },
+      setAttribute(name, value) { this[name] = value; },
+      appendChild(child) { child.__parent = this; this.children.push(child); return child; },
+    };
+  },
+};
+const timelineActions = [];
+globalThis.__relayTeamsMessageTimelineApplyAction = action => timelineActions.push(action);
+
+import {
+  appendStreamChunk,
+  appendStreamInjectionMarker,
+  getOrCreateStreamBlock,
+} from "./stream.js";
+
+const container = {
+  children: [],
+  appendChild(child) { child.__parent = this; this.children.push(child); return child; },
+  querySelectorAll(selector) {
+    if (selector !== ".message") return [];
+    return this.children.filter(child => child?.kind === "message");
+  },
+  insertBefore(child, ref) {
+    child.__parent = this;
+    if (!ref) {
+      this.children.push(child);
+      return child;
+    }
+    const index = this.children.indexOf(ref);
+    if (index === -1) this.children.push(child);
+    else this.children.splice(index, 0, child);
+    return child;
+  },
+};
+
+getOrCreateStreamBlock(container, "primary", "main-role", "Main Agent", "run-primary");
+appendStreamChunk("primary", "A", "run-primary", "main-role", "Main Agent");
+const payload = { injection_id: "inj-1", content: "改一下", source: "user", status: "applied" };
+appendStreamInjectionMarker(
+  container,
+  "primary",
+  payload,
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent" },
+);
+appendStreamInjectionMarker(
+  container,
+  "primary",
+  payload,
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent" },
+);
+
+console.log(JSON.stringify(container.children.map(child => {
+  if (String(child.className || "").includes("message-inject-marker")) {
+    return `marker:${child.dataset.injectionId}:${child.children[1].textContent}`;
+  }
+  return `message:${child.contentEl.children.map(item => item.textContent).join("")}`;
+})));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    assert json.loads(result.stdout) == ["message:A", "marker:inj-1:改一下"]
+
+
+def test_live_injection_removes_superseded_tool_before_new_segment(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "live_injection_superseded_tool"
+    temp_dir.mkdir()
+    _write_live_injection_test_modules(temp_dir, source)
+
+    runner = """
+globalThis.document = {
+  createElement(tagName = "div") {
+    return {
+      tagName,
+      className: "",
+      dataset: {},
+      children: [],
+      textContent: "",
+      append(...items) { items.forEach(item => this.appendChild(item)); },
+      setAttribute(name, value) { this[name] = value; },
+      appendChild(child) { child.__parent = this; this.children.push(child); return child; },
+    };
+  },
+};
+
+const timelineActions = [];
+globalThis.__relayTeamsMessageTimelineApplyAction = action => timelineActions.push(action);
+
+import {
+  appendStreamInjectionMarker,
+  appendToolCallBlock,
+  getOrCreateStreamBlock,
+  updateToolResult,
+} from "./stream.js";
+
+const container = {
+  children: [],
+  appendChild(child) { child.__parent = this; this.children.push(child); return child; },
+  querySelectorAll(selector) {
+    if (selector !== ".message") return [];
+    return this.children.filter(child => child?.kind === "message");
+  },
+  insertBefore(child, ref) {
+    child.__parent = this;
+    if (!ref) {
+      this.children.push(child);
+      return child;
+    }
+    const index = this.children.indexOf(ref);
+    if (index === -1) this.children.push(child);
+    else this.children.splice(index, 0, child);
+    return child;
+  },
+};
+
+getOrCreateStreamBlock(container, "primary", "main-role", "Main Agent", "run-primary");
+appendToolCallBlock(
+  container,
+  "primary",
+  "shell",
+  { command: "pwd" },
+  "call-old",
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent" },
+);
+appendStreamInjectionMarker(
+  container,
+  "primary",
+  {
+    injection_id: "inj-1",
+    content: "改成 ls",
+    source: "user",
+    status: "applied",
+    supersedes_pending_tool_calls: true,
+  },
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent" },
+);
+appendToolCallBlock(
+  container,
+  "primary",
+  "shell",
+  { command: "ls" },
+  "call-new",
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent" },
+);
+updateToolResult(
+  "primary",
+  "shell",
+  { ok: true, data: "done" },
+  false,
+  "call-new",
+  { runId: "run-primary", roleId: "main-role", label: "Main Agent", container },
+);
+
+console.log(JSON.stringify({
+  rendered: container.children.map(child => {
+  if (String(child.className || "").includes("message-inject-marker")) {
+    return `marker:${child.children[1].textContent}`;
+  }
+  const tools = child.contentEl.children
+    .filter(item => item.className === "tool-block")
+    .map(item => `${item.dataset.toolCallId}:${item.dataset.status}`);
+  return `message:${tools.join(",")}`;
+  }),
+  injectionAction: timelineActions.find(action => action.type === "injection"),
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["rendered"] == ["marker:改成 ls", "message:call-new:completed"]
+    assert payload["injectionAction"]["supersedesPendingToolCalls"] is True
 
 
 def test_stream_overlay_terminal_event_releases_event_id_dedupe(
@@ -2882,6 +3476,347 @@ console.log(JSON.stringify({
     assert payload["messageUpdates"] == [{"text": "", "streaming": True}]
     assert payload["afterToolResult"] == [True]
     assert payload["cursorStates"] == [True, False]
+
+
+def test_historical_injection_and_failed_tool_collapse_into_processed_group(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/history.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "history_failed_tool_refresh"
+    temp_dir.mkdir()
+    (temp_dir / "history.js").write_text(
+        source.replace("../../core/state.js", "./mockState.mjs")
+        .replace("../../utils/i18n.js", "./mockI18n.mjs")
+        .replace("./messageActions.js", "./mockMessageActions.mjs")
+        .replace("./helpers.js", "./mockHelpers.mjs"),
+        encoding="utf-8",
+    )
+    _write_mock_message_actions(temp_dir)
+    (temp_dir / "toolResultStatus.mjs").write_text(
+        """
+export function isToolResultError(result, options = {}) {
+  return options?.isError === true
+    || result?.ok === false
+    || result?.error === true
+    || result?.status === 'failed'
+    || result?.data?.status === 'failed'
+    || (typeof result?.data?.exit_code === 'number' && result.data.exit_code !== 0);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export function isRunPrimaryRoleId() {
+  return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function formatMessage(key, values = {}) {
+  return key === 'tool.group.processed' ? `processed${values.duration || ''}` : key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockHelpers.mjs").write_text(
+        """
+import { isToolResultError } from './toolResultStatus.mjs';
+
+function makeClassList(el) {
+  return {
+    add(...names) {
+      const tokens = new Set(String(el.className || '').split(/\\s+/).filter(Boolean));
+      names.forEach(name => tokens.add(name));
+      el.className = Array.from(tokens).join(' ');
+    },
+    contains(name) {
+      return String(el.className || '').split(/\\s+/).includes(name);
+    },
+  };
+}
+
+function makeElement(tagName = 'div') {
+  const el = {
+    tagName,
+    className: '',
+    dataset: {},
+    children: [],
+    childNodes: [],
+    textContent: '',
+    hidden: false,
+    get classList() { return makeClassList(this); },
+    get nextElementSibling() {
+      const siblings = this.parentElement?.children || [];
+      const index = siblings.indexOf(this);
+      return index >= 0 ? siblings[index + 1] || null : null;
+    },
+    appendChild(child) {
+      child.parentElement = this;
+      this.children.push(child);
+      this.childNodes.push(child);
+      return child;
+    },
+    querySelector(selector) {
+      if (selector === '.msg-content') return this.contentEl || null;
+      if (selector === '.msg-role') return { textContent: String(this.dataset.label || '').toUpperCase() };
+      if (selector === '.tool-output') return this.outputEl || null;
+      if (selector === '.tool-status') return this.statusEl || null;
+      if (selector === ':scope .tool-block[data-status="error"]') return findFailedTool(this);
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === ':scope > .message') {
+        return this.children.filter(child => child.classList.contains('message'));
+      }
+      return [];
+    },
+    setAttribute(name, value) {
+      this[name] = value;
+    },
+    remove() {},
+  };
+  return el;
+}
+
+function findFailedTool(root) {
+  if (root.classList?.contains('tool-block') && root.dataset.status === 'error') {
+    return root;
+  }
+  for (const child of root.children || []) {
+    const found = findFailedTool(child);
+    if (found) return found;
+  }
+  return null;
+}
+
+export { isToolResultError };
+export function applyToolReturn(toolBlock, content, options = {}) {
+  toolBlock.dataset.status = isToolResultError(content, options) ? 'error' : 'completed';
+  toolBlock.__result = content;
+}
+export function appendMessageText(contentEl, text) {
+  const el = makeElement('div');
+  el.className = 'msg-text';
+  el.textContent = String(text || '');
+  contentEl.appendChild(el);
+  return el;
+}
+export function appendStructuredContentPart() {}
+export function appendThinkingText() {}
+export function buildToolBlock(toolName, args, toolCallId) {
+  const block = makeElement('details');
+  block.className = 'tool-block';
+  block.dataset.toolName = String(toolName || '');
+  block.dataset.toolCallId = String(toolCallId || '');
+  block.dataset.status = 'running';
+  block.args = args;
+  block.outputEl = makeElement('pre');
+  block.statusEl = makeElement('span');
+  block.appendChild(block.outputEl);
+  return block;
+}
+export const buildPendingToolBlock = buildToolBlock;
+export function decoratePendingApprovalBlock() {}
+export function findToolBlockInContainer() { return null; }
+export function indexPendingToolBlock(pendingToolBlocks, toolBlock, toolName, toolCallId) {
+  if (toolCallId) pendingToolBlocks[`${toolName || ''}::${toolCallId || ''}`] = toolBlock;
+  pendingToolBlocks[`${toolName || ''}::`] = [toolBlock];
+}
+export function labelFromRole(role) { return role || 'agent'; }
+export function parseApprovalArgsPreview() { return ''; }
+export function renderMessageBlock(container, _role, label, _parts = [], options = {}) {
+  const wrapper = makeElement('div');
+  wrapper.className = 'message';
+  wrapper.dataset.label = label;
+  wrapper.dataset.runId = String(options.runId || '');
+  wrapper.dataset.roleId = String(options.roleId || '');
+  wrapper.dataset.instanceId = String(options.instanceId || '');
+  const contentEl = makeElement('div');
+  contentEl.className = 'msg-content';
+  wrapper.contentEl = contentEl;
+  wrapper.appendChild(contentEl);
+  container.appendChild(wrapper);
+  return { wrapper, contentEl };
+}
+export function renderParts(contentEl, parts, pendingToolBlocks) {
+  parts.forEach(part => {
+    const kind = part.part_kind || part.kind;
+    if (kind === 'tool-call') {
+      const block = buildToolBlock(part.tool_name, part.args || {}, part.tool_call_id);
+      contentEl.appendChild(block);
+      indexPendingToolBlock(pendingToolBlocks, block, part.tool_name, part.tool_call_id);
+    } else if (kind === 'text') {
+      appendMessageText(contentEl, part.content || '');
+    }
+  });
+}
+export function resolvePendingToolBlock(pendingToolBlocks, toolName, toolCallId) {
+  return pendingToolBlocks[`${toolName || ''}::${toolCallId || ''}`]
+    || pendingToolBlocks[`${toolName || ''}::`]?.[0]
+    || null;
+}
+export function forceScrollBottom() {}
+export function setToolStatus(block, status) { block.dataset.status = status; }
+export function setToolValidationFailureState(block) { block.dataset.status = 'validation_failed'; }
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+globalThis.__relayTeamsMessageTimelineApplyAction = () => {};
+globalThis.document = {
+  createElement() {
+    return {
+      className: '',
+      dataset: {},
+      children: [],
+      childNodes: [],
+      get nextElementSibling() {
+        const siblings = this.parentElement?.children || [];
+        const index = siblings.indexOf(this);
+        return index >= 0 ? siblings[index + 1] || null : null;
+      },
+      appendChild(child) {
+        if (child.parentElement?.children) {
+          child.parentElement.children = child.parentElement.children.filter(item => item !== child);
+        }
+        child.parentElement = this;
+        this.children.push(child);
+        this.childNodes.push(child);
+        return child;
+      },
+      append(...nodes) {
+        nodes.forEach(node => this.appendChild(node));
+      },
+      setAttribute(name, value) {
+        this[name] = value;
+      },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      addEventListener() {},
+    };
+  },
+};
+
+import { renderHistoricalMessageList } from './history.js';
+
+const container = {
+  dataset: {},
+  children: [],
+  appendChild(child) {
+    child.parentElement = this;
+    this.children.push(child);
+    return child;
+  },
+  insertBefore(child, before) {
+    const index = this.children.indexOf(before);
+    child.parentElement = this;
+    if (index >= 0) this.children.splice(index, 0, child);
+    else this.children.push(child);
+    return child;
+  },
+  querySelector(selector) {
+    if (selector === ':scope > .tool-group') {
+      return this.children.find(child => child.className === 'tool-group') || null;
+    }
+    if (selector === ':scope .tool-block[data-status="error"]') {
+      const visit = node => {
+        if (node?.className === 'tool-block' && node.dataset?.status === 'error') return node;
+        for (const child of node?.children || []) {
+          const found = visit(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      return visit(this);
+    }
+    return null;
+  },
+  querySelectorAll(selector) {
+    if (selector === ':scope > .message') {
+      return this.children.filter(child => String(child.className || '').split(/\\s+/).includes('message'));
+    }
+    return [];
+  },
+};
+
+renderHistoricalMessageList(container, [
+  {
+    role: 'assistant',
+    role_id: 'Main Agent',
+    instance_id: 'primary',
+    created_at: '2026-04-29T10:00:00',
+    message: {
+      parts: [
+        { part_kind: 'tool-call', tool_name: 'shell', tool_call_id: 'call-1', args: { command: 'ls missing' } },
+      ],
+    },
+  },
+  {
+    role: 'user',
+    created_at: '2026-04-29T10:00:01',
+    message: {
+      parts: [
+        {
+          part_kind: 'tool-return',
+          tool_name: 'shell',
+          tool_call_id: 'call-1',
+          content: 'Shell command failed',
+          is_error: true,
+        },
+      ],
+    },
+  },
+  {
+    entry_type: 'injection',
+    status: 'applied',
+    injection_status: 'applied',
+    injection_id: 'inj-1',
+    content: 'change direction',
+    created_at: '2026-04-29T10:00:01.500',
+    occurred_at: '2026-04-29T10:00:01.500',
+    message: { parts: [{ part_kind: 'text', content: 'change direction' }] },
+  },
+  {
+    role: 'assistant',
+    role_id: 'Main Agent',
+    instance_id: 'primary',
+    created_at: '2026-04-29T10:00:02',
+    message: { parts: [{ part_kind: 'text', content: 'done' }] },
+  },
+], {
+  runId: 'run-1',
+  runStatus: 'completed',
+  hasFinalOutput: true,
+  isLatestRound: false,
+});
+
+console.log(JSON.stringify({
+  childClasses: container.children.map(child => child.className),
+  failedStatus: container.querySelector(':scope .tool-block[data-status="error"]')?.dataset?.status || '',
+  groupCount: container.children.filter(child => child.className === 'tool-group').length,
+}));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["failedStatus"] == "error"
+    assert payload["groupCount"] == 1
+    assert payload["childClasses"] == ["tool-group", "message"]
 
 
 def test_rebind_then_tool_result_keeps_existing_text_and_appends_idle_placeholder(

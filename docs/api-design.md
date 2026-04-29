@@ -1386,7 +1386,61 @@ Frontend behavior:
 
 ### `POST /runs/{run_id}/inject`
 
-Injects follow-up content to active agents in a run.
+Queues injectable content for an active run. The model-visible behavior is an
+injected user message; there is no separate runtime guidance channel.
+
+Request body:
+- `content`: non-empty text to inject.
+- `source`: optional injection source, defaults to `user`.
+- `mode`: optional delivery mode, defaults to `queued`.
+- `client_message_id`: optional client-generated correlation ID. UI clients use
+  it to reconcile the local pending queue item with the backend
+  `injection_enqueued` event and response for the same injected message.
+
+Delivery modes:
+- `queued`: enqueue a user-visible injection for the run coordinator. It is
+  applied at the earliest safe boundary: before starting a model request, after
+  a complete tool-call/tool-result batch has been persisted, or before accepting
+  a final answer.
+- `interrupt`: enqueue a user-visible injection that interrupts the current
+  model step at the next runtime interrupt check, then rebuilds the model
+  iteration from the last persisted safe conversation boundary.
+
+Injected content is never inserted between an assistant tool call and the
+matching tool result. If the model has produced a tool-call batch, queued
+injections wait for the matching tool results to be committed. The injection is
+then appended after the tool result and before the next model request. For
+example, if the first shell `pwd` call finishes while a queued injection is
+waiting, the next model request history must be original user message, `pwd`
+tool call, `pwd` tool result, then the injected user message.
+Multiple queued public user injections drained at the same boundary are merged
+into one user message with blank lines between entries.
+
+### `POST /runs/{run_id}/inject:force`
+
+Forces queued user injections for the run coordinator into one interrupt
+injection for the same run. Messages are merged in queue order with blank lines
+between entries. The response includes the promoted `injection_id` and
+`applied_injection_ids` covering the original queued injection IDs plus the
+promoted interrupt ID. When the original queued messages carried
+`client_message_id` values, the response also includes
+`superseded_client_message_ids` so clients can remove matching optimistic queue
+items. This endpoint does not create a new run.
+
+SSE events:
+- `injection_enqueued`: emitted when an injection is accepted or forced.
+- `injection_applied`: emitted when the injection is appended to the target
+  agent conversation and the model iteration is rebuilt. This event means the
+  next model request for that target includes the injected message; it is not
+  only a UI marker.
+
+`injection_applied` includes `restart_scope` (`turn_boundary`,
+`pre_tool_call`, or `interrupt`) and `supersedes_pending_tool_calls`. When
+`supersedes_pending_tool_calls` is true, the client should drop any streamed
+tool-call UI that has not yet received a tool result for that run turn.
+
+Session round projections expose public user/subagent injections as
+`injection_messages`. Internal system reminders remain hidden or redacted.
 
 ### `GET /runs/{run_id}/tool-approvals`
 

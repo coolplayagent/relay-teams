@@ -36,10 +36,9 @@ def test_round_user_prompts_are_collapsible_plaintext_blocks() -> None:
     components_css = load_components_css()
 
     assert "collapsibleUserPrompts: true," in timeline_script
-    assert (
-        "collapseUserPrompt: role === 'user' && options.collapsibleUserPrompts === true,"
-        in history_script
-    )
+    assert "collapseUserPrompt: role === 'user'" in history_script
+    assert "&& entryType !== 'injection'" in history_script
+    assert "&& options.collapsibleUserPrompts === true," in history_script
     assert "function appendUserPromptText(contentEl, text) {" in block_script
     assert "function updateUserPromptText(promptEl, text) {" in block_script
     assert "function updateThinkingText(textEl, text, options = {}) {" in block_script

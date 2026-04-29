@@ -34,7 +34,11 @@ from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.media_run_executor import MediaRunExecutor
 from relay_teams.sessions.runs.run_auxiliary import RunAuxiliaryService
@@ -53,6 +57,7 @@ from relay_teams.sessions.runs.background_tasks.manager import (
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.run_models import (
+    InjectionMessage,
     IntentInput,
     RunEvent,
     RunKind,
@@ -1521,7 +1526,9 @@ class SessionRunService:
         self._resume_requested_runs.discard(run_id)
         runtime = self._runtime_for_run(run_id)
         if runtime is not None and runtime.is_recoverable:
-            self._remember_active_run(session_id, run_id)
+            current_active = self._active_run_registry.get_active_run_id(session_id)
+            if current_active in {None, run_id}:
+                self._remember_active_run(session_id, run_id)
             return
         if self._hook_service is not None:
             self._hook_service.clear_run(run_id)
@@ -1538,7 +1545,9 @@ class SessionRunService:
         self._resume_requested_runs.discard(run_id)
         runtime = await self._runtime_for_run_async(run_id)
         if runtime is not None and runtime.is_recoverable:
-            self._remember_active_run(session_id, run_id)
+            current_active = self._active_run_registry.get_active_run_id(session_id)
+            if current_active in {None, run_id}:
+                self._remember_active_run(session_id, run_id)
             return
         if self._hook_service is not None:
             self._hook_service.clear_run(run_id)
@@ -1796,11 +1805,23 @@ class SessionRunService:
         run_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
     ):
+        if source == InjectionSource.USER:
+            return self._run_control_manager.inject_to_coordinator(
+                run_id=run_id,
+                source=source,
+                content=content,
+                delivery_mode=delivery_mode,
+                client_message_id=client_message_id,
+            )
         return self._run_control_manager.inject_to_running_agents(
             run_id=run_id,
             source=source,
             content=content,
+            delivery_mode=delivery_mode,
+            client_message_id=client_message_id,
         )
 
     async def inject_message_async(
@@ -1809,19 +1830,61 @@ class SessionRunService:
         run_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
     ):
         if self._should_delegate_to_bound_loop():
             return await self._call_coroutine_in_bound_loop_async(
-                lambda: self._run_control_manager.inject_to_running_agents_async(
+                lambda: self._inject_message_local_async(
                     run_id=run_id,
                     source=source,
                     content=content,
+                    delivery_mode=delivery_mode,
+                    client_message_id=client_message_id,
                 )
+            )
+        return await self._inject_message_local_async(
+            run_id=run_id,
+            source=source,
+            content=content,
+            delivery_mode=delivery_mode,
+            client_message_id=client_message_id,
+        )
+
+    async def _inject_message_local_async(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode,
+        client_message_id: str | None = None,
+    ):
+        if source == InjectionSource.USER:
+            return await self._run_control_manager.inject_to_coordinator_async(
+                run_id=run_id,
+                source=source,
+                content=content,
+                delivery_mode=delivery_mode,
+                client_message_id=client_message_id,
             )
         return await self._run_control_manager.inject_to_running_agents_async(
             run_id=run_id,
             source=source,
             content=content,
+            delivery_mode=delivery_mode,
+            client_message_id=client_message_id,
+        )
+
+    async def force_queued_injections_async(self, run_id: str) -> InjectionMessage:
+        if self._should_delegate_to_bound_loop():
+            return await self._call_coroutine_in_bound_loop_async(
+                lambda: self._run_control_manager.force_user_queued_injections_async(
+                    run_id=run_id
+                )
+            )
+        return await self._run_control_manager.force_user_queued_injections_async(
+            run_id=run_id
         )
 
     def handle_background_task_completion(

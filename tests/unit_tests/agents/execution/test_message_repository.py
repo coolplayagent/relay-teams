@@ -490,6 +490,200 @@ def test_message_repo_drops_duplicate_late_tool_return_but_keeps_user_prompt(
     assert history[2].parts[0].content == "optimize it"
 
 
+def test_message_repo_drops_duplicate_late_tool_pair_from_reads(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_duplicate_tool_pair.db"
+    repo = MessageRepository(db_path)
+    conversation_id = build_conversation_id("session-1", "time")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="shell",
+                        args={"command": "pwd"},
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="shell",
+                        tool_call_id="call-1",
+                        content={"ok": True, "data": "/workspace"},
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart(content="/workspace")]),
+        ],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="shell",
+                        args={"command": "pwd"},
+                        tool_call_id="call-1",
+                    )
+                ]
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="shell",
+                        tool_call_id="call-1",
+                        content={"ok": True, "data": "/workspace"},
+                    )
+                ]
+            ),
+        ],
+    )
+
+    history = repo.get_history_for_conversation(conversation_id)
+    projected = repo.get_messages_by_session("session-1")
+    projected_with_hidden = repo.get_messages_by_session(
+        "session-1",
+        include_hidden_from_context=True,
+    )
+    projected_by_run_with_hidden = repo.get_messages_by_session_run_ids(
+        "session-1",
+        ("run-1",),
+        include_hidden_from_context=True,
+    )
+
+    assert len(history) == 3
+    assert isinstance(history[0], ModelResponse)
+    assert isinstance(history[0].parts[0], ToolCallPart)
+    assert isinstance(history[1], ModelRequest)
+    assert isinstance(history[1].parts[0], ToolReturnPart)
+    assert isinstance(history[2], ModelResponse)
+    assert isinstance(history[2].parts[0], TextPart)
+    assert len(projected) == 3
+    assert len(projected_with_hidden) == 3
+    assert len(projected_by_run_with_hidden) == 3
+
+
+def test_message_repo_keeps_reused_tool_call_id_for_new_tool_occurrence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_reused_tool_call_id.db"
+    repo = MessageRepository(db_path)
+    conversation_id = build_conversation_id("session-1", "time")
+
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="shell",
+                        args={"command": "pwd"},
+                        tool_call_id="call-1",
+                    )
+                ]
+            )
+        ],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="shell",
+                        tool_call_id="call-1",
+                        content="/workspace/agent-teams",
+                    )
+                ]
+            )
+        ],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="shell",
+                        args={"command": "cd .. && pwd"},
+                        tool_call_id="call-1",
+                    )
+                ]
+            )
+        ],
+    )
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id=conversation_id,
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="shell",
+                        tool_call_id="call-1",
+                        content="/workspace",
+                    )
+                ]
+            )
+        ],
+    )
+
+    history = repo.get_history_for_conversation(conversation_id)
+
+    assert len(history) == 4
+    assert isinstance(history[0], ModelResponse)
+    assert isinstance(history[0].parts[0], ToolCallPart)
+    assert history[0].parts[0].args == {"command": "pwd"}
+    assert isinstance(history[1], ModelRequest)
+    assert isinstance(history[1].parts[0], ToolReturnPart)
+    assert isinstance(history[2], ModelResponse)
+    assert isinstance(history[2].parts[0], ToolCallPart)
+    assert history[2].parts[0].args == {"command": "cd .. && pwd"}
+    assert isinstance(history[3], ModelRequest)
+    assert isinstance(history[3].parts[0], ToolReturnPart)
+
+
 def test_message_repo_drops_orphan_tool_return_request_from_history(
     tmp_path: Path,
 ) -> None:

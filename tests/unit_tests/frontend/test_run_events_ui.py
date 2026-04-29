@@ -1024,12 +1024,15 @@ def _run_event_router_script(tmp_path: Path, runner_source: str) -> dict[str, ob
         "../../components/rounds/timeline.js": "./mockRounds.mjs",
         "../../components/sessionTokenUsage.js": "./mockSessionTokenUsage.mjs",
         "../../components/subagentSessions.js": "./mockSubagentSessions.mjs",
+        "../../components/messageRenderer.js": "./mockMessageRenderer.mjs",
+        "../../components/runtimeInjectQueue.js": "./mockRuntimeInjectQueue.mjs",
         "../state.js": "./mockState.mjs",
         "../../utils/logger.js": "./mockLogger.mjs",
         "./runEvents.js": "./mockRunEvents.mjs",
         "./toolEvents.js": "./mockToolEvents.mjs",
         "./humanEvents.js": "./mockHumanEvents.mjs",
         "./notificationEvents.js": "./mockNotificationEvents.mjs",
+        "./utils.js": "./mockUtils.mjs",
     }
     source_text = source_path.read_text(encoding="utf-8")
     for original, replacement in replacements.items():
@@ -1044,6 +1047,14 @@ export const state = {
     taskInstanceMap: {},
     taskStatusMap: {},
 };
+
+export function getRunPrimaryRoleId() {
+    return 'MainAgent';
+}
+
+export function isRunPrimaryRoleId() {
+    return true;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -1086,6 +1097,38 @@ export function syncRoundTodoVisibility() {
 }
 
 export function updateRoundTodo() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageRenderer.mjs").write_text(
+        """
+export function applyStreamOverlayEvent() {
+    return undefined;
+}
+
+export function appendStreamInjectionMarker() {
+    return undefined;
+}
+
+export function finalizeStream() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function clearRuntimeInjectMessages() {
+    return undefined;
+}
+
+export function removeRuntimeInjectMessage() {
+    return undefined;
+}
+
+export function upsertRuntimeInjectMessage() {
     return undefined;
 }
 """.strip(),
@@ -1149,6 +1192,14 @@ export function handleSubagentStopped() { return undefined; }
     (tmp_path / "mockNotificationEvents.mjs").write_text(
         """
 export function handleNotificationRequested() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockUtils.mjs").write_text(
+        """
+export function coordinatorContainerFor() {
+    return null;
+}
 """.strip(),
         encoding="utf-8",
     )

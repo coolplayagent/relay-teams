@@ -428,10 +428,10 @@ export function setToolValidationFailureState(toolBlock, payload) {
     }
 }
 
-export function applyToolReturn(toolBlock, content) {
+export function applyToolReturn(toolBlock, content, options = {}) {
     const outputEl = toolBlock.querySelector('.tool-output');
 
-    const isError = isToolEnvelopeError(content);
+    const isError = isToolResultError(content, options);
     if (isError) {
         setToolStatus(toolBlock, 'error');
         if (outputEl) {
@@ -532,10 +532,6 @@ function formatValidationDetails(payload) {
     return `${reason}\n\nTool was not executed.\n\n\`\`\`json\n${detailsText}\n\`\`\``;
 }
 
-function isToolEnvelopeError(content) {
-    return !!(content && typeof content === 'object' && content.ok === false);
-}
-
 function renderToolResultContent(targetEl, content, toolName) {
     targetEl.replaceChildren();
     if (content && typeof content === 'object' && typeof content.ok === 'boolean') {
@@ -547,6 +543,50 @@ function renderToolResultContent(targetEl, content, toolName) {
     }
     const val = typeof content === 'object' ? JSON.stringify(content, null, 2) : String(content);
     targetEl.textContent = val;
+}
+
+export function isToolResultError(result, options = {}) {
+    if (options?.isError === true) {
+        return true;
+    }
+    if (!result || typeof result !== 'object') {
+        return false;
+    }
+    if (result.ok === false || result.error === true) {
+        return true;
+    }
+    if (hasFailedToolData(result)) {
+        return true;
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'data')) {
+        return hasFailedToolData(result.data);
+    }
+    return false;
+}
+
+function hasFailedToolData(data) {
+    if (!data || typeof data !== 'object') {
+        return false;
+    }
+    const status = String(data.status || '').trim().toLowerCase();
+    if (status === 'failed' || status === 'error') {
+        return true;
+    }
+    const exitCode = normalizedExitCode(data.exit_code);
+    return exitCode !== null && exitCode !== 0;
+}
+
+function normalizedExitCode(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    return null;
 }
 
 function renderEnvelopeResult(targetEl, envelope, toolName) {
@@ -561,8 +601,14 @@ function renderEnvelopeResult(targetEl, envelope, toolName) {
     const data = envelope.data;
 
     if (toolName === 'shell' && data && typeof data === 'object') {
-        const output = String(data.output || '');
-        targetEl.textContent = output;
+        const output = String(
+            data.output
+            || data.output_excerpt
+            || (Array.isArray(data.recent_output) ? data.recent_output.join('\n') : '')
+            || data.stderr
+            || '',
+        );
+        targetEl.textContent = output || JSON.stringify(data, null, 2);
         return;
     }
 

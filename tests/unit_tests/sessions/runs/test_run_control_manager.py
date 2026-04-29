@@ -5,7 +5,11 @@ import pytest
 from pydantic_ai.messages import UserPromptPart
 
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -256,6 +260,121 @@ def test_get_coordinator_instance_id_uses_assigned_ephemeral_root(
     assert agent_repo.get_session_role_instance_id("session-1", "Coordinator") is None
 
 
+def test_inject_to_coordinator_publishes_event(tmp_path: Path) -> None:
+    db_path = tmp_path / "run_control_coordinator_injection.db"
+    event_log = EventLog(db_path)
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(
+            event_log=event_log,
+            run_state_repo=RunStateRepository(db_path),
+        ),
+        injection_manager=injection_manager,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=MessageRepository(db_path),
+        event_bus=event_log,
+        run_runtime_repo=run_runtime_repo,
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="handle inject",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    task_repo.update_status(
+        root_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-coordinator",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-coordinator",
+        role_id="Coordinator",
+        workspace_id="workspace-1",
+        status=InstanceStatus.RUNNING,
+    )
+    run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        root_task_id=root_task.task_id,
+    )
+
+    message = mgr.inject_to_coordinator(
+        run_id="run-1",
+        source=InjectionSource.USER,
+        content="adjust course",
+        delivery_mode=InjectionDeliveryMode.INTERRUPT,
+        client_message_id="client-1",
+    )
+
+    assert message.recipient_instance_id == "inst-coordinator"
+    assert message.delivery_mode == InjectionDeliveryMode.INTERRUPT
+    assert message.client_message_id == "client-1"
+    assert injection_manager.drain_interrupt("run-1", "inst-coordinator") == (message,)
+    events = event_log.list_by_session_with_ids("session-1")
+    assert events[-1]["event_type"] == RunEventType.INJECTION_ENQUEUED.value
+    assert '"client_message_id":"client-1"' in str(events[-1]["payload_json"])
+
+
+@pytest.mark.asyncio
+async def test_get_coordinator_instance_id_async_uses_role_fallback(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_async_coordinator_fallback.db"
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(),
+        injection_manager=RunInjectionManager(),
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=MessageRepository(db_path),
+        event_bus=EventLog(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+    _ = await task_repo.create_async(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id="session-1",
+            parent_task_id=None,
+            trace_id="run-1",
+            role_id="Coordinator",
+            objective="fallback",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    await agent_repo.upsert_instance_async(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-coordinator",
+        role_id="Coordinator",
+        workspace_id="workspace-1",
+        status=InstanceStatus.RUNNING,
+    )
+
+    assert (
+        await mgr.get_coordinator_instance_id_async(
+            run_id="run-1",
+            session_id="session-1",
+        )
+        == "inst-coordinator"
+    )
+
+
 @pytest.mark.asyncio
 async def test_inject_to_running_agents_async_publishes_event(
     tmp_path: Path,
@@ -299,6 +418,115 @@ async def test_inject_to_running_agents_async_publishes_event(
     assert len(queued) == 1
     events = await event_log.list_by_session_with_ids_async("session-1")
     assert events[-1]["event_type"] == RunEventType.INJECTION_ENQUEUED.value
+
+
+@pytest.mark.asyncio
+async def test_force_user_queued_injections_async_promotes_and_publishes(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_force_injection.db"
+    event_log = EventLog(db_path)
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    agent_repo = AgentInstanceRepository(db_path)
+    task_repo = TaskRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(
+            event_log=event_log,
+            run_state_repo=RunStateRepository(db_path),
+        ),
+        injection_manager=injection_manager,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        message_repo=MessageRepository(db_path),
+        event_bus=event_log,
+        run_runtime_repo=run_runtime_repo,
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="force inject",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = await task_repo.create_async(root_task)
+    await task_repo.update_status_async(
+        root_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id="inst-coordinator",
+    )
+    await agent_repo.upsert_instance_async(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-coordinator",
+        role_id="Coordinator",
+        workspace_id="workspace-1",
+        status=InstanceStatus.RUNNING,
+    )
+    run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        root_task_id=root_task.task_id,
+    )
+    first = injection_manager.enqueue(
+        "run-1",
+        "inst-coordinator",
+        InjectionSource.USER,
+        "first",
+        client_message_id="client-first",
+    )
+    second = injection_manager.enqueue(
+        "run-1",
+        "inst-coordinator",
+        InjectionSource.USER,
+        "second",
+        client_message_id="client-second",
+    )
+
+    message = await mgr.force_user_queued_injections_async(run_id="run-1")
+
+    assert message.content == "first\n\nsecond"
+    assert message.delivery_mode == InjectionDeliveryMode.INTERRUPT
+    assert message.superseded_injection_ids == (
+        first.injection_id,
+        second.injection_id,
+    )
+    assert message.superseded_client_message_ids == (
+        "client-first",
+        "client-second",
+    )
+    assert injection_manager.drain_interrupt("run-1", "inst-coordinator") == (message,)
+    events = await event_log.list_by_session_with_ids_async("session-1")
+    assert events[-1]["event_type"] == RunEventType.INJECTION_ENQUEUED.value
+
+
+@pytest.mark.asyncio
+async def test_inject_to_coordinator_async_requires_runtime(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_control_async_injection_missing_runtime.db"
+    mgr = RunControlManager()
+    mgr.bind_runtime(
+        run_event_hub=RunEventHub(),
+        injection_manager=RunInjectionManager(),
+        agent_repo=AgentInstanceRepository(db_path),
+        task_repo=TaskRepository(db_path),
+        message_repo=MessageRepository(db_path),
+        event_bus=EventLog(db_path),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+
+    with pytest.raises(KeyError, match="Run run-missing not found"):
+        await mgr.inject_to_coordinator_async(
+            run_id="run-missing",
+            source=InjectionSource.USER,
+            content="queued",
+        )
 
 
 @pytest.mark.asyncio

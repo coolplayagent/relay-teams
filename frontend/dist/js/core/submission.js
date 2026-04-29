@@ -25,6 +25,10 @@ export function isForegroundSubmissionActive(submission) {
     );
 }
 
+export function hasActiveForegroundSubmission() {
+    return !!(activeSubmission && activeSubmission.detached !== true);
+}
+
 export function finishForegroundSubmission(submission) {
     if (activeSubmission === submission) {
         activeSubmission = null;

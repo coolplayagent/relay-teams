@@ -14,6 +14,11 @@ class InjectionSource(str, Enum):
     SUBAGENT = "subagent"
 
 
+class InjectionDeliveryMode(str, Enum):
+    QUEUED = "queued"
+    INTERRUPT = "interrupt"
+
+
 class RunEventType(str, Enum):
     RUN_STARTED = "run_started"
     RUN_PAUSED = "run_paused"

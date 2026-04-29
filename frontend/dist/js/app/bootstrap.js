@@ -1,4 +1,4 @@
-/**
+﻿/**
  * app/bootstrap.js
  * UI bindings and application startup sequence.
  */
@@ -26,6 +26,7 @@ import {
   handlePromptComposerInput,
   handlePromptComposerKeydown,
   handlePromptComposerPaste,
+  handleRuntimeForceInject,
   initializeSessionTopologyControls,
   initializePromptMentionAutocomplete,
   initializeThinkingControls,
@@ -77,6 +78,10 @@ export function setupEventBindings(handleSend) {
       }
     };
   }
+  document.addEventListener("agent-teams-force-inject-requested", (event) => {
+    const runId = String(event?.detail?.runId || "").trim();
+    void handleRuntimeForceInject(runId);
+  });
   document.addEventListener("run-approval-resolved", (event) => {
     const runId = event?.detail?.runId;
     if (!runId || typeof runId !== "string") return;

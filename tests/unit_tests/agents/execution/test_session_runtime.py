@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic_ai.messages import FunctionToolResultEvent, ToolReturnPart
+from pydantic_ai.messages import FunctionToolResultEvent, ToolCallPart, ToolReturnPart
 
 from relay_teams.agents.execution import session_runtime as session_runtime_module
 from .agent_llm_session_test_support import (
@@ -31,7 +31,7 @@ from .agent_llm_session_test_support import (
 
 
 @pytest.mark.asyncio
-async def test_generate_async_deduplicates_against_provider_history(
+async def test_generate_async_persists_only_provider_canonical_tool_messages(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = object.__new__(AgentLlmSession)
@@ -79,6 +79,16 @@ async def test_generate_async_deduplicates_against_provider_history(
         content={"ok": True},
         tool_call_id="call-stream",
     )
+    canonical_tool_call = ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="test_tool",
+                args={"value": "from-provider"},
+                tool_call_id="call-stream",
+            )
+        ]
+    )
+    canonical_tool_result = ModelRequest(parts=[streamed_tool_result])
     captured_tool_outcome_messages: list[ModelRequest | ModelResponse] = []
 
     class _FakeToolEventStream:
@@ -119,7 +129,12 @@ async def test_generate_async_deduplicates_against_provider_history(
         response = final_response
 
         def new_messages(self) -> list[ModelRequest | ModelResponse]:
-            return [echoed_request, final_response]
+            return [
+                echoed_request,
+                canonical_tool_call,
+                canonical_tool_result,
+                final_response,
+            ]
 
         def usage(self) -> object:
             return usage
@@ -152,7 +167,12 @@ async def test_generate_async_deduplicates_against_provider_history(
             return self._nodes.pop(0)
 
         def new_messages(self) -> list[ModelRequest | ModelResponse]:
-            return [echoed_request, final_response]
+            return [
+                echoed_request,
+                canonical_tool_call,
+                canonical_tool_result,
+                final_response,
+            ]
 
         def usage(self) -> object:
             return usage
@@ -241,10 +261,30 @@ async def test_generate_async_deduplicates_against_provider_history(
         published_tool_outcome_ids: set[str] | None = None,
     ) -> bool:
         _ = request
-        captured_tool_outcome_messages.extend(messages)
+        published_messages: list[ModelRequest | ModelResponse] = []
+        for message in messages:
+            if isinstance(message, ModelResponse):
+                continue
+            unpublished_parts: list[ToolReturnPart] = []
+            for part in message.parts:
+                if not isinstance(part, ToolReturnPart):
+                    continue
+                tool_call_id = str(part.tool_call_id or "").strip()
+                if (
+                    tool_call_id
+                    and published_tool_outcome_ids is not None
+                    and tool_call_id in published_tool_outcome_ids
+                ):
+                    continue
+                unpublished_parts.append(part)
+                if tool_call_id and published_tool_outcome_ids is not None:
+                    published_tool_outcome_ids.add(tool_call_id)
+            if unpublished_parts:
+                published_messages.append(ModelRequest(parts=unpublished_parts))
+        captured_tool_outcome_messages.extend(published_messages)
         if published_tool_outcome_ids is not None:
             published_tool_outcome_ids.add("call-stream")
-        return True
+        return bool(published_messages)
 
     session.__dict__["_publish_committed_tool_outcome_events_from_messages_async"] = (
         _publish_committed_tool_outcome_events_from_messages_async
@@ -304,7 +344,11 @@ async def test_generate_async_deduplicates_against_provider_history(
     assert observed_histories
     assert all(list(history) == provider_history for history in observed_histories)
     assert len(message_repo.append_calls) == 1
-    assert message_repo.append_calls[0] == [final_response]
+    assert message_repo.append_calls[0] == [
+        canonical_tool_call,
+        canonical_tool_result,
+        final_response,
+    ]
     streamed_tool_outcome_messages = [
         message
         for message in captured_tool_outcome_messages

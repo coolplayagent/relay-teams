@@ -20,6 +20,10 @@ from pydantic_ai.messages import (
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.sessions.session_rounds_projection import build_session_rounds
 from relay_teams.sessions.session_rounds_projection import build_session_timeline_rounds
+from relay_teams.sessions.session_rounds_projection import (
+    _coordinator_event_tool_messages,
+    _merge_event_tool_messages,
+)
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.media import content_parts_from_text
@@ -30,6 +34,148 @@ from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.workspace import build_conversation_id
+
+
+def _tool_message(
+    *,
+    role: str,
+    part_kind: str,
+    tool_call_id: str,
+    created_at: str,
+    content: str,
+) -> dict[str, object]:
+    return {
+        "role": role,
+        "created_at": created_at,
+        "message": {
+            "parts": [
+                {
+                    "part_kind": part_kind,
+                    "tool_name": "shell",
+                    "tool_call_id": tool_call_id,
+                    "content": content,
+                }
+            ]
+        },
+    }
+
+
+def test_coordinator_event_tool_messages_supports_instance_fallback() -> None:
+    coordinator_message: dict[str, object] = {
+        "role_id": "",
+        "agent_role_id": "",
+        "instance_id": "inst-coordinator",
+    }
+    worker_message: dict[str, object] = {
+        "role_id": "Worker",
+        "agent_role_id": "Worker",
+        "instance_id": "inst-worker",
+    }
+
+    assert _coordinator_event_tool_messages(
+        [coordinator_message, worker_message],
+        coordinator_role_id=None,
+        coordinator_instance_id="inst-coordinator",
+    ) == [coordinator_message]
+    assert (
+        _coordinator_event_tool_messages(
+            [coordinator_message],
+            coordinator_role_id=None,
+            coordinator_instance_id=None,
+        )
+        == []
+    )
+
+
+def test_coordinator_event_tool_messages_prefers_instance_over_shared_role() -> None:
+    coordinator_message: dict[str, object] = {
+        "role_id": "Main Agent",
+        "agent_role_id": "Main Agent",
+        "instance_id": "inst-coordinator",
+    }
+    same_role_worker_message: dict[str, object] = {
+        "role_id": "Main Agent",
+        "agent_role_id": "Main Agent",
+        "instance_id": "inst-worker",
+    }
+
+    messages = [coordinator_message, same_role_worker_message]
+
+    assert _coordinator_event_tool_messages(
+        messages,
+        coordinator_role_id="Main Agent",
+        coordinator_instance_id="inst-coordinator",
+    ) == [coordinator_message]
+    assert (
+        _coordinator_event_tool_messages(
+            messages,
+            coordinator_role_id="Main Agent",
+            coordinator_instance_id=None,
+        )
+        == messages
+    )
+
+
+def test_merge_event_tool_messages_preserves_repeated_tool_call_occurrences() -> None:
+    existing_call = _tool_message(
+        role="assistant",
+        part_kind="tool-call",
+        tool_call_id="call_1",
+        created_at="2026-04-29T10:00:00Z",
+        content="first call",
+    )
+    existing_result = _tool_message(
+        role="user",
+        part_kind="tool-return",
+        tool_call_id="call_1",
+        created_at="2026-04-29T10:00:01Z",
+        content="first result",
+    )
+    first_event_call = _tool_message(
+        role="assistant",
+        part_kind="tool-call",
+        tool_call_id="call_1",
+        created_at="2026-04-29T10:00:00Z",
+        content="first event call",
+    )
+    first_event_result = _tool_message(
+        role="user",
+        part_kind="tool-return",
+        tool_call_id="call_1",
+        created_at="2026-04-29T10:00:01Z",
+        content="first event result",
+    )
+    second_event_call = _tool_message(
+        role="assistant",
+        part_kind="tool-call",
+        tool_call_id="call_1",
+        created_at="2026-04-29T10:00:02Z",
+        content="second event call",
+    )
+    second_event_result = _tool_message(
+        role="user",
+        part_kind="tool-return",
+        tool_call_id="call_1",
+        created_at="2026-04-29T10:00:03Z",
+        content="second event result",
+    )
+
+    merged = _merge_event_tool_messages(
+        [existing_call, existing_result],
+        [
+            first_event_call,
+            first_event_result,
+            second_event_call,
+            second_event_result,
+        ],
+    )
+
+    assert merged == [
+        existing_call,
+        existing_result,
+        second_event_call,
+        second_event_result,
+    ]
 
 
 def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) -> None:
@@ -112,6 +258,127 @@ def test_build_session_rounds_maps_role_by_instance_across_runs(tmp_path: Path) 
     )
     assert len(coordinator_messages) == 1
     assert coordinator_messages[0].get("role_id") == "Coordinator"
+
+
+def test_build_session_rounds_projects_public_injection_messages(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_injection.db"
+    session_id = "session-1"
+    run_id = "run-injection"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+    events: list[dict[str, object]] = [
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "event_type": RunEventType.INJECTION_ENQUEUED.value,
+            "occurred_at": "2026-04-29T10:00:00+00:00",
+            "payload_json": json.dumps(
+                {
+                    "injection_id": "inj_focus",
+                    "run_id": run_id,
+                    "recipient_instance_id": "inst-main",
+                    "source": "user",
+                    "delivery_mode": "interrupt",
+                    "visibility": "public",
+                    "content": "focus on tests",
+                    "priority": 1,
+                    "created_at": "2026-04-29T10:00:00+00:00",
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "event_type": RunEventType.INJECTION_APPLIED.value,
+            "occurred_at": "2026-04-29T10:00:02+00:00",
+            "payload_json": json.dumps(
+                {
+                    "injection_id": "inj_focus",
+                    "run_id": run_id,
+                    "recipient_instance_id": "inst-main",
+                    "source": "user",
+                    "delivery_mode": "interrupt",
+                    "visibility": "public",
+                    "content": "focus on tests",
+                    "priority": 1,
+                    "created_at": "2026-04-29T10:00:00+00:00",
+                    "interrupted_current_step": True,
+                    "restart_scope": "interrupt",
+                    "supersedes_pending_tool_calls": False,
+                }
+            ),
+        },
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _session_id: [],
+        get_session_events=lambda _session_id: events,
+    )
+    timeline = build_session_timeline_rounds(
+        session_id=session_id,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_user_messages=lambda _session_id: [],
+        get_session_events=lambda _session_id: events,
+    )
+
+    injection_messages = cast(list[dict[str, object]], rounds[0]["injection_messages"])
+    assert len(injection_messages) == 1
+    assert injection_messages[0]["status"] == "applied"
+    assert injection_messages[0]["injection_id"] == "inj_focus"
+    assert injection_messages[0]["applied_at"] == "2026-04-29T10:00:02+00:00"
+    assert injection_messages[0]["occurred_at"] == "2026-04-29T10:00:02+00:00"
+    assert injection_messages[0]["mode"] == "interrupt"
+    assert injection_messages[0]["content"] == "focus on tests"
+    assert injection_messages[0]["interrupted_current_step"] is True
+    assert injection_messages[0]["restart_scope"] == "interrupt"
+    assert injection_messages[0]["supersedes_pending_tool_calls"] is False
+    assert timeline[0]["injection_messages"] == injection_messages
+
+
+def test_build_session_rounds_omits_internal_injection_payloads(tmp_path: Path) -> None:
+    db_path = tmp_path / "rounds_projection_internal_injection.db"
+    run_id = "run-injection"
+    events: list[dict[str, object]] = [
+        {
+            "trace_id": run_id,
+            "event_type": RunEventType.INJECTION_ENQUEUED.value,
+            "occurred_at": "2026-04-29T10:00:00+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "recipient_instance_id": "inst-main",
+                    "source": "system",
+                    "delivery_mode": "queued",
+                    "visibility": "internal",
+                    "content_redacted": True,
+                    "content_length": 12,
+                    "created_at": "2026-04-29T10:00:00+00:00",
+                }
+            ),
+        }
+    ]
+
+    rounds = build_session_rounds(
+        session_id="session-1",
+        agent_repo=AgentInstanceRepository(db_path),
+        task_repo=TaskRepository(db_path),
+        approval_tickets_by_run={},
+        run_runtime_repo=RunRuntimeRepository(db_path),
+        get_session_messages=lambda _session_id: [],
+        get_session_events=lambda _session_id: events,
+    )
+
+    assert rounds == []
 
 
 def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
@@ -224,6 +491,515 @@ def test_build_session_rounds_keeps_tool_outcome_messages_for_recovery(
     ]
     assert len(coordinator_messages) == 3
     assert part_kinds == ["tool-call", "tool-return", "retry-prompt"]
+
+
+def test_build_session_rounds_projects_missing_tool_pairs_from_events(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_event_tool_pairs.db"
+    session_id = "session-1"
+    run_id = "run-1"
+    coordinator_instance_id = "inst-coordinator-1"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="recover event tool pairs",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id=session_id,
+        instance_id=coordinator_instance_id,
+        role_id="Coordinator",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    run_runtime_repo.ensure(
+        run_id=run_id,
+        session_id=session_id,
+        root_task_id="task-root",
+    )
+
+    events: list[dict[str, object]] = [
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:00+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "pwd"},
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "2026-04-29T10:00:01+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True, "data": "C:/Users/yex/Desktop"},
+                    "error": False,
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:02+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-2",
+                    "args": {"command": "pwd && cd .. && pwd"},
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "2026-04-29T10:00:03+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-2",
+                    "result": {"ok": False, "error": "cd failed"},
+                    "error": True,
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _session_id: [],
+        get_session_events=lambda _session_id: events,
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]], round_item["coordinator_messages"]
+    )
+    parts = [
+        cast(
+            dict[str, object],
+            cast(
+                list[dict[str, object]],
+                cast(dict[str, object], message["message"])["parts"],
+            )[0],
+        )
+        for message in coordinator_messages
+    ]
+
+    assert [part["part_kind"] for part in parts] == [
+        "tool-call",
+        "tool-return",
+        "tool-call",
+        "tool-return",
+    ]
+    assert [part["tool_call_id"] for part in parts] == [
+        "call-1",
+        "call-1",
+        "call-2",
+        "call-2",
+    ]
+    assert parts[3]["is_error"] is True
+
+
+def test_build_session_rounds_keeps_event_tool_pairs_scoped_by_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_event_tool_pair_collisions.db"
+    session_id = "session-1"
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    for run_id, command in (("run-1", "pwd"), ("run-2", "date")):
+        task_id = f"task-{run_id}"
+        _ = task_repo.create(
+            TaskEnvelope(
+                task_id=task_id,
+                session_id=session_id,
+                parent_task_id=None,
+                trace_id=run_id,
+                role_id="Coordinator",
+                objective=command,
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+            )
+        )
+        agent_repo.upsert_instance(
+            run_id=run_id,
+            trace_id=run_id,
+            session_id=session_id,
+            instance_id=f"inst-{run_id}",
+            role_id="Coordinator",
+            workspace_id="default",
+            status=InstanceStatus.COMPLETED,
+        )
+        run_runtime_repo.ensure(
+            run_id=run_id,
+            session_id=session_id,
+            root_task_id=task_id,
+        )
+
+    events: list[dict[str, object]] = [
+        {
+            "trace_id": "run-1",
+            "run_id": "run-1",
+            "task_id": "task-run-1",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:00+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-1",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "pwd"},
+                    "role_id": "Coordinator",
+                    "instance_id": "inst-run-1",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-1",
+            "run_id": "run-1",
+            "task_id": "task-run-1",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "2026-04-29T10:00:00.500000+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-1",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True, "data": "subagent output"},
+                    "error": False,
+                    "role_id": "Worker",
+                    "instance_id": "inst-worker-1",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-1",
+            "run_id": "run-1",
+            "task_id": "task-worker-1",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:00.250000+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-1",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "echo worker"},
+                    "role_id": "Worker",
+                    "instance_id": "inst-worker-1",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-1",
+            "run_id": "run-1",
+            "task_id": "task-run-1",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "2026-04-29T10:00:01+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-1",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True, "data": "C:/Users/yex/Desktop"},
+                    "error": False,
+                    "role_id": "Coordinator",
+                    "instance_id": "inst-run-1",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-2",
+            "run_id": "run-2",
+            "task_id": "task-run-2",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:02+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-2",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "date"},
+                    "role_id": "Coordinator",
+                    "instance_id": "inst-run-2",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-2",
+            "run_id": "run-2",
+            "task_id": "task-run-2",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "2026-04-29T10:00:03+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-2",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True, "data": "Wed Apr 29"},
+                    "error": False,
+                    "role_id": "Coordinator",
+                    "instance_id": "inst-run-2",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-1",
+            "run_id": "run-1",
+            "task_id": "task-run-1",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:04+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-1",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "whoami"},
+                    "role_id": "Coordinator",
+                    "instance_id": "inst-run-1",
+                }
+            ),
+        },
+        {
+            "trace_id": "run-1",
+            "run_id": "run-1",
+            "task_id": "task-run-1",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "2026-04-29T10:00:05+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": "run-1",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True, "data": "yex"},
+                    "error": False,
+                    "role_id": "Coordinator",
+                    "instance_id": "inst-run-1",
+                }
+            ),
+        },
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _session_id: [],
+        get_session_events=lambda _session_id: events,
+    )
+
+    by_run = {str(item["run_id"]): item for item in rounds}
+    run_1_messages = cast(
+        list[dict[str, object]], by_run["run-1"]["coordinator_messages"]
+    )
+    run_2_messages = cast(
+        list[dict[str, object]], by_run["run-2"]["coordinator_messages"]
+    )
+    run_1_parts = [
+        cast(
+            dict[str, object],
+            cast(
+                list[dict[str, object]],
+                cast(dict[str, object], message["message"])["parts"],
+            )[0],
+        )
+        for message in run_1_messages
+    ]
+    run_2_parts = [
+        cast(
+            dict[str, object],
+            cast(
+                list[dict[str, object]],
+                cast(dict[str, object], message["message"])["parts"],
+            )[0],
+        )
+        for message in run_2_messages
+    ]
+
+    assert len(run_1_parts) == 4
+    assert cast(dict[str, object], run_1_parts[0]["args"])["command"] == "pwd"
+    assert cast(dict[str, object], run_1_parts[1]["content"])["data"] == (
+        "C:/Users/yex/Desktop"
+    )
+    assert cast(dict[str, object], run_1_parts[2]["args"])["command"] == "whoami"
+    assert cast(dict[str, object], run_1_parts[3]["content"])["data"] == "yex"
+    assert cast(dict[str, object], run_2_parts[0]["args"])["command"] == "date"
+    assert cast(dict[str, object], run_2_parts[1]["content"])["data"] == "Wed Apr 29"
+
+
+def test_build_session_rounds_restores_missing_tool_return_from_events(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_event_tool_return_recovery.db"
+    session_id = "session-1"
+    run_id = "run-1"
+    coordinator_instance_id = "inst-coordinator-1"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    message_repo = MessageRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="recover missing tool return",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id=session_id,
+        instance_id=coordinator_instance_id,
+        role_id="Coordinator",
+        workspace_id="default",
+        status=InstanceStatus.COMPLETED,
+    )
+    run_runtime_repo.ensure(
+        run_id=run_id,
+        session_id=session_id,
+        root_task_id="task-root",
+    )
+    message_repo.append(
+        session_id=session_id,
+        workspace_id="default",
+        instance_id=coordinator_instance_id,
+        task_id="task-root",
+        trace_id=run_id,
+        agent_role_id="Coordinator",
+        messages=[
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name="shell",
+                        args={"command": "pwd"},
+                        tool_call_id="call-1",
+                    )
+                ]
+            )
+        ],
+    )
+    events: list[dict[str, object]] = [
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-04-29T10:00:00+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"command": "pwd"},
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "occurred_at": "9999-04-29T10:00:01+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "result": {"ok": True, "data": "C:/Users/yex/Desktop"},
+                    "error": False,
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda sid: cast(
+            list[dict[str, object]],
+            message_repo.get_messages_by_session(sid),
+        ),
+        get_session_events=lambda _session_id: events,
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]], round_item["coordinator_messages"]
+    )
+    parts = [
+        cast(
+            dict[str, object],
+            cast(
+                list[dict[str, object]],
+                cast(dict[str, object], message["message"])["parts"],
+            )[0],
+        )
+        for message in coordinator_messages
+    ]
+
+    assert [part["part_kind"] for part in parts] == ["tool-call", "tool-return"]
+    assert cast(dict[str, object], parts[1]["content"])["data"] == (
+        "C:/Users/yex/Desktop"
+    )
 
 
 def test_build_session_rounds_keeps_tool_return_from_mixed_media_replay_message(

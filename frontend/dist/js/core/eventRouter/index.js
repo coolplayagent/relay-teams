@@ -9,11 +9,20 @@ import {
 } from '../../app/recovery.js';
 import { rememberNormalModeSubagentFromBackgroundTask } from '../../components/subagentSessions.js';
 import {
-    syncRoundTodoVisibility,
-    updateRoundTodo,
-} from '../../components/rounds/timeline.js';
+    appendStreamInjectionMarker,
+    applyStreamOverlayEvent,
+} from '../../components/messageRenderer.js';
+import * as roundsTimeline from '../../components/rounds/timeline.js';
+import {
+    removeRuntimeInjectMessage,
+    upsertRuntimeInjectMessage,
+} from '../../components/runtimeInjectQueue.js';
 import { scheduleSessionTokenUsageRefresh } from '../../components/sessionTokenUsage.js';
-import { state } from '../state.js';
+import {
+    getRunPrimaryRoleId,
+    isRunPrimaryRoleId,
+    state,
+} from '../state.js';
 import { sysLog } from '../../utils/logger.js';
 import {
     handleLlmFallbackActivated,
@@ -48,6 +57,7 @@ import {
     handleSubagentGate,
 } from './humanEvents.js';
 import { handleNotificationRequested } from './notificationEvents.js';
+import { coordinatorContainerFor } from './utils.js';
 
 const BACKGROUND_TASK_UPDATE_REFRESH_DELAY_MS = 650;
 const BACKGROUND_TASK_STATUS_REFRESH_DELAY_MS = 350;
@@ -129,16 +139,18 @@ export function routeEvent(evType, payload, eventMeta) {
             handleSubagentRunTerminal(instanceId, 'failed', eventMeta, roleId);
         } else if (evType === 'run_stopped') {
             handleSubagentRunTerminal(instanceId, 'stopped', eventMeta, roleId);
+        } else if (evType === 'injection_enqueued' || evType === 'injection_applied') {
+            handleInjection(evType, payload, eventMeta);
         }
         clearSeenRunEventsForTerminal(evType, eventRunId);
         return;
     }
     if (evType === 'run_started') {
         handleRunStarted(eventMeta);
-        syncRoundTodoVisibility();
+        roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'run_resumed') {
         handleRunStarted(eventMeta);
-        syncRoundTodoVisibility();
+        roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'model_step_started') {
         handleModelStepStarted(eventMeta, instanceId, roleId);
     } else if (evType === 'llm_retry_scheduled') {
@@ -165,13 +177,13 @@ export function routeEvent(evType, payload, eventMeta) {
         handleModelStepFinished(eventMeta, instanceId, roleId);
     } else if (evType === 'run_completed') {
         handleRunCompleted(eventMeta);
-        syncRoundTodoVisibility();
+        roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'run_stopped') {
         handleRunStopped(eventMeta, payload);
-        syncRoundTodoVisibility();
+        roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'run_failed') {
         handleRunFailed(eventMeta, payload);
-        syncRoundTodoVisibility();
+        roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'tool_call') {
         handleToolCall(payload, eventMeta, instanceId, roleId);
     } else if (evType === 'tool_input_validation_failed') {
@@ -182,6 +194,8 @@ export function routeEvent(evType, payload, eventMeta) {
         handleToolApprovalRequested(payload, eventMeta, instanceId);
     } else if (evType === 'tool_approval_resolved') {
         handleToolApprovalResolved(payload, instanceId, eventMeta, roleId);
+    } else if (evType === 'injection_enqueued' || evType === 'injection_applied') {
+        handleInjection(evType, payload, eventMeta);
     } else if (evType === 'user_question_requested' || evType === 'user_question_answered') {
         return;
     } else if (evType === 'notification_requested') {
@@ -202,7 +216,7 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: false });
     } else if (evType === 'todo_updated') {
-        updateRoundTodo(
+        roundsTimeline.updateRoundTodo?.(
             payload?.run_id || eventMeta?.run_id || eventMeta?.trace_id || '',
             payload,
         );
@@ -210,6 +224,76 @@ export function routeEvent(evType, payload, eventMeta) {
         sysLog(`[evt] ${evType}`, 'log-info');
     }
     clearSeenRunEventsForTerminal(evType, eventRunId);
+}
+
+function handleInjection(evType, payload, eventMeta) {
+    const runId = String(eventMeta?.run_id || eventMeta?.trace_id || payload?.run_id || '').trim();
+    if (!runId || !payload || typeof payload !== 'object') {
+        return;
+    }
+    if (payload.content_redacted === true || String(payload.visibility || 'public') !== 'public') {
+        return;
+    }
+    const source = String(payload.source || 'user');
+    if (source !== 'user' && source !== 'subagent') {
+        return;
+    }
+    const projectedMessage = {
+        ...payload,
+        status: injectionStatus(evType, payload),
+        mode: payload.delivery_mode || payload.mode || 'queued',
+        recipient_instance_id: payload.recipient_instance_id || eventMeta?.instance_id || '',
+        occurred_at: eventMeta?.occurred_at || payload.created_at || new Date().toISOString(),
+        applied_at: evType === 'injection_applied'
+            ? String(eventMeta?.occurred_at || new Date().toISOString())
+            : String(payload.applied_at || ''),
+    };
+    if (evType === 'injection_applied') {
+        const roleId = String(
+            eventMeta?.role_id
+            || payload.role_id
+            || getRunPrimaryRoleId(runId)
+            || '',
+        ).trim();
+        const recipient = String(
+            payload.recipient_instance_id
+            || eventMeta?.instance_id
+            || 'primary',
+        ).trim();
+        const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
+        const renderedLive = isPrimary && !state.activeSubagentSession
+            ? appendStreamInjectionMarker(
+                coordinatorContainerFor(eventMeta),
+                recipient || 'primary',
+                projectedMessage,
+                {
+                    runId,
+                    roleId,
+                    eventId: eventMeta?.event_id || projectedMessage.injection_id || '',
+                },
+            )
+            : false;
+        if (!renderedLive) {
+            applyStreamOverlayEvent('injection_applied', projectedMessage, {
+                runId,
+                instanceId: recipient || 'primary',
+                roleId,
+                eventId: eventMeta?.event_id || projectedMessage.injection_id || '',
+            });
+        }
+        removeRuntimeInjectMessage(runId, projectedMessage);
+    } else {
+        removeRuntimeInjectMessage(runId, projectedMessage, { render: false });
+        upsertRuntimeInjectMessage(runId, projectedMessage);
+    }
+}
+
+function injectionStatus(evType, payload) {
+    if (evType === 'injection_applied') return 'applied';
+    if (String(payload?.delivery_mode || payload?.mode || '') === 'interrupt') {
+        return 'interrupting';
+    }
+    return 'queued';
 }
 
 function handleBackgroundTaskEvent(evType, payload, eventMeta) {

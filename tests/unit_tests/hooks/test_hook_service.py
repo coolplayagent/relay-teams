@@ -62,7 +62,11 @@ from relay_teams.hooks.hook_service import (
     _normalize_decision_for_event,
 )
 from relay_teams.media import UserPromptContent
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
 
@@ -1428,9 +1432,11 @@ async def test_async_rewake_enqueues_followup_context(tmp_path: Path) -> None:
             recipient_instance_id: str,
             source: InjectionSource,
             content: UserPromptContent,
+            delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
             sender_instance_id: str | None = None,
             sender_role_id: str | None = None,
         ) -> object:
+            _ = delivery_mode
             _ = sender_instance_id
             _ = sender_role_id
             self.items.append((run_id, recipient_instance_id, source, content))
