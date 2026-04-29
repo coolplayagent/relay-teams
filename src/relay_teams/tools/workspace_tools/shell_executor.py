@@ -51,6 +51,10 @@ _BASH_STARTUP_ENV_KEYS = frozenset(
 )
 _BASH_STARTUP_ENV_PREFIXES = ("BASH_FUNC_",)
 _SIGKILL_GRACE_SECONDS = 5
+_WINDOWS_PYTHON_UTF8_ENV = {
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONUTF8": "1",
+}
 
 
 class ShellKind(str, Enum):
@@ -359,9 +363,11 @@ def _sanitize_shell_env(
     *,
     shell: ResolvedShell,
 ) -> dict[str, str]:
-    if shell.kind == ShellKind.BASH:
-        return _sanitize_bash_env(env)
-    return env
+    sanitized = _sanitize_bash_env(env) if shell.kind == ShellKind.BASH else env
+    if _is_windows():
+        for key, value in _WINDOWS_PYTHON_UTF8_ENV.items():
+            sanitized.setdefault(key, value)
+    return sanitized
 
 
 def _prepend_powershell_utf8_prefix(command: str) -> str:

@@ -228,6 +228,40 @@ async def test_build_command_env_includes_node_proxy_runtime_defaults(
 
 
 @pytest.mark.asyncio
+async def test_build_command_env_forces_utf8_python_io_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    powershell_runtime = ResolvedCommandRuntime(
+        kind=CommandRuntimeKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+
+    monkeypatch.setattr(runtime_module, "_is_windows", lambda: True)
+    monkeypatch.setattr(runtime_module, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(runtime_module, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_gh_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_existing_clawhub_path",
+        lambda: None,
+    )
+    monkeypatch.setattr(runtime_module.os, "environ", {"PATH": r"C:\Windows\System32"})
+
+    env = await build_command_env(
+        runtime=powershell_runtime,
+        command="python -c \"print('hi')\"",
+    )
+
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONUTF8"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_build_command_env_prepends_existing_gh_path(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
