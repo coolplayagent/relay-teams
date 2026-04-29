@@ -106,6 +106,10 @@ export async function requestJsonManaged(key, url, options, errorMessage) {
 export function invalidateManagedRequests(prefix) {
     globalThis.__invalidatedPrefixes.push(prefix);
 }
+
+export function invalidateManagedRequestCache(prefix) {
+    globalThis.__invalidatedCachePrefixes.push(prefix);
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -126,12 +130,14 @@ export function invalidateManagedRequests(prefix) {
             (
                 "globalThis.__capturedRequests = []; "
                 "globalThis.__invalidatedPrefixes = []; "
+                "globalThis.__invalidatedCachePrefixes = []; "
                 f"const mod = await import({module_under_test_path.as_uri()!r}); "
                 "const result = await mod.markSessionTerminalRunViewed('session-a'); "
                 "console.log(JSON.stringify({"
                 "result,"
                 "requests: globalThis.__capturedRequests,"
-                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes,"
+                "invalidatedCachePrefixes: globalThis.__invalidatedCachePrefixes"
                 "}));"
             ),
         ],
@@ -158,7 +164,8 @@ export function invalidateManagedRequests(prefix) {
                 "errorMessage": "Failed to mark session run viewed",
             }
         ],
-        "invalidatedPrefixes": ["sessions:list", "sessions:session-a:record"],
+        "invalidatedPrefixes": [],
+        "invalidatedCachePrefixes": ["sessions:list", "sessions:session-a:record"],
     }
 
 
@@ -191,6 +198,10 @@ export async function requestJsonManaged(key, url, options, errorMessage, config
 
 export function invalidateManagedRequests(prefix) {
     globalThis.__invalidatedPrefixes.push(prefix);
+}
+
+export function invalidateManagedRequestCache() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",
@@ -570,6 +581,89 @@ export function invalidateManagedRequests(prefix) {
         "roles:",
         "roles:",
         "roles:",
+    ]
+
+
+def test_fetch_session_rounds_supports_summary_query(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "sessions.js"
+    )
+    module_under_test_path = tmp_path / "sessions.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson() {
+    throw new Error('not used');
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return { items: [] };
+}
+
+export function invalidateManagedRequests() {
+    return undefined;
+}
+
+export function invalidateManagedRequestCache() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSessionRounds('session-a', {"
+                "limit: 3, summary: true, priority: 'high'"
+                "}); "
+                "console.log(JSON.stringify(globalThis.__capturedManagedRequests));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert json.loads(completed.stdout.strip()) == [
+        {
+            "key": "sessions:session-a:rounds:limit=3&summary=true",
+            "url": "/api/sessions/session-a/rounds?limit=3&summary=true",
+            "options": {},
+            "errorMessage": "Failed to fetch session rounds",
+            "config": {"lane": "critical", "priority": "high", "ttlMs": 300},
+        }
     ]
 
 

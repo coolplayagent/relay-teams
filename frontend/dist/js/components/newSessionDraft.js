@@ -20,6 +20,10 @@ import { clearSessionTimeline } from './rounds/timeline.js';
 import { clearSessionTokenUsage } from './sessionTokenUsage.js';
 import { clearActiveSubagentSession } from './subagentSessions.js';
 import { renderNewSessionDraftView as renderNewSessionDraftMarkup } from './newSessionDraftView.js';
+import {
+    getSidebarDataSnapshot,
+    hasSidebarDataSnapshot,
+} from './sessionSidebarStore.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
 import { showTextInputDialog } from '../utils/feedback.js';
@@ -51,6 +55,7 @@ export function openNewSessionDraft(workspaceId) {
     bindLanguageRefresh();
     rememberComposerHome();
     draftWorkspaceError = '';
+    adoptSnapshotDraftWorkspaces();
     draftWorkspaceLoadState = draftWorkspaces.length > 0 ? 'ready' : 'loading';
 
     state.pendingNewSessionActive = true;
@@ -259,28 +264,54 @@ function bindLanguageRefresh() {
     });
 }
 
-async function refreshDraftWorkspaces({ preferredWorkspaceId = '' } = {}) {
+async function refreshDraftWorkspaces({ preferredWorkspaceId = '', force = false } = {}) {
+    if (force !== true && adoptSnapshotDraftWorkspaces()) {
+        applyDraftWorkspaceSelection(preferredWorkspaceId);
+        draftWorkspaceLoadState = 'ready';
+        draftWorkspaceError = '';
+        renderWorkspaceSelector();
+        return;
+    }
     draftWorkspaceLoadState = 'loading';
     draftWorkspaceError = '';
     renderWorkspaceSelector();
     try {
         const fetched = await fetchWorkspaces();
         draftWorkspaces = Array.isArray(fetched) ? fetched : [];
-        const preferred = String(preferredWorkspaceId || '').trim();
-        const selected = resolveSelectedWorkspaceId(preferred);
-        state.pendingNewSessionWorkspaceId = selected;
-        if (selected) {
-            state.currentWorkspaceId = selected;
-            document.dispatchEvent(new CustomEvent('agent-teams-draft-workspace-selected', {
-                detail: { workspaceId: selected },
-            }));
-        }
+        applyDraftWorkspaceSelection(preferredWorkspaceId);
         draftWorkspaceLoadState = 'ready';
         renderWorkspaceSelector();
     } catch (error) {
         draftWorkspaceLoadState = 'error';
         draftWorkspaceError = error?.message || String(error);
         renderWorkspaceSelector();
+    }
+}
+
+function adoptSnapshotDraftWorkspaces() {
+    if (!hasSidebarDataSnapshot()) {
+        return false;
+    }
+    const snapshotData = getSidebarDataSnapshot();
+    const workspaces = Array.isArray(snapshotData?.workspaces)
+        ? snapshotData.workspaces
+        : [];
+    if (workspaces.length === 0) {
+        return false;
+    }
+    draftWorkspaces = workspaces;
+    return true;
+}
+
+function applyDraftWorkspaceSelection(preferredWorkspaceId = '') {
+    const preferred = String(preferredWorkspaceId || '').trim();
+    const selected = resolveSelectedWorkspaceId(preferred);
+    state.pendingNewSessionWorkspaceId = selected;
+    if (selected) {
+        state.currentWorkspaceId = selected;
+        document.dispatchEvent(new CustomEvent('agent-teams-draft-workspace-selected', {
+            detail: { workspaceId: selected },
+        }));
     }
 }
 
@@ -373,7 +404,7 @@ async function addDraftWorkspace() {
         document.dispatchEvent(new CustomEvent('agent-teams-draft-workspace-added', {
             detail: { workspaceId, workspace },
         }));
-        await refreshDraftWorkspaces({ preferredWorkspaceId: workspaceId });
+        await refreshDraftWorkspaces({ preferredWorkspaceId: workspaceId, force: true });
     } catch (error) {
         draftWorkspaceError = error?.message || String(error);
         draftWorkspaceMenuOpen = false;

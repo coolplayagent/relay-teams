@@ -359,6 +359,105 @@ console.log(JSON.stringify({
     }
 
 
+def test_request_json_managed_can_invalidate_cache_without_aborting_in_flight_get(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"
+    module_under_test_path = tmp_path / "request.mjs"
+    runner_path = tmp_path / "runner-request-cache-only-invalidate.mjs"
+    logger_path = tmp_path / "mockLogger.mjs"
+
+    source_text = source_path.read_text(encoding="utf-8").replace(
+        "../../utils/logger.js",
+        "./mockLogger.mjs",
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+    logger_path.write_text(
+        """
+export function errorToPayload(error, context = {}) {
+    return { name: error?.name || '', ...context };
+}
+
+export function logError(...args) {
+    globalThis.__logErrorCalls.push(args);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    runner_path.write_text(
+        """
+globalThis.__logErrorCalls = [];
+let fetchCalls = 0;
+let firstSignalAbortedAfterCacheInvalidation = null;
+const releases = [];
+const startedSignals = [];
+async function waitForFetch(callNumber) {
+    while (!releases[callNumber]) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+}
+globalThis.fetch = async (_url, options = {}) => {
+    fetchCalls += 1;
+    const callNumber = fetchCalls;
+    startedSignals[callNumber] = options.signal || null;
+    await new Promise(resolve => {
+        releases[callNumber] = resolve;
+    });
+    return {
+        ok: true,
+        json: async () => ({ fetchCalls: callNumber }),
+    };
+};
+
+const { invalidateManagedRequestCache, requestJsonManaged } = await import('./request.mjs');
+const firstPromise = requestJsonManaged('sessions:list', '/api/sessions', undefined, 'failed');
+await waitForFetch(1);
+invalidateManagedRequestCache('sessions:');
+firstSignalAbortedAfterCacheInvalidation = startedSignals[1]?.aborted ?? null;
+const secondPromise = requestJsonManaged('sessions:list', '/api/sessions', undefined, 'failed');
+await waitForFetch(2);
+releases[2]();
+const second = await secondPromise;
+releases[1]();
+const first = await firstPromise;
+
+console.log(JSON.stringify({
+    fetchCalls,
+    firstSignalAbortedAfterCacheInvalidation,
+    first,
+    second,
+    logErrorCalls: globalThis.__logErrorCalls.length,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert json.loads(completed.stdout) == {
+        "fetchCalls": 2,
+        "firstSignalAbortedAfterCacheInvalidation": False,
+        "first": {"fetchCalls": 1},
+        "second": {"fetchCalls": 2},
+        "logErrorCalls": 0,
+    }
+
+
 def test_request_json_managed_prunes_expired_cached_gets(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "core" / "api" / "request.js"

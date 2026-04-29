@@ -133,9 +133,6 @@ async function fetchAndRenderUsage({
 }) {
     const nextRequestId = previewState.requestId + 1;
     previewState.requestId = nextRequestId;
-    if (previewState.controller) {
-        previewState.controller.abort();
-    }
 
     const controller = new AbortController();
     previewState.controller = controller;
@@ -146,9 +143,7 @@ async function fetchAndRenderUsage({
             fetchRunTokenUsage(sessionId, runId, {
                 signal: controller.signal,
             }),
-            fetchModelProfiles({
-                signal: controller.signal,
-            }),
+            fetchModelProfiles(),
         ]);
         if (previewState.requestId !== nextRequestId) return;
         const agentUsage = selectAgentUsage(usage, { roleId, instanceId });

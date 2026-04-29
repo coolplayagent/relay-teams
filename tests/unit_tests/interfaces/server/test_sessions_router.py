@@ -220,12 +220,14 @@ class _FakeSessionService:
         limit: int,
         cursor_run_id: str | None,
         timeline: bool = False,
+        summary: bool = False,
     ) -> dict[str, object]:
         return {
             "session_id": session_id,
             "limit": limit,
             "cursor_run_id": cursor_run_id,
             "timeline": timeline,
+            "summary": summary,
             "rounds": [],
         }
 

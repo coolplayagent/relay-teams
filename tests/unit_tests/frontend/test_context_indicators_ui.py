@@ -74,9 +74,94 @@ console.log(JSON.stringify({
     assert "128000" in cast(str, payload["title"])
 
 
+def test_context_indicator_burst_refresh_does_not_abort_previous_consumer(
+    tmp_path: Path,
+) -> None:
+    payload = _run_context_indicators_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { refreshVisibleContextIndicators } = await import('./contextIndicators.mjs');
+const { state, setNormalModeRoles } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'normal';
+state.currentNormalRootRoleId = 'writer';
+state.activeRunId = 'run-1';
+setNormalModeRoles([
+    { role_id: 'writer', model_profile: 'writer-profile' },
+]);
+
+refreshVisibleContextIndicators({ immediate: true });
+await Promise.resolve();
+refreshVisibleContextIndicators({ immediate: true });
+await Promise.resolve();
+const abortStatesAfterSecondRefresh = globalThis.__usageSignals.map(signal => signal.aborted);
+
+while (globalThis.__usageResolvers.length > 0) {
+    globalThis.__usageResolvers.shift()();
+    await Promise.resolve();
+}
+for (let index = 0; index < 5; index += 1) {
+    await Promise.resolve();
+}
+
+const indicator = globalThis.document.getElementById('main-context-indicator');
+console.log(JSON.stringify({
+    abortStatesAfterSecondRefresh,
+    usageCalls: globalThis.__usageCalls,
+    profileCalls: globalThis.__profileCalls,
+    textContent: indicator.textContent,
+    state: indicator.dataset.state,
+}));
+""".strip(),
+        mock_api_source="""
+globalThis.__usageCalls = 0;
+globalThis.__profileCalls = 0;
+globalThis.__usageSignals = [];
+globalThis.__usageResolvers = [];
+
+export async function fetchRunTokenUsage(sessionId, runId, options = {}) {
+    globalThis.__usageCalls += 1;
+    globalThis.__usageSignals.push(options.signal);
+    return await new Promise(resolve => {
+        globalThis.__usageResolvers.push(() => resolve({
+            run_id: 'run-1',
+            by_agent: [
+                {
+                    instance_id: 'inst-1',
+                    role_id: 'writer',
+                    input_tokens: 999,
+                    latest_input_tokens: 321,
+                },
+            ],
+        }));
+    });
+}
+
+export async function fetchModelProfiles(options = {}) {
+    globalThis.__profileCalls += 1;
+    if (options.signal) {
+        throw new Error('model profiles should not be tied to indicator abort signals');
+    }
+    return {
+        default: { is_default: true, context_window: 128000 },
+        'writer-profile': { is_default: false, context_window: 64000 },
+    };
+}
+""".strip(),
+    )
+
+    assert payload["abortStatesAfterSecondRefresh"] == [False, False]
+    assert payload["usageCalls"] == 2
+    assert payload["profileCalls"] == 2
+    assert payload["textContent"] == "321 / 64k"
+    assert payload["state"] == "ready"
+
+
 def _run_context_indicators_script(
     tmp_path: Path,
     runner_source: str,
+    mock_api_source: str | None = None,
 ) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -99,7 +184,8 @@ def _run_context_indicators_script(
     module_under_test_path.write_text(source_text, encoding="utf-8")
 
     (tmp_path / "mockApi.mjs").write_text(
-        """
+        mock_api_source
+        or """
 export async function fetchRunTokenUsage() {
     return {
         run_id: 'run-1',

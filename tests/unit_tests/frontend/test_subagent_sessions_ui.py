@@ -17,7 +17,7 @@ def test_opening_subagent_session_hides_main_input_container(tmp_path: Path) -> 
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -56,7 +56,11 @@ export function syncNormalModeSubagentStreams() {
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView() {
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView() {
     return {};
 }
 """.strip(),
@@ -299,7 +303,7 @@ def test_return_to_main_session_clears_subagent_view_before_hydration(
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -329,20 +333,31 @@ export function syncNormalModeSubagentStreams() {
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView(sessionId, options = {}) {
+import { els } from "./mockDom.mjs";
+
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView(sessionId, options = {}) {
+    els.chatMessages.innerHTML = "<div class='subagent-main-session-loading'></div>";
+    document.dispatchEvent(new CustomEvent("agent-teams-subagent-session-cleared", {
+        detail: { sessionId },
+    }));
     globalThis.__hydrateCalls.push({
         sessionId,
-        includeRounds: options.includeRounds === true,
+        includeRounds: true,
         quiet: options.quiet === true,
     });
-    await new Promise((resolve, reject) => {
-        globalThis.__hydrateResolvers.push({ resolve, reject });
-        options.signal?.addEventListener?.("abort", () => {
-            const error = new Error("aborted");
-            error.name = "AbortError";
-            reject(error);
-        });
+    await new Promise(resolve => {
+        globalThis.__hydrateResolvers.push({ resolve });
     });
+    document.dispatchEvent(new CustomEvent("agent-teams-session-activated", {
+        detail: { sessionId },
+    }));
+    document.dispatchEvent(new CustomEvent("agent-teams-session-selected", {
+        detail: { sessionId },
+    }));
 }
 """.strip(),
         encoding="utf-8",
@@ -534,7 +549,7 @@ def test_return_to_main_session_ignores_stale_hydration_after_subagent_reentry(
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -556,10 +571,24 @@ def test_return_to_main_session_ignores_stale_hydration_after_subagent_reentry(
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView() {
+import { state } from "./mockState.mjs";
+
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView(sessionId) {
+    document.dispatchEvent(new CustomEvent("agent-teams-subagent-session-cleared", {
+        detail: { sessionId },
+    }));
     await new Promise(resolve => {
         globalThis.__hydrateResolvers.push({ resolve });
     });
+    if (!state.activeSubagentSession) {
+        document.dispatchEvent(new CustomEvent("agent-teams-session-selected", {
+            detail: { sessionId },
+        }));
+    }
 }
 """.strip(),
         encoding="utf-8",
@@ -689,7 +718,7 @@ def test_ensure_session_subagents_syncs_running_streams_for_current_session(
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -742,7 +771,11 @@ export function syncNormalModeSubagentStreams(sessionId, records) {
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView() {
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView() {
     return {};
 }
 """.strip(),
@@ -868,6 +901,210 @@ console.log(JSON.stringify({
     ]
 
 
+def test_ensure_session_subagents_limits_parallel_backend_loads(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "subagentSessions.js"
+    )
+    module_under_test_path = tmp_path / "subagentSessions.mjs"
+    runner_path = tmp_path / "runner_concurrency.mjs"
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
+        .replace("./rounds/navigator.js", "./mockNavigator.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    (tmp_path / "mockApi.mjs").write_text(
+        """
+export async function fetchAgentMessages() {
+    return [];
+}
+
+export async function fetchSessionSubagents(sessionId) {
+    globalThis.__activeLoads += 1;
+    globalThis.__maxActiveLoads = Math.max(
+        globalThis.__maxActiveLoads,
+        globalThis.__activeLoads,
+    );
+    globalThis.__loadCalls.push(sessionId);
+    return await new Promise(resolve => {
+        globalThis.__loadResolvers.push(() => {
+            globalThis.__activeLoads -= 1;
+            resolve([]);
+        });
+    });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockStream.mjs").write_text(
+        """
+export function syncNormalModeSubagentStreams() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRecovery.mjs").write_text(
+        """
+export function abortMainSessionRestore() {
+    return undefined;
+}
+
+export async function restoreMainSessionView() {
+    return {};
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanel.mjs").write_text(
+        """
+export function clearAllPanels() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockAgentPanelHistory.mjs").write_text(
+        """
+export async function renderInstanceHistoryInto() {
+    return { messages: [], streamOverlayEntry: null };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockNavigator.mjs").write_text(
+        """
+export function hideRoundNavigator() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-1",
+    activeSubagentSession: null,
+    activeView: "main",
+    isGenerating: false,
+    activeAgentRoleId: null,
+    activeAgentInstanceId: null,
+};
+
+export function getRoleDisplayName(roleId, { fallback } = {}) {
+    return String(roleId || fallback || "Agent");
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockDom.mjs").write_text(
+        """
+export const els = {
+    inputContainer: { style: {} },
+    promptInput: { disabled: false },
+    sendBtn: { disabled: false },
+    promptInputHint: { textContent: "" },
+    chatMessages: null,
+};
+
+globalThis.document = {
+    dispatchEvent() {
+        return undefined;
+    },
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        """
+export function sysLog() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner_path.write_text(
+        """
+globalThis.__activeLoads = 0;
+globalThis.__maxActiveLoads = 0;
+globalThis.__loadCalls = [];
+globalThis.__loadResolvers = [];
+
+const { ensureSessionSubagents } = await import("./subagentSessions.mjs");
+
+const promises = Array.from({ length: 5 }, (_, index) => (
+    ensureSessionSubagents(`session-${index}`, { force: true })
+));
+await Promise.resolve();
+const callsAfterStart = [...globalThis.__loadCalls];
+const activeAfterStart = globalThis.__activeLoads;
+
+while (globalThis.__loadResolvers.length > 0) {
+    const resolver = globalThis.__loadResolvers.shift();
+    resolver();
+    await Promise.resolve();
+}
+await Promise.all(promises);
+
+console.log(JSON.stringify({
+    activeAfterStart,
+    callsAfterStart,
+    loadCalls: globalThis.__loadCalls,
+    maxActiveLoads: globalThis.__maxActiveLoads,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=3,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["activeAfterStart"] == 2
+    assert payload["callsAfterStart"] == ["session-0", "session-1"]
+    assert payload["loadCalls"] == [
+        "session-0",
+        "session-1",
+        "session-2",
+        "session-3",
+        "session-4",
+    ]
+    assert payload["maxActiveLoads"] == 2
+
+
 def test_subagent_status_update_emits_sidebar_refresh_event(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -879,7 +1116,7 @@ def test_subagent_status_update_emits_sidebar_refresh_event(tmp_path: Path) -> N
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -916,7 +1153,11 @@ export function syncNormalModeSubagentStreams(sessionId, records) {
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView() {
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView() {
     return {};
 }
 """.strip(),
@@ -1111,7 +1352,7 @@ def test_background_task_event_records_normal_mode_subagent_immediately(
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -1156,7 +1397,11 @@ export function syncNormalModeSubagentStreams(sessionId, records) {
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView() {
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView() {
     return {};
 }
 """.strip(),
@@ -1356,7 +1601,7 @@ def test_terminal_settle_retries_until_history_is_safe(
     source_text = (
         source_path.read_text(encoding="utf-8")
         .replace("../core/api.js", "./mockApi.mjs")
-        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../app/sessionView.js", "./mockRecovery.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./agentPanel/history.js", "./mockAgentPanelHistory.mjs")
@@ -1390,7 +1635,11 @@ export function syncNormalModeSubagentStreams() {
     )
     (tmp_path / "mockRecovery.mjs").write_text(
         """
-export async function hydrateSessionView() {
+export function abortMainSessionRestore() {
+    globalThis.__abortMainSessionRestoreCalls = (globalThis.__abortMainSessionRestoreCalls || 0) + 1;
+}
+
+export async function restoreMainSessionView() {
     return {};
 }
 """.strip(),

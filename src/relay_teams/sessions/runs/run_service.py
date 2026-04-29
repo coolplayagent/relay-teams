@@ -112,6 +112,10 @@ def _clear_current_task_cancellation_requests() -> None:
         current_task.uncancel()
 
 
+def _run_event_replay_sort_key(run_event: RunEvent) -> int:
+    return int(run_event.event_id or 0)
+
+
 class SessionRunService:
     def __init__(
         self,
@@ -1658,6 +1662,128 @@ class SessionRunService:
             self._run_event_hub.unsubscribe(run_id, queue)
             if terminal_reached:
                 self._run_event_hub.unsubscribe_all(run_id)
+
+    async def stream_multiplexed_run_events(
+        self,
+        run_offsets: tuple[tuple[str, int], ...],
+    ):
+        normalized_offsets = tuple(
+            (run_id.strip(), max(0, int(after_event_id)))
+            for run_id, after_event_id in run_offsets
+            if run_id.strip()
+        )
+        if not normalized_offsets:
+            return
+
+        queues = {
+            run_id: self._run_event_hub.subscribe(run_id)
+            for run_id, _after_event_id in normalized_offsets
+        }
+        terminal_run_ids: set[str] = set()
+        replay_high_watermarks: dict[str, int] = {
+            run_id: 0 for run_id, _after_event_id in normalized_offsets
+        }
+        pending_gets: dict[asyncio.Task[RunEvent], str] = {}
+        try:
+            replay_events: list[RunEvent] = []
+            if self._event_log is not None:
+                for row in await self._event_log.list_by_traces_after_ids_async(
+                    normalized_offsets
+                ):
+                    row_id = row.get("id")
+                    if not isinstance(row_id, int):
+                        continue
+                    replay_event = self._run_event_from_log_row(row)
+                    if replay_event is None:
+                        continue
+                    replay_high_watermarks[replay_event.run_id] = max(
+                        replay_high_watermarks.get(replay_event.run_id, 0),
+                        row_id,
+                    )
+                    replay_events.append(replay_event)
+            replay_events.sort(key=_run_event_replay_sort_key)
+            for replayed_event in replay_events:
+                if replayed_event.run_id in terminal_run_ids:
+                    continue
+                yield replayed_event
+                if replayed_event.event_type in (
+                    RunEventType.RUN_PAUSED,
+                    RunEventType.RUN_COMPLETED,
+                    RunEventType.RUN_FAILED,
+                    RunEventType.RUN_STOPPED,
+                ):
+                    terminal_run_ids.add(replayed_event.run_id)
+
+            for run_id in terminal_run_ids:
+                queue = queues.pop(run_id, None)
+                if queue is not None:
+                    self._run_event_hub.unsubscribe(run_id, queue)
+                    self._run_event_hub.unsubscribe_all(run_id)
+
+            pending_gets = {
+                asyncio.create_task(queue.get()): run_id
+                for run_id, queue in queues.items()
+            }
+            while pending_gets:
+                done, _pending = await asyncio.wait(
+                    tuple(pending_gets.keys()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    run_id = pending_gets.pop(task)
+                    live_event = task.result()
+                    high_watermark = replay_high_watermarks.get(run_id, 0)
+                    if (
+                        high_watermark > 0
+                        and live_event.event_id is not None
+                        and live_event.event_id <= high_watermark
+                    ):
+                        if run_id in queues:
+                            pending_gets[asyncio.create_task(queues[run_id].get())] = (
+                                run_id
+                            )
+                        continue
+                    yield live_event
+                    if live_event.event_type in (
+                        RunEventType.RUN_PAUSED,
+                        RunEventType.RUN_COMPLETED,
+                        RunEventType.RUN_FAILED,
+                        RunEventType.RUN_STOPPED,
+                    ):
+                        queue = queues.pop(run_id, None)
+                        if queue is not None:
+                            self._run_event_hub.unsubscribe(run_id, queue)
+                            self._run_event_hub.unsubscribe_all(run_id)
+                        continue
+                    if run_id in queues:
+                        pending_gets[asyncio.create_task(queues[run_id].get())] = run_id
+        finally:
+            for task in tuple(pending_gets.keys()):
+                task.cancel()
+            for run_id, queue in queues.items():
+                self._run_event_hub.unsubscribe(run_id, queue)
+
+    @staticmethod
+    def _run_event_from_log_row(row: dict[str, JsonValue]) -> RunEvent | None:
+        row_id = row.get("id")
+        if not isinstance(row_id, int):
+            return None
+        try:
+            event_type = RunEventType(str(row["event_type"]))
+        except ValueError:
+            return None
+        return RunEvent(
+            session_id=str(row["session_id"]),
+            run_id=str(row["trace_id"]),
+            trace_id=str(row["trace_id"]),
+            task_id=str(row["task_id"]) if row["task_id"] is not None else None,
+            instance_id=(
+                str(row["instance_id"]) if row["instance_id"] is not None else None
+            ),
+            event_type=event_type,
+            payload_json=str(row["payload_json"]),
+            event_id=row_id,
+        )
 
     async def run_intent_stream(self, intent: IntentInput):
         run_id, _ = await self.create_run_async(intent)

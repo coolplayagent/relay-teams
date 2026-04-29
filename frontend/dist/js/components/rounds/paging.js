@@ -10,6 +10,7 @@ export async function fetchInitialRoundsPage(sessionId, options = {}) {
     return fetchSessionRounds(sessionId, {
         limit: roundsState.pageSize,
         priority: options.priority,
+        summary: options.summary === true,
         signal: options.signal,
     });
 }

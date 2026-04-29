@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Annotated, ClassVar, Literal, Optional, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -40,6 +40,7 @@ from relay_teams.validation import (
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/runs", tags=["Runs"])
+MAX_MULTIPLEX_RUN_STREAMS = 32
 
 
 async def _create_and_start_run(
@@ -114,6 +115,43 @@ def _find_normalized_media_ref(
 
 def _contains_inline_media(parts: tuple[ContentPart, ...]) -> bool:
     return any(isinstance(part, InlineMediaContentPart) for part in parts)
+
+
+def _normalize_multiplex_run_offsets(
+    run_ids: list[str],
+    after_event_ids: list[int],
+) -> tuple[tuple[str, int], ...]:
+    if not run_ids:
+        raise HTTPException(status_code=422, detail="At least one run_id is required")
+    if len(run_ids) > MAX_MULTIPLEX_RUN_STREAMS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"At most {MAX_MULTIPLEX_RUN_STREAMS} run_id values are allowed",
+        )
+    if len(after_event_ids) > len(run_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="after_event_id cannot contain more values than run_id",
+        )
+
+    offsets_by_run_id: dict[str, int] = {}
+    ordered_run_ids: list[str] = []
+    for index, raw_run_id in enumerate(run_ids):
+        run_id = str(raw_run_id).strip()
+        if not run_id or run_id.casefold() in {"none", "null"}:
+            raise HTTPException(status_code=422, detail="run_id cannot be blank")
+        after_event_id = after_event_ids[index] if index < len(after_event_ids) else 0
+        if after_event_id < 0:
+            raise HTTPException(
+                status_code=422,
+                detail="after_event_id must be greater than or equal to 0",
+            )
+        if run_id not in offsets_by_run_id:
+            ordered_run_ids.append(run_id)
+            offsets_by_run_id[run_id] = after_event_id
+            continue
+        offsets_by_run_id[run_id] = max(offsets_by_run_id[run_id], after_event_id)
+    return tuple((run_id, offsets_by_run_id[run_id]) for run_id in ordered_run_ids)
 
 
 class CreateRunRequest(BaseModel):
@@ -325,6 +363,51 @@ async def create_run(
             exc_info=exc,
         )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/events")
+async def stream_multiplexed_run_events(
+    service: Annotated[SessionRunService, Depends(get_run_service)],
+    run_id: Annotated[list[str], Query(default_factory=list)],
+    after_event_id: Annotated[list[int], Query(default_factory=list)],
+) -> StreamingResponse:
+    run_offsets = _normalize_multiplex_run_offsets(run_id, after_event_id)
+
+    async def event_generator():
+        event_count = 0
+        started = time.perf_counter()
+        log_event(
+            logger,
+            logging.INFO,
+            event="stream.multiplex.opened",
+            message="Multiplex run event stream opened",
+            payload={"run_count": len(run_offsets)},
+        )
+        try:
+            async for event in service.stream_multiplexed_run_events(run_offsets):
+                event_count += 1
+                yield f"data: {event.model_dump_json()}\n\n"
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            log_event(
+                logger,
+                logging.INFO,
+                event="stream.multiplex.closed",
+                message="Multiplex run event stream closed",
+                duration_ms=elapsed_ms,
+                payload={"event_count": event_count, "run_count": len(run_offsets)},
+            )
+        except Exception as exc:  # pragma: no cover - defensive path
+            log_event(
+                logger,
+                logging.ERROR,
+                event="stream.multiplex.failed",
+                message="Unexpected multiplex stream failure",
+                payload={"event_count": event_count, "run_count": len(run_offsets)},
+                exc_info=exc,
+            )
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/{run_id}/events")

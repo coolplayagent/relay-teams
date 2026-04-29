@@ -3,7 +3,6 @@
  * Creates a run via HTTP, then subscribes to run events over SSE.
  */
 import {
-    fetchSessionRecovery,
     fetchSessionSubagents,
     fetchSessions,
     sendUserPrompt,
@@ -39,6 +38,15 @@ let activeStreamSessionId = '';
 let activeConnection = null;
 const backgroundStreams = new Map();
 const pendingBackgroundAttachRunIds = new Set();
+let multiplexEventSource = null;
+let multiplexReconnectTimer = null;
+let multiplexConnectionSignature = '';
+let multiplexReconnectDelayMs = 900;
+let multiplexSyncSuspendDepth = 0;
+let multiplexSyncPendingReason = '';
+const runStreamLastEventIds = new Map();
+const runStreamAttention = new Map();
+let runStreamAttentionSequence = 0;
 const normalModeSubagentStreams = new Map();
 let normalModeSubagentConnection = null;
 let backgroundDiscoveryTimer = null;
@@ -53,8 +61,8 @@ const unavailableSessionCooldownUntil = new Map();
 const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;
 const unavailableRunCooldownUntil = new Map();
 const RUN_NOT_FOUND_COOLDOWN_MS = 30000;
-// Keep some room in the browser connection pool for control actions like stop.
-const MAX_BACKGROUND_STREAMS = 2;
+const MAX_MULTIPLEX_RUN_STREAMS = 32;
+const MULTIPLEX_RECONNECT_MAX_DELAY_MS = 5000;
 const FOREGROUND_NAVIGATION_STREAM_PAUSE_MS = 1200;
 const NORMAL_MODE_SUBAGENT_DISCOVERY_DELAY_MS = 2500;
 const NORMAL_MODE_SUBAGENT_RECONNECT_DELAY_MS = 900;
@@ -248,7 +256,7 @@ export function detachActiveStreamForSessionSwitch(options = {}) {
     if (detachPendingRunStartForSessionSwitch(options)) {
         return true;
     }
-    if (!activeConnection?.runId || !activeConnection?.eventSource) {
+    if (!activeConnection?.runId) {
         endStream({
             preserveRunStreamState: true,
             focusPrompt: options.focusPrompt !== false,
@@ -262,6 +270,7 @@ export function detachActiveStreamForSessionSwitch(options = {}) {
     connection.sessionId = String(
         activeStreamSessionId || state.currentSessionId || connection.sessionId || '',
     ).trim();
+    touchRunStreamAttention(connection.runId);
     backgroundStreams.set(connection.runId, connection);
     activeConnection = null;
     state.activeEventSource = null;
@@ -279,18 +288,17 @@ export function prepareStreamsForForegroundNavigation(sessionId = '') {
         Date.now() + FOREGROUND_NAVIGATION_STREAM_PAUSE_MS,
     );
     rescheduleBackgroundDiscoveryAfterPause();
-    let keptTargetBackground = false;
-    Array.from(backgroundStreams.values()).forEach(connection => {
-        if (
-            targetSessionId
-            && connection?.sessionId === targetSessionId
-            && !keptTargetBackground
-        ) {
-            keptTargetBackground = true;
-            return;
-        }
-        finishBackgroundConnection(connection, { rediscover: false, refreshSidebar: false });
-    });
+    const targetBackground = Array.from(backgroundStreams.values()).find(connection => (
+        targetSessionId
+        && connection?.sessionId === targetSessionId
+        && !connection.closed
+        && !connection.terminal
+    ));
+    if (targetBackground) {
+        touchRunStreamAttention(targetBackground.runId);
+    }
+    enforceMultiplexRunBudget(targetBackground?.runId || '');
+    requestMultiplexRunConnection('foreground-navigation');
 
     if (
         normalModeSubagentConnection
@@ -373,7 +381,8 @@ export function attachRunStream(runId, sessionId = state.currentSessionId, onCom
         return;
     }
     const sameRunAlreadyStreaming = !!(
-        state.activeEventSource
+        activeConnection
+        && activeConnection.runId === safeRunId
         && state.activeRunId === safeRunId
         && state.isGenerating
     );
@@ -382,7 +391,7 @@ export function attachRunStream(runId, sessionId = state.currentSessionId, onCom
     }
 
     const backgroundConnection = backgroundStreams.get(safeRunId);
-    if (backgroundConnection && backgroundConnection.eventSource) {
+    if (backgroundConnection && !backgroundConnection.closed) {
         releaseActiveStreamHandle({ close: true });
         promoteBackgroundStream(backgroundConnection, {
             sessionId,
@@ -553,24 +562,20 @@ function releaseActiveStreamHandle(options = {}) {
     const activeRunId = String(state.activeRunId || '').trim();
     if (activeConnection) {
         clearReconnectTimer(activeConnection);
-        if (activeConnection.eventSource && options.close !== false) {
-            activeConnection.eventSource.close();
-        }
         if (options.close !== false) {
             activeConnection.eventSource = null;
             activeConnection.closed = true;
         }
         activeConnection = null;
-    } else if (state.activeEventSource && options.close !== false) {
-        state.activeEventSource.close();
     }
     state.activeEventSource = null;
     activeStreamSessionId = '';
+    requestMultiplexRunConnection('release-active');
     return activeRunId;
 }
 
 function promoteBackgroundStream(connection, options = {}) {
-    if (!connection || !connection.eventSource) {
+    if (!connection || connection.closed || connection.terminal) {
         return;
     }
     backgroundStreams.delete(connection.runId);
@@ -581,117 +586,311 @@ function promoteBackgroundStream(connection, options = {}) {
     connection.primaryLabel = String(getRunPrimaryRoleLabel(connection.runId) || connection.primaryLabel || 'Main Agent');
     activeConnection = connection;
     state.activeRunId = connection.runId;
-    state.activeEventSource = connection.eventSource;
+    connection.eventSource = multiplexEventSource;
+    state.activeEventSource = multiplexEventSource;
     activeStreamSessionId = connection.sessionId;
+    touchRunStreamAttention(connection.runId);
     if (options.makeUiBusy !== false) {
         setStreamUiBusy(true);
     }
+    requestMultiplexRunConnection('promote-background');
     ensureBackgroundDiscoveryLoop();
 }
 
 function openRunStreamConnection(connection, { reason, afterEventId = null } = {}) {
-    const urlParams = afterEventId !== null ? `?after_event_id=${afterEventId}` : '';
-    const url = `/api/runs/${connection.runId}/events${urlParams}`;
-    logInfo('frontend.sse.opened', 'Run event stream opened', {
-        run_id: connection.runId,
-        reason,
-        url,
-        mode: connection.mode,
-    });
-    sysLog(`SSE ${reason} run=${connection.runId}`);
-    const es = new EventSource(url);
-    connection.eventSource = es;
+    const resolvedAfterEventId = afterEventId !== null
+        ? afterEventId
+        : Number(runStreamLastEventIds.get(connection.runId) || connection.lastEventId || 0);
+    connection.lastEventId = Math.max(
+        Number(connection.lastEventId || 0),
+        Number(resolvedAfterEventId || 0),
+    );
+    if (connection.lastEventId > 0) {
+        runStreamLastEventIds.set(connection.runId, connection.lastEventId);
+    }
+    connection.eventSource = multiplexEventSource;
     connection.closed = false;
     connection.terminal = false;
     clearReconnectTimer(connection);
+    touchRunStreamAttention(connection.runId);
 
     if (connection.mode === 'active') {
         activeConnection = connection;
-        state.activeEventSource = es;
         state.activeRunId = connection.runId;
+        state.activeEventSource = multiplexEventSource;
         activeStreamSessionId = connection.sessionId;
     } else {
         backgroundStreams.set(connection.runId, connection);
     }
+    enforceMultiplexRunBudget(connection.runId);
+    requestMultiplexRunConnection(reason || connection.mode || 'run');
     ensureBackgroundDiscoveryLoop();
     if (connection.mode === 'active') {
         ensureNormalModeSubagentDiscoveryLoop();
     }
+}
 
-    es.onmessage = (event) => {
+function requestMultiplexRunConnection(reason = 'sync') {
+    if (multiplexSyncSuspendDepth > 0) {
+        multiplexSyncPendingReason = multiplexSyncPendingReason || reason;
+        return;
+    }
+    ensureMultiplexRunConnection(reason);
+}
+
+function beginMultiplexSyncBatch() {
+    multiplexSyncSuspendDepth += 1;
+}
+
+function endMultiplexSyncBatch(reason = 'sync') {
+    multiplexSyncSuspendDepth = Math.max(0, multiplexSyncSuspendDepth - 1);
+    if (multiplexSyncSuspendDepth > 0) {
+        return;
+    }
+    const pendingReason = multiplexSyncPendingReason || reason;
+    multiplexSyncPendingReason = '';
+    ensureMultiplexRunConnection(pendingReason);
+}
+
+function ensureMultiplexRunConnection(reason = 'sync') {
+    const desiredConnections = desiredMultiplexRunConnections();
+    if (desiredConnections.length === 0) {
+        closeMultiplexRunConnection();
+        return;
+    }
+    const signature = multiplexConnectionSignatureFor(desiredConnections);
+    if (multiplexEventSource && multiplexConnectionSignature === signature) {
+        syncMultiplexEventSourceHandle();
+        return;
+    }
+    closeMultiplexRunConnection({ clearSignature: false });
+    const url = multiplexRunEventsUrl(desiredConnections);
+    multiplexConnectionSignature = signature;
+    logInfo('frontend.sse.multiplex_opened', 'Multiplex run event stream opened', {
+        reason,
+        url,
+        run_count: desiredConnections.length,
+    });
+    sysLog(`SSE multiplex ${reason} runs=${desiredConnections.length}`);
+    const es = new EventSource(url);
+    multiplexEventSource = es;
+    multiplexReconnectDelayMs = 900;
+    syncMultiplexEventSourceHandle();
+
+    es.onmessage = event => {
         try {
             const data = JSON.parse(event.data);
             if (data.error) {
-                if (isRunNotFoundError(data.error)) {
-                    markRunUnavailable(connection.runId);
-                }
-                logError('frontend.sse.payload_error', 'Run stream returned error', {
-                    run_id: connection.runId,
+                logError('frontend.sse.multiplex_payload_error', 'Multiplex run stream returned error', {
                     error: data.error,
-                    mode: connection.mode,
                 });
                 sysLog(`Run stream error: ${data.error}`, 'log-error');
-                if (connection.mode === 'active') {
-                    finishActiveConnection(connection);
-                } else {
-                    finishBackgroundConnection(connection);
-                }
+                scheduleMultiplexReconnect();
                 return;
             }
-
-            const eventId = Number(data.event_id || 0);
-            if (eventId > 0) {
-                connection.lastEventId = Math.max(connection.lastEventId, eventId);
-            }
-
-            const evType = data.event_type;
-            const payload = JSON.parse(data.payload_json || '{}');
-            if (connection.mode === 'background') {
-                applyBackgroundRunEvent(connection, evType, payload, data);
-            } else {
-                routeEvent(evType, payload, data);
-            }
-
-            if (isTerminalRunEvent(evType)) {
-                logInfo('frontend.sse.terminal_event', 'Run stream reached terminal event', {
-                    run_id: connection.runId,
-                    event_type: evType,
-                    mode: connection.mode,
-                });
-                connection.terminal = true;
-                if (connection.mode === 'active') {
-                    finishActiveConnection(connection);
-                } else {
-                    finishBackgroundConnection(connection);
-                }
-            }
+            applyMultiplexRunEvent(data);
         } catch (e) {
             logError(
-                'frontend.sse.parse_error',
-                'SSE parse error',
-                errorToPayload(e, { run_id: connection.runId, raw: event.data, mode: connection.mode }),
+                'frontend.sse.multiplex_parse_error',
+                'Multiplex SSE parse error',
+                errorToPayload(e, { raw: event.data }),
             );
         }
     };
 
     es.onerror = () => {
-        if (connection.closed || connection.terminal) return;
-        logWarn('frontend.sse.closed', 'Run event stream closed', {
-            run_id: connection.runId,
-            mode: connection.mode,
-        });
-        sysLog('SSE closed.', 'log-error');
-        if (connection.mode === 'active') {
-            finishActiveConnection(connection, { preserveRunStreamState: true });
+        if (multiplexEventSource !== es) {
             return;
         }
-        backgroundStreams.set(connection.runId, connection);
-        if (connection.eventSource) {
-            connection.eventSource.close();
-            connection.eventSource = null;
-        }
-        scheduleBackgroundReconnect(connection);
+        logWarn('frontend.sse.multiplex_closed', 'Multiplex run event stream closed', {
+            run_count: desiredMultiplexRunConnections().length,
+        });
+        sysLog('SSE multiplex closed.', 'log-error');
+        multiplexEventSource.close();
+        multiplexEventSource = null;
+        multiplexConnectionSignature = '';
+        syncMultiplexEventSourceHandle();
+        scheduleMultiplexReconnect();
     };
+}
+
+function applyMultiplexRunEvent(data) {
+    const runId = String(data.run_id || data.trace_id || '').trim();
+    if (!runId) {
+        return;
+    }
+    clearRunUnavailableCooldown(runId);
+    const connection = resolveRunConnection(runId);
+    if (!connection || connection.closed) {
+        return;
+    }
+    const eventId = Number(data.event_id || 0);
+    if (eventId > 0) {
+        connection.lastEventId = Math.max(connection.lastEventId || 0, eventId);
+        runStreamLastEventIds.set(runId, connection.lastEventId);
+    }
+    const evType = data.event_type;
+    const payload = JSON.parse(data.payload_json || '{}');
+    if (connection.mode === 'active') {
+        routeEvent(evType, payload, data);
+    } else {
+        applyBackgroundRunEvent(connection, evType, payload, data);
+    }
+
+    if (isTerminalRunEvent(evType)) {
+        logInfo('frontend.sse.terminal_event', 'Run stream reached terminal event', {
+            run_id: runId,
+            event_type: evType,
+            mode: connection.mode,
+        });
+        connection.terminal = true;
+        if (connection.mode === 'active') {
+            finishActiveConnection(connection);
+        } else {
+            finishBackgroundConnection(connection);
+        }
+    }
+}
+
+function scheduleMultiplexReconnect() {
+    if (multiplexReconnectTimer || desiredMultiplexRunConnections().length === 0) {
+        return;
+    }
+    multiplexReconnectTimer = setTimeout(() => {
+        multiplexReconnectTimer = null;
+        const hasDesiredConnections = desiredMultiplexRunConnections().length > 0;
+        if (!hasDesiredConnections) {
+            closeMultiplexRunConnection();
+            return;
+        }
+        multiplexConnectionSignature = '';
+        ensureMultiplexRunConnection('multiplex-reconnect');
+        multiplexReconnectDelayMs = Math.min(
+            MULTIPLEX_RECONNECT_MAX_DELAY_MS,
+            Math.max(900, multiplexReconnectDelayMs * 2),
+        );
+    }, multiplexReconnectDelayMs);
+    multiplexReconnectTimer.unref?.();
+}
+
+function closeMultiplexRunConnection(options = {}) {
+    if (multiplexReconnectTimer) {
+        clearTimeout(multiplexReconnectTimer);
+        multiplexReconnectTimer = null;
+    }
+    if (multiplexEventSource) {
+        multiplexEventSource.close();
+        multiplexEventSource = null;
+    }
+    if (options.clearSignature !== false) {
+        multiplexConnectionSignature = '';
+    }
+    syncMultiplexEventSourceHandle();
+}
+
+function syncMultiplexEventSourceHandle() {
+    const es = multiplexEventSource;
+    if (activeConnection && !activeConnection.closed && !activeConnection.terminal) {
+        activeConnection.eventSource = es;
+        state.activeEventSource = es;
+    } else {
+        state.activeEventSource = null;
+    }
+    backgroundStreams.forEach(connection => {
+        if (!connection.closed && !connection.terminal) {
+            connection.eventSource = es;
+        }
+    });
+}
+
+function desiredMultiplexRunConnections() {
+    const connections = [];
+    if (activeConnection && !activeConnection.closed && !activeConnection.terminal) {
+        connections.push(activeConnection);
+    }
+    Array.from(backgroundStreams.values())
+        .filter(connection => connection && !connection.closed && !connection.terminal)
+        .sort(compareRunStreamAttention)
+        .forEach(connection => {
+            if (!connections.some(item => item.runId === connection.runId)) {
+                connections.push(connection);
+            }
+        });
+    return connections.slice(0, MAX_MULTIPLEX_RUN_STREAMS);
+}
+
+function multiplexConnectionSignatureFor(connections) {
+    return connections
+        .map(connection => connection.runId)
+        .join('|');
+}
+
+function multiplexRunEventsUrl(connections) {
+    const params = new URLSearchParams();
+    connections.forEach(connection => {
+        params.append('run_id', connection.runId);
+        params.append(
+            'after_event_id',
+            String(Number(connection.lastEventId || runStreamLastEventIds.get(connection.runId) || 0)),
+        );
+    });
+    return `/api/runs/events?${params.toString()}`;
+}
+
+function resolveRunConnection(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return null;
+    }
+    if (activeConnection?.runId === safeRunId) {
+        return activeConnection;
+    }
+    return backgroundStreams.get(safeRunId) || null;
+}
+
+function enforceMultiplexRunBudget(preferredRunId = '') {
+    const preferred = String(preferredRunId || '').trim();
+    const hiddenConnections = Array.from(backgroundStreams.values())
+        .filter(connection => connection && !connection.closed && !connection.terminal)
+        .sort(compareRunStreamAttention);
+    const maxHidden = Math.max(
+        0,
+        MAX_MULTIPLEX_RUN_STREAMS - (activeConnection && !activeConnection.closed ? 1 : 0),
+    );
+    hiddenConnections.slice(maxHidden).forEach(connection => {
+        if (preferred && connection.runId === preferred) {
+            const replacement = hiddenConnections
+                .slice(0, maxHidden)
+                .reverse()
+                .find(item => item.runId !== preferred);
+            if (replacement) {
+                finishBackgroundConnection(replacement, { rediscover: false, refreshSidebar: false });
+            }
+            return;
+        }
+        finishBackgroundConnection(connection, { rediscover: false, refreshSidebar: false });
+    });
+}
+
+function compareRunStreamAttention(left, right) {
+    return runStreamAttentionValue(right) - runStreamAttentionValue(left);
+}
+
+function runStreamAttentionValue(connection) {
+    const runId = String(connection?.runId || '').trim();
+    if (!runId) {
+        return 0;
+    }
+    return Number(runStreamAttention.get(runId) || 0);
+}
+
+function touchRunStreamAttention(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    runStreamAttentionSequence += 1;
+    runStreamAttention.set(safeRunId, runStreamAttentionSequence);
 }
 
 function finishActiveConnection(connection, finishOptions = {}) {
@@ -699,10 +898,10 @@ function finishActiveConnection(connection, finishOptions = {}) {
     const expectedToolCallIds = collectCoordinatorOverlayToolCallIds(connection.runId);
     connection.closed = true;
     clearReconnectTimer(connection);
-    if (connection.eventSource) {
+    if (connection.eventSource && connection.eventSource !== multiplexEventSource) {
         connection.eventSource.close();
-        connection.eventSource = null;
     }
+    connection.eventSource = null;
     if (activeConnection === connection) {
         activeConnection = null;
     }
@@ -713,6 +912,7 @@ function finishActiveConnection(connection, finishOptions = {}) {
         activeStreamSessionId = '';
     }
     endStream(finishOptions);
+    requestMultiplexRunConnection('finish-active');
     ensureNormalModeSubagentDiscoveryLoop();
     if (typeof connection.onCompleted === 'function') {
         Promise.resolve()
@@ -769,11 +969,12 @@ function finishBackgroundConnection(connection, { rediscover = true, refreshSide
     if (!connection || connection.closed) return;
     connection.closed = true;
     clearReconnectTimer(connection);
-    if (connection.eventSource) {
+    if (connection.eventSource && connection.eventSource !== multiplexEventSource) {
         connection.eventSource.close();
-        connection.eventSource = null;
     }
+    connection.eventSource = null;
     backgroundStreams.delete(connection.runId);
+    requestMultiplexRunConnection('finish-background');
     if (refreshSidebar) {
         scheduleSessionsRefresh();
     }
@@ -839,7 +1040,12 @@ function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {
 }
 
 function isTerminalRunEvent(evType) {
-    return evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped';
+    return (
+        evType === 'run_completed'
+        || evType === 'run_failed'
+        || evType === 'run_stopped'
+        || evType === 'run_paused'
+    );
 }
 
 function ensureBackgroundDiscoveryLoop() {
@@ -982,8 +1188,9 @@ function shouldRunBackgroundDiscovery() {
     return !!(
         activeConnection
         || backgroundStreams.size > 0
+        || pendingBackgroundAttachRunIds.size > 0
         || state.isGenerating
-        || String(state.currentSessionId || '').trim()
+        || pendingRunStart
     );
 }
 
@@ -1027,73 +1234,87 @@ async function reconcileBackgroundStreams(sessionRecords = []) {
     if (isBackgroundDiscoveryPaused()) {
         return;
     }
-    const records = Array.isArray(sessionRecords) ? sessionRecords : [];
-    const focusedRunId = String(activeConnection?.runId || '').trim();
-    const backgroundRunIds = new Set();
-    backgroundStreams.forEach(connection => {
-        if (connection?.runId) {
-            backgroundRunIds.add(connection.runId);
+    beginMultiplexSyncBatch();
+    try {
+        const records = Array.isArray(sessionRecords) ? sessionRecords : [];
+        const focusedRunId = String(activeConnection?.runId || '').trim();
+        const backgroundRunIds = new Set();
+        backgroundStreams.forEach(connection => {
+            if (connection?.runId) {
+                backgroundRunIds.add(connection.runId);
+            }
+        });
+        pendingBackgroundAttachRunIds.forEach(runId => {
+            if (runId) {
+                backgroundRunIds.add(runId);
+            }
+        });
+
+        const candidates = [];
+        for (const rawRecord of records) {
+            const record = rawRecord && typeof rawRecord === 'object' ? rawRecord : null;
+            const sessionId = String(record?.session_id || '').trim();
+            const runId = String(record?.active_run_id || '').trim();
+            const status = String(record?.active_run_status || '').trim();
+            if (!sessionId || !runId) {
+                continue;
+            }
+            if (isSessionUnavailable(sessionId)) {
+                continue;
+            }
+            if (isRunUnavailable(runId)) {
+                continue;
+            }
+            if (status !== 'running' && status !== 'queued') {
+                continue;
+            }
+            candidates.push(record);
         }
-    });
-    pendingBackgroundAttachRunIds.forEach(runId => {
-        if (runId) {
+
+        candidates.sort((left, right) => {
+            const leftRunId = String(left?.active_run_id || '').trim();
+            const rightRunId = String(right?.active_run_id || '').trim();
+            const attentionDelta = Number(runStreamAttention.get(rightRunId) || 0)
+                - Number(runStreamAttention.get(leftRunId) || 0);
+            if (attentionDelta !== 0) {
+                return attentionDelta;
+            }
+            return backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left);
+        });
+
+        const desiredRunIds = new Set();
+        for (const record of candidates) {
+            const runId = String(record?.active_run_id || '').trim();
+            if (!runId) {
+                continue;
+            }
+            if (focusedRunId && runId === focusedRunId) {
+                desiredRunIds.add(runId);
+                continue;
+            }
+            if (desiredRunIds.size >= MAX_MULTIPLEX_RUN_STREAMS) {
+                break;
+            }
+            desiredRunIds.add(runId);
+            if (backgroundRunIds.has(runId)) {
+                continue;
+            }
+            attachBackgroundStreamForSession(record);
             backgroundRunIds.add(runId);
         }
-    });
 
-    const candidates = [];
-    for (const rawRecord of records) {
-        const record = rawRecord && typeof rawRecord === 'object' ? rawRecord : null;
-        const sessionId = String(record?.session_id || '').trim();
-        const runId = String(record?.active_run_id || '').trim();
-        const status = String(record?.active_run_status || '').trim();
-        if (!sessionId || !runId) {
-            continue;
-        }
-        if (isSessionUnavailable(sessionId)) {
-            continue;
-        }
-        if (isRunUnavailable(runId)) {
-            continue;
-        }
-        if (status !== 'running' && status !== 'queued') {
-            continue;
-        }
-        candidates.push(record);
+        Array.from(backgroundStreams.values()).forEach(connection => {
+            if (!connection?.runId) {
+                return;
+            }
+            if (desiredRunIds.has(connection.runId)) {
+                return;
+            }
+            finishBackgroundConnection(connection);
+        });
+    } finally {
+        endMultiplexSyncBatch('background-reconcile');
     }
-
-    candidates.sort((left, right) => backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left));
-
-    const desiredRunIds = new Set();
-    for (const record of candidates) {
-        const runId = String(record?.active_run_id || '').trim();
-        if (!runId) {
-            continue;
-        }
-        if (focusedRunId && runId === focusedRunId) {
-            desiredRunIds.add(runId);
-            continue;
-        }
-        if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {
-            break;
-        }
-        desiredRunIds.add(runId);
-        if (backgroundRunIds.has(runId)) {
-            continue;
-        }
-        await attachBackgroundStreamForSession(record);
-        backgroundRunIds.add(runId);
-    }
-
-    Array.from(backgroundStreams.values()).forEach(connection => {
-        if (!connection?.runId) {
-            return;
-        }
-        if (desiredRunIds.has(connection.runId)) {
-            return;
-        }
-        finishBackgroundConnection(connection);
-    });
 }
 
 function backgroundRecordTimestamp(record) {
@@ -1105,7 +1326,7 @@ function backgroundRecordTimestamp(record) {
     return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-async function attachBackgroundStreamForSession(record) {
+function attachBackgroundStreamForSession(record) {
     const sessionId = String(record?.session_id || '').trim();
     const runId = String(record?.active_run_id || '').trim();
     if (!sessionId || !runId) {
@@ -1125,35 +1346,18 @@ async function attachBackgroundStreamForSession(record) {
     }
 
     pendingBackgroundAttachRunIds.add(runId);
-    const navigationToken = foregroundNavigationStreamToken;
     try {
-        const snapshot = await fetchSessionRecovery(sessionId);
-        if (navigationToken !== foregroundNavigationStreamToken || isBackgroundDiscoveryPaused()) {
-            return false;
-        }
-        const activeRun = snapshot?.active_run && typeof snapshot.active_run === 'object'
-            ? snapshot.active_run
-            : snapshot?.activeRun && typeof snapshot.activeRun === 'object'
-                ? snapshot.activeRun
-                : null;
         clearSessionUnavailableCooldown(sessionId);
-        const recoveredRunId = String(activeRun?.run_id || '').trim();
-        const recoveredStatus = String(activeRun?.status || '').trim();
-        if (!recoveredRunId || recoveredRunId !== runId) {
-            return false;
-        }
-        if (recoveredStatus !== 'running' && recoveredStatus !== 'queued') {
-            return false;
-        }
-        const recoveredPrimaryRoleId = String(
-            activeRun?.primary_role_id
-            || snapshot?.round_snapshot?.primary_role_id
-            || snapshot?.roundSnapshot?.primary_role_id
+        const sessionMode = String(record?.session_mode || 'normal').trim().toLowerCase();
+        const recordPrimaryRoleId = String(
+            record?.active_run_primary_role_id
+            || record?.activeRunPrimaryRoleId
+            || record?.primary_role_id
             || '',
         ).trim();
-        setRunPrimaryRole(runId, recoveredPrimaryRoleId || null);
-        const sessionMode = String(record?.session_mode || 'normal').trim().toLowerCase();
-        const afterEventId = resolveBackgroundAfterEventId(activeRun);
+        setRunPrimaryRole(runId, recordPrimaryRoleId || null);
+        const knownEventId = Number(runStreamLastEventIds.get(runId) || 0);
+        const afterEventId = knownEventId > 0 ? knownEventId : 0;
         const connection = {
             runId,
             sessionId,
@@ -1162,7 +1366,7 @@ async function attachBackgroundStreamForSession(record) {
             mode: 'background',
             lastEventId: afterEventId,
             primaryRoleId: String(
-                recoveredPrimaryRoleId || getRunPrimaryRoleId(runId, sessionMode) || getPrimaryRoleId(sessionMode) || ''
+                recordPrimaryRoleId || getRunPrimaryRoleId(runId, sessionMode) || getPrimaryRoleId(sessionMode) || ''
             ).trim(),
             primaryLabel: String(getRunPrimaryRoleLabel(runId, sessionMode) || getPrimaryRoleLabel(sessionMode) || 'Main Agent'),
             closed: false,
@@ -1175,9 +1379,6 @@ async function attachBackgroundStreamForSession(record) {
         });
         return true;
     } catch (e) {
-        if (e?.status === 404) {
-            markSessionUnavailable(sessionId);
-        }
         logWarn('frontend.background.attach_failed', 'Failed to attach background stream', {
             session_id: sessionId,
             run_id: runId,
@@ -1492,21 +1693,6 @@ function finishNormalModeSubagentConnection(connection) {
     }
     normalModeSubagentStreams.delete(connection.runId);
     ensureNormalModeSubagentDiscoveryLoop();
-}
-
-function resolveBackgroundAfterEventId(activeRun) {
-    if (!activeRun || typeof activeRun !== 'object') {
-        return 0;
-    }
-    const lastEventId = Number(activeRun.last_event_id || 0);
-    if (lastEventId > 0) {
-        return lastEventId;
-    }
-    const checkpointEventId = Number(activeRun.checkpoint_event_id || 0);
-    if (checkpointEventId > 0) {
-        return checkpointEventId;
-    }
-    return 0;
 }
 
 function isRunNotFoundError(errorMessage) {

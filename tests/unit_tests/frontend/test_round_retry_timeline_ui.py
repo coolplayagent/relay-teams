@@ -271,6 +271,224 @@ console.log(JSON.stringify({
     }
 
 
+def test_load_session_rounds_does_not_overwrite_new_session_draft(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+let resolveInitialPage;
+globalThis.__initialRoundsPagePromise = new Promise(resolve => {
+    resolveInitialPage = resolve;
+});
+globalThis.__timelineRoundsPage = {
+    items: [
+        { run_id: 'stale-run', created_at: '2026-04-25T12:00:00', intent: 'Stale' },
+    ],
+    has_more: false,
+    next_cursor: null,
+};
+
+const { state } = await import('./mockState.mjs');
+const { loadSessionRounds } = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+const loadPromise = loadSessionRounds('session-1', { render: false });
+await Promise.resolve();
+await Promise.resolve();
+
+state.currentSessionId = null;
+state.pendingNewSessionActive = true;
+state.currentMainView = 'new-session-draft';
+resolveInitialPage({
+    items: [
+        { run_id: 'stale-run', created_at: '2026-04-25T12:00:00', intent: 'Stale' },
+    ],
+    has_more: false,
+    next_cursor: null,
+});
+await loadPromise;
+
+console.log(JSON.stringify({
+    currentRunIds: roundsState.currentRounds.map(round => round.run_id),
+    timelineRunIds: roundsState.timelineRounds.map(round => round.run_id),
+    navigatorSnapshots: globalThis.__navigatorRoundSnapshots || [],
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "currentRunIds": [],
+        "timelineRunIds": [],
+        "navigatorSnapshots": [],
+    }
+
+
+def test_load_session_rounds_background_mode_renders_summary_before_full_page(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.__summaryRoundsPage = {
+    items: [
+        {
+            run_id: 'run-1',
+            created_at: '2026-04-25T11:01:00',
+            intent: 'Summary shell',
+            has_user_messages: true,
+        },
+    ],
+    has_more: false,
+    next_cursor: null,
+};
+globalThis.__initialRoundsPagePromise = new Promise(resolve => {
+    globalThis.__resolveFullRoundsPage = resolve;
+});
+globalThis.__timelineRoundsPage = globalThis.__summaryRoundsPage;
+
+const { loadSessionRounds } = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+await loadSessionRounds('session-1', {
+    render: false,
+    timelineLoadMode: 'background',
+});
+await Promise.resolve();
+
+const afterSummary = {
+    initialFetches: globalThis.__initialRoundFetches,
+    currentRunIds: roundsState.currentRounds.map(round => round.run_id),
+    hasCoordinatorMessages: Object.prototype.hasOwnProperty.call(
+        roundsState.currentRounds[0],
+        'coordinator_messages',
+    ),
+};
+
+globalThis.__resolveFullRoundsPage({
+    items: [
+        {
+            run_id: 'run-1',
+            created_at: '2026-04-25T11:01:00',
+            intent: 'Summary shell',
+            coordinator_messages: [{ role: 'assistant', content: 'full detail' }],
+            has_user_messages: true,
+        },
+    ],
+    has_more: false,
+    next_cursor: null,
+});
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    afterSummary,
+    afterFull: {
+        initialFetches: globalThis.__initialRoundFetches,
+        hasCoordinatorMessages: Object.prototype.hasOwnProperty.call(
+            roundsState.currentRounds[0],
+            'coordinator_messages',
+        ),
+    },
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "afterSummary": {
+            "initialFetches": [{"summary": True}, {"summary": False}],
+            "currentRunIds": ["run-1"],
+            "hasCoordinatorMessages": False,
+        },
+        "afterFull": {
+            "initialFetches": [{"summary": True}, {"summary": False}],
+            "hasCoordinatorMessages": True,
+        },
+    }
+
+
+def test_terminal_overlay_survives_stale_background_full_page(
+    tmp_path: Path,
+) -> None:
+    payload = _run_round_timeline_script(
+        tmp_path=tmp_path,
+        runner_source="""
+globalThis.document = {
+    getElementById: () => null,
+    querySelector: () => null,
+};
+globalThis.__summaryRoundsPage = {
+    items: [
+        {
+            run_id: 'run-1',
+            created_at: '2026-04-25T11:01:00',
+            intent: 'Summary shell',
+            run_status: 'running',
+            run_phase: 'running',
+            has_user_messages: true,
+        },
+    ],
+    has_more: false,
+    next_cursor: null,
+};
+globalThis.__initialRoundsPagePromise = new Promise(resolve => {
+    globalThis.__resolveFullRoundsPage = resolve;
+});
+globalThis.__timelineRoundsPage = globalThis.__summaryRoundsPage;
+
+const {
+    loadSessionRounds,
+    overlayRoundRecoveryState,
+} = await import('./timeline.mjs');
+const { roundsState } = await import('./mockRoundsState.mjs');
+
+await loadSessionRounds('session-1', {
+    render: false,
+    timelineLoadMode: 'background',
+});
+overlayRoundRecoveryState('run-1', {
+    run_status: 'completed',
+    run_phase: 'terminal',
+    is_recoverable: false,
+    pending_tool_approval_count: 0,
+    pending_tool_approvals: [],
+});
+
+globalThis.__resolveFullRoundsPage({
+    items: [
+        {
+            run_id: 'run-1',
+            created_at: '2026-04-25T11:01:00',
+            intent: 'Summary shell',
+            run_status: 'running',
+            run_phase: 'running',
+            coordinator_messages: [{ role: 'assistant', content: 'full detail' }],
+            has_user_messages: true,
+        },
+    ],
+    has_more: false,
+    next_cursor: null,
+});
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    currentStatus: roundsState.currentRounds[0].run_status,
+    currentPhase: roundsState.currentRounds[0].run_phase,
+    timelineStatus: roundsState.timelineRounds[0].run_status,
+    reconciledRuns: globalThis.__reconciledTerminalRuns,
+}));
+""".strip(),
+    )
+
+    assert payload == {
+        "currentStatus": "completed",
+        "currentPhase": "terminal",
+        "timelineStatus": "completed",
+        "reconciledRuns": ["run-1", "run-1", "run-1"],
+    }
+
+
 def test_load_session_rounds_evicts_live_round_when_persisted_without_messages(
     tmp_path: Path,
 ) -> None:
@@ -815,7 +1033,17 @@ export function sortRoundsAscending(rounds) {
     );
 }
 
-export async function fetchInitialRoundsPage() {
+export async function fetchInitialRoundsPage(_sessionId, options = {}) {
+    if (!Array.isArray(globalThis.__initialRoundFetches)) {
+        globalThis.__initialRoundFetches = [];
+    }
+    globalThis.__initialRoundFetches.push({ summary: options.summary === true });
+    if (options.summary === true && globalThis.__summaryRoundsPage) {
+        return globalThis.__summaryRoundsPage;
+    }
+    if (globalThis.__initialRoundsPagePromise) {
+        return await globalThis.__initialRoundsPagePromise;
+    }
     return globalThis.__initialRoundsPage || { items: [] };
 }
 

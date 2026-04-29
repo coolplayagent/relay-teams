@@ -5,6 +5,21 @@ from pathlib import Path
 import subprocess
 
 
+def test_background_discovery_does_not_poll_for_idle_selected_session() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "frontend" / "dist" / "js" / "core" / "stream.js").read_text(
+        encoding="utf-8"
+    )
+    block = source.split("function shouldRunBackgroundDiscovery()", 1)[1].split(
+        "\n}\n",
+        1,
+    )[0]
+
+    assert "currentSessionId" not in block
+    assert "pendingBackgroundAttachRunIds.size > 0" in block
+    assert "pendingRunStart" in block
+
+
 def test_normal_mode_subagent_streams_attach_route_and_detach(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "core" / "stream.js"
@@ -602,7 +617,9 @@ console.log(JSON.stringify({
 
     payload = json.loads(completed.stdout)
 
-    assert payload["eventSourceUrls"] == ["/api/runs/run-1/events"]
+    assert payload["eventSourceUrls"] == [
+        "/api/runs/events?run_id=run-1&after_event_id=0"
+    ]
     assert 2500 in payload["scheduledDelays"]
     assert payload["fetchSubagentCalls"] == ["session-1"]
 
@@ -906,8 +923,10 @@ console.log(JSON.stringify({
 
     payload = json.loads(completed.stdout)
 
-    assert payload["fetchRecoveryCalls"] == ["session-1"]
-    assert payload["eventSourceUrls"] == ["/api/runs/run-1/events?after_event_id=1"]
+    assert payload["fetchRecoveryCalls"] == []
+    assert payload["eventSourceUrls"] == [
+        "/api/runs/events?run_id=run-1&after_event_id=0"
+    ]
     assert payload["eventSourceClosed"] is True
     assert payload["routeEventCalls"] == [
         {
@@ -1113,8 +1132,8 @@ export function clearRunStreamState() {
     return undefined;
 }
 
-export function applyStreamOverlayEvent() {
-    return undefined;
+export function applyStreamOverlayEvent(evType, payload, options = {}) {
+    globalThis.__overlayCalls.push({ evType, payload, options });
 }
 """.strip(),
         encoding="utf-8",
@@ -1161,6 +1180,7 @@ import { state } from "./mockState.mjs";
 globalThis.__fetchRecoveryCalls = [];
 globalThis.__fetchSessionsCalls = 0;
 globalThis.__routeEventCalls = [];
+globalThis.__overlayCalls = [];
 globalThis.__scheduleSessionsRefreshCalls = 0;
 globalThis.__eventSources = [];
 globalThis.__deferRecovery = false;
@@ -1197,7 +1217,7 @@ const {
 syncBackgroundStreamsForSessions(globalThis.__sessionRecords);
 await new Promise(resolve => setTimeout(resolve, 30));
 const backgroundBeforeNavigation = globalThis.__eventSources.filter(source => (
-    source.url.startsWith("/api/runs/run-session-")
+    source.url.startsWith("/api/runs/events?")
     && source.closed !== true
 )).map(source => source.url);
 
@@ -1218,12 +1238,44 @@ prepareStreamsForForegroundNavigation("session-39");
 const openAfterPrepare = globalThis.__eventSources
     .filter(source => source.closed !== true)
     .map(source => source.url);
+const session39Source = globalThis.__eventSources.find(source => (
+    source.closed !== true && source.url.startsWith("/api/runs/events?")
+));
+session39Source.onmessage({
+    data: JSON.stringify({
+        event_id: 100,
+        event_type: "text_delta",
+        payload_json: JSON.stringify({
+            run_id: "run-session-39",
+            session_id: "session-39",
+            text: "visible",
+        }),
+        run_id: "run-session-39",
+        trace_id: "run-session-39",
+    }),
+});
 
 globalThis.__deferRecovery = true;
 syncBackgroundStreamsForSessions(globalThis.__sessionRecords);
 await Promise.resolve();
 state.currentSessionId = "session-12";
 prepareStreamsForForegroundNavigation("session-12");
+const session12Source = globalThis.__eventSources.find(source => (
+    source.closed !== true && source.url.startsWith("/api/runs/events?")
+));
+session12Source.onmessage({
+    data: JSON.stringify({
+        event_id: 101,
+        event_type: "text_delta",
+        payload_json: JSON.stringify({
+            run_id: "run-session-39",
+            session_id: "session-39",
+            text: "hidden",
+        }),
+        run_id: "run-session-39",
+        trace_id: "run-session-39",
+    }),
+});
 for (const resolveRecovery of globalThis.__recoveryResolvers.splice(0)) {
     resolveRecovery();
 }
@@ -1237,6 +1289,8 @@ console.log(JSON.stringify({
     openUrlsAtEnd: globalThis.__eventSources
         .filter(source => source.closed !== true)
         .map(source => source.url),
+    routeEventCalls: globalThis.__routeEventCalls,
+    overlayCalls: globalThis.__overlayCalls,
     fetchRecoveryCallCount: globalThis.__fetchRecoveryCalls.length,
     fetchRecoveryCalls: globalThis.__fetchRecoveryCalls,
     scheduleSessionsRefreshCalls: globalThis.__scheduleSessionsRefreshCalls,
@@ -1263,15 +1317,22 @@ process.exit(0);
 
     payload = json.loads(completed.stdout)
 
-    assert len(payload["backgroundBeforeNavigation"]) == 2
+    assert len(payload["backgroundBeforeNavigation"]) == 1
+    assert payload["backgroundBeforeNavigation"][0].count("run_id=") == 32
     assert payload["subagentStreamBeforeNavigation"] == [
         "/api/sessions/session-00/subagents/events?after_event_id=18",
     ]
-    assert payload["openAfterPrepare"] == [
-        "/api/runs/run-session-39/events?after_event_id=7",
+    assert len(payload["openAfterPrepare"]) == 1
+    assert payload["openAfterPrepare"][0].startswith("/api/runs/events?")
+    assert "run_id=run-session-39" in payload["openAfterPrepare"][0]
+    assert len(payload["openUrlsAtEnd"]) == 1
+    assert payload["openUrlsAtEnd"][0].startswith("/api/runs/events?")
+    assert "run_id=run-session-12" in payload["openUrlsAtEnd"][0]
+    assert [call["payload"]["text"] for call in payload["routeEventCalls"]] == [
+        "visible"
     ]
-    assert payload["openUrlsAtEnd"] == []
-    assert payload["fetchRecoveryCallCount"] == 2
+    assert [call["payload"]["text"] for call in payload["overlayCalls"]] == ["hidden"]
+    assert payload["fetchRecoveryCallCount"] == 0
     assert payload["scheduleSessionsRefreshCalls"] == 0
 
 
@@ -1582,7 +1643,9 @@ console.log(JSON.stringify({
     assert payload["currentSessionId"] == "session-b"
     assert payload["activeRunId"] is None
     assert payload["activeEventSourceUrl"] is None
-    assert payload["eventSourceUrls"] == ["/api/runs/run-a/events"]
+    assert payload["eventSourceUrls"] == [
+        "/api/runs/events?run_id=run-a&after_event_id=0"
+    ]
     assert payload["runCreated"] == []
     assert payload["completed"] == []
     assert payload["scheduleSessionsRefreshCalls"] == 1
@@ -1590,6 +1653,306 @@ console.log(JSON.stringify({
         {"sessionId": "session-a", "promptText": "hello"},
     ]
     assert payload["stopRunCalls"] == 0
+
+
+def test_active_multiplex_stream_releases_ui_on_run_paused(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "stream.js"
+    module_under_test_path = tmp_path / "stream.mjs"
+    runner_path = tmp_path / "runner_paused_terminal.mjs"
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("./api.js", "./mockApi.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../app/prompt.js", "./mockPrompt.mjs")
+        .replace("../components/subagentSessions.js", "./mockSubagentSessions.mjs")
+        .replace("../components/sidebar.js", "./mockSidebar.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/backendStatus.js", "./mockBackendStatus.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+        .replace("./eventRouter.js", "./mockEventRouter.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("./state.js", "./mockState.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+
+    (tmp_path / "mockApi.mjs").write_text(
+        """
+export async function fetchSessionRecovery() {
+    return {};
+}
+
+export async function fetchSessionSubagents() {
+    return [];
+}
+
+export async function fetchSessions() {
+    return [];
+}
+
+export async function sendUserPrompt() {
+    return { run_id: "run-paused", target_role_id: "MainAgent" };
+}
+
+export async function stopRun() {
+    throw new Error("not used");
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockContextIndicators.mjs").write_text(
+        """
+export function refreshVisibleContextIndicators() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockPrompt.mjs").write_text(
+        """
+export function refreshSessionTopologyControls() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSubagentSessions.mjs").write_text(
+        """
+export function replaceSessionSubagents() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSidebar.mjs").write_text(
+        """
+export function scheduleSessionsRefresh(delay = null, options = {}) {
+    globalThis.__scheduleSessionsRefreshCalls.push({ delay, options });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockDom.mjs").write_text(
+        """
+export const els = {
+    sendBtn: { disabled: false },
+    promptInput: {
+        disabled: false,
+        focus() {
+            globalThis.__focusCalls += 1;
+        },
+    },
+    yoloToggle: { disabled: false },
+    thinkingModeToggle: { disabled: false },
+    thinkingEffortSelect: { disabled: false },
+    stopBtn: { style: {}, disabled: false },
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockBackendStatus.mjs").write_text(
+        """
+export function markBackendOnline() {
+    return undefined;
+}
+
+export async function refreshBackendStatus() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        """
+export function errorToPayload(error, extra = {}) {
+    return { error: String(error?.message || error || ''), ...extra };
+}
+
+export function logError() {
+    return undefined;
+}
+
+export function logInfo() {
+    return undefined;
+}
+
+export function logWarn() {
+    return undefined;
+}
+
+export function sysLog() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockEventRouter.mjs").write_text(
+        """
+export function routeEvent(evType, payload, eventMeta) {
+    globalThis.__routeEventCalls.push({ evType, payload, eventMeta });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearRunStreamState(runId) {
+    globalThis.__clearRunStreamStateCalls.push(runId);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-a",
+    currentSessionMode: "normal",
+    activeSubagentSession: null,
+    activeEventSource: null,
+    activeRunId: null,
+    isGenerating: false,
+    runPrimaryRoleMap: {},
+};
+
+export function getPrimaryRoleId() {
+    return "MainAgent";
+}
+
+export function getPrimaryRoleLabel() {
+    return "Main Agent";
+}
+
+export function getRunPrimaryRoleId() {
+    return "MainAgent";
+}
+
+export function getRunPrimaryRoleLabel() {
+    return "Main Agent";
+}
+
+export function setRunPrimaryRole(runId, roleId) {
+    state.runPrimaryRoleMap[runId] = roleId;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner_path.write_text(
+        """
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.__eventSources = [];
+globalThis.__routeEventCalls = [];
+globalThis.__clearRunStreamStateCalls = [];
+globalThis.__scheduleSessionsRefreshCalls = [];
+globalThis.__focusCalls = 0;
+
+class MockEventSource {
+    constructor(url) {
+        this.url = url;
+        this.closed = false;
+        this.onmessage = null;
+        this.onerror = null;
+        globalThis.__eventSources.push(this);
+    }
+
+    close() {
+        this.closed = true;
+    }
+}
+
+globalThis.EventSource = MockEventSource;
+
+const { startIntentStream } = await import("./stream.mjs");
+
+const completed = [];
+await startIntentStream(
+    "hello",
+    "session-a",
+    sessionId => completed.push(sessionId),
+    { targetRoleId: "MainAgent" },
+);
+
+const eventSource = globalThis.__eventSources[0];
+const beforePause = {
+    isGenerating: state.isGenerating,
+    sendDisabled: els.sendBtn.disabled,
+    promptDisabled: els.promptInput.disabled,
+    activeRunId: state.activeRunId,
+    activeEventSourceUrl: state.activeEventSource?.url || null,
+};
+
+eventSource.onmessage({
+    data: JSON.stringify({
+        event_id: 12,
+        event_type: "run_paused",
+        payload_json: JSON.stringify({ reason: "approval" }),
+        run_id: "run-paused",
+        trace_id: "run-paused",
+    }),
+});
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    beforePause,
+    afterPause: {
+        isGenerating: state.isGenerating,
+        sendDisabled: els.sendBtn.disabled,
+        promptDisabled: els.promptInput.disabled,
+        activeRunId: state.activeRunId,
+        activeEventSourceUrl: state.activeEventSource?.url || null,
+        eventSourceClosed: eventSource.closed === true,
+    },
+    completed,
+    routeEventCalls: globalThis.__routeEventCalls,
+    clearRunStreamStateCalls: globalThis.__clearRunStreamStateCalls,
+    focusCalls: globalThis.__focusCalls,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=3,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["beforePause"] == {
+        "isGenerating": True,
+        "sendDisabled": True,
+        "promptDisabled": True,
+        "activeRunId": "run-paused",
+        "activeEventSourceUrl": "/api/runs/events?run_id=run-paused&after_event_id=0",
+    }
+    assert payload["afterPause"] == {
+        "isGenerating": False,
+        "sendDisabled": False,
+        "promptDisabled": False,
+        "activeRunId": "run-paused",
+        "activeEventSourceUrl": None,
+        "eventSourceClosed": True,
+    }
+    assert payload["completed"] == ["session-a"]
+    assert payload["clearRunStreamStateCalls"] == ["run-paused"]
+    assert payload["focusCalls"] == 1
+    assert [call["evType"] for call in payload["routeEventCalls"]] == ["run_paused"]
 
 
 def test_normal_mode_subagent_discovery_reconciles_sidebar_cache(

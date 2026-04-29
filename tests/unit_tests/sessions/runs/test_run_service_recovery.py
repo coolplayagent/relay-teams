@@ -2524,6 +2524,252 @@ async def test_stream_run_events_stops_after_run_paused(
 
 
 @pytest.mark.asyncio
+async def test_stream_multiplexed_run_events_ignores_empty_offsets(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_multiplex_stream_empty_offsets.db"
+    manager = _build_manager(db_path)
+
+    replayed = [
+        event async for event in manager.stream_multiplexed_run_events(((" ", 3),))
+    ]
+
+    assert replayed == []
+
+
+@pytest.mark.asyncio
+async def test_stream_multiplexed_run_events_replays_runs_and_finishes_live_terminal(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_multiplex_stream_replay_live.db"
+    manager = _build_manager(db_path)
+    run_a_started_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run":"a","step":"started"}',
+        )
+    )
+    run_b_started_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-b",
+            run_id="run-b",
+            trace_id="run-b",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run":"b","step":"started"}',
+        )
+    )
+    run_a_delta_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.TEXT_DELTA,
+            payload_json='{"text":"after offset"}',
+        )
+    )
+    run_b_completed_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-b",
+            run_id="run-b",
+            trace_id="run-b",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed"}',
+        )
+    )
+
+    stream = manager.stream_multiplexed_run_events(
+        (("run-a", run_a_started_id), ("run-b", 0))
+    )
+    replayed = [await anext(stream), await anext(stream), await anext(stream)]
+    live_task = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    live_completed_id = await manager._run_event_hub.publish_async(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed"}',
+        )
+    )
+    live_completed = await asyncio.wait_for(live_task, timeout=1)
+
+    assert [event.event_id for event in replayed] == [
+        run_b_started_id,
+        run_a_delta_id,
+        run_b_completed_id,
+    ]
+    assert live_completed.event_id == live_completed_id
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(stream), timeout=1)
+    assert manager._run_event_hub.has_subscribers("run-a") is False
+    assert manager._run_event_hub.has_subscribers("run-b") is False
+
+
+@pytest.mark.asyncio
+async def test_stream_multiplexed_run_events_stops_replay_after_terminal_event(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_multiplex_stream_terminal_replay_stop.db"
+    manager = _build_manager(db_path)
+    run_a_started_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run":"a","step":"started"}',
+        )
+    )
+    run_a_paused_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.RUN_PAUSED,
+            payload_json='{"reason":"approval"}',
+        )
+    )
+    _ = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.RUN_RESUMED,
+            payload_json='{"reason":"resume"}',
+        )
+    )
+    _ = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.TEXT_DELTA,
+            payload_json='{"text":"after pause"}',
+        )
+    )
+    run_b_started_id = manager._run_event_hub.publish(
+        RunEvent(
+            session_id="session-b",
+            run_id="run-b",
+            trace_id="run-b",
+            event_type=RunEventType.RUN_STARTED,
+            payload_json='{"run":"b","step":"started"}',
+        )
+    )
+
+    stream = manager.stream_multiplexed_run_events((("run-a", 0), ("run-b", 0)))
+    replayed = [await anext(stream), await anext(stream), await anext(stream)]
+    live_task = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    live_completed_id = await manager._run_event_hub.publish_async(
+        RunEvent(
+            session_id="session-b",
+            run_id="run-b",
+            trace_id="run-b",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed"}',
+        )
+    )
+    live_completed = await asyncio.wait_for(live_task, timeout=1)
+
+    assert [event.event_id for event in replayed] == [
+        run_a_started_id,
+        run_a_paused_id,
+        run_b_started_id,
+    ]
+    assert live_completed.event_id == live_completed_id
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(stream), timeout=1)
+    assert manager._run_event_hub.has_subscribers("run-a") is False
+    assert manager._run_event_hub.has_subscribers("run-b") is False
+
+
+@pytest.mark.asyncio
+async def test_stream_multiplexed_run_events_skips_live_events_already_replayed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_multiplex_stream_duplicate_replay.db"
+    manager = _build_manager(db_path)
+    event_log = manager._event_log
+    assert event_log is not None
+    original_list = event_log.list_by_traces_after_ids_async
+
+    async def _list_after_publishing_duplicate(
+        trace_offsets: tuple[tuple[str, int], ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        _ = await manager._run_event_hub.publish_async(
+            RunEvent(
+                session_id="session-a",
+                run_id="run-a",
+                trace_id="run-a",
+                event_type=RunEventType.TEXT_DELTA,
+                payload_json='{"text":"duplicate"}',
+            )
+        )
+        return await original_list(trace_offsets)
+
+    monkeypatch.setattr(
+        event_log,
+        "list_by_traces_after_ids_async",
+        _list_after_publishing_duplicate,
+    )
+
+    stream = manager.stream_multiplexed_run_events((("run-a", 0),))
+    replayed = await anext(stream)
+    live_task = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    live_completed_id = await manager._run_event_hub.publish_async(
+        RunEvent(
+            session_id="session-a",
+            run_id="run-a",
+            trace_id="run-a",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed"}',
+        )
+    )
+    live_completed = await asyncio.wait_for(live_task, timeout=1)
+
+    assert replayed.event_type == RunEventType.TEXT_DELTA
+    assert live_completed.event_type == RunEventType.RUN_COMPLETED
+    assert live_completed.event_id == live_completed_id
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(stream), timeout=1)
+    assert manager._run_event_hub.has_subscribers("run-a") is False
+
+
+@pytest.mark.asyncio
+async def test_stream_multiplexed_run_events_streams_live_without_event_log(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_multiplex_stream_no_event_log.db"
+    manager = _build_manager(db_path, attach_manager_event_log=False)
+
+    stream = manager.stream_multiplexed_run_events((("run-live", 0),))
+    live_task = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    live_completed_id = await manager._run_event_hub.publish_async(
+        RunEvent(
+            session_id="session-live",
+            run_id="run-live",
+            trace_id="run-live",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed"}',
+        )
+    )
+    live_completed = await asyncio.wait_for(live_task, timeout=1)
+
+    assert live_completed.event_id == live_completed_id
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(stream), timeout=1)
+    assert manager._run_event_hub.has_subscribers("run-live") is False
+
+
+@pytest.mark.asyncio
 async def test_worker_auto_recovers_network_stream_interruption(
     tmp_path: Path,
 ) -> None:

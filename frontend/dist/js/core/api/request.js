@@ -218,6 +218,21 @@ export function invalidateManagedRequests(prefix = '') {
     }
 }
 
+export function invalidateManagedRequestCache(prefix = '') {
+    const safePrefix = String(prefix || '').trim();
+    const shouldInvalidate = key => !safePrefix || String(key).startsWith(safePrefix);
+    for (const key of COALESCED_CACHE.keys()) {
+        if (shouldInvalidate(key)) {
+            deleteManagedCacheEntry(key);
+        }
+    }
+    for (const key of COALESCED_IN_FLIGHT.keys()) {
+        if (shouldInvalidate(key)) {
+            evictManagedInFlightEntry(COALESCED_IN_FLIGHT.get(key));
+        }
+    }
+}
+
 function normalizeRequestLane(lane) {
     const safeLane = String(lane || '').trim();
     if (Object.prototype.hasOwnProperty.call(REQUEST_LIMITS, safeLane)) {

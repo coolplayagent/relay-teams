@@ -349,7 +349,7 @@ export async function fetchModelProfiles(options = {}) {
             signal: options.signal,
         },
         'Failed to fetch model profiles',
-        { ttlMs: 2000 },
+        { ttlMs: 10000 },
     );
 }
 

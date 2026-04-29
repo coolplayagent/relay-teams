@@ -143,7 +143,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "clearAllStreamState({ preserveOverlay: true });" in timeline_script
     assert "export function attachRunStream(" in stream_script
     assert "const backgroundStreams = new Map();" in stream_script
-    assert "const MAX_BACKGROUND_STREAMS = 2;" in stream_script
+    assert "const MAX_MULTIPLEX_RUN_STREAMS = 32;" in stream_script
     assert "const unavailableSessionCooldownUntil = new Map();" in stream_script
     assert "const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert (
@@ -164,24 +164,23 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     )
     assert "const sessions = await fetchSessions();" in stream_script
     assert "reason: 'background-discovery'," in stream_script
-    assert "const snapshot = await fetchSessionRecovery(sessionId);" in stream_script
+    assert "function attachBackgroundStreamForSession(record) {" in stream_script
     assert (
-        "candidates.sort((left, right) => backgroundRecordTimestamp(right) - backgroundRecordTimestamp(left));"
+        "const attentionDelta = Number(runStreamAttention.get(rightRunId) || 0)"
         in stream_script
     )
     assert (
         "const focusedRunId = String(activeConnection?.runId || '').trim();"
         in stream_script
     )
-    assert "|| String(state.currentSessionId || '').trim()" in stream_script
+    assert "|| String(state.currentSessionId || '').trim()" not in stream_script
+    assert "|| pendingBackgroundAttachRunIds.size > 0" in stream_script
+    assert "|| pendingRunStart" in stream_script
     assert "const backgroundRunIds = new Set();" in stream_script
     assert "if (focusedRunId && runId === focusedRunId) {" in stream_script
     assert "if (backgroundRunIds.has(runId)) {" in stream_script
-    assert "if (desiredRunIds.size >= MAX_BACKGROUND_STREAMS) {" in stream_script
-    assert (
-        "finishActiveConnection(connection, { preserveRunStreamState: true });"
-        in stream_script
-    )
+    assert "if (desiredRunIds.size >= MAX_MULTIPLEX_RUN_STREAMS) {" in stream_script
+    assert "requestMultiplexRunConnection('finish-active');" in stream_script
     assert "const unavailableRunCooldownUntil = new Map();" in stream_script
     assert "const RUN_NOT_FOUND_COOLDOWN_MS = 30000;" in stream_script
     assert "status: 'stopped'," in stream_script
@@ -190,8 +189,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "pending_user_question_count: 0," in stream_script
     assert "pending_user_questions: []," in stream_script
     assert "if (isRunNotFoundError(data.error)) {" in stream_script
-    assert "if (e?.status === 404) {" in stream_script
-    assert "markSessionUnavailable(sessionId);" in stream_script
+    assert "markSessionUnavailable(connection.sessionId);" in stream_script
     assert "if (isSessionUnavailable(sessionId)) {" in stream_script
     assert "if (!ignoreUnavailable && isRunUnavailable(safeRunId)) {" in stream_script
     assert "const streamCore = await import('../core/stream.js');" in sidebar_script

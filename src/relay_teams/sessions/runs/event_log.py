@@ -45,6 +45,9 @@ class EventLog(SharedSqliteRepository):
                 "CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id)"
             )
             self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_trace_id ON events(trace_id, id)"
+            )
+            self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id)"
             )
             self._conn.execute(
@@ -82,6 +85,10 @@ class EventLog(SharedSqliteRepository):
             await cursor.close()
             cursor = await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_trace ON events(trace_id)"
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_trace_id ON events(trace_id, id)"
             )
             await cursor.close()
             cursor = await conn.execute(
@@ -251,6 +258,45 @@ class EventLog(SharedSqliteRepository):
             )
         )
         return tuple(self._row_to_dict(row) for row in rows)
+
+    def list_by_traces_after_ids(
+        self,
+        trace_offsets: tuple[tuple[str, int], ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        normalized_offsets = _normalize_trace_offsets(trace_offsets)
+        if not normalized_offsets:
+            return ()
+        after_by_trace = dict(normalized_offsets)
+        rows: list[sqlite3.Row] = []
+        chunk_size = _SQLITE_SAFE_VARIABLE_LIMIT - 1
+        with self._lock:
+            for index in range(0, len(normalized_offsets), chunk_size):
+                offset_chunk = normalized_offsets[index : index + chunk_size]
+                trace_ids = tuple(trace_id for trace_id, _offset in offset_chunk)
+                min_after_event_id = min(offset for _trace_id, offset in offset_chunk)
+                placeholders = ", ".join("?" for _trace_id in trace_ids)
+                rows.extend(
+                    self._conn.execute(
+                        "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                        f"FROM events WHERE trace_id IN ({placeholders}) AND id>? ORDER BY id ASC",
+                        (*trace_ids, min_after_event_id),
+                    ).fetchall()
+                )
+        rows.sort(key=_row_event_id)
+        return tuple(
+            self._row_to_dict(row)
+            for row in rows
+            if _row_event_id(row) > after_by_trace.get(str(row["trace_id"]), 0)
+        )
+
+    async def list_by_traces_after_ids_async(
+        self,
+        trace_offsets: tuple[tuple[str, int], ...],
+    ) -> tuple[dict[str, JsonValue], ...]:
+        return await self._call_sync_async(
+            self.list_by_traces_after_ids,
+            trace_offsets,
+        )
 
     def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         with self._lock:
@@ -628,3 +674,28 @@ class EventLog(SharedSqliteRepository):
         if "id" in row.keys():
             result["id"] = int(row["id"])
         return result
+
+
+def _normalize_trace_offsets(
+    trace_offsets: tuple[tuple[str, int], ...],
+) -> tuple[tuple[str, int], ...]:
+    offsets_by_trace: dict[str, int] = {}
+    ordered_trace_ids: list[str] = []
+    for raw_trace_id, raw_after_event_id in trace_offsets:
+        trace_id = str(raw_trace_id).strip()
+        if not trace_id:
+            continue
+        after_event_id = max(0, int(raw_after_event_id))
+        if trace_id not in offsets_by_trace:
+            ordered_trace_ids.append(trace_id)
+            offsets_by_trace[trace_id] = after_event_id
+            continue
+        offsets_by_trace[trace_id] = max(offsets_by_trace[trace_id], after_event_id)
+    return tuple(
+        (trace_id, offsets_by_trace[trace_id]) for trace_id in ordered_trace_ids
+    )
+
+
+def _row_event_id(row: sqlite3.Row) -> int:
+    row_id = row["id"]
+    return int(row_id) if isinstance(row_id, int) else 0

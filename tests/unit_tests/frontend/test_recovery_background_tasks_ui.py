@@ -8,6 +8,21 @@ import subprocess
 from .css_helpers import load_components_css
 
 
+def test_recovery_continuity_polling_excludes_terminal_recoverable_runs() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "frontend" / "dist" / "js" / "app" / "recovery.js").read_text(
+        encoding="utf-8"
+    )
+    block = source.split("function shouldPollContinuity()", 1)[1].split(
+        "\n}\n",
+        1,
+    )[0]
+
+    assert "isContinuityPollableRun(activeRun)" in block
+    assert "activeRun?.is_recoverable" not in block
+    assert "if (isTerminalRecoveryRun(activeRun)) return false;" in source
+
+
 def test_recovery_ui_tracks_background_tasks_in_banner_and_events() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     recovery_script = (
@@ -412,3 +427,172 @@ console.log(JSON.stringify({
     assert payload["snapshot"] is None
     assert payload["display"] == "none"
     assert payload["html"] == ""
+
+
+def test_terminal_run_state_patches_round_without_recovery_snapshot(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (repo_root / "frontend" / "dist" / "js" / "app" / "recovery.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "recovery_terminal_state"
+    temp_dir.mkdir()
+    (temp_dir / "recovery.mjs").write_text(
+        source.replace("../components/subagentRail.js", "./mockSubagentRail.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/rounds/timeline.js", "./mockTimeline.mjs")
+        .replace("../components/sidebar.js", "./mockSidebar.mjs")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockSubagentRail.mjs").write_text(
+        "export async function refreshSubagentRail() { return undefined; }",
+        encoding="utf-8",
+    )
+    (temp_dir / "mockContextIndicators.mjs").write_text(
+        "export function refreshVisibleContextIndicators() { return undefined; }",
+        encoding="utf-8",
+    )
+    (temp_dir / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearRunStreamState() { return undefined; }
+export function reconcileTerminalRunStreamState() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockTimeline.mjs").write_text(
+        """
+globalThis.__roundOverlays = [];
+export async function loadSessionRounds() { return undefined; }
+export function overlayRoundRecoveryState(runId, overlay) {
+    globalThis.__roundOverlays.push({ runId, overlay });
+}
+export function syncRoundTodoVisibility() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockSidebar.mjs").write_text(
+        """
+globalThis.__sessionRefreshes = 0;
+export function scheduleSessionsRefresh() {
+    globalThis.__sessionRefreshes += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockApi.mjs").write_text(
+        """
+export async function answerUserQuestion() { return {}; }
+export async function fetchSessionRecovery() { return {}; }
+export async function invalidateSessionRecovery() { return {}; }
+export async function resolveToolApproval() { return {}; }
+export async function resumeRun() { return {}; }
+export async function stopBackgroundTask() { return {}; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-1",
+    currentRecoverySnapshot: null,
+    pausedSubagent: null,
+    isGenerating: true,
+    activeRunId: "run-1",
+};
+export function clearRunPrimaryRole() { return undefined; }
+export function humanizeRoleId(roleId) { return String(roleId || ""); }
+export function isPrimaryRoleId() { return false; }
+export function isReservedSystemRoleId() { return false; }
+export function setRunPrimaryRole() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockStream.mjs").write_text(
+        """
+export function endStream() { return undefined; }
+export function resumeRunStream() { return undefined; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockDom.mjs").write_text(
+        """
+function createElement() {
+    return {
+        style: { display: "none" },
+        innerHTML: "",
+        textContent: "",
+        hidden: false,
+        querySelectorAll() { return []; },
+        querySelector() { return null; },
+    };
+}
+export const els = {
+    backgroundTaskHost: createElement(),
+    recoveryQuestionHost: createElement(),
+    recoveryApprovalHost: createElement(),
+    resumeRunBtn: createElement(),
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function t(key) { return key; }
+export function formatMessage(key) { return key; }
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockLogger.mjs").write_text(
+        "export function sysLog() { return undefined; }",
+        encoding="utf-8",
+    )
+    runner = """
+import { markRunTerminalState } from "./recovery.mjs";
+import { state } from "./mockState.mjs";
+
+markRunTerminalState("run-1", {
+    status: "completed",
+    phase: "terminal",
+    recoverable: false,
+});
+
+console.log(JSON.stringify({
+    overlays: globalThis.__roundOverlays,
+    refreshes: globalThis.__sessionRefreshes,
+    snapshot: state.currentRecoverySnapshot,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "overlays": [
+            {
+                "runId": "run-1",
+                "overlay": {
+                    "run_status": "completed",
+                    "run_phase": "terminal",
+                    "is_recoverable": False,
+                    "pending_tool_approval_count": 0,
+                    "pending_tool_approvals": [],
+                },
+            }
+        ],
+        "refreshes": 1,
+        "snapshot": None,
+    }

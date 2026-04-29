@@ -243,6 +243,48 @@ def test_session_rounds_timeline_bypasses_full_round_projection(
     assert "coordinator_messages" not in first
 
 
+def test_session_rounds_summary_pages_lightweight_timeline_without_full_projection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "summary_round_state_overlay.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    task_repo = TaskRepository(db_path)
+    for index in range(3):
+        _ = task_repo.create(
+            TaskEnvelope(
+                task_id=f"task-root-{index}",
+                session_id="session-1",
+                parent_task_id=None,
+                trace_id=f"run-{index}",
+                objective=f"summary only {index}",
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+            )
+        )
+
+    def fail_full_round_projection(**_kwargs: object) -> list[dict[str, object]]:
+        raise AssertionError("summary requests should not build full round payloads")
+
+    monkeypatch.setattr(
+        session_service_module,
+        "build_session_rounds",
+        fail_full_round_projection,
+    )
+
+    page = service.get_session_rounds("session-1", limit=2, summary=True)
+    items = page.get("items")
+
+    assert isinstance(items, list)
+    assert len(items) == 2
+    assert page.get("has_more") is True
+    assert page.get("next_cursor") == items[-1].get("run_id")
+    assert all(
+        "coordinator_messages" not in item for item in items if isinstance(item, dict)
+    )
+
+
 def test_session_rounds_page_targets_only_visible_run_messages(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -303,6 +345,65 @@ def test_session_rounds_page_targets_only_visible_run_messages(
     assert len(items) == 1
     assert page.get("has_more") is True
     assert captured_run_ids == [(str(items[0].get("run_id") or ""),)]
+
+
+def test_get_round_targets_single_run_messages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "single_round_targeted_messages.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    task_repo = TaskRepository(db_path)
+    for index in range(3):
+        _ = task_repo.create(
+            TaskEnvelope(
+                task_id=f"task-root-{index}",
+                session_id="session-1",
+                parent_task_id=None,
+                trace_id=f"run-{index}",
+                objective=f"work {index}",
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+            )
+        )
+
+    def fail_full_session_message_load(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("single round reads should not load every session message")
+
+    captured_run_ids: list[tuple[str, ...]] = []
+    original_targeted_load = service._message_repo.get_messages_by_session_run_ids
+
+    def capture_targeted_load(
+        session_id: str,
+        run_ids: tuple[str, ...],
+        *,
+        include_cleared: bool = False,
+        include_hidden_from_context: bool = False,
+    ) -> list[dict[str, JsonValue]]:
+        captured_run_ids.append(run_ids)
+        return original_targeted_load(
+            session_id,
+            run_ids,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+
+    monkeypatch.setattr(
+        service._message_repo,
+        "get_messages_by_session",
+        fail_full_session_message_load,
+    )
+    monkeypatch.setattr(
+        service._message_repo,
+        "get_messages_by_session_run_ids",
+        capture_targeted_load,
+    )
+
+    round_item = service.get_round("session-1", "run-1")
+
+    assert round_item.get("run_id") == "run-1"
+    assert captured_run_ids == [("run-1",)]
 
 
 def test_build_session_timeline_rounds_filters_included_run_ids(

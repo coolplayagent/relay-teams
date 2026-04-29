@@ -7,7 +7,7 @@ import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { formatMessage, getCurrentLanguage, t } from '../utils/i18n.js';
 
-const REFRESH_DEBOUNCE_MS = 160;
+const REFRESH_DEBOUNCE_MS = 400;
 const EMPTY_TEXT = () => t('token_usage.empty');
 
 const refreshState = {

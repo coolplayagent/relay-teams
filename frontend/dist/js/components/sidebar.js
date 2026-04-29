@@ -82,6 +82,7 @@ const FEATURE_IDS = Object.freeze({
 let selectSessionHandler = null;
 let refreshTimer = null;
 let pendingSessionsRefreshForce = false;
+let pendingSessionsRefreshTrailingForce = false;
 const expandedProjectIds = new Set();
 const expandedProjectSessionIds = new Set();
 const initializedProjectIds = new Set();
@@ -98,6 +99,7 @@ let pendingSessionAnimation = null;
 let pendingSessionVisibilityAnimation = null;
 let loadProjectsRequestId = 0;
 let loadProjectsController = null;
+let sessionsRefreshPromise = null;
 let lastProjectsRenderSignature = '';
 let sidebarSelectionToken = 0;
 let sessionAnimationTokenSeed = 0;
@@ -1218,7 +1220,11 @@ async function handlePrimaryNewSessionClick() {
     const draftSelectionToken = sidebarSelectionToken;
     const currentWorkspaceId = String(state.currentWorkspaceId || '').trim();
     try {
-        const fetchedWorkspaces = await fetchWorkspaces();
+        const snapshotData = hasSidebarDataSnapshot() ? getSidebarDataSnapshot() : null;
+        const fetchedWorkspaces = Array.isArray(snapshotData?.workspaces)
+            && snapshotData.workspaces.length > 0
+            ? snapshotData.workspaces
+            : await fetchWorkspaces();
         if (!isLatestSidebarSelection(draftSelectionToken)) {
             return;
         }
@@ -2469,6 +2475,11 @@ export async function loadProjects({ forceRefresh = false } = {}) {
         if (loadProjectsController === controller) {
             loadProjectsController = null;
         }
+        if (pendingSessionsRefreshTrailingForce) {
+            const trailingForce = pendingSessionsRefreshTrailingForce;
+            pendingSessionsRefreshTrailingForce = false;
+            scheduleSessionsRefresh(120, { forceRefresh: trailingForce });
+        }
     }
 }
 
@@ -2484,8 +2495,52 @@ export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } 
             return;
         }
         pendingSessionsRefreshForce = false;
-        void loadProjects({ forceRefresh: forceNow });
+        void refreshSessionsSnapshot({ forceRefresh: forceNow });
     }, safeDelayMs);
+}
+
+async function refreshSessionsSnapshot({ forceRefresh = false } = {}) {
+    if (!els.projectsList) return;
+    if (!hasSidebarDataSnapshot()) {
+        await loadProjects({ forceRefresh });
+        return;
+    }
+    if (loadProjectsController || sessionsRefreshPromise) {
+        pendingSessionsRefreshTrailingForce = (
+            pendingSessionsRefreshTrailingForce
+            || forceRefresh === true
+        );
+        return;
+    }
+    sessionsRefreshPromise = (async () => {
+        try {
+            const sessions = await fetchSessions({ forceRefresh: forceRefresh === true });
+            const snapshotData = getSidebarDataSnapshot();
+            rememberSidebarDataSnapshot({
+                workspaces: snapshotData.workspaces,
+                sessions,
+                automationProjects: snapshotData.automationProjects,
+            });
+            renderProjectSidebarData(
+                snapshotData.workspaces,
+                sessions,
+                snapshotData.automationProjects,
+            );
+        } catch (error) {
+            if (error?.name === 'AbortError') {
+                return;
+            }
+            sysLog(formatMessage('sidebar.error.loading_projects', { error: error.message }), 'log-error');
+        } finally {
+            sessionsRefreshPromise = null;
+            if (pendingSessionsRefreshTrailingForce) {
+                const trailingForce = pendingSessionsRefreshTrailingForce;
+                pendingSessionsRefreshTrailingForce = false;
+                scheduleSessionsRefresh(120, { forceRefresh: trailingForce });
+            }
+        }
+    })();
+    await sessionsRefreshPromise;
 }
 
 export function toggleProjectSortMode() {

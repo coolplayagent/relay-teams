@@ -124,7 +124,7 @@ _LEGACY_COORDINATOR_IDENTIFIERS = (
 )
 _MAIN_AGENT_IDENTIFIERS = ("mainagent", "main agent", "main_agent")
 _AUTO_SESSION_TITLE_MAX_CHARS = 120
-_LIST_SESSIONS_CACHE_TTL_SECONDS = 0.1
+_LIST_SESSIONS_CACHE_TTL_SECONDS = 0.5
 
 
 def _legacy_coordinator_identifiers() -> tuple[str, ...]:
@@ -1500,6 +1500,7 @@ class SessionService:
         limit: int = 8,
         cursor_run_id: str | None = None,
         timeline: bool = False,
+        summary: bool = False,
     ) -> dict[str, object]:
         if timeline:
             rounds = self.build_session_timeline_rounds(session_id)
@@ -1510,6 +1511,8 @@ class SessionService:
             limit=limit,
             cursor_run_id=cursor_run_id,
         )
+        if summary:
+            return page
         page_items = page.get("items")
         if not isinstance(page_items, list) or not page_items:
             return page
@@ -1552,8 +1555,27 @@ class SessionService:
         return page
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
-        rounds = self.build_session_rounds(session_id)
-        return find_round_by_run_id(rounds, session_id=session_id, run_id=run_id)
+        safe_run_id = str(run_id or "").strip()
+        timeline_item = next(
+            (
+                item
+                for item in self.build_session_timeline_rounds(session_id)
+                if str(item.get("run_id") or "") == safe_run_id
+            ),
+            None,
+        )
+        rounds = self.build_session_rounds(
+            session_id,
+            included_run_ids={safe_run_id},
+            include_history_markers=False,
+        )
+        round_item = find_round_by_run_id(rounds, session_id=session_id, run_id=run_id)
+        if timeline_item is not None:
+            round_item["clear_marker_before"] = timeline_item.get("clear_marker_before")
+            round_item["compaction_marker_before"] = timeline_item.get(
+                "compaction_marker_before"
+            )
+        return round_item
 
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
         _ = self._session_repo.get(session_id)

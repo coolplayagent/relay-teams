@@ -40,6 +40,7 @@ def test_session_switch_pressure_does_not_starve_backend(
         for index in range(24)
     ]
     subagent_session_ids: list[str] = []
+    completed_run_ids: list[str] = []
     for index, session_id in enumerate(session_ids[1:4], start=1):
         run_id = create_run(
             api_client,
@@ -57,6 +58,7 @@ def test_session_switch_pressure_does_not_starve_backend(
         )
         assert events[-1]["event_type"] == "run_completed"
         subagent_session_ids.append(session_id)
+        completed_run_ids.append(run_id)
 
     create_started = time.perf_counter()
     slow_run_id = create_run(
@@ -68,7 +70,10 @@ def test_session_switch_pressure_does_not_starve_backend(
     create_elapsed_ms = int((time.perf_counter() - create_started) * 1000)
     assert create_elapsed_ms < 3000
 
-    request_plan = _build_pressure_request_plan(session_ids)
+    request_plan = _build_pressure_request_plan(
+        session_ids,
+        multiplex_replay_run_ids=completed_run_ids,
+    )
     results = _run_pressure_requests(
         integration_env.api_base_url,
         request_plan,
@@ -114,12 +119,21 @@ def test_session_switch_pressure_does_not_starve_backend(
 
 def _build_pressure_request_plan(
     session_ids: list[str],
+    *,
+    multiplex_replay_run_ids: list[str] | None = None,
 ) -> list[tuple[HttpMethod, str]]:
     request_plan: list[tuple[HttpMethod, str]] = [("GET", "/api/sessions")]
+    replay_run_ids = multiplex_replay_run_ids or []
+    if replay_run_ids:
+        replay_query = "&".join(
+            f"run_id={run_id}&after_event_id=0" for run_id in replay_run_ids
+        )
+        request_plan.append(("GET", f"/api/runs/events?{replay_query}"))
     for session_id in session_ids:
         request_plan.extend(
             [
                 ("GET", f"/api/sessions/{session_id}"),
+                ("GET", f"/api/sessions/{session_id}/rounds?summary=true&limit=4"),
                 ("GET", f"/api/sessions/{session_id}/rounds?limit=8"),
                 ("GET", f"/api/sessions/{session_id}/recovery"),
                 ("GET", f"/api/sessions/{session_id}/token-usage"),

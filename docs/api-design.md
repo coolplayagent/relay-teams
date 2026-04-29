@@ -937,6 +937,7 @@ Query parameters:
 - optional `limit`: number of round projections to return for the normal paged view
 - optional `cursor_run_id`: cursor for loading older normal round projections
 - optional `timeline=true`: returns the full lightweight round index for timeline navigation; this mode ignores `limit` and `cursor_run_id`, sets `has_more = false`, and omits heavy message/task mapping fields such as `coordinator_messages`, `tasks`, `instance_role_map`, `role_instance_map`, `task_instance_map`, and `task_status_map`
+- optional `summary=true`: returns the paged lightweight round index for fast session switching; this mode honors `limit` and `cursor_run_id`, keeps pagination fields, and omits the same heavy fields as `timeline=true`
 
 Response shape:
 
@@ -1325,6 +1326,19 @@ Response:
 ```json
 {"run_id": "run-1", "session_id": "session-1", "target_role_id": "Architect"}
 ```
+
+### `GET /runs/events`
+
+Streams multiple main-run event streams over one SSE connection.
+
+Query:
+- `run_id`: repeat once per run, up to 32 values.
+- `after_event_id`: optional repeated replay offset matching each `run_id`; omitted values default to `0`.
+
+The response emits the same `RunEvent` JSON shape as `GET /runs/{run_id}/events`.
+Clients route each event by its `run_id` or `trace_id`. This endpoint is intended
+for browser-side multiplexing of active and recently viewed main sessions so the
+UI does not open one SSE connection per running session.
 
 ### `GET /runs/{run_id}/events`
 

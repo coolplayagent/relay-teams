@@ -3,7 +3,10 @@
  * Normal-mode subagent child-session cache, navigation, and read-only view.
  */
 import { fetchSessionSubagents } from '../core/api.js';
-import { hydrateSessionView } from '../app/recovery.js';
+import {
+    abortMainSessionRestore,
+    restoreMainSessionView,
+} from '../app/sessionView.js';
 import { syncNormalModeSubagentStreams } from '../core/stream.js';
 import { clearAllPanels } from './agentPanel.js';
 import { renderInstanceHistoryInto } from './agentPanel/history.js';
@@ -18,12 +21,13 @@ const loadingSessionIds = new Set();
 const loadingPromisesBySessionId = new Map();
 const expandedParentSessionIds = new Set();
 const terminalRefreshTimers = new Map();
+const queuedSubagentSessionLoads = [];
 let activeSubagentRenderSequence = 0;
 let activeSubagentRenderController = null;
-let mainSessionReturnController = null;
-let mainSessionReturnToken = 0;
 let subagentSessionsChangedFrame = 0;
 let pendingSubagentSessionsChangedDetail = null;
+let activeSubagentSessionLoadCount = 0;
+const MAX_PARALLEL_SUBAGENT_SESSION_LOADS = 2;
 const TERMINAL_REFRESH_DELAYS_MS = [120, 250, 500, 900, 1400];
 
 export function getSessionSubagentSessions(sessionId) {
@@ -64,7 +68,7 @@ export function clearActiveSubagentSession({ abortMainReturn = true } = {}) {
         activeSubagentRenderController = null;
     }
     if (abortMainReturn) {
-        abortMainSessionReturn();
+        abortMainSessionRestore();
     }
     cancelTerminalRefreshForInstance(getActiveSubagentSession()?.instanceId || '');
     state.activeSubagentSession = null;
@@ -111,7 +115,10 @@ export async function ensureSessionSubagents(
         });
     }
     const loadPromise = (async () => {
-        const payload = await fetchSessionSubagents(safeSessionId, { signal });
+        const payload = await runQueuedSubagentSessionLoad(
+            () => fetchSessionSubagents(safeSessionId, { signal }),
+            signal,
+        );
         throwIfAborted(signal);
         replaceSessionSubagents(safeSessionId, payload, { emitChange: false });
         return getSessionSubagentSessions(safeSessionId);
@@ -134,6 +141,63 @@ export async function ensureSessionSubagents(
                 sessionId: safeSessionId,
             });
         }
+    }
+}
+
+function runQueuedSubagentSessionLoad(operation, signal) {
+    throwIfAborted(signal);
+    if (activeSubagentSessionLoadCount < MAX_PARALLEL_SUBAGENT_SESSION_LOADS) {
+        return startSubagentSessionLoad(operation, signal);
+    }
+    return new Promise((resolve, reject) => {
+        const entry = {
+            operation,
+            signal,
+            resolve,
+            reject,
+            abortHandler: null,
+        };
+        entry.abortHandler = () => {
+            const index = queuedSubagentSessionLoads.indexOf(entry);
+            if (index >= 0) {
+                queuedSubagentSessionLoads.splice(index, 1);
+            }
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+        };
+        if (signal) {
+            signal.addEventListener('abort', entry.abortHandler, { once: true });
+        }
+        queuedSubagentSessionLoads.push(entry);
+        drainSubagentSessionLoadQueue();
+    });
+}
+
+async function startSubagentSessionLoad(operation, signal) {
+    throwIfAborted(signal);
+    activeSubagentSessionLoadCount += 1;
+    try {
+        return await operation();
+    } finally {
+        activeSubagentSessionLoadCount = Math.max(0, activeSubagentSessionLoadCount - 1);
+        drainSubagentSessionLoadQueue();
+    }
+}
+
+function drainSubagentSessionLoadQueue() {
+    while (
+        activeSubagentSessionLoadCount < MAX_PARALLEL_SUBAGENT_SESSION_LOADS
+        && queuedSubagentSessionLoads.length > 0
+    ) {
+        const entry = queuedSubagentSessionLoads.shift();
+        if (!entry) {
+            continue;
+        }
+        if (entry.signal && entry.abortHandler) {
+            entry.signal.removeEventListener('abort', entry.abortHandler);
+        }
+        startSubagentSessionLoad(entry.operation, entry.signal)
+            .then(entry.resolve)
+            .catch(entry.reject);
     }
 }
 
@@ -282,7 +346,7 @@ export async function openSubagentSession(sessionId, record) {
     if (!safeSessionId || normalized === null) {
         return;
     }
-    abortMainSessionReturn();
+    abortMainSessionRestore();
     state.activeSubagentSession = normalized;
     state.activeView = 'subagent-session';
     state.activeAgentRoleId = normalized.roleId;
@@ -309,44 +373,8 @@ export async function returnToMainSessionView() {
         clearActiveSubagentSession();
         return;
     }
-    const returnRequest = resetMainSessionReturnController();
-    const returnController = returnRequest.controller;
-    const returnToken = returnRequest.token;
-    const returnSignal = returnController.signal;
     clearActiveSubagentSession({ abortMainReturn: false });
-    showMainSessionLoadingPlaceholder(sessionId);
-    document.dispatchEvent(new CustomEvent('agent-teams-subagent-session-cleared', {
-        detail: { sessionId },
-    }));
-    try {
-        await hydrateSessionView(sessionId, {
-            includeRounds: true,
-            quiet: true,
-            signal: returnSignal,
-        });
-        if (
-            returnSignal.aborted
-            || !isLatestMainSessionReturn(returnToken, returnController, sessionId)
-            || String(state.currentSessionId || '').trim() !== sessionId
-            || state.activeSubagentSession
-        ) {
-            return;
-        }
-        document.dispatchEvent(new CustomEvent('agent-teams-session-activated', {
-            detail: { sessionId },
-        }));
-        document.dispatchEvent(new CustomEvent('agent-teams-session-selected', {
-            detail: { sessionId },
-        }));
-    } catch (error) {
-        if (error?.name === 'AbortError') {
-            return;
-        }
-        showMainSessionLoadFailed(sessionId);
-        sysLog(`Failed to return to main session: ${error.message || error}`, 'log-error');
-    } finally {
-        clearMainSessionReturnController(returnController);
-    }
+    await restoreMainSessionView(sessionId, { quiet: true });
 }
 
 export async function renderActiveSubagentSession(options = {}) {
@@ -633,40 +661,6 @@ function cancelTerminalRefreshForInstance(instanceId) {
     terminalRefreshTimers.delete(safeInstanceId);
 }
 
-function resetMainSessionReturnController() {
-    abortMainSessionReturn();
-    mainSessionReturnController = new AbortController();
-    mainSessionReturnToken += 1;
-    return {
-        controller: mainSessionReturnController,
-        token: mainSessionReturnToken,
-    };
-}
-
-function clearMainSessionReturnController(controller) {
-    if (mainSessionReturnController === controller) {
-        mainSessionReturnController = null;
-    }
-}
-
-function abortMainSessionReturn() {
-    if (!mainSessionReturnController) {
-        return;
-    }
-    mainSessionReturnController.abort();
-    mainSessionReturnController = null;
-    mainSessionReturnToken += 1;
-}
-
-function isLatestMainSessionReturn(token, controller, sessionId) {
-    return !!(
-        mainSessionReturnController === controller
-        && mainSessionReturnToken === token
-        && !controller.signal.aborted
-        && String(state.currentSessionId || '').trim() === String(sessionId || '').trim()
-    );
-}
-
 function isStillActiveSubagentRender(active, requestId) {
     return !!(
         requestId === activeSubagentRenderSequence
@@ -742,29 +736,6 @@ function setSubagentSessionLoading(instanceId, loading, wrapper = null) {
     if (loadingEl) {
         loadingEl.hidden = loading !== true;
     }
-}
-
-function showMainSessionLoadingPlaceholder(sessionId) {
-    if (!els.chatMessages) {
-        return;
-    }
-    els.chatMessages.innerHTML = `
-        <div class="subagent-main-session-loading" data-session-id="${escapeAttribute(sessionId)}" role="status" aria-live="polite">
-            <span class="subagent-main-session-loading-spinner" aria-hidden="true"></span>
-            <span>${escapeHtml(t('session.loading'))}</span>
-        </div>
-    `;
-}
-
-function showMainSessionLoadFailed(sessionId) {
-    if (!els.chatMessages) {
-        return;
-    }
-    els.chatMessages.innerHTML = `
-        <div class="subagent-main-session-loading is-error" data-session-id="${escapeAttribute(sessionId)}" role="status">
-            <span>${escapeHtml(t('subagent_session.load_failed'))}</span>
-        </div>
-    `;
 }
 
 function setElementClassFlag(element, className, enabled) {

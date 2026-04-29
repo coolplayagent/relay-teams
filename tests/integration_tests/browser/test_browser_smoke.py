@@ -1980,29 +1980,40 @@ def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
 
     page = browser_page
     subagent_request_urls: list[str] = []
-    page.on(
-        "request",
-        lambda request: (
+    session_index_requests: list[str] = []
+    recovery_requests: list[str] = []
+
+    def track_request(request: Request) -> None:
+        if request.method != "GET":
+            return
+        if request.url.startswith(
+            f"{integration_env.api_base_url}/api/sessions/"
+        ) and request.url.endswith("/subagents"):
             subagent_request_urls.append(request.url)
-            if (
-                request.method == "GET"
-                and request.url.startswith(
-                    f"{integration_env.api_base_url}/api/sessions/"
-                )
-                and request.url.endswith("/subagents")
-            )
-            else None
-        ),
-    )
+            return
+        if request.url == f"{integration_env.api_base_url}/api/sessions":
+            session_index_requests.append(request.url)
+            return
+        if request.url.startswith(
+            f"{integration_env.api_base_url}/api/sessions/"
+        ) and request.url.endswith("/recovery"):
+            recovery_requests.append(request.url)
+
+    page.on("request", track_request)
 
     _open_app(page, integration_env)
     expect(page.locator(".session-item.active")).to_have_count(
         1,
         timeout=_WAIT_TIMEOUT_MS,
     )
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(800)
+    initial_session_index_request_count = len(session_index_requests)
+    initial_recovery_request_count = len(recovery_requests)
+    page.wait_for_timeout(3200)
 
-    assert len(subagent_request_urls) == 1
+    assert len(subagent_request_urls) == 0
+    assert len(session_index_requests) == initial_session_index_request_count
+    assert len(recovery_requests) == initial_recovery_request_count
 
 
 def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_load(
@@ -2040,10 +2051,16 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     page = browser_page
     failed_requests: list[str] = []
     subagent_list_requests: list[str] = []
+    session_index_requests: list[str] = []
 
     def track_response(response: Response) -> None:
         if response.status >= 500:
             failed_requests.append(response.url)
+        if (
+            response.request.method == "GET"
+            and response.url == f"{integration_env.api_base_url}/api/sessions"
+        ):
+            session_index_requests.append(response.url)
         if (
             response.request.method == "GET"
             and response.url.startswith(f"{integration_env.api_base_url}/api/sessions/")
@@ -2063,6 +2080,10 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
         "data-session-id",
         switch_targets[-1],
         timeout=2500,
+    )
+    expect(page.locator(".session-item-activating")).to_have_count(0, timeout=2500)
+    expect(page.locator(".home-new-session-btn")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
     )
 
     page.locator(".home-new-session-btn").click()
@@ -2158,7 +2179,120 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     expect(page.locator(".session-subagent-list.is-animating")).to_have_count(0)
 
     assert failed_requests == []
-    assert len(subagent_list_requests) <= 8
+    assert len(subagent_list_requests) <= 2
+    assert len(session_index_requests) <= 4
+
+
+def test_browser_burst_new_session_starts_stay_within_request_budget(
+    browser_page: Page,
+    integration_env: IntegrationEnvironment,
+    api_client: httpx.Client,
+) -> None:
+    create_session(
+        api_client,
+        session_id=new_session_id("browser-burst-seed"),
+    )
+
+    page = browser_page
+    api_requests: list[tuple[str, str]] = []
+    failed_requests: list[str] = []
+
+    def track_request(request: Request) -> None:
+        if request.url.startswith(f"{integration_env.api_base_url}/api/"):
+            api_requests.append(
+                (request.method, _api_path(integration_env, request.url))
+            )
+
+    def track_response(response: Response) -> None:
+        if (
+            response.url.startswith(f"{integration_env.api_base_url}/api/")
+            and response.status >= 500
+        ):
+            failed_requests.append(response.url)
+
+    page.on("request", track_request)
+    page.on("response", track_response)
+    _open_app(page, integration_env)
+    expect(page.locator(".home-new-session-btn")).to_be_visible(
+        timeout=_WAIT_TIMEOUT_MS
+    )
+    expect(page.locator(".session-item.active")).to_have_count(
+        1,
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    expect(
+        page.locator(
+            ".chat-container.is-session-switch-pending, .chat-container.is-session-switching"
+        )
+    ).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
+    api_requests.clear()
+
+    feedback_times_ms: list[int] = []
+    for index in range(3):
+        page.locator(".home-new-session-btn").click()
+        expect(page.locator(".new-session-draft-page")).to_be_visible(
+            timeout=_WAIT_TIMEOUT_MS,
+        )
+        expect(page.locator("#prompt-input")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+        page.locator("#prompt-input").fill(f"browser burst start {index}")
+        started = time.perf_counter()
+        page.locator("#send-btn").click()
+        expect(
+            page.locator(".session-run-start-placeholder, .session-round-section").first
+        ).to_be_visible(timeout=500)
+        feedback_times_ms.append(int((time.perf_counter() - started) * 1000))
+
+    page.wait_for_timeout(2500)
+
+    get_sessions = [
+        path
+        for method, path in api_requests
+        if method == "GET" and path == "/api/sessions"
+    ]
+    get_workspaces = [
+        path
+        for method, path in api_requests
+        if method == "GET" and path == "/api/workspaces"
+    ]
+    get_recovery = [
+        path
+        for method, path in api_requests
+        if method == "GET"
+        and path.startswith("/api/sessions/")
+        and path.endswith("/recovery")
+    ]
+    get_subagents = [
+        path
+        for method, path in api_requests
+        if method == "GET"
+        and path.startswith("/api/sessions/")
+        and path.endswith("/subagents")
+    ]
+    get_model_profiles = [
+        path
+        for method, path in api_requests
+        if method == "GET" and path == "/api/system/configs/model/profiles"
+    ]
+    post_sessions = [
+        path
+        for method, path in api_requests
+        if method == "POST" and path == "/api/sessions"
+    ]
+    post_runs = [
+        path
+        for method, path in api_requests
+        if method == "POST" and path == "/api/runs"
+    ]
+
+    assert failed_requests == []
+    assert len(post_sessions) == 3
+    assert len(post_runs) == 3
+    assert max(feedback_times_ms) < 500
+    assert len(get_workspaces) == 0
+    assert len(get_sessions) <= 5
+    assert len(get_recovery) <= 5
+    assert len(get_subagents) == 0
+    assert len(get_model_profiles) <= 2
 
 
 def test_browser_terminal_run_viewed_state_survives_reload(
@@ -2239,6 +2373,10 @@ def _open_app(page: Page, integration_env: IntegrationEnvironment) -> None:
         timeout=_WAIT_TIMEOUT_MS,
     )
     expect(page.locator("#projects-list")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+
+def _api_path(integration_env: IntegrationEnvironment, url: str) -> str:
+    return str(url).removeprefix(integration_env.api_base_url)
 
 
 def _open_web_settings_panel(
@@ -2365,6 +2503,11 @@ def _vertical_gap_between(upper: Locator, lower: Locator) -> float:
 
 def _create_session_via_sidebar(page: Page) -> str:
     existing_session_ids = set(_session_ids(page))
+    expect(
+        page.locator(
+            ".chat-container.is-session-switch-pending, .chat-container.is-session-switching"
+        )
+    ).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
     first_project_row = page.locator(".project-row").first
     first_project_row.hover()
     expect(page.locator(".project-new-session-btn").first).to_be_visible(

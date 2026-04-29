@@ -64,7 +64,7 @@ export function routeEvent(evType, payload, eventMeta) {
     const displayableBackgroundTaskEvent = backgroundTaskEvent
         && isDisplayableBackgroundTaskPayload(payload);
     if (isSubagentRun && evType === 'token_usage') {
-        scheduleSessionTokenUsageRefresh({ immediate: true });
+        scheduleSessionTokenUsageRefresh({ immediate: false });
     }
     if (
         isSubagentRun
@@ -200,7 +200,7 @@ export function routeEvent(evType, payload, eventMeta) {
         }
         return;
     } else if (evType === 'token_usage') {
-        scheduleSessionTokenUsageRefresh({ immediate: true });
+        scheduleSessionTokenUsageRefresh({ immediate: false });
     } else if (evType === 'todo_updated') {
         updateRoundTodo(
             payload?.run_id || eventMeta?.run_id || eventMeta?.trace_id || '',
@@ -276,7 +276,7 @@ function scheduleContinuityRefreshForEvent(evType) {
     if (evType === 'run_started' || evType === 'run_resumed') {
         scheduleRecoveryContinuityRefresh({
             sessionId,
-            delayMs: 0,
+            delayMs: 300,
             forceRefresh: true,
             includeRounds: false,
             quiet: true,
@@ -314,9 +314,6 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'llm_retry_exhausted'
         || evType === 'llm_fallback_activated'
         || evType === 'llm_fallback_exhausted'
-        || evType === 'tool_result'
-        || evType === 'output_delta'
-        || evType === 'generation_progress'
         || evType === 'tool_approval_requested'
         || evType === 'tool_approval_resolved'
         || evType === 'user_question_requested'
@@ -328,7 +325,7 @@ function scheduleContinuityRefreshForEvent(evType) {
     ) {
         scheduleRecoveryContinuityRefresh({
             sessionId,
-            delayMs: 0,
+            delayMs: 350,
             forceRefresh: true,
             includeRounds: false,
             quiet: true,
@@ -356,7 +353,7 @@ function scheduleContinuityRefreshForEvent(evType) {
     if (evType === 'run_completed' || evType === 'run_failed' || evType === 'run_stopped') {
         scheduleRecoveryContinuityRefresh({
             sessionId,
-            delayMs: 0,
+            delayMs: 650,
             forceRefresh: true,
             includeRounds: false,
             quiet: true,

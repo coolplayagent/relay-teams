@@ -18,7 +18,9 @@ from relay_teams.media import (
     content_parts_from_text,
 )
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.user_question_models import UserQuestionAnswer
 
 
@@ -33,6 +35,7 @@ class _FakeRunService:
         self.raise_on_inject = False
         self.raise_on_subagent_inject = False
         self.created_run_inputs: list[IntentInput] = []
+        self.multiplex_stream_calls: list[tuple[tuple[str, int], ...]] = []
         self.background_tasks: dict[str, dict[str, object]] = {
             "exec-1": {
                 "background_task_id": "exec-1",
@@ -342,6 +345,21 @@ class _FakeRunService:
     ) -> dict[str, str]:
         return {"instance_id": instance_id, "run_id": run_id}
 
+    async def stream_multiplexed_run_events(self, run_offsets):
+        normalized_offsets = tuple(
+            (str(run_id), int(offset)) for run_id, offset in run_offsets
+        )
+        self.multiplex_stream_calls.append(normalized_offsets)
+        for run_id, offset in normalized_offsets:
+            yield RunEvent(
+                session_id=f"session-{run_id}",
+                run_id=run_id,
+                trace_id=run_id,
+                event_type=RunEventType.RUN_COMPLETED,
+                payload_json='{"status":"completed"}',
+                event_id=offset + 1,
+            )
+
 
 class _CancellationAwareRunService(_FakeRunService):
     def __init__(self) -> None:
@@ -480,6 +498,78 @@ async def test_create_and_start_run_finishes_startup_after_cancellation() -> Non
     await asyncio.wait_for(fake_service.run_started.wait(), timeout=1)
 
     assert fake_service.started_run_ids == ["run-1"]
+
+
+def test_multiplex_run_events_route_streams_multiple_runs() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.get(
+        "/api/runs/events?run_id=run-1&after_event_id=4&run_id=run-2&after_event_id=9"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert fake_service.multiplex_stream_calls == [(("run-1", 4), ("run-2", 9))]
+    assert '"run_id":"run-1"' in response.text
+    assert '"event_id":5' in response.text
+    assert '"run_id":"run-2"' in response.text
+    assert '"event_id":10' in response.text
+
+
+def test_multiplex_run_events_route_deduplicates_run_ids_with_max_offset() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.get(
+        "/api/runs/events?run_id=run-1&after_event_id=4"
+        "&run_id=run-1&after_event_id=8"
+        "&run_id=run-2"
+    )
+
+    assert response.status_code == 200
+    assert fake_service.multiplex_stream_calls == [(("run-1", 8), ("run-2", 0))]
+
+
+def test_multiplex_run_events_route_rejects_too_many_runs() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+    query = "&".join(f"run_id=run-{index}" for index in range(33))
+
+    response = client.get(f"/api/runs/events?{query}")
+
+    assert response.status_code == 422
+    assert fake_service.multiplex_stream_calls == []
+
+
+@pytest.mark.parametrize(
+    ("query", "detail"),
+    [
+        ("", "At least one run_id is required"),
+        (
+            "run_id=run-1&after_event_id=1&after_event_id=2",
+            "after_event_id cannot contain more values than run_id",
+        ),
+        ("run_id=%20", "run_id cannot be blank"),
+        (
+            "run_id=run-1&after_event_id=-1",
+            "after_event_id must be greater than or equal to 0",
+        ),
+    ],
+)
+def test_multiplex_run_events_route_rejects_invalid_offsets(
+    query: str,
+    detail: str,
+) -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+    suffix = f"?{query}" if query else ""
+
+    response = client.get(f"/api/runs/events{suffix}")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == detail
+    assert fake_service.multiplex_stream_calls == []
 
 
 def test_create_run_route_accepts_yolo() -> None:
