@@ -72,7 +72,7 @@ Endpoint resolution:
 - Other URLs are first probed through root and path-relative Agent Card candidates.
 - If Agent Card discovery fails for a non-card URL, the original URL is treated as a direct JSON-RPC endpoint.
 - A direct endpoint such as `/rpc.json` is not treated as an Agent Card just because it ends in `.json`.
-- Runtime `:test` uses the same fallback semantics. When no Agent Card is available for a non-card URL, it probes the direct endpoint with a non-mutating `tasks/get` request and accepts either JSON-RPC result or error as evidence that the endpoint is reachable.
+- Runtime `:test` uses the same endpoint semantics. When an Agent Card is available, the resolved `card.url` JSON-RPC endpoint is probed with a non-mutating `tasks/get` request before returning success. When no Agent Card is available for a non-card URL, the same probe is sent to the original direct endpoint. JSON-RPC result or error both prove that the endpoint is reachable.
 
 Prompt execution:
 

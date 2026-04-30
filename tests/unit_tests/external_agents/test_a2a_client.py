@@ -29,6 +29,19 @@ async def test_probe_a2a_agent_fetches_agent_card(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            assert str(request.url) == "http://agent.test/a2a"
+            payload = json.loads(request.content.decode("utf-8"))
+            assert isinstance(payload, dict)
+            assert payload["method"] == "tasks/get"
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "error": {"code": -32001, "message": "Task not found"},
+                },
+            )
         assert request.method == "GET"
         assert str(request.url) == "http://agent.test/.well-known/agent.json"
         return httpx.Response(

@@ -427,6 +427,24 @@ def test_codex_app_server_listener_is_forced_to_stdio(args: tuple[str, ...]) -> 
     assert built_args == ("app-server", "--listen", "stdio://")
 
 
+@pytest.mark.parametrize(
+    "args",
+    (
+        ("--listen", "ws://127.0.0.1:0"),
+        ("--listen=ws://127.0.0.1:0",),
+        ("--listen", "off"),
+    ),
+)
+def test_bare_codex_listener_args_are_replaced_with_stdio(
+    args: tuple[str, ...],
+) -> None:
+    built_args = _build_command_args(
+        transport=StdioTransportConfig(command="codex", args=args),
+    )
+
+    assert built_args == ("app-server", "--listen", "stdio://")
+
+
 def test_non_codex_yolo_argument_is_preserved() -> None:
     args = _build_command_args(
         transport=StdioTransportConfig(command="custom-agent", args=("--yolo",)),

@@ -82,6 +82,7 @@ async def probe_a2a_agent(config: ExternalAgentConfig) -> ExternalAgentTestResul
                     protocol=ExternalAgentProtocol.A2A,
                     protocol_version_text="direct-jsonrpc",
                 )
+            await client.probe_direct_endpoint(card.url)
         return ExternalAgentTestResult(
             ok=True,
             message="External A2A agent card is reachable.",
@@ -174,7 +175,8 @@ class A2aHttpClient:
     def configured_url(self) -> str:
         return self._transport.url
 
-    async def probe_direct_endpoint(self) -> None:
+    async def probe_direct_endpoint(self, endpoint: str | None = None) -> None:
+        target_endpoint = endpoint or self._transport.url
         payload: dict[str, JsonValue] = {
             "jsonrpc": "2.0",
             "id": self._next_request_id(),
@@ -182,7 +184,7 @@ class A2aHttpClient:
             "params": {"id": "relay-teams-probe"},
         }
         response = await self._require_client().post(
-            self._transport.url,
+            target_endpoint,
             json=payload,
             headers={
                 **self._headers(),
