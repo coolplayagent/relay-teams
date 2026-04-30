@@ -45,6 +45,7 @@ from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     VerificationPlan,
@@ -917,10 +918,24 @@ async def test_graph_mode_reports_missing_node_role_without_creating_tasks(
         for record in records
         if record.envelope.orchestration_node_id is not None
     )
+    root_record = await task_repo.get_async(root_task.task_id)
+    events = coordinator.event_bus.list_by_trace("run-1")
+    failed_events = tuple(
+        event
+        for event in events
+        if event["event_type"] == EventType.TASK_FAILED.value
+        and event["task_id"] == root_task.task_id
+    )
     assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
     assert result.error_code == "graph_role_missing"
     assert result.error_message == "Graph references missing role(s): missingrole."
     assert "Missing graph node roles: missingrole" in result.output
+    assert root_record.status == TaskStatus.FAILED
+    assert root_record.assigned_instance_id == coordinator_instance_id
+    assert root_record.error_message == result.error_message
+    assert len(failed_events) == 1
+    assert failed_events[0]["instance_id"] == coordinator_instance_id
+    assert '"reason": "graph_role_missing"' in str(failed_events[0]["payload_json"])
     assert graph_records == ()
 
 

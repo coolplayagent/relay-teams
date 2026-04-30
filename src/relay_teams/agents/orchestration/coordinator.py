@@ -515,6 +515,7 @@ class CoordinatorGraph(BaseModel):
         missing_role_ids = self._missing_graph_role_ids(graph)
         if missing_role_ids:
             role_list = ", ".join(missing_role_ids)
+            error_message = f"Graph references missing role(s): {role_list}."
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -529,6 +530,13 @@ class CoordinatorGraph(BaseModel):
             graph_status = await self._graph_status_async(
                 trace_id=trace_id, graph=graph
             )
+            await self._fail_graph_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="graph_role_missing",
+                error_message=error_message,
+            )
             return TaskExecutionResult(
                 output=(
                     self._graph_execution_summary(graph_status=graph_status)
@@ -536,7 +544,7 @@ class CoordinatorGraph(BaseModel):
                 ),
                 completion_reason=RunCompletionReason.ASSISTANT_ERROR,
                 error_code="graph_role_missing",
-                error_message=f"Graph references missing role(s): {role_list}.",
+                error_message=error_message,
             )
 
         while True:
@@ -558,27 +566,51 @@ class CoordinatorGraph(BaseModel):
             if graph_status.completed:
                 break
             if not created_any and not ran_any:
+                error_message = "Graph execution made no progress."
+                await self._fail_graph_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="graph_execution_blocked",
+                    error_message=error_message,
+                )
                 return TaskExecutionResult(
                     output=self._graph_execution_summary(graph_status=graph_status),
                     completion_reason=RunCompletionReason.ASSISTANT_ERROR,
                     error_code="graph_execution_blocked",
-                    error_message="Graph execution made no progress.",
+                    error_message=error_message,
                 )
 
         graph_status = await self._graph_status_async(trace_id=trace_id, graph=graph)
         if graph_status.failed:
+            error_message = "One or more graph nodes failed."
+            await self._fail_graph_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="graph_execution_failed",
+                error_message=error_message,
+            )
             return TaskExecutionResult(
                 output=self._graph_execution_summary(graph_status=graph_status),
                 completion_reason=RunCompletionReason.ASSISTANT_ERROR,
                 error_code="graph_execution_failed",
-                error_message="One or more graph nodes failed.",
+                error_message=error_message,
             )
         if not graph_status.completed:
+            error_message = "Graph execution did not complete."
+            await self._fail_graph_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="graph_execution_incomplete",
+                error_message=error_message,
+            )
             return TaskExecutionResult(
                 output=self._graph_execution_summary(graph_status=graph_status),
                 completion_reason=RunCompletionReason.ASSISTANT_ERROR,
                 error_code="graph_execution_incomplete",
-                error_message="Graph execution did not complete.",
+                error_message=error_message,
             )
 
         final_output = self._graph_final_response(
@@ -659,6 +691,39 @@ class CoordinatorGraph(BaseModel):
                     "instance_id": assigned_instance_id,
                 },
             )
+
+    async def _fail_graph_root_task_async(
+        self,
+        *,
+        trace_id: str,
+        root_task: TaskEnvelope,
+        coordinator_instance_id: str,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        current = await self.task_repo.get_async(root_task.task_id)
+        assigned_instance_id = current.assigned_instance_id or coordinator_instance_id
+        await self.task_repo.update_status_async(
+            root_task.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=assigned_instance_id,
+            error_message=error_message,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_FAILED,
+                trace_id=trace_id,
+                session_id=root_task.session_id,
+                task_id=root_task.task_id,
+                instance_id=assigned_instance_id,
+                payload_json=dumps(
+                    {
+                        "reason": error_code,
+                        "error_message": error_message,
+                    }
+                ),
+            )
+        )
 
     async def _create_ready_graph_tasks_async(
         self,
