@@ -15,6 +15,7 @@ class CommandScope(str, Enum):
 
 class CommandDiscoverySource(str, Enum):
     APP = "app"
+    PLUGIN = "plugin"
     PROJECT_CODEX = "project_codex"
     PROJECT_CLAUDE = "project_claude"
     PROJECT_OPENCODE = "project_opencode"

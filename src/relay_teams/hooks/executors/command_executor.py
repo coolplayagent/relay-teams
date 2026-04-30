@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -29,18 +30,21 @@ class CommandHookExecutor:
         *,
         handler: HookHandlerConfig,
         event_input: HookEventInput,
+        extra_env: dict[str, str] | None = None,
     ) -> HookDecision:
         command = str(handler.command or "").strip()
         if not command:
             raise ValueError("Command hook requires a command")
         args = _build_command_args(command=command, shell=handler.shell)
         payload = event_input.model_dump_json().encode("utf-8")
+        env = _build_command_env(extra_env)
         try:
             process = await asyncio.create_subprocess_exec(
                 *args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(payload),
@@ -56,6 +60,7 @@ class CommandHookExecutor:
                 stderr=subprocess.PIPE,
                 check=False,
                 timeout=handler.timeout_seconds,
+                env=env,
             )
             stdout = completed.stdout
             stderr = completed.stderr
@@ -102,6 +107,14 @@ def _build_command_args(*, command: str, shell: HookShell | None) -> list[str]:
     if sys.platform.startswith("win"):
         return [_strip_wrapping_quotes(arg) for arg in args]
     return args
+
+
+def _build_command_env(extra_env: dict[str, str] | None) -> dict[str, str] | None:
+    if not extra_env:
+        return None
+    env = dict(os.environ)
+    env.update(extra_env)
+    return env
 
 
 def _decode_limited(data: bytes, *, limit_bytes: int, stream_name: str) -> str:

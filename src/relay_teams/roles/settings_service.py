@@ -24,6 +24,7 @@ from relay_teams.roles.role_registry import (
     is_coordinator_role_definition,
     is_reserved_system_role_definition,
 )
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.roles.memory_models import default_memory_profile
@@ -44,9 +45,11 @@ class RoleSettingsService:
         get_external_agent_service: Callable[[], ExternalAgentConfigService] | None,
         on_roles_reloaded: Callable[[RoleRegistry], None],
         reload_skill_registry: Callable[[], SkillRegistry] | None = None,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
     ) -> None:
         self._roles_dir: Path = roles_dir
         self._builtin_roles_dir: Path = builtin_roles_dir
+        self._plugin_sources: tuple[PluginComponentSource, ...] = plugin_sources
         self._loader: RoleLoader = RoleLoader()
         self._get_tool_registry: Callable[[], ToolRegistry] = get_tool_registry
         self._get_mcp_registry: Callable[[], McpRegistry] = get_mcp_registry
@@ -54,6 +57,12 @@ class RoleSettingsService:
         self._reload_skill_registry = reload_skill_registry
         self._get_external_agent_service = get_external_agent_service
         self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
+
+    def replace_plugin_sources(
+        self,
+        plugin_sources: tuple[PluginComponentSource, ...],
+    ) -> None:
+        self._plugin_sources = plugin_sources
 
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
         builtin_role_ids = self._load_builtin_role_ids()
@@ -309,9 +318,10 @@ class RoleSettingsService:
         strict_capability_validation: bool,
         consumer_prefix: str,
     ) -> RoleRegistry:
-        registry = self._loader.load_builtin_and_app(
+        registry = self._loader.load_builtin_app_and_plugins(
             builtin_roles_dir=self._builtin_roles_dir,
             app_roles_dir=self._roles_dir,
+            plugin_sources=self._plugin_sources,
             allow_empty=True,
         )
         sanitized_registry = RoleRegistry()

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from pydantic_ai import Tool
 
 from relay_teams.logger import get_logger, log_event
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills.discovery import SkillsDirectory
 from relay_teams.skills.skill_models import (
     Skill,
@@ -68,12 +69,14 @@ class SkillRegistry(BaseModel):
         *,
         app_skills_dir: Path,
         builtin_skills_dir: Path | None = None,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
         max_depth: int = 3,
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_skill_dirs(
                 app_skills_dir=app_skills_dir,
                 builtin_skills_dir=builtin_skills_dir,
+                plugin_sources=plugin_sources,
                 max_depth=max_depth,
             )
         )
@@ -85,12 +88,14 @@ class SkillRegistry(BaseModel):
         app_config_dir: Path,
         max_depth: int = 3,
         project_start_dir: Path | None = None,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
     ) -> SkillRegistry:
         return cls(
             directory=SkillsDirectory.from_config_dirs(
                 app_config_dir=app_config_dir,
                 max_depth=max_depth,
                 project_start_dir=project_start_dir,
+                plugin_sources=plugin_sources,
             )
         )
 

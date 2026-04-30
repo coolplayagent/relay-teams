@@ -9,8 +9,10 @@ from relay_teams.computer import ExecutionSurface
 from relay_teams.hooks import (
     parse_tolerant_hooks_payload,
 )
-from relay_teams.hooks.hook_models import HooksConfig
+from relay_teams.hooks.hook_models import HookHandlerType, HooksConfig
 from relay_teams.logger import get_logger
+from relay_teams.plugins.path_resolution import namespace_plugin_ref
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.roles.default_role_tools import (
     COORDINATOR_IDENTIFIERS,
     COORDINATOR_REQUIRED_TOOLS,
@@ -227,6 +229,42 @@ class RoleLoader:
             )
         return registry
 
+    def load_builtin_app_and_plugins(
+        self,
+        *,
+        builtin_roles_dir: Path,
+        app_roles_dir: Path,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
+        allow_empty: bool = False,
+    ) -> RoleRegistry:
+        registry = self.load_builtin_and_app(
+            builtin_roles_dir=builtin_roles_dir,
+            app_roles_dir=app_roles_dir,
+            allow_empty=True,
+        )
+        for plugin_source in plugin_sources:
+            if not plugin_source.path.exists() or not plugin_source.path.is_dir():
+                continue
+            for md_file in sorted(plugin_source.path.glob("*.md")):
+                try:
+                    role = self.load_one(md_file)
+                    registry.register(
+                        _namespace_plugin_role(
+                            role=role,
+                            plugin_name=plugin_source.plugin_name,
+                        )
+                    )
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Skipping invalid plugin role",
+                        extra={"path": str(md_file), "error": str(exc)},
+                    )
+        if not allow_empty and not registry.list_roles():
+            raise ValueError(
+                f"No role files found in {builtin_roles_dir}, {app_roles_dir}, or plugin sources"
+            )
+        return registry
+
     def build_effective_role_map(
         self,
         *,
@@ -360,6 +398,107 @@ def _role_available_in_normal_mode(role: RoleDefinition) -> bool:
 
 def _role_available_as_subagent(role: RoleDefinition) -> bool:
     return role.mode in {RoleMode.SUBAGENT, RoleMode.ALL}
+
+
+def _namespace_plugin_role(
+    *,
+    role: RoleDefinition,
+    plugin_name: str,
+) -> RoleDefinition:
+    if is_reserved_system_role_definition(role):
+        raise ValueError(
+            f"Plugin role cannot define reserved system role: {role.role_id}"
+        )
+    return role.model_copy(
+        update={
+            "role_id": namespace_plugin_ref(
+                plugin_name=plugin_name,
+                local_name=role.role_id,
+            ),
+            "mcp_servers": _namespace_plugin_refs(
+                plugin_name=plugin_name,
+                refs=role.mcp_servers,
+            ),
+            "skills": _namespace_plugin_refs(
+                plugin_name=plugin_name,
+                refs=role.skills,
+            ),
+            "hooks": _namespace_plugin_hooks(
+                plugin_name=plugin_name,
+                hooks=role.hooks,
+            ),
+        }
+    )
+
+
+def _namespace_plugin_refs(
+    *,
+    plugin_name: str,
+    refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    namespaced: list[str] = []
+    for ref in refs:
+        normalized = ref.strip()
+        if not normalized:
+            continue
+        if normalized == "*":
+            namespaced.append(normalized)
+            continue
+        if ":" in normalized:
+            namespaced.append(normalized)
+            continue
+        namespaced.append(
+            namespace_plugin_ref(plugin_name=plugin_name, local_name=normalized)
+        )
+    return tuple(namespaced)
+
+
+def _namespace_plugin_hooks(
+    *,
+    plugin_name: str,
+    hooks: HooksConfig,
+) -> HooksConfig:
+    if not hooks.hooks:
+        return hooks
+    next_hooks = {}
+    for event_name, groups in hooks.hooks.items():
+        next_groups = []
+        for group in groups:
+            next_handlers = []
+            for handler in group.hooks:
+                if handler.type == HookHandlerType.AGENT and handler.role_id:
+                    next_handlers.append(
+                        handler.model_copy(
+                            update={
+                                "role_id": _namespace_plugin_ref(
+                                    plugin_name=plugin_name,
+                                    ref=handler.role_id,
+                                )
+                            }
+                        )
+                    )
+                    continue
+                next_handlers.append(handler)
+            next_groups.append(
+                group.model_copy(
+                    update={
+                        "role_ids": _namespace_plugin_refs(
+                            plugin_name=plugin_name,
+                            refs=group.role_ids,
+                        ),
+                        "hooks": tuple(next_handlers),
+                    }
+                )
+            )
+        next_hooks[event_name] = tuple(next_groups)
+    return HooksConfig(hooks=next_hooks)
+
+
+def _namespace_plugin_ref(*, plugin_name: str, ref: str) -> str:
+    normalized = ref.strip()
+    if not normalized or normalized == "*" or ":" in normalized:
+        return ref
+    return namespace_plugin_ref(plugin_name=plugin_name, local_name=normalized)
 
 
 def _parse_frontmatter_hooks(

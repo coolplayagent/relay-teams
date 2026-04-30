@@ -85,6 +85,7 @@ from relay_teams.interfaces.server.deps import (
     get_web_config_service,
     get_web_connectivity_probe_service,
     get_hook_service,
+    get_plugin_registry,
 )
 from relay_teams.interfaces.server.control_plane import (
     ControlPlaneDiscoveryPayload,
@@ -148,6 +149,7 @@ from relay_teams.skills.clawhub_models import (
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.hooks import HookRuntimeView, HookService, HooksConfig
+from relay_teams.plugins import PluginRegistry
 from relay_teams.validation import RequiredIdentifierStr
 from relay_teams.workspace import (
     SshProfileConfig,
@@ -246,6 +248,13 @@ async def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
 ) -> dict[str, JsonValue]:
     return await call_maybe_async(service.get_config_status)
+
+
+@router.get("/configs/plugins/runtime")
+async def get_plugins_runtime_view(
+    plugin_registry: PluginRegistry = Depends(get_plugin_registry),
+) -> PluginRegistry:
+    return plugin_registry
 
 
 @router.get("/configs/workspace/ssh-profiles")

@@ -17,6 +17,7 @@ from pathlib import Path
 class RoleConfigSource(str, Enum):
     BUILTIN = "builtin"
     APP = "app"
+    PLUGIN = "plugin"
 
 
 class RoleMode(str, Enum):

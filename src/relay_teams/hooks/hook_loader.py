@@ -21,6 +21,8 @@ from relay_teams.hooks.hook_models import (
 )
 from relay_teams.logger import get_logger
 from relay_teams.paths import get_project_root_or_none
+from relay_teams.plugins.path_resolution import namespace_plugin_ref
+from relay_teams.plugins.plugin_models import PluginComponentSource
 
 LOGGER = get_logger(__name__)
 _CAPABILITY_WILDCARD = "*"
@@ -109,11 +111,13 @@ class HookLoader:
         project_root: Path | None = None,
         get_role_registry: Callable[[], object] | None = None,
         get_skill_registry: Callable[[], object] | None = None,
+        plugin_hook_sources: tuple[PluginComponentSource, ...] = (),
     ) -> None:
         self._app_config_dir = app_config_dir
         self._project_root = project_root or get_project_root_or_none(Path.cwd())
         self._get_role_registry = get_role_registry
         self._get_skill_registry = get_skill_registry
+        self._plugin_hook_sources = plugin_hook_sources
 
     @property
     def user_config_path(self) -> Path:
@@ -182,6 +186,7 @@ class HookLoader:
                             group=group,
                         )
                     )
+        self._append_plugin_hooks(resolved=resolved, sources=sources)
         self._append_role_hooks(resolved=resolved, sources=sources)
         self._append_skill_hooks(resolved=resolved, sources=sources)
         return HookRuntimeSnapshot(
@@ -189,18 +194,34 @@ class HookLoader:
             hooks={key: tuple(value) for key, value in resolved.items()},
         )
 
-    def _load_single_file(self, path: Path, *, tolerant: bool) -> HooksConfig:
+    def _load_single_file(
+        self,
+        path: Path,
+        *,
+        tolerant: bool,
+        plugin_name: str = "",
+    ) -> HooksConfig:
         if not path.exists():
             return HooksConfig()
         try:
             payload = _load_json_object(path)
             if tolerant:
                 normalized_payload = normalize_hooks_payload(payload, tolerant=True)
+                if plugin_name:
+                    normalized_payload = _namespace_plugin_hooks_payload(
+                        normalized_payload,
+                        plugin_name=plugin_name,
+                    )
                 return self._load_tolerant_payload(
                     path=path,
                     payload=normalized_payload,
                 )
             normalized_payload = normalize_hooks_payload(payload)
+            if plugin_name:
+                normalized_payload = _namespace_plugin_hooks_payload(
+                    normalized_payload,
+                    plugin_name=plugin_name,
+                )
             config = HooksConfig.model_validate(normalized_payload)
             validate_hook_event_capabilities(config=config)
             return self._validate_handler_references(config=config, tolerant=False)
@@ -209,6 +230,43 @@ class HookLoader:
                 raise
             LOGGER.warning("Ignoring invalid hook config", extra={"path": str(path)})
             return HooksConfig()
+
+    def _append_plugin_hooks(
+        self,
+        *,
+        resolved: dict[HookEventName, list[ResolvedHookMatcherGroup]],
+        sources: list[HookSourceInfo],
+    ) -> None:
+        for plugin_source in self._plugin_hook_sources:
+            path = plugin_source.path
+            if not path.exists():
+                continue
+            config = self._load_single_file(
+                path,
+                tolerant=True,
+                plugin_name=plugin_source.plugin_name,
+            )
+            if not config.hooks:
+                continue
+            source = HookSourceInfo(
+                scope=HookSourceScope.PLUGIN,
+                path=path,
+                plugin_name=plugin_source.plugin_name,
+                plugin_root=plugin_source.root_dir,
+                plugin_data=plugin_source.data_dir,
+            )
+            sources.append(source)
+            for event_name, groups in config.hooks.items():
+                bucket = resolved.setdefault(event_name, [])
+                for group in groups:
+                    if group.hooks:
+                        bucket.append(
+                            ResolvedHookMatcherGroup(
+                                source=source,
+                                event_name=event_name,
+                                group=group,
+                            )
+                        )
 
     def _load_tolerant_payload(self, *, path: Path, payload: object) -> HooksConfig:
         if not isinstance(payload, dict):
@@ -616,6 +674,72 @@ def normalize_hooks_payload(payload: object, *, tolerant: bool = False) -> objec
         normalized_hooks[event_name] = normalized_groups
     next_payload["hooks"] = normalized_hooks
     return next_payload
+
+
+def _namespace_plugin_hooks_payload(payload: object, *, plugin_name: str) -> object:
+    if not isinstance(payload, dict):
+        return payload
+    raw_hooks = payload.get("hooks")
+    if not isinstance(raw_hooks, dict):
+        return payload
+    next_hooks: dict[object, object] = {}
+    for event_name, raw_groups in raw_hooks.items():
+        if not isinstance(raw_groups, list):
+            next_hooks[event_name] = raw_groups
+            continue
+        next_hooks[event_name] = [
+            _namespace_plugin_hook_group(group, plugin_name=plugin_name)
+            for group in raw_groups
+        ]
+    return dict(payload) | {"hooks": next_hooks}
+
+
+def _namespace_plugin_hook_group(group: object, *, plugin_name: str) -> object:
+    if not isinstance(group, dict):
+        return group
+    next_group = dict(group)
+    raw_role_ids = next_group.get("role_ids")
+    if isinstance(raw_role_ids, list):
+        next_group["role_ids"] = [
+            _namespace_plugin_role_ref(value, plugin_name=plugin_name)
+            for value in raw_role_ids
+        ]
+    elif isinstance(raw_role_ids, tuple):
+        next_group["role_ids"] = tuple(
+            _namespace_plugin_role_ref(value, plugin_name=plugin_name)
+            for value in raw_role_ids
+        )
+    raw_handlers = next_group.get("hooks")
+    if isinstance(raw_handlers, list):
+        next_group["hooks"] = [
+            _namespace_plugin_hook_handler(handler, plugin_name=plugin_name)
+            for handler in raw_handlers
+        ]
+    return next_group
+
+
+def _namespace_plugin_hook_handler(handler: object, *, plugin_name: str) -> object:
+    if not isinstance(handler, dict):
+        return handler
+    next_handler = dict(handler)
+    if str(next_handler.get("type") or "").strip() != HookHandlerType.AGENT.value:
+        return next_handler
+    role_id = next_handler.get("role_id")
+    if isinstance(role_id, str):
+        next_handler["role_id"] = _namespace_plugin_role_ref(
+            role_id,
+            plugin_name=plugin_name,
+        )
+    return next_handler
+
+
+def _namespace_plugin_role_ref(value: object, *, plugin_name: str) -> object:
+    if not isinstance(value, str):
+        return value
+    normalized = value.strip()
+    if not normalized or normalized == _CAPABILITY_WILDCARD or ":" in normalized:
+        return value
+    return namespace_plugin_ref(plugin_name=plugin_name, local_name=normalized)
 
 
 def parse_tolerant_hooks_payload(payload: object) -> HooksConfig:

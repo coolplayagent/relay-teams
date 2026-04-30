@@ -8,10 +8,12 @@ from pydantic import JsonValue
 from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_config_manager import McpConfigManager
 from relay_teams.mcp.mcp_models import (
+    McpConfigScope,
     McpServerAddResult,
     McpServerConfigResult,
     McpServerConnectionTestResult,
     McpServerEnabledUpdateRequest,
+    McpServerSpec,
     McpServerSummary,
     McpServerToolsSummary,
     McpServerUpdateRequest,
@@ -30,15 +32,25 @@ class McpService:
         registry: McpRegistry,
         config_manager: McpConfigManager | None = None,
         on_registry_changed: Callable[[McpRegistry], None] | None = None,
+        extra_specs: tuple[McpServerSpec, ...] = (),
     ) -> None:
         self._registry: McpRegistry = registry
         self._config_manager: McpConfigManager | None = config_manager
         self._on_registry_changed: Callable[[McpRegistry], None] | None = (
             on_registry_changed
         )
+        self._extra_specs: tuple[McpServerSpec, ...] = extra_specs
 
     def replace_registry(self, registry: McpRegistry) -> None:
         self._registry = registry
+
+    def replace_extra_specs(self, extra_specs: tuple[McpServerSpec, ...]) -> None:
+        self._extra_specs = extra_specs
+
+    def _load_registry(self) -> McpRegistry:
+        if self._config_manager is None:
+            raise RuntimeError("MCP config manager is not available")
+        return self._config_manager.load_registry(extra_specs=self._extra_specs)
 
     def _publish_registry(self, registry: McpRegistry) -> None:
         self.replace_registry(registry)
@@ -74,7 +86,11 @@ class McpService:
             attributes={"server_name": name},
         ):
             spec = self._registry.get_spec(name.strip())
-            config = self._config_manager.get_server_config(name)
+            config = (
+                self._config_manager.get_server_config(name)
+                if spec.source == McpConfigScope.APP
+                else spec.server_config
+            )
             return McpServerConfigResult(
                 server=McpServerSummary(
                     name=spec.name,
@@ -117,12 +133,15 @@ class McpService:
             operation="add_server",
             attributes={"server_name": name},
         ):
+            normalized_name = name.strip()
+            if normalized_name:
+                self._require_no_non_app_shadow(normalized_name)
             config_path = self._config_manager.add_server(
                 name=name,
                 server_config=server_config,
                 overwrite=overwrite,
             )
-            self._publish_registry(self._config_manager.load_registry())
+            self._publish_registry(self._load_registry())
             spec = self._registry.get_spec(name.strip())
             return McpServerAddResult(
                 server=McpServerSummary(
@@ -147,11 +166,12 @@ class McpService:
             operation="set_server_enabled",
             attributes={"server_name": name, "enabled": request.enabled},
         ):
+            self._require_app_managed_server(name)
             self._config_manager.set_server_enabled(
                 name=name,
                 enabled=request.enabled,
             )
-            self._publish_registry(self._config_manager.load_registry())
+            self._publish_registry(self._load_registry())
             spec = self._registry.get_spec(name.strip())
             return McpServerSummary(
                 name=spec.name,
@@ -173,11 +193,12 @@ class McpService:
             operation="update_server",
             attributes={"server_name": name},
         ):
+            self._require_app_managed_server(name)
             self._config_manager.update_server(
                 name=name,
                 server_config=request.config,
             )
-            self._publish_registry(self._config_manager.load_registry())
+            self._publish_registry(self._load_registry())
             spec = self._registry.get_spec(name.strip())
             return McpServerConfigResult(
                 server=McpServerSummary(
@@ -217,6 +238,25 @@ class McpService:
                 ok=True,
                 tool_count=len(tools),
                 tools=tools,
+            )
+
+    def _require_app_managed_server(self, name: str) -> None:
+        spec = self._registry.get_spec(name.strip())
+        if spec.source != McpConfigScope.APP:
+            raise ValueError(
+                f"MCP server is managed by {spec.source.value} and cannot be modified: "
+                f"{spec.name}"
+            )
+
+    def _require_no_non_app_shadow(self, name: str) -> None:
+        try:
+            spec = self._registry.get_spec(name)
+        except ValueError:
+            return
+        if spec.source != McpConfigScope.APP:
+            raise ValueError(
+                f"MCP server is managed by {spec.source.value} and cannot be shadowed "
+                f"by app config: {spec.name}"
             )
 
 

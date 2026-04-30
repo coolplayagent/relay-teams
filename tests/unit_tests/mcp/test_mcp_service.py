@@ -602,6 +602,140 @@ def test_add_server_publishes_registry_updates_to_runtime_callback(
     )
 
 
+def test_add_server_preserves_extra_specs_during_registry_reload(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    plugin_spec = McpServerSpec(
+        name="quality:docs",
+        config={"mcpServers": {"quality:docs": {"command": "uvx"}}},
+        server_config={"command": "uvx"},
+        source=McpConfigScope.PLUGIN,
+    )
+    service = McpService(
+        registry=manager.load_registry(extra_specs=(plugin_spec,)),
+        config_manager=manager,
+        extra_specs=(plugin_spec,),
+    )
+
+    service.add_server(
+        name="filesystem",
+        server_config={"transport": "stdio", "command": "npx"},
+    )
+
+    assert service.list_servers()[0].name == "filesystem"
+    assert service.list_servers()[1].name == "quality:docs"
+
+
+def test_add_server_rejects_plugin_server_shadow(tmp_path: Path) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    plugin_spec = McpServerSpec(
+        name="quality:docs",
+        config={"mcpServers": {"quality:docs": {"command": "uvx"}}},
+        server_config={"command": "uvx"},
+        source=McpConfigScope.PLUGIN,
+    )
+    service = McpService(
+        registry=manager.load_registry(extra_specs=(plugin_spec,)),
+        config_manager=manager,
+        extra_specs=(plugin_spec,),
+    )
+
+    with pytest.raises(ValueError, match="cannot be shadowed by app config"):
+        service.add_server(
+            name="quality:docs",
+            server_config={"transport": "stdio", "command": "npx"},
+            overwrite=True,
+        )
+
+    assert not (app_config_dir / "mcp.json").exists()
+    assert (
+        service.get_server_config("quality:docs").server.source == McpConfigScope.PLUGIN
+    )
+
+
+def test_server_mutations_preserve_extra_specs_during_registry_reload(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    manager.add_server(
+        name="filesystem",
+        server_config={"transport": "stdio", "command": "npx"},
+    )
+    plugin_spec = McpServerSpec(
+        name="quality:docs",
+        config={"mcpServers": {"quality:docs": {"command": "uvx"}}},
+        server_config={"command": "uvx"},
+        source=McpConfigScope.PLUGIN,
+    )
+    service = McpService(
+        registry=manager.load_registry(extra_specs=(plugin_spec,)),
+        config_manager=manager,
+        extra_specs=(plugin_spec,),
+    )
+
+    service.set_server_enabled(
+        "filesystem",
+        McpServerEnabledUpdateRequest(enabled=False),
+    )
+    service.update_server(
+        "filesystem",
+        McpServerUpdateRequest(config={"transport": "stdio", "command": "bunx"}),
+    )
+
+    servers = service.list_servers()
+    assert servers[0].name == "filesystem"
+    assert servers[0].enabled is False
+    assert servers[1].name == "quality:docs"
+
+
+def test_plugin_server_config_is_readonly_from_runtime_registry(tmp_path: Path) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    plugin_spec = McpServerSpec(
+        name="quality:docs",
+        config={"mcpServers": {"quality:docs": {"command": "uvx"}}},
+        server_config={"command": "uvx"},
+        source=McpConfigScope.PLUGIN,
+    )
+    service = McpService(
+        registry=manager.load_registry(extra_specs=(plugin_spec,)),
+        config_manager=manager,
+        extra_specs=(plugin_spec,),
+    )
+
+    result = service.get_server_config("quality:docs")
+
+    assert result.server.name == "quality:docs"
+    assert result.server.source == McpConfigScope.PLUGIN
+    assert result.config["command"] == "uvx"
+    with pytest.raises(ValueError, match="managed by plugin"):
+        service.set_server_enabled(
+            "quality:docs",
+            McpServerEnabledUpdateRequest(enabled=False),
+        )
+    with pytest.raises(ValueError, match="managed by plugin"):
+        service.update_server(
+            "quality:docs",
+            McpServerUpdateRequest(config={"command": "npx"}),
+        )
+
+
 def test_service_raises_when_config_manager_is_unavailable() -> None:
     service = McpService(registry=McpRegistry(()))
 

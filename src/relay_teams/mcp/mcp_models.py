@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 class McpConfigScope(str, Enum):
     APP = "app"
+    PLUGIN = "plugin"
     SESSION = "session"
 
 

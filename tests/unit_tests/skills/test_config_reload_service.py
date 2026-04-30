@@ -74,7 +74,7 @@ def test_reload_skills_config_omits_project_start_dir_when_not_configured(
 
     service.reload_skills_config()
 
-    assert captured_kwargs == [{"app_config_dir": app_config_dir}]
+    assert captured_kwargs == [{"app_config_dir": app_config_dir, "plugin_sources": ()}]
 
 
 def test_reload_skills_config_uses_configured_project_start_dir(
@@ -110,5 +110,6 @@ def test_reload_skills_config_uses_configured_project_start_dir(
         {
             "app_config_dir": app_config_dir,
             "project_start_dir": project_dir,
+            "plugin_sources": (),
         }
     ]

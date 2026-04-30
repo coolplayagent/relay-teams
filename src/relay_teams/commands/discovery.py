@@ -14,6 +14,8 @@ from relay_teams.commands.command_models import (
     CommandScope,
 )
 from relay_teams.logger import get_logger
+from relay_teams.plugins.path_resolution import namespace_plugin_ref
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
@@ -25,7 +27,7 @@ DEFAULT_COMMAND_MAX_DEPTH = 8
 
 
 class CommandDiscoveryLocation:
-    __slots__ = ("base_dir", "scope", "source")
+    __slots__ = ("base_dir", "plugin_name", "scope", "source")
 
     def __init__(
         self,
@@ -33,21 +35,25 @@ class CommandDiscoveryLocation:
         base_dir: Path,
         scope: CommandScope,
         source: CommandDiscoverySource,
+        plugin_name: str = "",
     ) -> None:
         self.base_dir = base_dir
         self.scope = scope
         self.source = source
+        self.plugin_name = plugin_name
 
 
 def discover_commands(
     *,
     app_config_dir: Path,
     workspace_root: Optional[Path],
+    plugin_sources: tuple[PluginComponentSource, ...] = (),
     max_depth: int = DEFAULT_COMMAND_MAX_DEPTH,
 ) -> tuple[CommandDefinition, ...]:
     locations = _build_locations(
         app_config_dir=app_config_dir,
         workspace_root=workspace_root,
+        plugin_sources=plugin_sources,
     )
     commands: list[CommandDefinition] = []
     with trace_span(
@@ -60,6 +66,7 @@ def discover_commands(
                     "scope": location.scope.value,
                     "source": location.source.value,
                     "base_dir": str(location.base_dir),
+                    "plugin_name": location.plugin_name,
                 }
                 for location in locations
             ],
@@ -75,6 +82,7 @@ def _build_locations(
     *,
     app_config_dir: Path,
     workspace_root: Optional[Path],
+    plugin_sources: tuple[PluginComponentSource, ...],
 ) -> tuple[CommandDiscoveryLocation, ...]:
     locations: list[CommandDiscoveryLocation] = [
         CommandDiscoveryLocation(
@@ -83,6 +91,15 @@ def _build_locations(
             source=CommandDiscoverySource.APP,
         )
     ]
+    for plugin_source in plugin_sources:
+        locations.append(
+            CommandDiscoveryLocation(
+                base_dir=plugin_source.path.resolve(),
+                scope=CommandScope.APP,
+                source=CommandDiscoverySource.PLUGIN,
+                plugin_name=plugin_source.plugin_name,
+            )
+        )
     if workspace_root is None:
         return tuple(locations)
 
@@ -155,11 +172,19 @@ def _load_command(
         LOGGER.warning("Skipping command %s due to parsing error: %s", path, exc)
         return None
 
-    default_name = _default_command_name(rel=rel, source=location.source)
+    default_name = _default_command_name(
+        rel=rel,
+        source=location.source,
+        plugin_name=location.plugin_name,
+    )
     raw_name = data.get("name")
     provided_name = raw_name.strip() if isinstance(raw_name, str) else ""
-    name = provided_name if is_valid_command_name(provided_name) else default_name
-    if provided_name and name != provided_name:
+    name = _provided_command_name(
+        provided_name=provided_name,
+        default_name=default_name,
+        location=location,
+    )
+    if provided_name and not is_valid_command_name(provided_name):
         LOGGER.warning(
             "Ignoring invalid command front matter name %s in %s",
             provided_name,
@@ -172,6 +197,7 @@ def _load_command(
     aliases = _aliases(
         value=data.get("aliases"),
         default_aliases=_default_aliases(name=name, rel=rel, source=location.source),
+        location=location,
     )
     description = _string_field(data, "description")
     argument_hint = _string_field(data, "argument_hint") or _string_field(
@@ -213,13 +239,32 @@ def _default_command_name(
     *,
     rel: Path,
     source: CommandDiscoverySource,
+    plugin_name: str = "",
 ) -> str:
     rel_name = rel.with_suffix("").as_posix()
+    if source == CommandDiscoverySource.PLUGIN and plugin_name:
+        return namespace_plugin_ref(plugin_name=plugin_name, local_name=rel_name)
     if source == CommandDiscoverySource.PROJECT_CLAUDE:
         parts = rel.with_suffix("").parts
         if len(parts) >= 2 and parts[0] == "opsx":
             return f"opsx:{'/'.join(parts[1:])}"
     return rel_name
+
+
+def _provided_command_name(
+    *,
+    provided_name: str,
+    default_name: str,
+    location: CommandDiscoveryLocation,
+) -> str:
+    if not is_valid_command_name(provided_name):
+        return default_name
+    if location.source == CommandDiscoverySource.PLUGIN and location.plugin_name:
+        return namespace_plugin_ref(
+            plugin_name=location.plugin_name,
+            local_name=provided_name,
+        )
+    return provided_name
 
 
 def _default_aliases(
@@ -260,10 +305,20 @@ def _aliases(
     *,
     value: object,
     default_aliases: tuple[str, ...],
+    location: CommandDiscoveryLocation,
 ) -> tuple[str, ...]:
     aliases: list[str] = []
     for item in _string_sequence(value):
         alias = item.removeprefix("/").strip()
+        if (
+            is_valid_command_name(alias)
+            and location.source == CommandDiscoverySource.PLUGIN
+            and location.plugin_name
+        ):
+            alias = namespace_plugin_ref(
+                plugin_name=location.plugin_name,
+                local_name=alias,
+            )
         if is_valid_command_name(alias) and alias not in aliases:
             aliases.append(alias)
     for alias in default_aliases:

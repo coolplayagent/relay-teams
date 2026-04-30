@@ -45,7 +45,11 @@ class McpConfigManager:
         self._app_config_dir: Path = app_config_dir.expanduser().resolve()
         self._user_home_dir: Path | None = user_home_dir
 
-    def load_registry(self) -> McpRegistry:
+    def load_registry(
+        self,
+        *,
+        extra_specs: tuple[McpServerSpec, ...] = (),
+    ) -> McpRegistry:
         ensure_app_config_bootstrap(self._app_config_dir)
         sync_app_env_to_process_env(self._app_config_dir / _ENV_FILE_NAME)
         with trace_span(
@@ -65,6 +69,11 @@ class McpConfigManager:
                 proxy_env=proxy_env,
             ):
                 merged_specs[spec.name] = spec
+            for spec in extra_specs:
+                merged_specs[spec.name] = _apply_proxy_env_to_mcp_spec(
+                    spec=spec,
+                    proxy_env=proxy_env,
+                )
             return McpRegistry(tuple(merged_specs.values()))
 
     def add_server(
@@ -375,3 +384,23 @@ def _apply_proxy_env_to_mcp_server_config(
         merged_env[key] = value
     merged_config["env"] = merged_env
     return merged_config
+
+
+def _apply_proxy_env_to_mcp_spec(
+    *,
+    spec: McpServerSpec,
+    proxy_env: dict[str, str],
+) -> McpServerSpec:
+    effective_server_config = _apply_proxy_env_to_mcp_server_config(
+        spec.server_config,
+        proxy_env,
+    )
+    wrapped_config: dict[str, JsonValue] = {
+        "mcpServers": {spec.name: effective_server_config},
+    }
+    return spec.model_copy(
+        update={
+            "config": wrapped_config,
+            "server_config": effective_server_config,
+        }
+    )

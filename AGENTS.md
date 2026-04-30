@@ -19,6 +19,7 @@
   - `notifications/`: notification models, settings, config, and delivery service
   - `paths/`: repository and runtime path helpers
   - `persistence/`: DB access and shared persistence models/repos
+  - `plugins/`: plugin manifests, registry, component source resolution, and plugin-provided MCP source loading
   - `providers/`: provider contracts, model config, HTTP client factory, OpenAI-compatible adapters, token usage
   - `reflection/`: reflection config, models, repository, service, and CLI
   - `roles/`: role models, registry, settings, and CLI
@@ -33,6 +34,7 @@
 - Tests:
   - `tests/unit_tests/`: mirrors `src/relay_teams/` by module
   - `tests/unit_tests/hooks/`: hook loader, executors, and runtime behavior
+  - `tests/unit_tests/plugins/`: plugin manifest loading, namespacing, component source wiring, and runtime integration
   - `tests/integration_tests/api/`: HTTP/SSE integration flows
   - `tests/integration_tests/browser/`: browser scenarios
   - `tests/integration_tests/cli/`: CLI integration coverage
