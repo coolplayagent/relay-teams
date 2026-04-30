@@ -70,7 +70,18 @@ class A2aPromptResult(BaseModel):
 async def probe_a2a_agent(config: ExternalAgentConfig) -> ExternalAgentTestResult:
     try:
         async with _build_a2a_client(config) as client:
-            card = await client.fetch_agent_card()
+            try:
+                card = await client.fetch_agent_card()
+            except A2aClientError:
+                if _looks_like_agent_card_url(client.configured_url):
+                    raise
+                await client.probe_direct_endpoint()
+                return ExternalAgentTestResult(
+                    ok=True,
+                    message="External A2A JSON-RPC endpoint is reachable.",
+                    protocol=ExternalAgentProtocol.A2A,
+                    protocol_version_text="direct-jsonrpc",
+                )
         return ExternalAgentTestResult(
             ok=True,
             message="External A2A agent card is reachable.",
@@ -158,6 +169,33 @@ class A2aHttpClient:
         raise A2aClientError(
             "Unable to fetch A2A agent card. Tried " + "; ".join(errors)
         )
+
+    @property
+    def configured_url(self) -> str:
+        return self._transport.url
+
+    async def probe_direct_endpoint(self) -> None:
+        payload: dict[str, JsonValue] = {
+            "jsonrpc": "2.0",
+            "id": self._next_request_id(),
+            "method": "tasks/get",
+            "params": {"id": "relay-teams-probe"},
+        }
+        response = await self._require_client().post(
+            self._transport.url,
+            json=payload,
+            headers={
+                **self._headers(),
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        parsed = response.json()
+        if not isinstance(parsed, dict):
+            raise A2aClientError("A2A JSON-RPC probe response must be a JSON object")
+        response_payload = {str(key): item for key, item in parsed.items()}
+        if "result" not in response_payload and "error" not in response_payload:
+            raise A2aClientError("A2A JSON-RPC probe response missing result or error")
 
     async def send_message(
         self,

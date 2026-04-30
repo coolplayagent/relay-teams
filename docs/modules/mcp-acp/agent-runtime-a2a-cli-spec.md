@@ -72,6 +72,7 @@ Endpoint resolution:
 - Other URLs are first probed through root and path-relative Agent Card candidates.
 - If Agent Card discovery fails for a non-card URL, the original URL is treated as a direct JSON-RPC endpoint.
 - A direct endpoint such as `/rpc.json` is not treated as an Agent Card just because it ends in `.json`.
+- Runtime `:test` uses the same fallback semantics. When no Agent Card is available for a non-card URL, it probes the direct endpoint with a non-mutating `tasks/get` request and accepts either JSON-RPC result or error as evidence that the endpoint is reachable.
 
 Prompt execution:
 
@@ -117,7 +118,7 @@ Provider behavior:
 
 Required local validation:
 
-- A2A unit tests for Agent Card discovery, direct `/rpc.json` endpoint fallback, `message/send`, and task polling.
+- A2A unit tests for Agent Card discovery, direct `/rpc.json` endpoint fallback in probe and prompt execution, `message/send`, and task polling.
 - CLI unit tests for stdio JSON-RPC initialize/thread/turn flow, streamed delta collection, completed-item fallback, Codex app-server command construction, legacy exec option filtering, and non-Codex argument preservation.
 - Server, SDK, frontend API facade, and CLI tests for the `agent-runtimes` public route and command names.
 - Browser smoke test through the Settings UI using the real local frontend/backend with Chrome DevTools MCP.
