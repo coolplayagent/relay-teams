@@ -165,6 +165,14 @@ RoleReloadCallback = Callable[[RoleRegistry], None]
 RoleInstanceResolver = Callable[[str, str], str | None]
 
 
+class _RoleAssetSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    role_id: str
+    target_path: Path
+    previous_content: str | None
+
+
 async def _run_generated_tool_action(
     tool_input: dict[str, JsonValue],
     *,
@@ -363,6 +371,7 @@ class AutoHarnessService:
                 "updated_at": datetime.now(tz=timezone.utc),
             }
         )
+        role_asset_snapshot = self._capture_role_asset_snapshot(role=target_role)
         self._register_record(enabled)
         try:
             role_updated = self._attach_tool_to_role(
@@ -372,7 +381,15 @@ class AutoHarnessService:
         except Exception:
             self._tool_registry.unregister_tool(enabled.tool_name)
             raise
-        await self._write_record_async(record=enabled, code=code)
+        try:
+            await self._write_record_async(record=enabled, code=code)
+        except Exception as exc:
+            self._rollback_failed_enablement(
+                record=enabled,
+                role_asset_snapshot=role_asset_snapshot if role_updated else None,
+                error=exc,
+            )
+            raise
         if run_id:
             dirty_instance_ids: list[str] = []
             if target_role.role_id == current_role_id and instance_id:
@@ -644,6 +661,69 @@ class AutoHarnessService:
     ) -> None:
         await asyncio.to_thread(self._write_record, record=record, code=code)
 
+    def _capture_role_asset_snapshot(
+        self,
+        *,
+        role: RoleDefinition,
+    ) -> _RoleAssetSnapshot:
+        source_path, source = self._resolve_role_source(role)
+        target_path = (
+            self._roles_dir / f"{role.role_id}.md"
+            if source == RoleConfigSource.BUILTIN
+            else source_path
+        )
+        previous_content = (
+            target_path.read_text(encoding="utf-8") if target_path.exists() else None
+        )
+        return _RoleAssetSnapshot(
+            role_id=role.role_id,
+            target_path=target_path,
+            previous_content=previous_content,
+        )
+
+    def _rollback_failed_enablement(
+        self,
+        *,
+        record: GeneratedToolRecord,
+        role_asset_snapshot: _RoleAssetSnapshot | None,
+        error: Exception,
+    ) -> None:
+        try:
+            self._tool_registry.unregister_tool(record.tool_name)
+            if role_asset_snapshot is not None:
+                self._restore_role_asset_snapshot(role_asset_snapshot)
+        except Exception as rollback_exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="autoharness.generated_tool_enable_rollback_failed",
+                message="Failed to roll back generated tool enablement",
+                payload={
+                    "tool_name": record.tool_name,
+                    "target_role_id": record.target_role_id,
+                    "error_type": type(error).__name__,
+                },
+                exc_info=rollback_exc,
+            )
+
+    def _restore_role_asset_snapshot(self, snapshot: _RoleAssetSnapshot) -> None:
+        if snapshot.previous_content is None:
+            snapshot.target_path.unlink(missing_ok=True)
+        else:
+            snapshot.target_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.target_path.write_text(
+                snapshot.previous_content,
+                encoding="utf-8",
+            )
+        rollback_registry = RoleLoader().load_builtin_and_app(
+            builtin_roles_dir=self._builtin_roles_dir,
+            app_roles_dir=self._roles_dir,
+            allow_empty=True,
+        )
+        current_registry = self._get_role_registry()
+        current_registry.register(rollback_registry.get(snapshot.role_id))
+        self._on_roles_reloaded(rollback_registry)
+
     def _resolve_target_role(
         self,
         *,
@@ -663,9 +743,10 @@ class AutoHarnessService:
                 ) from exc
             raise ValueError(f"Unknown target role: {resolved_role_id}") from exc
 
-    def _attach_tool_to_role(self, *, role: RoleDefinition, tool_name: str) -> bool:
-        if tool_name in role.tools:
-            return False
+    def _resolve_role_source(
+        self,
+        role: RoleDefinition,
+    ) -> tuple[Path, RoleConfigSource]:
         role_map = RoleLoader().build_effective_role_map(
             builtin_roles_dir=self._builtin_roles_dir,
             app_roles_dir=self._roles_dir,
@@ -673,7 +754,12 @@ class AutoHarnessService:
         source_record = role_map.get(role.role_id)
         if source_record is None:
             raise ValueError(f"Role not found: {role.role_id}")
-        source_path, source = source_record
+        return source_record
+
+    def _attach_tool_to_role(self, *, role: RoleDefinition, tool_name: str) -> bool:
+        if tool_name in role.tools:
+            return False
+        source_path, source = self._resolve_role_source(role)
         content = source_path.read_text(encoding="utf-8")
         front_matter, body = _split_markdown_front_matter(content)
         parsed = yaml.safe_load(front_matter)

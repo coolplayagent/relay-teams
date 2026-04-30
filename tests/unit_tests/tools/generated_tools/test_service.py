@@ -868,6 +868,69 @@ async def test_enable_tool_does_not_persist_enabled_state_when_role_update_fails
 
 
 @pytest.mark.asyncio
+async def test_enable_tool_rolls_back_when_enabled_manifest_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _role_registry, tool_registry, role = _build_service(
+        tmp_path,
+        code=SAFE_CODE,
+    )
+    role_path = tmp_path / "roles" / "worker.md"
+    original_role_content = role_path.read_text(encoding="utf-8")
+    synthesis = await service.synthesize_tool(
+        role=role,
+        session_id="session-1",
+        run_id="run-1",
+        task_id="task-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        instance_id="instance-1",
+        tool_name="sum",
+        description="Add two integers",
+        input_schema=_schema(),
+        behavior="Return a + b as total.",
+        test_cases=_test_cases(),
+        target_role_id=None,
+        thinking=RunThinkingConfig(),
+    )
+
+    async def _fail_write_record(
+        *,
+        record: GeneratedToolRecord,
+        code: str,
+    ) -> None:
+        _ = (record, code)
+        raise OSError("manifest write failed")
+
+    monkeypatch.setattr(service, "_write_record_async", _fail_write_record)
+
+    with pytest.raises(OSError, match="manifest write failed"):
+        await service.enable_tool(
+            current_role_id=role.role_id,
+            tool_name=synthesis.tool_name,
+            code_hash=synthesis.code_hash,
+            target_role_id=None,
+            run_id="run-1",
+            instance_id="instance-1",
+        )
+
+    assert role_path.read_text(encoding="utf-8") == original_role_content
+    assert (
+        service._load_record(synthesis.tool_name).status == GeneratedToolStatus.PENDING
+    )
+    assert tool_registry.list_names() == ()
+    assert service._get_role_registry().get("Worker").tools == role.tools
+    assert (
+        service.consume_tools_dirty(
+            run_id="run-1",
+            instance_id="instance-1",
+        )
+        == ()
+    )
+
+
+@pytest.mark.asyncio
 async def test_enable_tool_rolls_back_role_file_when_reload_fails(
     tmp_path: Path,
 ) -> None:
