@@ -15,8 +15,9 @@ import time
 import yaml
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from multiprocessing.context import ForkServerContext, SpawnContext
 from pathlib import Path
-from typing import Literal, NoReturn, Protocol, cast
+from typing import NoReturn, Protocol
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai import Agent, ModelRequestNode
@@ -960,61 +961,10 @@ class _GeneratedCodeOutputConnection(Protocol):
         raise NotImplementedError
 
 
-class _GeneratedCodeInputConnection(Protocol):
-    def poll(self) -> bool:
-        raise NotImplementedError
-
-    def recv(self) -> object:
-        raise NotImplementedError
-
-    def close(self) -> None:
-        raise NotImplementedError
-
-
-class _GeneratedCodeProcess(Protocol):
-    def start(self) -> None:
-        raise NotImplementedError
-
-    def join(self, timeout: float | None = None) -> None:
-        raise NotImplementedError
-
-    def is_alive(self) -> bool:
-        raise NotImplementedError
-
-    def terminate(self) -> None:
-        raise NotImplementedError
-
-    def kill(self) -> None:
-        raise NotImplementedError
-
-
-class _GeneratedCodeProcessContext(Protocol):
-    def Pipe(
-        self,
-        *,
-        duplex: bool,
-    ) -> tuple[_GeneratedCodeInputConnection, _GeneratedCodeOutputConnection]:
-        raise NotImplementedError
-
-    def Process(
-        self,
-        *,
-        target: Callable[
-            [str, dict[str, JsonValue], _GeneratedCodeOutputConnection],
-            None,
-        ],
-        args: tuple[str, dict[str, JsonValue], _GeneratedCodeOutputConnection],
-    ) -> _GeneratedCodeProcess:
-        raise NotImplementedError
-
-
-def _generated_code_process_context() -> _GeneratedCodeProcessContext:
-    method: Literal["forkserver", "spawn"] = (
-        "forkserver"
-        if "forkserver" in multiprocessing.get_all_start_methods()
-        else "spawn"
-    )
-    return cast(_GeneratedCodeProcessContext, multiprocessing.get_context(method))
+def _generated_code_process_context() -> ForkServerContext | SpawnContext:
+    if "forkserver" in multiprocessing.get_all_start_methods():
+        return multiprocessing.get_context("forkserver")
+    return multiprocessing.get_context("spawn")
 
 
 async def _execute_generated_code_in_process(
