@@ -1374,6 +1374,10 @@ def test_generated_code_safety_and_json_conversion_branches() -> None:
     globals_map = generated_service_module._build_generated_code_globals()
     with pytest.raises(AttributeError, match="read-only"):
         setattr(globals_map["json"], "loads", str)
+    with pytest.raises(AttributeError, match="missing"):
+        getattr(globals_map["json"], "missing")
+    with pytest.raises(AttributeError, match="read-only"):
+        delattr(globals_map["json"], "loads")
     assert generated_service_module._execute_generated_code_sync(
         "def run(tool_input):\n"
         "    return {'match': re.search('x', 'X', re.IGNORECASE) is not None}\n",
@@ -1458,6 +1462,125 @@ async def test_generated_code_execution_and_prompt_helpers_raise_expected_errors
     )
     assert "Model profile: default" in prompt
     assert "Tool name: generated_sum" in prompt
+
+
+def test_generated_code_process_context_prefers_forkserver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_contexts: list[str] = []
+
+    def _get_context(method: str) -> str:
+        requested_contexts.append(method)
+        return method
+
+    monkeypatch.setattr(
+        generated_service_module.multiprocessing,
+        "get_all_start_methods",
+        lambda: ["spawn", "forkserver"],
+    )
+    monkeypatch.setattr(
+        generated_service_module.multiprocessing,
+        "get_context",
+        _get_context,
+    )
+
+    assert generated_service_module._generated_code_process_context() == "forkserver"
+
+    monkeypatch.setattr(
+        generated_service_module.multiprocessing,
+        "get_all_start_methods",
+        lambda: ["spawn"],
+    )
+    assert generated_service_module._generated_code_process_context() == "spawn"
+    assert requested_contexts == ["forkserver", "spawn"]
+
+
+def test_execute_generated_code_sync_rejects_missing_callable_after_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        generated_service_module,
+        "_validate_generated_code",
+        lambda _code: None,
+    )
+
+    with pytest.raises(ValueError, match="callable run"):
+        generated_service_module._execute_generated_code_sync("VALUE = 1\n", {})
+
+
+@pytest.mark.asyncio
+async def test_generated_code_process_success_message_returns_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_connection = _FakeParentConnection(
+        message=generated_service_module._GeneratedCodeProcessMessage(
+            ok=True,
+            result={"total": 5},
+        )
+    )
+    child_connection = _FakeChildConnection()
+    process = _FakeProcess()
+    process_context = _FakeProcessContext(
+        parent_connection=parent_connection,
+        child_connection=child_connection,
+        process=process,
+    )
+    monkeypatch.setattr(
+        generated_service_module,
+        "_generated_code_process_context",
+        lambda: process_context,
+    )
+
+    result = await generated_service_module._execute_generated_code_in_process(
+        SAFE_CODE,
+        {"a": 2, "b": 3},
+    )
+
+    assert result == {"total": 5}
+    assert process.started is True
+    assert process.terminated is False
+    assert process.killed is False
+    assert len(process.join_timeouts) == 1
+    join_timeout = process.join_timeouts[0]
+    assert join_timeout is not None
+    assert join_timeout >= 0.0
+    assert child_connection.closed is True
+    assert parent_connection.closed is True
+
+
+@pytest.mark.asyncio
+async def test_generated_code_process_error_message_maps_to_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_connection = _FakeParentConnection(
+        message=generated_service_module._GeneratedCodeProcessMessage(
+            ok=False,
+            error_type="ValueError",
+            message="bad input",
+        )
+    )
+    child_connection = _FakeChildConnection()
+    process = _FakeProcess()
+    process_context = _FakeProcessContext(
+        parent_connection=parent_connection,
+        child_connection=child_connection,
+        process=process,
+    )
+    monkeypatch.setattr(
+        generated_service_module,
+        "_generated_code_process_context",
+        lambda: process_context,
+    )
+
+    with pytest.raises(ValueError, match="bad input"):
+        await generated_service_module._execute_generated_code_in_process(
+            SAFE_CODE,
+            {"a": 2, "b": 3},
+        )
+
+    assert process.started is True
+    assert child_connection.closed is True
+    assert parent_connection.closed is True
 
 
 @pytest.mark.asyncio
@@ -1554,6 +1677,14 @@ def test_generated_code_process_worker_and_error_mapping_branches() -> None:
         error_connection,
     )
     assert error_connection.closed is True
+    with pytest.raises(TypeError, match="bad type"):
+        generated_service_module._raise_generated_code_process_error(
+            generated_service_module._GeneratedCodeProcessMessage(
+                ok=False,
+                error_type="TypeError",
+                message="bad type",
+            )
+        )
     with pytest.raises(RuntimeError, match="Generated tool process failed: boom"):
         generated_service_module._raise_generated_code_process_error(
             generated_service_module._GeneratedCodeProcessMessage(
