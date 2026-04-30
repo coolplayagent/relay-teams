@@ -336,7 +336,7 @@ def test_prompts_preview_returns_runtime_provider_and_user_sections() -> None:
         "- Description: Drafts release notes and summaries."
         in payload["runtime_system_prompt"]
     )
-    assert "- Tools: orch_dispatch_task" in payload["runtime_system_prompt"]
+    assert "- Tools: none" in payload["runtime_system_prompt"]
     assert (
         "- MCP Tools: docs_read_file, docs_search_docs"
         in payload["runtime_system_prompt"]

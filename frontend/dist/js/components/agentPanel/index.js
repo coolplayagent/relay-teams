@@ -57,7 +57,6 @@ export function openAgentPanel(
             || !existing
             || panel.loadedSessionId !== (state.currentSessionId || '')
             || panel.loadedRunId !== (activeRunId || '')
-            || !state.isGenerating
         )
     );
     if (shouldRefreshHistory) {

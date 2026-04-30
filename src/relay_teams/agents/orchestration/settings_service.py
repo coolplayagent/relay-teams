@@ -95,6 +95,7 @@ class OrchestrationSettingsService:
             orchestration_preset_id=preset.preset_id,
             orchestration_prompt=preset.orchestration_prompt,
             allowed_role_ids=preset.role_ids,
+            orchestration_graph=preset.graph,
         )
 
     def _validate_roles(self, settings: OrchestrationSettings) -> None:
@@ -106,3 +107,7 @@ class OrchestrationSettingsService:
                     raise ValueError(
                         f"Reserved system role cannot be used in orchestration presets: {role_id}"
                     )
+            if preset.graph is None:
+                continue
+            for node in preset.graph.nodes:
+                _ = registry.get(node.role_id)

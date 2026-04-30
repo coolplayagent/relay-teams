@@ -187,7 +187,7 @@ def test_runtime_role_resolver_applies_template_defaults(tmp_path: Path) -> None
     assert role.model_profile == "default"
 
 
-def test_runtime_role_resolver_does_not_add_office_tool_to_coordinator_like_role(
+def test_runtime_role_resolver_strips_coordinator_tools_from_temporary_role(
     tmp_path: Path,
 ) -> None:
     resolver = RuntimeRoleResolver(
@@ -208,4 +208,29 @@ def test_runtime_role_resolver_does_not_add_office_tool_to_coordinator_like_role
     )
 
     role = resolver.get_effective_role(run_id="run-1", role_id="dispatch_lead")
-    assert role.tools == ("orch_create_tasks", "orch_update_task", "orch_dispatch_task")
+    assert role.tools == ("office_read_markdown",)
+
+
+def test_runtime_role_resolver_rejects_coordinator_template_for_temporary_role(
+    tmp_path: Path,
+) -> None:
+    resolver = RuntimeRoleResolver(
+        role_registry=_base_registry(),
+        temporary_role_repository=TemporaryRoleRepository(tmp_path / "roles.db"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Coordinator role cannot be used as a temporary role template",
+    ):
+        resolver.create_temporary_role(
+            run_id="run-1",
+            session_id="session-1",
+            role=TemporaryRoleSpec(
+                role_id="tmp_dispatch",
+                name="Tmp Dispatch",
+                description="temporary",
+                system_prompt="tmp",
+                template_role_id="Coordinator",
+            ),
+        )

@@ -851,6 +851,46 @@ def test_resolve_role_allowed_tools_uses_updated_role_registry_tools() -> None:
     assert resolved == ("alpha", "generated_sum")
 
 
+def test_resolve_role_allowed_tools_filters_coordinator_tools_for_subagents() -> None:
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates work.",
+            version="1",
+            tools=("orch_create_tasks", "orch_update_task", "orch_dispatch_task"),
+            system_prompt="Coordinate work.",
+        )
+    )
+    role_registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Builds things.",
+            version="1",
+            tools=("alpha", "orch_dispatch_task"),
+            system_prompt="Build things.",
+        )
+    )
+    tool_registry = ToolRegistry(
+        {
+            "alpha": lambda _agent: None,
+            "orch_dispatch_task": lambda _agent: None,
+        }
+    )
+
+    resolved = session_runtime_module.resolve_role_allowed_tools(
+        tool_registry=tool_registry,
+        role_registry=role_registry,
+        role_id="Crafter",
+        fallback_allowed_tools=("alpha",),
+        session_id="session-1",
+    )
+
+    assert resolved == ("alpha",)
+
+
 def test_resolve_role_allowed_tools_uses_fallback_for_missing_runtime_role() -> None:
     role_registry = RoleRegistry()
     tool_registry = ToolRegistry({"alpha": lambda _agent: None})

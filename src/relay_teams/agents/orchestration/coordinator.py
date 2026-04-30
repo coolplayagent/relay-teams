@@ -10,10 +10,14 @@ from typing import Callable
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import ModelResponse, TextPart
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.models import (
     AgentRuntimeRecord,
     create_subagent_instance,
+)
+from relay_teams.agents.orchestration.graph_models import (
+    OrchestrationGraph,
+    OrchestrationGraphNode,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
@@ -31,7 +35,11 @@ from relay_teams.sessions.runs.enums import ExecutionMode, RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.ids import new_trace_id
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from relay_teams.sessions.runs.run_models import IntentInput, RunEvent
+from relay_teams.sessions.runs.run_models import (
+    IntentInput,
+    RunEvent,
+    RunTopologySnapshot,
+)
 from relay_teams.sessions.runs.assistant_errors import (
     RunCompletionReason,
     build_assistant_error_message,
@@ -175,6 +183,7 @@ class CoordinatorGraph(BaseModel):
                         trace_id=trace_id,
                         root_task=root_task,
                         coordinator_instance_id=root_instance_id,
+                        topology=intent.topology,
                     )
                 )
         else:
@@ -310,6 +319,10 @@ class CoordinatorGraph(BaseModel):
             coordinator_instance_id=root_instance_id,
             coordinator_first=coordinator_first,
             initial_result=root_task_record.result or "",
+            topology=await self._topology_for_run_async(
+                trace_id=trace_id,
+                fallback_session_id=root_task.session_id,
+            ),
         )
         result = self._coerce_task_execution_result(result)
         if result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
@@ -409,7 +422,16 @@ class CoordinatorGraph(BaseModel):
         coordinator_instance_id: str,
         coordinator_first: bool = True,
         initial_result: str = "",
+        topology: RunTopologySnapshot | None = None,
     ) -> TaskExecutionResult:
+        if topology is not None and topology.orchestration_graph is not None:
+            return await self._run_graph_mode(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                topology=topology,
+                initial_result=initial_result,
+            )
         coordinator_result = TaskExecutionResult(output=initial_result)
         coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
@@ -466,13 +488,511 @@ class CoordinatorGraph(BaseModel):
 
         return coordinator_result
 
+    async def _run_graph_mode(
+        self,
+        *,
+        trace_id: str,
+        root_task: TaskEnvelope,
+        coordinator_instance_id: str,
+        topology: RunTopologySnapshot,
+        initial_result: str = "",
+    ) -> TaskExecutionResult:
+        graph = topology.orchestration_graph
+        if graph is None:
+            return TaskExecutionResult(output=initial_result)
+
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="coord.graph.started",
+            message="Coordinator graph execution started",
+            payload={
+                "trace_id": trace_id,
+                "root_task_id": root_task.task_id,
+                "node_count": len(graph.nodes),
+            },
+        )
+        missing_role_ids = self._missing_graph_role_ids(graph)
+        if missing_role_ids:
+            role_list = ", ".join(missing_role_ids)
+            error_message = f"Graph references missing role(s): {role_list}."
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.graph.role_missing",
+                message="Coordinator graph references missing roles",
+                payload={
+                    "trace_id": trace_id,
+                    "root_task_id": root_task.task_id,
+                    "missing_role_ids": list(missing_role_ids),
+                },
+            )
+            graph_status = await self._graph_status_async(
+                trace_id=trace_id, graph=graph
+            )
+            await self._fail_graph_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="graph_role_missing",
+                error_message=error_message,
+            )
+            return TaskExecutionResult(
+                output=(
+                    self._graph_execution_summary(graph_status=graph_status)
+                    + f"\n\nMissing graph node roles: {role_list}"
+                ),
+                completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                error_code="graph_role_missing",
+                error_message=error_message,
+            )
+
+        while True:
+            created_any = await self._create_ready_graph_tasks_async(
+                graph=graph,
+                root_task=root_task,
+            )
+            ran_any = await self._run_pending_delegated_tasks(
+                trace_id=trace_id,
+                root_task_id=root_task.task_id,
+                max_parallel_tasks=graph.max_parallel_tasks,
+            )
+            graph_status = await self._graph_status_async(
+                trace_id=trace_id,
+                graph=graph,
+            )
+            if graph_status.failed:
+                break
+            if graph_status.completed:
+                break
+            if not created_any and not ran_any:
+                error_message = "Graph execution made no progress."
+                await self._fail_graph_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="graph_execution_blocked",
+                    error_message=error_message,
+                )
+                return TaskExecutionResult(
+                    output=self._graph_execution_summary(graph_status=graph_status),
+                    completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                    error_code="graph_execution_blocked",
+                    error_message=error_message,
+                )
+
+        graph_status = await self._graph_status_async(trace_id=trace_id, graph=graph)
+        if graph_status.failed:
+            error_message = "One or more graph nodes failed."
+            await self._fail_graph_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="graph_execution_failed",
+                error_message=error_message,
+            )
+            return TaskExecutionResult(
+                output=self._graph_execution_summary(graph_status=graph_status),
+                completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                error_code="graph_execution_failed",
+                error_message=error_message,
+            )
+        if not graph_status.completed:
+            error_message = "Graph execution did not complete."
+            await self._fail_graph_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="graph_execution_incomplete",
+                error_message=error_message,
+            )
+            return TaskExecutionResult(
+                output=self._graph_execution_summary(graph_status=graph_status),
+                completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                error_code="graph_execution_incomplete",
+                error_message=error_message,
+            )
+
+        final_output = self._graph_final_response(
+            root_task=root_task,
+            graph_status=graph_status,
+        )
+        await self._complete_graph_root_task_async(
+            trace_id=trace_id,
+            root_task=root_task,
+            coordinator_instance_id=coordinator_instance_id,
+            output=final_output,
+        )
+        result = TaskExecutionResult(output=final_output)
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="coord.graph.completed",
+            message="Coordinator graph execution completed",
+            payload={
+                "trace_id": trace_id,
+                "root_task_id": root_task.task_id,
+                "node_count": len(graph.nodes),
+            },
+        )
+        return result
+
+    async def _complete_graph_root_task_async(
+        self,
+        *,
+        trace_id: str,
+        root_task: TaskEnvelope,
+        coordinator_instance_id: str,
+        output: str,
+    ) -> None:
+        current = await self.task_repo.get_async(root_task.task_id)
+        assigned_instance_id = current.assigned_instance_id or coordinator_instance_id
+        await self.task_repo.update_status_async(
+            root_task.task_id,
+            TaskStatus.COMPLETED,
+            assigned_instance_id=assigned_instance_id,
+            result=output,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_COMPLETED,
+                trace_id=trace_id,
+                session_id=root_task.session_id,
+                task_id=root_task.task_id,
+                instance_id=assigned_instance_id,
+                payload_json="{}",
+            )
+        )
+        instance = await self.agent_repo.get_instance_async(assigned_instance_id)
+        role_id = _require_task_role_id(root_task)
+        if isinstance(self.task_execution_service, TaskExecutionService):
+            await self.task_execution_service.message_repo.append_async(
+                session_id=root_task.session_id,
+                workspace_id=instance.workspace_id,
+                conversation_id=instance.conversation_id,
+                agent_role_id=role_id,
+                instance_id=assigned_instance_id,
+                task_id=root_task.task_id,
+                trace_id=trace_id,
+                messages=[ModelResponse(parts=[TextPart(content=output)])],
+            )
+        if self.run_event_hub is not None:
+            await self._publish_run_event_async(
+                session_id=root_task.session_id,
+                run_id=trace_id,
+                trace_id=trace_id,
+                task_id=root_task.task_id,
+                instance_id=assigned_instance_id,
+                role_id=role_id,
+                event_type=RunEventType.TEXT_DELTA,
+                payload={
+                    "text": output,
+                    "role_id": role_id,
+                    "instance_id": assigned_instance_id,
+                },
+            )
+
+    async def _fail_graph_root_task_async(
+        self,
+        *,
+        trace_id: str,
+        root_task: TaskEnvelope,
+        coordinator_instance_id: str,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        current = await self.task_repo.get_async(root_task.task_id)
+        assigned_instance_id = current.assigned_instance_id or coordinator_instance_id
+        await self.task_repo.update_status_async(
+            root_task.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=assigned_instance_id,
+            error_message=error_message,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_FAILED,
+                trace_id=trace_id,
+                session_id=root_task.session_id,
+                task_id=root_task.task_id,
+                instance_id=assigned_instance_id,
+                payload_json=dumps(
+                    {
+                        "reason": error_code,
+                        "error_message": error_message,
+                    }
+                ),
+            )
+        )
+
+    async def _create_ready_graph_tasks_async(
+        self,
+        *,
+        graph: OrchestrationGraph,
+        root_task: TaskEnvelope,
+    ) -> bool:
+        records_by_node = await self._graph_records_by_node_async(
+            trace_id=root_task.trace_id,
+            graph=graph,
+        )
+        created_any = False
+        for node_id in graph.topological_node_ids():
+            if node_id in records_by_node:
+                continue
+            upstream_node_ids = graph.upstream_node_ids(node_id)
+            if any(
+                upstream_node_id not in records_by_node
+                for upstream_node_id in upstream_node_ids
+            ):
+                continue
+            upstream_records = tuple(
+                records_by_node[upstream_node_id]
+                for upstream_node_id in upstream_node_ids
+            )
+            if any(
+                record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}
+                for record in upstream_records
+            ):
+                continue
+            if any(
+                record.status != TaskStatus.COMPLETED for record in upstream_records
+            ):
+                continue
+            await self._create_graph_node_task_async(
+                graph=graph,
+                node=graph.node_by_id(node_id),
+                root_task=root_task,
+                upstream_records=upstream_records,
+            )
+            created_any = True
+        return created_any
+
+    async def _create_graph_node_task_async(
+        self,
+        *,
+        graph: OrchestrationGraph,
+        node: OrchestrationGraphNode,
+        root_task: TaskEnvelope,
+        upstream_records: tuple[TaskRecord, ...],
+    ) -> None:
+        envelope = TaskEnvelope(
+            task_id=new_task_id().value,
+            session_id=root_task.session_id,
+            parent_task_id=root_task.task_id,
+            trace_id=root_task.trace_id,
+            role_id=node.role_id,
+            title=node.title or node.node_id,
+            objective=self._graph_node_objective(
+                node=node,
+                root_task=root_task,
+                upstream_records=upstream_records,
+            ),
+            skills=root_task.skills,
+            verification=node.verification,
+            orchestration_node_id=node.node_id,
+            depends_on_task_ids=tuple(
+                record.envelope.task_id for record in upstream_records
+            ),
+        )
+        await self._execute_task_created_hooks(root_task=envelope)
+        _ = await self.task_repo.create_async(envelope)
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_CREATED,
+                trace_id=envelope.trace_id,
+                session_id=envelope.session_id,
+                task_id=envelope.task_id,
+                payload_json=dumps(
+                    {
+                        "orchestration_node_id": envelope.orchestration_node_id or "",
+                        "depends_on_task_ids": list(envelope.depends_on_task_ids),
+                    }
+                ),
+            )
+        )
+        instance_id = await self._create_graph_node_instance_async(
+            session_id=envelope.session_id,
+            trace_id=envelope.trace_id,
+            role_id=node.role_id,
+        )
+        await self.task_repo.update_status_async(
+            envelope.task_id,
+            TaskStatus.ASSIGNED,
+            assigned_instance_id=instance_id,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_ASSIGNED,
+                trace_id=envelope.trace_id,
+                session_id=envelope.session_id,
+                task_id=envelope.task_id,
+                instance_id=instance_id,
+                payload_json=dumps(
+                    {"orchestration_node_id": envelope.orchestration_node_id or ""}
+                ),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="coord.graph.node.created",
+            message="Coordinator graph node task created",
+            payload={
+                "trace_id": envelope.trace_id,
+                "task_id": envelope.task_id,
+                "node_id": node.node_id,
+                "role_id": node.role_id,
+                "upstream_task_ids": list(envelope.depends_on_task_ids),
+                "graph_max_parallel_tasks": graph.max_parallel_tasks,
+            },
+        )
+
+    async def _create_graph_node_instance_async(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+        role_id: str,
+    ) -> str:
+        _ = self.role_registry.get(role_id)
+        session = (
+            await self.session_repo.get_async(session_id) if self.session_repo else None
+        )
+        if session is None:
+            raise RuntimeError(
+                "CoordinatorGraph requires session_repo to resolve graph node workspace"
+            )
+        instance = create_subagent_instance(
+            role_id,
+            workspace_id=session.workspace_id,
+            session_id=session_id,
+        )
+        await self.agent_repo.upsert_instance_async(
+            run_id=trace_id,
+            trace_id=trace_id,
+            session_id=session_id,
+            instance_id=instance.instance_id,
+            role_id=role_id,
+            workspace_id=instance.workspace_id,
+            conversation_id=instance.conversation_id,
+            status=InstanceStatus.IDLE,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.INSTANCE_CREATED,
+                trace_id=trace_id,
+                session_id=session_id,
+                task_id=None,
+                instance_id=instance.instance_id,
+                payload_json=dumps({"role_id": role_id}),
+            )
+        )
+        return instance.instance_id
+
+    async def _graph_records_by_node_async(
+        self,
+        *,
+        trace_id: str,
+        graph: OrchestrationGraph,
+    ) -> dict[str, TaskRecord]:
+        graph_node_ids = {node.node_id for node in graph.nodes}
+        records_by_node: dict[str, TaskRecord] = {}
+        for record in await self.task_repo.list_by_trace_async(trace_id):
+            node_id = record.envelope.orchestration_node_id
+            if node_id is None or node_id not in graph_node_ids:
+                continue
+            records_by_node[node_id] = record
+        return records_by_node
+
+    async def _graph_status_async(
+        self,
+        *,
+        trace_id: str,
+        graph: OrchestrationGraph,
+    ) -> "_GraphStatus":
+        records_by_node = await self._graph_records_by_node_async(
+            trace_id=trace_id,
+            graph=graph,
+        )
+        return _GraphStatus(graph=graph, records_by_node=records_by_node)
+
+    def _missing_graph_role_ids(self, graph: OrchestrationGraph) -> tuple[str, ...]:
+        missing_role_ids: list[str] = []
+        for role_id in sorted({node.role_id for node in graph.nodes}):
+            try:
+                _ = self.role_registry.get(role_id)
+            except KeyError:
+                missing_role_ids.append(role_id)
+        return tuple(missing_role_ids)
+
+    @staticmethod
+    def _graph_node_objective(
+        *,
+        node: OrchestrationGraphNode,
+        root_task: TaskEnvelope,
+        upstream_records: tuple[TaskRecord, ...],
+    ) -> str:
+        sections = [
+            f"Graph node: {node.node_id}",
+            f"Original user objective:\n{root_task.objective}",
+            f"Node objective:\n{node.objective}",
+        ]
+        if upstream_records:
+            sections.append(
+                "Upstream results:\n" + _format_task_results(upstream_records)
+            )
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def _graph_final_response(
+        *,
+        root_task: TaskEnvelope,
+        graph_status: "_GraphStatus",
+    ) -> str:
+        final_node_id = (
+            graph_status.graph.final_response_node_id
+            or graph_status.graph.topological_node_ids()[-1]
+        )
+        final_record = graph_status.records_by_node.get(final_node_id)
+        sections = [
+            "Graph-based orchestration completed.",
+            f"Original user objective:\n{root_task.objective}",
+            CoordinatorGraph._graph_execution_summary(graph_status=graph_status),
+        ]
+        if final_record is not None and final_record.result:
+            sections.append(
+                f"Final response from graph node {final_node_id}:\n{final_record.result}"
+            )
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def _graph_execution_summary(*, graph_status: "_GraphStatus") -> str:
+        lines = ["Graph execution summary:"]
+        for node_id in graph_status.graph.topological_node_ids():
+            node = graph_status.graph.node_by_id(node_id)
+            record = graph_status.records_by_node.get(node_id)
+            if record is None:
+                lines.append(f"- {node_id} role={node.role_id} status=not_created")
+                continue
+            lines.append(
+                f"- {node_id} role={node.role_id} task={record.envelope.task_id} status={record.status.value}"
+            )
+            if record.result:
+                lines.append(f"  result={record.result}")
+            if record.error_message:
+                lines.append(f"  error={record.error_message}")
+        return "\n".join(lines)
+
     async def _run_pending_delegated_tasks(
         self,
         *,
         trace_id: str,
         root_task_id: str,
+        max_parallel_tasks: int = MAX_PARALLEL_DELEGATED_TASKS,
     ) -> bool:
         records = await self.task_repo.list_by_trace_async(trace_id)
+        records_by_task_id = {record.envelope.task_id: record for record in records}
         lanes: dict[str, list[TaskRecord]] = {}
         instances: dict[str, AgentRuntimeRecord] = {}
         for record in records:
@@ -480,6 +1000,16 @@ class CoordinatorGraph(BaseModel):
             if task.task_id == root_task_id:
                 continue
             if record.status not in (TaskStatus.ASSIGNED, TaskStatus.CREATED):
+                continue
+            if await self._fail_task_if_dependency_failed_async(
+                record=record,
+                records_by_task_id=records_by_task_id,
+            ):
+                continue
+            if not _dependencies_completed(
+                record=record,
+                records_by_task_id=records_by_task_id,
+            ):
                 continue
             if record.assigned_instance_id is None:
                 continue
@@ -523,7 +1053,7 @@ class CoordinatorGraph(BaseModel):
         if not lanes:
             return False
 
-        semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
+        semaphore = asyncio.Semaphore(max_parallel_tasks)
 
         async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> bool:
             lane_instance = instances[instance_id]
@@ -553,6 +1083,57 @@ class CoordinatorGraph(BaseModel):
             )
         )
         return any(lane_results)
+
+    async def _fail_task_if_dependency_failed_async(
+        self,
+        *,
+        record: TaskRecord,
+        records_by_task_id: dict[str, TaskRecord],
+    ) -> bool:
+        failed_dependencies = tuple(
+            dependency_task_id
+            for dependency_task_id in record.envelope.depends_on_task_ids
+            if dependency_task_id not in records_by_task_id
+            or records_by_task_id[dependency_task_id].status
+            in {TaskStatus.FAILED, TaskStatus.TIMEOUT}
+        )
+        if not failed_dependencies:
+            return False
+        error_message = "Task dependency failed or is missing: " + ", ".join(
+            failed_dependencies
+        )
+        await self.task_repo.update_status_async(
+            record.envelope.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=record.assigned_instance_id,
+            error_message=error_message,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_FAILED,
+                trace_id=record.envelope.trace_id,
+                session_id=record.envelope.session_id,
+                task_id=record.envelope.task_id,
+                instance_id=record.assigned_instance_id,
+                payload_json=dumps(
+                    {
+                        "reason": "dependency_failed",
+                        "failed_dependencies": list(failed_dependencies),
+                    }
+                ),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="coord.task.dependency_failed",
+            message="Delegated task failed because a dependency failed or is missing",
+            payload={
+                "task_id": record.envelope.task_id,
+                "failed_dependencies": list(failed_dependencies),
+            },
+        )
+        return True
 
     async def _get_root_task_by_trace_async(self, trace_id: str) -> TaskRecord:
         for record in await self.task_repo.list_by_trace_async(trace_id):
@@ -941,6 +1522,36 @@ class CoordinatorGraph(BaseModel):
             return ToolApprovalPolicy()
         return ToolApprovalPolicy(yolo=intent.yolo)
 
+    async def _topology_for_run_async(
+        self,
+        *,
+        trace_id: str,
+        fallback_session_id: str,
+    ) -> RunTopologySnapshot | None:
+        run_intent_repo = getattr(self.task_execution_service, "run_intent_repo", None)
+        if not isinstance(run_intent_repo, RunIntentRepository):
+            return None
+        try:
+            intent = await run_intent_repo.get_async(
+                trace_id,
+                fallback_session_id=fallback_session_id,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.topology.lookup_failed",
+                message="Run topology lookup failed; using legacy orchestration loop",
+                payload={
+                    "trace_id": trace_id,
+                    "session_id": fallback_session_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            return None
+        return intent.topology
+
     async def _terminal_status_from_verification_async(
         self,
         *,
@@ -1026,6 +1637,56 @@ class CoordinatorGraph(BaseModel):
         if isinstance(result, TaskExecutionResult):
             return result
         return TaskExecutionResult(output=result)
+
+
+class _GraphStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    graph: OrchestrationGraph
+    records_by_node: dict[str, TaskRecord]
+
+    @property
+    def completed(self) -> bool:
+        return all(
+            (record := self.records_by_node.get(node.node_id)) is not None
+            and record.status == TaskStatus.COMPLETED
+            for node in self.graph.nodes
+        )
+
+    @property
+    def failed(self) -> bool:
+        return any(
+            record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}
+            for record in self.records_by_node.values()
+        )
+
+
+def _format_task_results(records: tuple[TaskRecord, ...]) -> str:
+    lines: list[str] = []
+    for record in records:
+        title = record.envelope.title or record.envelope.task_id
+        node_id = record.envelope.orchestration_node_id or ""
+        node_prefix = f"{node_id} " if node_id else ""
+        lines.append(
+            f"- {node_prefix}{title} ({record.envelope.task_id}) status={record.status.value}"
+        )
+        if record.result:
+            lines.append(f"  result={record.result}")
+        if record.error_message:
+            lines.append(f"  error={record.error_message}")
+    return "\n".join(lines)
+
+
+def _dependencies_completed(
+    *,
+    record: TaskRecord,
+    records_by_task_id: dict[str, TaskRecord],
+) -> bool:
+    for dependency_task_id in record.envelope.depends_on_task_ids:
+        dependency = records_by_task_id.get(dependency_task_id)
+        if dependency is None or dependency.status != TaskStatus.COMPLETED:
+            return False
+    return True
 
 
 def _require_task_role_id(task: TaskEnvelope) -> str:

@@ -23,6 +23,11 @@ from relay_teams.roles.memory_models import (
 from relay_teams.roles.memory_repository import RoleMemoryRepository
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleLoader, RoleRegistry
+from relay_teams.roles.runtime_tools import (
+    role_with_runtime_tools,
+    runtime_tools_for_role,
+    strip_coordinator_only_tools,
+)
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.roles.role_registry import (
     SystemRolesUnavailableError,
@@ -58,6 +63,9 @@ __all__ = [
     "RoleToolGroupOption",
     "RoleValidationResult",
     "RuntimeRoleResolver",
+    "role_with_runtime_tools",
+    "runtime_tools_for_role",
+    "strip_coordinator_only_tools",
     "ensure_required_system_roles",
     "TemporaryRoleRecord",
     "TemporaryRoleRepository",

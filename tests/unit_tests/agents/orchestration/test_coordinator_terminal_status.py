@@ -10,6 +10,11 @@ from relay_teams.media import content_parts_from_text
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
+from relay_teams.agents.orchestration.graph_models import (
+    OrchestrationGraph,
+    OrchestrationGraphEdge,
+    OrchestrationGraphNode,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
@@ -25,6 +30,7 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import IntentInput
+from relay_teams.sessions.runs.run_models import RunTopologySnapshot
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -36,8 +42,10 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     VerificationPlan,
@@ -77,6 +85,31 @@ class _RecordingTaskExecutionService:
             result=result,
         )
         return TaskExecutionResult(output=result)
+
+
+class _FailingTaskExecutionService:
+    def __init__(self, task_repo: TaskRepository) -> None:
+        self._task_repo = task_repo
+        self.calls: list[str] = []
+
+    async def execute(
+        self, *, instance_id: str, role_id: str, task: TaskEnvelope
+    ) -> TaskExecutionResult:
+        _ = role_id
+        self.calls.append(task.task_id)
+        error_message = "graph node failed"
+        self._task_repo.update_status(
+            task.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=instance_id,
+            error_message=error_message,
+        )
+        return TaskExecutionResult(
+            output="",
+            completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+            error_code="node_failed",
+            error_message=error_message,
+        )
 
 
 class _FailingRunIntentRepository(RunIntentRepository):
@@ -655,6 +688,315 @@ async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
     assert followup_start >= first_end
     assert second_start < first_end
     assert first_start < second_end
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_runs_fanout_then_join_before_final_coordinator(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    slow_execution_service = _SlowRecordingTaskExecutionService(task_repo)
+    coordinator.task_execution_service = cast(
+        TaskExecutionService, slow_execution_service
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="ship the graph feature",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph.model_validate(
+        {
+            "max_parallel_tasks": 2,
+            "nodes": [
+                {"node_id": "left", "role_id": "time", "objective": "Do left work."},
+                {"node_id": "right", "role_id": "time", "objective": "Do right work."},
+                {
+                    "node_id": "join",
+                    "role_id": "time",
+                    "objective": "Join both results.",
+                },
+            ],
+            "edges": [
+                {"from_node_id": "left", "to_node_id": "join"},
+                {"from_node_id": "right", "to_node_id": "join"},
+            ],
+        }
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("time",),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+    left_record = records_by_node["left"]
+    right_record = records_by_node["right"]
+    join_record = records_by_node["join"]
+    left_start, left_end = slow_execution_service.spans[left_record.envelope.task_id]
+    right_start, right_end = slow_execution_service.spans[right_record.envelope.task_id]
+    join_start, _join_end = slow_execution_service.spans[join_record.envelope.task_id]
+
+    assert result.output.startswith("Graph-based orchestration completed.")
+    assert "join role=time" in result.output
+    root_record = await task_repo.get_async(root_task.task_id)
+    assert root_record.status == TaskStatus.COMPLETED
+    assert root_record.result == result.output
+    assert set(records_by_node) == {"left", "right", "join"}
+    assert all(
+        record.status == TaskStatus.COMPLETED for record in records_by_node.values()
+    )
+    assert root_task.task_id not in slow_execution_service.calls
+    assert slow_execution_service.max_active_count == 2
+    assert right_start < left_end
+    assert left_start < right_end
+    assert join_start >= left_end
+    assert join_start >= right_end
+    assert left_record.envelope.task_id in join_record.envelope.depends_on_task_ids
+    assert right_record.envelope.task_id in join_record.envelope.depends_on_task_ids
+    assert left_record.result is not None
+    assert right_record.result is not None
+    assert left_record.result in join_record.envelope.objective
+    assert right_record.result in join_record.envelope.objective
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_runs_dependency_chain_beyond_standard_cycle_limit(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="run a deep graph",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph(
+        max_parallel_tasks=1,
+        nodes=tuple(
+            OrchestrationGraphNode(
+                node_id=f"node{index}",
+                role_id="time",
+                objective=f"Run step {index}.",
+            )
+            for index in range(10)
+        ),
+        edges=tuple(
+            OrchestrationGraphEdge(
+                from_node_id=f"node{index}",
+                to_node_id=f"node{index + 1}",
+            )
+            for index in range(9)
+        ),
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("time",),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    graph_records = tuple(
+        record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    )
+    root_record = await task_repo.get_async(root_task.task_id)
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+    assert root_record.status == TaskStatus.COMPLETED
+    assert len(graph_records) == 10
+    assert len(task_execution_service.calls) == 10
+    assert all(record.status == TaskStatus.COMPLETED for record in graph_records)
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_reports_missing_node_role_without_creating_tasks(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="run graph with stale role",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="stale",
+                role_id="missingrole",
+                objective="Use a removed role.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("missingrole",),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    graph_records = tuple(
+        record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    )
+    root_record = await task_repo.get_async(root_task.task_id)
+    events = coordinator.event_bus.list_by_trace("run-1")
+    failed_events = tuple(
+        event
+        for event in events
+        if event["event_type"] == EventType.TASK_FAILED.value
+        and event["task_id"] == root_task.task_id
+    )
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "graph_role_missing"
+    assert result.error_message == "Graph references missing role(s): missingrole."
+    assert "Missing graph node roles: missingrole" in result.output
+    assert root_record.status == TaskStatus.FAILED
+    assert root_record.assigned_instance_id == coordinator_instance_id
+    assert root_record.error_message == result.error_message
+    assert len(failed_events) == 1
+    assert failed_events[0]["instance_id"] == coordinator_instance_id
+    assert '"reason": "graph_role_missing"' in str(failed_events[0]["payload_json"])
+    assert graph_records == ()
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_reports_failed_node_before_blocked_status(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    coordinator.task_execution_service = cast(
+        TaskExecutionService, _FailingTaskExecutionService(task_repo)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="run a graph with a failing node",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="fail",
+                role_id="time",
+                objective="Fail this node.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("time",),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "graph_execution_failed"
+    assert result.error_message == "One or more graph nodes failed."
+    assert "status=failed" in result.output
+    assert "graph node failed" in result.output
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+from relay_teams.agents.orchestration.graph_models import OrchestrationGraph
 from relay_teams.media import (
     InlineMediaContentPart,
     MediaModality,
@@ -529,6 +530,28 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
                 orchestration_preset_id="default",
                 orchestration_prompt="Delegate by capability.",
                 allowed_role_ids=("writer", "reviewer"),
+                orchestration_graph=OrchestrationGraph.model_validate(
+                    {
+                        "nodes": [
+                            {
+                                "node_id": "write",
+                                "role_id": "writer",
+                                "objective": "Write.",
+                            },
+                            {
+                                "node_id": "review",
+                                "role_id": "reviewer",
+                                "objective": "Review.",
+                            },
+                        ],
+                        "edges": [
+                            {
+                                "from_node_id": "write",
+                                "to_node_id": "review",
+                            }
+                        ],
+                    }
+                ),
             ),
         ),
     )
@@ -539,6 +562,11 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
     assert record.topology is not None
     assert record.topology.orchestration_preset_id == "default"
     assert record.topology.allowed_role_ids == ("writer", "reviewer")
+    assert record.topology.orchestration_graph is not None
+    assert record.topology.orchestration_graph.topological_node_ids() == (
+        "write",
+        "review",
+    )
 
 
 def test_run_intent_repo_upsert_retries_transient_write_lock(tmp_path: Path) -> None:

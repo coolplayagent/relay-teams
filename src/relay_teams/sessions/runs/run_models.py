@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from relay_teams.agents.orchestration.graph_models import OrchestrationGraph
 from relay_teams.media import ContentPart
 from relay_teams.media import ContentPartsAdapter
 from relay_teams.media import UserPromptContent
@@ -52,6 +53,7 @@ class RunTopologySnapshot(BaseModel):
     orchestration_preset_id: OptionalIdentifierStr = None
     orchestration_prompt: str = ""
     allowed_role_ids: tuple[str, ...] = ()
+    orchestration_graph: OrchestrationGraph | None = None
 
 
 class RuntimePromptConversationContext(BaseModel):

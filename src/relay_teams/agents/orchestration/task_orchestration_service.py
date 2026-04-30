@@ -584,6 +584,10 @@ def _task_projection(record: TaskRecord) -> dict[str, JsonValue]:
             JsonValue,
             record.envelope.handoff.model_dump(mode="json"),
         )
+    if record.envelope.orchestration_node_id is not None:
+        row["orchestration_node_id"] = record.envelope.orchestration_node_id
+    if record.envelope.depends_on_task_ids:
+        row["depends_on_task_ids"] = list(record.envelope.depends_on_task_ids)
     lifecycle = record.envelope.lifecycle
     if _has_non_default_lifecycle(lifecycle):
         row["lifecycle"] = cast(JsonValue, lifecycle.model_dump(mode="json"))

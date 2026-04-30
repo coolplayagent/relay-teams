@@ -1,9 +1,20 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 COORDINATOR_REQUIRED_TOOLS = frozenset(
     (
         "orch_create_tasks",
         "orch_update_task",
+        "orch_dispatch_task",
+    )
+)
+COORDINATOR_ONLY_TOOLS = frozenset(
+    (
+        "orch_create_tasks",
+        "orch_create_temporary_role",
+        "orch_update_task",
+        "orch_list_available_roles",
+        "orch_list_delegated_tasks",
         "orch_dispatch_task",
     )
 )

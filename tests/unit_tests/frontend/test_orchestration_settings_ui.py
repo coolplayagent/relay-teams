@@ -125,6 +125,38 @@ console.log(JSON.stringify({
     assert payload["listDisplay"] == "block"
 
 
+def test_orchestration_save_preserves_graph_template(tmp_path: Path) -> None:
+    payload = _run_orchestration_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindOrchestrationSettingsHandlers, loadOrchestrationSettingsPanel } from "./orchestrationSettings.mjs";
+
+installGlobals(createElements());
+bindOrchestrationSettingsHandlers();
+await loadOrchestrationSettingsPanel();
+
+await document.getElementById("orchestration-preset-list").querySelectorAll(".orchestration-edit-btn")[0].onclick({ stopPropagation() {} });
+await document.getElementById("save-orchestration-btn").onclick();
+
+console.log(JSON.stringify({
+    saveCalls: globalThis.__saveCalls,
+}));
+""".strip(),
+    )
+
+    save_calls = cast(list[dict[str, JsonValue]], payload["saveCalls"])
+    saved_config = cast(dict[str, JsonValue], save_calls[0]["config"])
+    saved_presets = cast(list[dict[str, JsonValue]], saved_config["presets"])
+    default_preset = next(
+        preset for preset in saved_presets if preset["preset_id"] == "default"
+    )
+    graph = cast(dict[str, JsonValue], default_preset["graph"])
+    nodes = cast(list[dict[str, JsonValue]], graph["nodes"])
+    edges = cast(list[dict[str, JsonValue]], graph["edges"])
+    assert nodes[0]["node_id"] == "write"
+    assert edges[0]["from_node_id"] == "write"
+
+
 def _run_orchestration_settings_script(
     tmp_path: Path, runner_source: str
 ) -> dict[str, object]:
@@ -157,6 +189,26 @@ let orchestrationConfig = {
             description: "General routing.",
             role_ids: ["Writer", "Reviewer"],
             orchestration_prompt: "Route by capability.",
+            graph: {
+                nodes: [
+                    {
+                        node_id: "write",
+                        role_id: "Writer",
+                        objective: "Draft the update.",
+                    },
+                    {
+                        node_id: "review",
+                        role_id: "Reviewer",
+                        objective: "Review the draft.",
+                    },
+                ],
+                edges: [
+                    {
+                        from_node_id: "write",
+                        to_node_id: "review",
+                    },
+                ],
+            },
         },
         {
             preset_id: "shipping",
@@ -252,6 +304,10 @@ const translations = {
     "settings.orchestration.allowed_roles": "Allowed Roles",
     "settings.orchestration.prompt_title": "Orchestration Prompt",
     "settings.orchestration.prompt_placeholder": "Explain how Coordinator should split work, choose roles, and drive work to completion.",
+    "settings.orchestration.graph_title": "Graph JSON",
+    "settings.orchestration.graph_placeholder": "Optional DAG template JSON with nodes, edges, max_parallel_tasks, and final_response_node_id.",
+    "settings.orchestration.graph_invalid": "Graph JSON must be valid JSON.",
+    "settings.orchestration.graph_object_required": "Graph JSON must be an object.",
     "settings.orchestration.no_roles_available": "No normal roles available.",
     "settings.orchestration.saved_title": "Orchestration Saved",
     "settings.orchestration.saved_message_detail": "Orchestration settings were saved.",
@@ -428,6 +484,7 @@ function createElements() {{
         ["orchestration-default-input", createElement("block")],
         ["orchestration-role-picker", createElement("block")],
         ["orchestration-prompt-input", createElement("block")],
+        ["orchestration-graph-input", createElement("block")],
     ]);
 
     for (const [id, element] of elements.entries()) {{
@@ -460,16 +517,24 @@ function installGlobals(elements) {{
     globalThis.__saveCalls = [];
     globalThis.__roleConfigOptionsErrorMessage = "";
     globalThis.__requestOrder = [];
+    const decodeHtml = value => String(value || "")
+        .replaceAll("&quot;", "\\"")
+        .replaceAll("&#39;", "'")
+        .replaceAll("&lt;", "<")
+        .replaceAll("&gt;", ">")
+        .replaceAll("&amp;", "&");
     globalThis.__syncEditorFields = html => {{
         const idMatch = html.match(/id="orchestration-id-input" value="([^"]*)"/);
         const nameMatch = html.match(/id="orchestration-name-input" value="([^"]*)"/);
         const descMatch = html.match(/id="orchestration-description-input" value="([^"]*)"/);
         const promptMatch = html.match(/<textarea id="orchestration-prompt-input"[^>]*>([\\s\\S]*?)<\\/textarea>/);
+        const graphMatch = html.match(/<textarea id="orchestration-graph-input"[^>]*>([\\s\\S]*?)<\\/textarea>/);
         const defaultMatch = html.match(/id="orchestration-default-input"( checked)?/);
         elements.get("orchestration-id-input").value = idMatch ? idMatch[1] : "";
         elements.get("orchestration-name-input").value = nameMatch ? nameMatch[1] : "";
         elements.get("orchestration-description-input").value = descMatch ? descMatch[1] : "";
-        elements.get("orchestration-prompt-input").value = promptMatch ? promptMatch[1] : "";
+        elements.get("orchestration-prompt-input").value = promptMatch ? decodeHtml(promptMatch[1]) : "";
+        elements.get("orchestration-graph-input").value = graphMatch ? decodeHtml(graphMatch[1]) : "";
         elements.get("orchestration-default-input").checked = Boolean(defaultMatch && defaultMatch[1]);
 
         const rolePicker = elements.get("orchestration-role-picker");

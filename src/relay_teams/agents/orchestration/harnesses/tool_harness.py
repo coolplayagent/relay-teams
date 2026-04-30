@@ -20,6 +20,7 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_tools import runtime_tools_for_role
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry.registry import ToolRegistry, ToolResolutionContext
 
@@ -55,13 +56,21 @@ class TaskToolHarness(BaseModel):
         skill_tool_names = frozenset(
             tool.name for tool in skill_registry.get_toolset_tools(resolved_skills)
         )
+        runtime_tool_names = runtime_tools_for_role(
+            role_registry=self.role_registry,
+            role=role,
+            consumer=(
+                "agents.orchestration.harnesses.tool_harness"
+                ".build_runtime_tools_snapshot"
+            ),
+        )
         tool_agent = build_coordination_agent(
             model_name="snapshot-model",
             base_url="https://example.invalid/v1",
             api_key="snapshot",
             system_prompt="runtime-tools-snapshot",
             allowed_tools=tool_registry.resolve_names(
-                role.tools,
+                runtime_tool_names,
                 context=ToolResolutionContext(
                     session_id="" if task is None else task.session_id
                 ),

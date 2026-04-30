@@ -1577,7 +1577,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
             name="Writer Agent",
             description="Writes implementation changes.",
             version="1",
-            tools=("read", "write"),
+            tools=("read", "write", "orch_dispatch_task"),
             mcp_servers=(),
             skills=(),
             system_prompt="Write tasks.",
@@ -1628,6 +1628,7 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
     assert writer_tools["write"].startswith(
         "Write full file contents to the workspace."
     )
+    assert "orch_dispatch_task" not in writer_tools
 
 
 @pytest.mark.asyncio
