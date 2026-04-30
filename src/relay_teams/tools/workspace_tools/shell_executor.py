@@ -358,6 +358,18 @@ def _sanitize_bash_env(env: dict[str, str]) -> dict[str, str]:
     return sanitized
 
 
+def _set_case_insensitive_env_default(
+    env: dict[str, str],
+    *,
+    key: str,
+    value: str,
+) -> None:
+    normalized_key = key.casefold()
+    if any(existing_key.casefold() == normalized_key for existing_key in env):
+        return
+    env[key] = value
+
+
 def _sanitize_shell_env(
     env: dict[str, str],
     *,
@@ -366,7 +378,7 @@ def _sanitize_shell_env(
     sanitized = _sanitize_bash_env(env) if shell.kind == ShellKind.BASH else env
     if _is_windows():
         for key, value in _WINDOWS_PYTHON_UTF8_ENV.items():
-            sanitized.setdefault(key, value)
+            _set_case_insensitive_env_default(sanitized, key=key, value=value)
     return sanitized
 
 
