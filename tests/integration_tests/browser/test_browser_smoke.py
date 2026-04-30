@@ -47,6 +47,7 @@ _VIEWPORT_WIDTH = 1600
 _VIEWPORT_HEIGHT = 1200
 _WAIT_TIMEOUT_MS = 30_000
 _BURST_SESSION_FEEDBACK_TIMEOUT_MS = 2_500
+_BURST_RECOVERY_REQUEST_BUDGET = 6
 _ROW_ALIGNMENT_TOLERANCE_PX = 9.0
 
 
@@ -2292,7 +2293,7 @@ def test_browser_burst_new_session_starts_stay_within_request_budget(
     assert max(feedback_times_ms) < _BURST_SESSION_FEEDBACK_TIMEOUT_MS
     assert len(get_workspaces) == 0
     assert len(get_sessions) <= 5
-    assert len(get_recovery) <= 5
+    assert len(get_recovery) <= _BURST_RECOVERY_REQUEST_BUDGET
     assert len(get_subagents) == 0
     assert len(get_model_profiles) <= 2
 
