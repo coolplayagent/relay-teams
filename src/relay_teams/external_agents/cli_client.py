@@ -213,9 +213,26 @@ def _build_codex_app_server_args(args: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _ensure_codex_stdio_listener(args: tuple[str, ...]) -> tuple[str, ...]:
-    if _has_codex_app_server_listen(args):
-        return args
-    return args + ("--listen", _CODEX_APP_SERVER_LISTENER)
+    normalized: list[str] = []
+    skip_next = False
+    replaced = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--listen":
+            normalized.extend(("--listen", _CODEX_APP_SERVER_LISTENER))
+            skip_next = True
+            replaced = True
+            continue
+        if arg.startswith("--listen="):
+            normalized.extend(("--listen", _CODEX_APP_SERVER_LISTENER))
+            replaced = True
+            continue
+        normalized.append(arg)
+    if replaced:
+        return tuple(normalized)
+    return tuple(normalized) + ("--listen", _CODEX_APP_SERVER_LISTENER)
 
 
 def _migrate_legacy_codex_args(args: tuple[str, ...]) -> tuple[str, ...]:
@@ -247,19 +264,6 @@ def _migrate_legacy_codex_args(args: tuple[str, ...]) -> tuple[str, ...]:
         if arg == "--analytics-default-enabled":
             migrated.append(arg)
     return tuple(migrated)
-
-
-def _has_codex_app_server_listen(args: tuple[str, ...]) -> bool:
-    skip_next = False
-    for arg in args:
-        if skip_next:
-            skip_next = False
-            continue
-        if arg == "--listen" or arg.startswith("--listen="):
-            return True
-        if _codex_option_consumes_value(arg):
-            skip_next = True
-    return False
 
 
 def _is_codex_command(command: str) -> bool:
