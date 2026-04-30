@@ -320,6 +320,7 @@ export async function renderInstanceHistoryInto(container, options = {}) {
                 ? 'normal-child-session'
                 : 'orchestration-panel';
         }
+        clearHistoryRenderTarget(renderTarget);
         renderHistoricalMessageList(renderTarget, messages, renderOptions);
         replaceHistoryContainerWhenReady(container, renderTarget);
         if (overlayMode === 'bind' && messages.length > 0 && streamOverlayEntry) {
@@ -346,6 +347,17 @@ export async function renderInstanceHistoryInto(container, options = {}) {
 
 function shouldReplaceHistoryWhenReady(options = {}) {
     return options.replaceWhenReady === true;
+}
+
+function clearHistoryRenderTarget(renderTarget) {
+    if (!renderTarget) {
+        return;
+    }
+    if (typeof renderTarget.replaceChildren === 'function') {
+        renderTarget.replaceChildren();
+        return;
+    }
+    renderTarget.innerHTML = '';
 }
 
 function createHistoryRenderTarget(container) {

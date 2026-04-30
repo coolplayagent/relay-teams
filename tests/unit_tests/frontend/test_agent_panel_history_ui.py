@@ -346,6 +346,103 @@ function createNode() {
     assert payload["scrollHtml"] == "rendered:1"
 
 
+def test_load_agent_history_clears_loading_placeholder_before_rendering(
+    tmp_path: Path,
+) -> None:
+    payload = _run_history_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+export async function fetchAgentMessages() {
+    return [
+        {
+            role: 'assistant',
+            role_id: 'writer',
+            instance_id: 'inst-1',
+            message: {
+                parts: [{ part_kind: 'text', content: 'persisted history' }],
+            },
+        },
+    ];
+}
+
+export async function fetchAgentReflection() {
+    return { summary: 'Reflection', updated_at: '2026-03-16T08:30:00Z' };
+}
+
+export async function fetchRunTokenUsage() {
+    return null;
+}
+""".strip(),
+        mock_message_renderer_source="""
+export function getInstanceStreamOverlay() {
+    return null;
+}
+
+export function bindStreamOverlayToContainer() {
+    return null;
+}
+
+export function renderHistoricalMessageList(container, messages) {
+    container.innerHTML += `rendered:${messages.length}`;
+}
+""".strip(),
+        runner_source="""
+const { loadAgentHistory } = await import('./history.mjs');
+const { state } = await import('./mockState.mjs');
+const { setPanel } = await import('./mockPanelState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+
+const panelEl = createPanelElement();
+setPanel('inst-1', {
+    panelEl,
+    scrollEl: panelEl.querySelector('.agent-panel-scroll'),
+    loadedSessionId: '',
+    loadedRunId: '',
+});
+
+await loadAgentHistory('inst-1', 'writer');
+
+console.log(JSON.stringify({
+    scrollHtml: panelEl.querySelector('.agent-panel-scroll').innerHTML,
+}));
+
+function createPanelElement() {
+    return {
+        _nodes: new Map([
+            ['.agent-panel-scroll', createNode()],
+            ['.agent-panel-runtime-prompt-meta', createNode()],
+            ['.agent-panel-runtime-prompt-body', createNode()],
+            ['.agent-panel-runtime-tools-meta', createNode()],
+            ['.agent-panel-runtime-tools-body', createNode()],
+            ['.agent-panel-reflection-meta', createNode()],
+            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-summary-status', createNode()],
+            ['.agent-panel-summary-updated', createNode()],
+            ['.agent-panel-summary-tasks', createNode()],
+            ['.agent-token-usage[data-instance-id="inst-1"]', createNode()],
+        ]),
+        querySelector(selector) {
+            return this._nodes.get(selector) || null;
+        },
+    };
+}
+
+function createNode() {
+    return {
+        innerHTML: '',
+        textContent: '',
+        className: '',
+        dataset: {},
+    };
+}
+""".strip(),
+    )
+
+    assert payload["scrollHtml"] == "rendered:1"
+
+
 def _run_history_script(
     tmp_path: Path,
     runner_source: str,
