@@ -65,7 +65,7 @@ def test_reload_mcp_config_cleans_uvx_package_cache_before_reload(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -114,7 +114,7 @@ def test_reload_mcp_config_cleans_uv_tool_run_package_from_from_flag(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -156,7 +156,7 @@ def test_reload_mcp_config_falls_back_to_global_uv_cache_clean_when_package_unkn
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -198,7 +198,7 @@ def test_reload_mcp_config_skips_uv_cache_clean_for_uv_run_projects(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -240,7 +240,7 @@ def test_reload_mcp_config_retries_without_force_for_legacy_uv(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -293,7 +293,7 @@ def test_reload_mcp_config_reuses_configured_uv_path_for_uvx_servers(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -345,7 +345,7 @@ def test_reload_mcp_config_parses_uv_global_options_before_tool_run(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:
@@ -396,7 +396,7 @@ def test_reload_mcp_config_parses_uv_cache_dir_before_tool_run(
         )
     )
     manager = McpConfigManager(app_config_dir=app_config_dir)
-    monkeypatch.setattr(manager, "load_registry", lambda: registry)
+    monkeypatch.setattr(manager, "load_registry", lambda **_kwargs: registry)
     recorded_commands: list[tuple[str, ...]] = []
 
     def _fake_run(*args, **kwargs) -> subprocess.CompletedProcess[str]:

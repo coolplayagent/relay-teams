@@ -364,6 +364,17 @@ The response flattens effective hook handlers across user, project, and project-
 Each entry includes at least the handler name, hook event, matcher, source scope/path, and any scoped filters such as tool names or role IDs.
 When no hook files are active, the endpoint returns an empty `loaded_hooks` list.
 
+### `GET /system/configs/plugins/runtime`
+
+Returns the Phase 1 runtime plugin registry loaded from local plugin roots.
+Local plugin roots are configured through `RELAY_TEAMS_PLUGIN_DIRS`, typically
+from the process environment or the `.env` file in the resolved app config
+directory.
+The response includes enabled plugin records, component source paths for skills,
+roles, commands, hooks, and MCP server configs, plus plugin diagnostics. Invalid
+runtime plugin entries are reported through diagnostics instead of crashing
+startup.
+
 ### `PUT /system/configs/github`
 
 Saves the GitHub CLI configuration.

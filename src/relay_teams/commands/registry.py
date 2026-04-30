@@ -15,6 +15,7 @@ from relay_teams.commands.command_models import (
 )
 from relay_teams.commands.discovery import discover_commands
 from relay_teams.logger import get_logger
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
@@ -37,6 +38,7 @@ class CommandRegistry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_config_dir: Path
+    plugin_sources: tuple[PluginComponentSource, ...] = ()
 
     def list_commands(
         self,
@@ -59,6 +61,7 @@ class CommandRegistry(BaseModel):
             discover_commands(
                 app_config_dir=self.app_config_dir,
                 workspace_root=None,
+                plugin_sources=self.plugin_sources,
             )
         )
         return tuple(
@@ -81,6 +84,7 @@ class CommandRegistry(BaseModel):
                 for command in discover_commands(
                     app_config_dir=self.app_config_dir,
                     workspace_root=workspace_root,
+                    plugin_sources=self.plugin_sources,
                 )
                 if command.scope == CommandScope.PROJECT
             )
@@ -102,6 +106,7 @@ class CommandRegistry(BaseModel):
         for command in discover_commands(
             app_config_dir=self.app_config_dir,
             workspace_root=workspace_root,
+            plugin_sources=self.plugin_sources,
         ):
             if command.source_path.resolve() == target_path:
                 return command
@@ -178,6 +183,7 @@ class CommandRegistry(BaseModel):
             discover_commands(
                 app_config_dir=self.app_config_dir,
                 workspace_root=workspace_root,
+                plugin_sources=self.plugin_sources,
             )
         )
         command_map = {command.name: command for command in effective_commands}

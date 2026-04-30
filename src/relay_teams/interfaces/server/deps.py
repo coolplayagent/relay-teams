@@ -44,6 +44,7 @@ from relay_teams.net.web_connectivity import WebConnectivityProbeService
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
+from relay_teams.plugins import PluginRegistry
 from relay_teams.providers.model_config_service import ModelConfigService
 from relay_teams.roles import RoleMemoryService, RoleRegistry
 from relay_teams.roles.settings_service import RoleSettingsService
@@ -92,6 +93,10 @@ def get_feishu_subscription_service(request: Request) -> FeishuSubscriptionServi
 
 def get_config_status_service(request: Request) -> ConfigStatusService:
     return get_container(request).config_status_service
+
+
+def get_plugin_registry(request: Request) -> PluginRegistry:
+    return get_container(request).plugin_registry
 
 
 def get_model_config_service(request: Request) -> ModelConfigService:

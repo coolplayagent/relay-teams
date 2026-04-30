@@ -25,10 +25,12 @@ class McpConfigReloadService:
         mcp_config_manager: McpConfigManager,
         role_registry: RoleRegistry,
         on_mcp_reloaded: Callable[[McpRegistry], None],
+        extra_specs: tuple[McpServerSpec, ...] = (),
     ) -> None:
         self._mcp_config_manager: McpConfigManager = mcp_config_manager
         self._role_registry: RoleRegistry = role_registry
         self._on_mcp_reloaded: Callable[[McpRegistry], None] = on_mcp_reloaded
+        self._extra_specs = extra_specs
 
     def reload_mcp_config(self) -> None:
         with trace_span(
@@ -36,7 +38,9 @@ class McpConfigReloadService:
             component="mcp.config",
             operation="reload",
         ):
-            mcp_registry = self._mcp_config_manager.load_registry()
+            mcp_registry = self._mcp_config_manager.load_registry(
+                extra_specs=self._extra_specs
+            )
             self._clean_uv_tool_cache(mcp_registry.list_specs())
             for role in self._role_registry.list_roles():
                 mcp_registry.resolve_server_names(

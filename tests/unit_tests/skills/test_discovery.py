@@ -9,6 +9,7 @@ import pytest
 
 from relay_teams.hooks.hook_models import HookEventName
 from relay_teams.hooks.hook_models import HooksConfig
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills import discovery
 from relay_teams.skills.discovery import SkillsDirectory, _parse_frontmatter_hooks
 from relay_teams.skills.skill_models import SkillSource
@@ -107,6 +108,47 @@ def test_skills_directory_from_skill_dirs_uses_builtin_then_user_sources(
         (SkillSource.BUILTIN, builtin_skills_dir.resolve()),
         (SkillSource.USER_RELAY_TEAMS, user_skills_dir.resolve()),
     )
+
+
+def test_plugin_skill_hooks_namespace_role_references(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugin"
+    skills_dir = plugin_root / "skills"
+    skill_dir = skills_dir / "guardrail"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: guardrail\n"
+        "description: Guardrail skill\n"
+        "hooks:\n"
+        "  Stop:\n"
+        "    - role_ids: [reviewer, other-plugin:shared, '*']\n"
+        "      hooks:\n"
+        "        - type: agent\n"
+        "          role_id: reviewer\n"
+        "          prompt: Review this run\n"
+        "---\n"
+        "Use this skill for guardrails.\n",
+        encoding="utf-8",
+    )
+    directory = SkillsDirectory(
+        sources=(),
+        plugin_sources=(
+            PluginComponentSource(
+                plugin_name="acme",
+                root_dir=plugin_root,
+                data_dir=plugin_root / "data",
+                path=skills_dir,
+            ),
+        ),
+    )
+
+    directory.discover()
+
+    skill = directory.get_skill("acme:guardrail")
+    assert skill is not None
+    groups = skill.metadata.hooks.hooks[HookEventName.STOP]
+    assert groups[0].role_ids == ("acme:reviewer", "other-plugin:shared", "*")
+    assert groups[0].hooks[0].role_id == "acme:reviewer"
 
 
 def test_skills_directory_from_config_dirs_uses_builtin_user_and_agents_sources(

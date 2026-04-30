@@ -460,6 +460,7 @@ def test_skills_directory_discover_replaces_skill_cache_atomically(
         path: Path,
         source: SkillSource,
         load_warnings: list[tuple[Path, str]] | None = None,
+        plugin_name: str | None = None,
     ):
         if path.parent.name == "alpha":
             load_started.set()
@@ -468,6 +469,7 @@ def test_skills_directory_discover_replaces_skill_cache_atomically(
             path=path,
             source=source,
             load_warnings=load_warnings,
+            plugin_name=plugin_name,
         )
 
     directory._load_skill = blocking_load_skill

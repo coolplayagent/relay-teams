@@ -7,6 +7,7 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from relay_teams.logger import get_logger
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.trace import trace_span
@@ -20,13 +21,21 @@ class SkillsConfigReloadService:
         *,
         config_dir: Path,
         project_start_dir: Path | None = None,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
         role_registry: RoleRegistry,
         on_skill_reloaded: Callable[[SkillRegistry], None],
     ) -> None:
         self._config_dir: Path = config_dir
         self._project_start_dir: Path | None = project_start_dir
+        self._plugin_sources = plugin_sources
         self._role_registry: RoleRegistry = role_registry
         self._on_skill_reloaded: Callable[[SkillRegistry], None] = on_skill_reloaded
+
+    def replace_plugin_sources(
+        self,
+        plugin_sources: tuple[PluginComponentSource, ...],
+    ) -> None:
+        self._plugin_sources = plugin_sources
 
     def reload_skills_config(self) -> SkillRegistry:
         attributes: dict[str, JsonValue] = {"config_dir": str(self._config_dir)}
@@ -40,12 +49,14 @@ class SkillsConfigReloadService:
         ):
             if self._project_start_dir is None:
                 skill_registry = SkillRegistry.from_config_dirs(
-                    app_config_dir=self._config_dir
+                    app_config_dir=self._config_dir,
+                    plugin_sources=self._plugin_sources,
                 )
             else:
                 skill_registry = SkillRegistry.from_config_dirs(
                     app_config_dir=self._config_dir,
                     project_start_dir=self._project_start_dir,
+                    plugin_sources=self._plugin_sources,
                 )
             for role in self._role_registry.list_roles():
                 skill_registry.resolve_known(

@@ -11,6 +11,7 @@ from relay_teams.hooks.hook_models import HooksConfig
 
 class SkillSource(str, Enum):
     BUILTIN = "builtin"
+    PLUGIN = "plugin"
     USER_CODEX = "user_codex"
     USER_CLAUDE = "user_claude"
     USER_OPENCODE = "user_opencode"

@@ -77,6 +77,40 @@ def _write_app_role(config_dir: Path, *, role_id: str) -> None:
     )
 
 
+def _write_plugin_manifest(
+    plugin_root: Path,
+    *,
+    name: str,
+    config_dir: Path,
+) -> None:
+    manifest_dir = plugin_root / config_dir.name
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text(
+        f'{{"name": "{name}", "version": "1.0.0"}}',
+        encoding="utf-8",
+    )
+
+
+def _write_plugin_role(plugin_root: Path, *, role_id: str) -> None:
+    roles_dir = plugin_root / "roles"
+    roles_dir.mkdir(parents=True, exist_ok=True)
+    (roles_dir / f"{role_id}.md").write_text(
+        (
+            "---\n"
+            f"role_id: {role_id}\n"
+            "name: Reviewer\n"
+            "description: Reviews plugin work.\n"
+            "version: 1.0.0\n"
+            "mode: subagent\n"
+            "tools:\n"
+            "  - orch_dispatch_task\n"
+            "---\n\n"
+            "Review carefully.\n"
+        ),
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _use_empty_skill_registry(
     monkeypatch: pytest.MonkeyPatch,
@@ -113,6 +147,78 @@ def test_runtime_reload_updates_run_service_provider_factory(
 
     assert container.run_service._provider_factory is container._provider_factory
     assert container.run_service._provider_factory is not previous_provider_factory
+
+
+def test_container_loads_plugin_dirs_from_app_env_before_plugin_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.delenv("RELAY_TEAMS_PLUGIN_DIRS", raising=False)
+    config_dir = tmp_path / ".agent-teams"
+    plugin_root = tmp_path / "plugins" / "quality"
+    _write_model_config(config_dir, api_key="initial-secret")
+    _write_plugin_manifest(plugin_root, name="quality", config_dir=config_dir)
+    (config_dir / ".env").write_text(
+        f"RELAY_TEAMS_PLUGIN_DIRS={plugin_root}\n",
+        encoding="utf-8",
+    )
+
+    container = ServerContainer(config_dir=config_dir)
+
+    assert [plugin.name for plugin in container.plugin_registry.plugins] == ["quality"]
+
+
+def test_app_env_plugin_dirs_change_reloads_plugin_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.delenv("RELAY_TEAMS_PLUGIN_DIRS", raising=False)
+    config_dir = tmp_path / ".agent-teams"
+    plugin_root = tmp_path / "plugins" / "quality"
+    _write_model_config(config_dir, api_key="initial-secret")
+    _write_plugin_manifest(plugin_root, name="quality", config_dir=config_dir)
+    _write_plugin_role(plugin_root, role_id="reviewer")
+    commands_dir = plugin_root / "commands"
+    commands_dir.mkdir(parents=True)
+    (commands_dir / "review.md").write_text(
+        "---\ndescription: Review code\n---\n\nReview $ARGUMENTS\n",
+        encoding="utf-8",
+    )
+    hooks_dir = plugin_root / "hooks"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text(
+        '{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "echo ok"}]}]}}',
+        encoding="utf-8",
+    )
+    (plugin_root / "mcp.json").write_text(
+        '{"mcpServers": {"docs": {"command": "docs-server"}}}',
+        encoding="utf-8",
+    )
+    container = ServerContainer(config_dir=config_dir)
+
+    assert container.plugin_registry.plugins == ()
+
+    container.environment_variable_service.save_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key="RELAY_TEAMS_PLUGIN_DIRS",
+        request=EnvironmentVariableSaveRequest(value=str(plugin_root)),
+    )
+
+    assert [plugin.name for plugin in container.plugin_registry.plugins] == ["quality"]
+    assert container.role_registry.get("quality:reviewer").name == "Reviewer"
+    assert container.mcp_registry.get_spec("quality:docs").name == "quality:docs"
+    command = container.command_registry.get_command(
+        "quality:review",
+        workspace_root=None,
+    )
+    assert command is not None
+    assert command.name == "quality:review"
+    assert [
+        source.plugin_name
+        for source in container.hook_service.get_effective_config().sources
+    ] == ["quality"]
 
 
 def test_container_injects_fallback_middleware_into_reflection_service(
@@ -269,6 +375,7 @@ def test_container_skill_registry_uses_explicit_project_start_dir_snapshot(
         {
             "app_config_dir": config_dir,
             "project_start_dir": project_dir.resolve(),
+            "plugin_sources": (),
         }
     ]
 
@@ -317,7 +424,7 @@ def test_saving_app_environment_variable_reloads_mcp_and_skills_runtime(
     monkeypatch.setattr(
         container.mcp_config_manager,
         "load_registry",
-        lambda: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
+        lambda **_kwargs: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
     )
     monkeypatch.setattr(
         container.skills_config_reload_service,
@@ -361,7 +468,7 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     monkeypatch.setattr(
         container.mcp_config_manager,
         "load_registry",
-        lambda: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
+        lambda **_kwargs: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
     )
     monkeypatch.setattr(
         container.skills_config_reload_service,

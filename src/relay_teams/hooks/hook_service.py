@@ -39,6 +39,7 @@ from relay_teams.hooks.hook_models import (
     HookRuntimeSnapshot,
     HookRuntimeView,
     HookSourceInfo,
+    HookSourceScope,
     HooksConfig,
     LoadedHookRuntimeView,
     ResolvedHookMatcherGroup,
@@ -105,6 +106,9 @@ class HookService:
 
     def get_user_config(self) -> HooksConfig:
         return self._loader.get_user_config()
+
+    def replace_loader(self, loader: HookLoader) -> None:
+        self._loader = loader
 
     def get_effective_config(self) -> HookRuntimeSnapshot:
         return self._loader.load_snapshot()
@@ -226,7 +230,10 @@ class HookService:
                     tool_name=tool_name,
                 ):
                     continue
-                dedup_key = _handler_dedup_key(handler)
+                dedup_key = _handler_dedup_key(
+                    handler=handler,
+                    source=resolved.source,
+                )
                 if handler.run_async:
                     if dedup_key is not None and dedup_key in seen_async_keys:
                         continue
@@ -417,6 +424,7 @@ class HookService:
                 decision = await self._command_executor.execute(
                     handler=handler,
                     event_input=event_input,
+                    extra_env=_plugin_hook_env(source),
                 )
             elif handler.type == HookHandlerType.HTTP:
                 decision = await self._http_executor.execute(
@@ -613,9 +621,13 @@ def _normalize_decision_for_event(
 
 
 def _handler_dedup_key(
+    *,
     handler: HookHandlerConfig,
+    source: HookSourceInfo,
 ) -> Optional[tuple[str, ...]]:
+    source_key = _handler_dedup_source_key(source)
     common = (
+        *source_key,
         handler.type.value,
         handler.name.strip(),
         str(handler.if_rule or "").strip(),
@@ -645,6 +657,31 @@ def _handler_dedup_key(
             ",".join(handler.allowed_env_vars),
         )
     return None
+
+
+def _handler_dedup_source_key(source: HookSourceInfo) -> tuple[str, ...]:
+    if source.scope != HookSourceScope.PLUGIN:
+        return ("",)
+    return (
+        source.scope.value,
+        source.plugin_name,
+        str(source.plugin_root or ""),
+        str(source.plugin_data or ""),
+        str(source.path),
+    )
+
+
+def _plugin_hook_env(source: HookSourceInfo) -> dict[str, str]:
+    if source.scope != HookSourceScope.PLUGIN:
+        return {}
+    env: dict[str, str] = {}
+    if source.plugin_root is not None:
+        env["RELAY_TEAMS_PLUGIN_ROOT"] = str(source.plugin_root)
+    if source.plugin_data is not None:
+        env["RELAY_TEAMS_PLUGIN_DATA"] = str(source.plugin_data)
+    if source.plugin_name:
+        env["RELAY_TEAMS_PLUGIN_NAME"] = source.plugin_name
+    return env
 
 
 def _decision_conflicts(

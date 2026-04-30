@@ -9,9 +9,11 @@ import yaml
 
 from relay_teams.builtin import get_builtin_skills_dir
 from relay_teams.hooks import parse_tolerant_hooks_payload
-from relay_teams.hooks.hook_models import HooksConfig
+from relay_teams.hooks.hook_models import HookHandlerType, HooksConfig
 from relay_teams.logger import get_logger
 from relay_teams.paths import get_app_config_dir, get_project_root_or_none
+from relay_teams.plugins.path_resolution import namespace_plugin_ref
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills.skill_models import (
     Skill,
     SkillMetadata,
@@ -28,7 +30,7 @@ _SCRIPT_DESCRIPTION_PATTERN = re.compile(
 )
 _DISCOVERY_WARNING_SAMPLE_LIMIT = 5
 
-_SkillDiscoverySignature = tuple[tuple[str, str, int, int], ...]
+_SkillDiscoverySignature = tuple[tuple[str, str, str, int, int], ...]
 _SkillLoadWarningEntry = tuple[Path, str]
 _SkillDuplicateWarningEntry = tuple[str, Path, SkillSource, Path, SkillSource]
 
@@ -75,11 +77,16 @@ class SkillsDirectory:
         self,
         *,
         sources: tuple[tuple[SkillSource, Path], ...],
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
         max_depth: int = 3,
     ) -> None:
         self.max_depth = max_depth
         self.sources = tuple(
             (source, _resolve_dir(base_dir)) for source, base_dir in sources
+        )
+        self.plugin_sources = tuple(
+            source.model_copy(update={"path": _resolve_dir(source.path)})
+            for source in plugin_sources
         )
         self._skills: dict[str, Skill] = {}
         self._discovery_signature: _SkillDiscoverySignature | None = None
@@ -91,13 +98,18 @@ class SkillsDirectory:
         *,
         app_skills_dir: Path,
         builtin_skills_dir: Path | None = None,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
         max_depth: int = 3,
     ) -> SkillsDirectory:
         sources: list[tuple[SkillSource, Path]] = []
         if builtin_skills_dir is not None:
             sources.append((SkillSource.BUILTIN, _resolve_dir(builtin_skills_dir)))
         sources.append((SkillSource.USER_RELAY_TEAMS, _resolve_dir(app_skills_dir)))
-        return cls(sources=tuple(sources), max_depth=max_depth)
+        return cls(
+            sources=tuple(sources),
+            plugin_sources=plugin_sources,
+            max_depth=max_depth,
+        )
 
     @classmethod
     def from_config_dirs(
@@ -106,6 +118,7 @@ class SkillsDirectory:
         app_config_dir: Path,
         max_depth: int = 3,
         project_start_dir: Path | None = None,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
     ) -> SkillsDirectory:
         resolved_app_config_dir = _resolve_dir(app_config_dir)
         return cls(
@@ -121,6 +134,7 @@ class SkillsDirectory:
                 agents_skills_dir=resolved_app_config_dir.parent / ".agents" / "skills",
                 project_start_dir=project_start_dir,
             ),
+            plugin_sources=plugin_sources,
             max_depth=max_depth,
         )
 
@@ -156,6 +170,13 @@ class SkillsDirectory:
                 "sources": [
                     {"source": source.value, "base_dir": str(path)}
                     for source, path in self.sources
+                ],
+                "plugin_sources": [
+                    {
+                        "plugin_name": source.plugin_name,
+                        "base_dir": str(source.path),
+                    }
+                    for source in self.plugin_sources
                 ],
                 "max_depth": self.max_depth,
             },
@@ -198,6 +219,37 @@ class SkillsDirectory:
                         load_warnings.append((path, str(exc)))
                     except Exception as exc:
                         load_warnings.append((path, str(exc)))
+            for plugin_source in self.plugin_sources:
+                base_dir = plugin_source.path
+                if not base_dir.exists():
+                    continue
+                for path in self._iter_skill_manifest_paths(base_dir):
+                    try:
+                        skill = self._load_skill(
+                            path=path,
+                            source=SkillSource.PLUGIN,
+                            load_warnings=load_warnings,
+                            plugin_name=plugin_source.plugin_name,
+                        )
+                        if skill is None:
+                            continue
+                        existing_skill = discovered_skills.get(skill.metadata.name)
+                        if existing_skill is not None:
+                            duplicate_warnings.append(
+                                (
+                                    skill.metadata.name,
+                                    existing_skill.directory,
+                                    existing_skill.source,
+                                    skill.directory,
+                                    skill.source,
+                                )
+                            )
+                        discovered_skills[skill.metadata.name] = skill
+                    except OSError as exc:
+                        had_transient_load_failure = True
+                        load_warnings.append((path, str(exc)))
+                    except Exception as exc:
+                        load_warnings.append((path, str(exc)))
             with self._lock:
                 self._skills = discovered_skills
                 if had_transient_load_failure:
@@ -210,7 +262,7 @@ class SkillsDirectory:
             )
 
     def _build_discovery_signature(self) -> _SkillDiscoverySignature:
-        signature: list[tuple[str, str, int, int]] = []
+        signature: list[tuple[str, str, str, int, int]] = []
         for source, base_dir in self.sources:
             if not base_dir.exists():
                 continue
@@ -219,7 +271,7 @@ class SkillsDirectory:
                     discovery_paths = _iter_skill_discovery_paths(manifest_path)
                 except (OSError, RuntimeError):
                     signature.append(
-                        (source.value, _safe_signature_path(manifest_path), -1, -1)
+                        (source.value, "", _safe_signature_path(manifest_path), -1, -1)
                     )
                     continue
                 for path in discovery_paths:
@@ -229,13 +281,55 @@ class SkillsDirectory:
                         signature.append(
                             (
                                 source.value,
+                                "",
                                 signature_path,
                                 stat_result.st_mtime_ns,
                                 stat_result.st_size,
                             )
                         )
                     except OSError:
-                        signature.append((source.value, signature_path, -1, -1))
+                        signature.append((source.value, "", signature_path, -1, -1))
+        for plugin_source in self.plugin_sources:
+            base_dir = plugin_source.path
+            if not base_dir.exists():
+                continue
+            for manifest_path in self._iter_skill_manifest_paths(base_dir):
+                try:
+                    discovery_paths = _iter_skill_discovery_paths(manifest_path)
+                except (OSError, RuntimeError):
+                    signature.append(
+                        (
+                            SkillSource.PLUGIN.value,
+                            plugin_source.plugin_name,
+                            _safe_signature_path(manifest_path),
+                            -1,
+                            -1,
+                        )
+                    )
+                    continue
+                for path in discovery_paths:
+                    signature_path = _safe_signature_path(path)
+                    try:
+                        stat_result = path.stat()
+                        signature.append(
+                            (
+                                SkillSource.PLUGIN.value,
+                                plugin_source.plugin_name,
+                                signature_path,
+                                stat_result.st_mtime_ns,
+                                stat_result.st_size,
+                            )
+                        )
+                    except OSError:
+                        signature.append(
+                            (
+                                SkillSource.PLUGIN.value,
+                                plugin_source.plugin_name,
+                                signature_path,
+                                -1,
+                                -1,
+                            )
+                        )
         return tuple(signature)
 
     def _iter_skill_manifest_paths(self, base_dir: Path) -> tuple[Path, ...]:
@@ -322,6 +416,7 @@ class SkillsDirectory:
         path: Path,
         source: SkillSource,
         load_warnings: list[_SkillLoadWarningEntry] | None = None,
+        plugin_name: str | None = None,
     ) -> Skill | None:
         with trace_span(
             logger,
@@ -347,6 +442,11 @@ class SkillsDirectory:
             description = raw_description if isinstance(raw_description, str) else ""
             if not name:
                 return None
+            runtime_name = (
+                namespace_plugin_ref(plugin_name=plugin_name, local_name=name)
+                if plugin_name is not None
+                else name
+            )
 
             resources: dict[str, SkillResource] = {}
             resource_entries = _as_object_mapping(data.get("resources"))
@@ -403,15 +503,18 @@ class SkillsDirectory:
                     )
 
             metadata = SkillMetadata(
-                name=name,
+                name=runtime_name,
                 description=description,
                 instructions=body.strip(),
                 resources=resources,
                 scripts=scripts,
-                hooks=_parse_frontmatter_hooks(data.get("hooks")),
+                hooks=_namespace_plugin_hooks(
+                    plugin_name=plugin_name,
+                    hooks=_parse_frontmatter_hooks(data.get("hooks")),
+                ),
             )
             return Skill(
-                ref=name,
+                ref=runtime_name,
                 metadata=metadata,
                 directory=path.parent,
                 source=source,
@@ -500,6 +603,70 @@ def _resolve_optional_path(base_dir: Path, value: object) -> Path | None:
     if not isinstance(value, str) or not value.strip():
         return None
     return base_dir / value
+
+
+def _namespace_plugin_hooks(
+    *,
+    plugin_name: str | None,
+    hooks: HooksConfig,
+) -> HooksConfig:
+    if plugin_name is None or not hooks.hooks:
+        return hooks
+    next_hooks = {}
+    for event_name, groups in hooks.hooks.items():
+        next_groups = []
+        for group in groups:
+            next_handlers = []
+            for handler in group.hooks:
+                if handler.type == HookHandlerType.AGENT and handler.role_id:
+                    next_handlers.append(
+                        handler.model_copy(
+                            update={
+                                "role_id": _namespace_plugin_ref(
+                                    plugin_name=plugin_name,
+                                    ref=handler.role_id,
+                                )
+                            }
+                        )
+                    )
+                    continue
+                next_handlers.append(handler)
+            next_groups.append(
+                group.model_copy(
+                    update={
+                        "role_ids": _namespace_plugin_refs(
+                            plugin_name=plugin_name,
+                            refs=group.role_ids,
+                        ),
+                        "hooks": tuple(next_handlers),
+                    }
+                )
+            )
+        next_hooks[event_name] = tuple(next_groups)
+    return HooksConfig(hooks=next_hooks)
+
+
+def _namespace_plugin_refs(
+    *,
+    plugin_name: str,
+    refs: tuple[str, ...],
+) -> tuple[str, ...]:
+    namespaced: list[str] = []
+    for ref in refs:
+        normalized = ref.strip()
+        if not normalized:
+            continue
+        namespaced.append(
+            _namespace_plugin_ref(plugin_name=plugin_name, ref=normalized)
+        )
+    return tuple(namespaced)
+
+
+def _namespace_plugin_ref(*, plugin_name: str, ref: str) -> str:
+    normalized = ref.strip()
+    if not normalized or normalized == "*" or ":" in normalized:
+        return ref
+    return namespace_plugin_ref(plugin_name=plugin_name, local_name=normalized)
 
 
 def _safe_signature_path(path: Path) -> str:

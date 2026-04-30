@@ -60,6 +60,7 @@ from relay_teams.hooks.hook_service import (
     _handler_dedup_key,
     _merge_decisions,
     _normalize_decision_for_event,
+    _plugin_hook_env,
 )
 from relay_teams.media import UserPromptContent
 from relay_teams.sessions.runs.enums import (
@@ -410,8 +411,9 @@ async def test_supported_events_dispatch_supported_handler_types(
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = handler
+            _ = (handler, extra_env)
             self.calls.append(event_input.event_name)
             return HookDecision(decision=HookDecisionType.ALLOW)
 
@@ -539,9 +541,11 @@ async def test_execute_publishes_hook_events_with_async_publisher(
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
             _ = handler
             _ = event_input
+            _ = extra_env
             return HookDecision(decision=HookDecisionType.ALLOW)
 
     source = HookSourceInfo(scope=HookSourceScope.USER, path=tmp_path / "hooks.json")
@@ -757,13 +761,16 @@ def test_decision_conflicts_detects_duplicate_rewrites_and_deferred_actions() ->
 
 
 def test_handler_dedup_key_covers_command_http_and_other_handlers() -> None:
+    source = HookSourceInfo(scope=HookSourceScope.USER, path=Path("hooks.json"))
     command_key = _handler_dedup_key(
-        HookHandlerConfig(
+        handler=HookHandlerConfig(
             type=HookHandlerType.COMMAND,
             command="python hook.py",
-        )
+        ),
+        source=source,
     )
     assert command_key == (
+        "",
         "command",
         "",
         "",
@@ -773,12 +780,14 @@ def test_handler_dedup_key_covers_command_http_and_other_handlers() -> None:
         "python hook.py",
     )
     assert _handler_dedup_key(
-        HookHandlerConfig(
+        handler=HookHandlerConfig(
             type=HookHandlerType.COMMAND,
             command="python hook.py",
             shell=HookShell.POWERSHELL,
-        )
+        ),
+        source=source,
     ) == (
+        "",
         "command",
         "",
         "",
@@ -789,29 +798,82 @@ def test_handler_dedup_key_covers_command_http_and_other_handlers() -> None:
     )
     assert (
         _handler_dedup_key(
-            HookHandlerConfig(
+            handler=HookHandlerConfig(
                 type=HookHandlerType.COMMAND,
                 if_rule="shell(git *)",
                 command="python hook.py",
-            )
+            ),
+            source=source,
         )
         != command_key
     )
     assert _handler_dedup_key(
-        HookHandlerConfig(
+        handler=HookHandlerConfig(
             type=HookHandlerType.HTTP,
             url="https://hook.test/",
-        )
-    ) == ("http", "", "", "5.0", "ignore", "https://hook.test/", "", "")
+        ),
+        source=source,
+    ) == ("", "http", "", "", "5.0", "ignore", "https://hook.test/", "", "")
     assert (
         _handler_dedup_key(
-            HookHandlerConfig(
+            handler=HookHandlerConfig(
                 type=HookHandlerType.PROMPT,
                 prompt="return allow",
-            )
+            ),
+            source=source,
         )
         is None
     )
+
+
+def test_handler_dedup_key_includes_plugin_source_context() -> None:
+    handler = HookHandlerConfig(
+        type=HookHandlerType.COMMAND,
+        command="python hook.py",
+    )
+    first_source = HookSourceInfo(
+        scope=HookSourceScope.PLUGIN,
+        path=Path("first/hooks/hooks.json"),
+        plugin_name="first",
+        plugin_root=Path("first"),
+        plugin_data=Path("data/first"),
+    )
+    second_source = HookSourceInfo(
+        scope=HookSourceScope.PLUGIN,
+        path=Path("second/hooks/hooks.json"),
+        plugin_name="second",
+        plugin_root=Path("second"),
+        plugin_data=Path("data/second"),
+    )
+
+    assert _handler_dedup_key(
+        handler=handler, source=first_source
+    ) != _handler_dedup_key(
+        handler=handler,
+        source=second_source,
+    )
+
+
+def test_plugin_hook_env_includes_plugin_context() -> None:
+    source = HookSourceInfo(
+        scope=HookSourceScope.PLUGIN,
+        path=Path("quality/hooks/hooks.json"),
+        plugin_name="quality",
+        plugin_root=Path("quality"),
+        plugin_data=Path("data/quality"),
+    )
+
+    assert _plugin_hook_env(source) == {
+        "RELAY_TEAMS_PLUGIN_ROOT": "quality",
+        "RELAY_TEAMS_PLUGIN_DATA": str(Path("data/quality")),
+        "RELAY_TEAMS_PLUGIN_NAME": "quality",
+    }
+
+
+def test_non_plugin_hook_env_is_empty() -> None:
+    source = HookSourceInfo(scope=HookSourceScope.USER, path=Path("hooks.json"))
+
+    assert _plugin_hook_env(source) == {}
 
 
 @pytest.mark.asyncio
@@ -824,7 +886,9 @@ async def test_async_hook_does_not_control_current_decision(tmp_path: Path) -> N
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
+            _ = (handler, event_input, extra_env)
             await asyncio.sleep(0)
             completed.set()
             return HookDecision(decision=HookDecisionType.DENY)
@@ -889,8 +953,9 @@ async def test_async_hook_tasks_are_retained_until_done(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = (handler, event_input)
+            _ = (handler, event_input, extra_env)
             started.set()
             await release.wait()
             return HookDecision(decision=HookDecisionType.ALLOW)
@@ -956,7 +1021,9 @@ async def test_on_error_fail_reraises_hook_failure(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
+            _ = (handler, event_input, extra_env)
             raise RuntimeError("boom")
 
     service = HookService(
@@ -995,8 +1062,9 @@ async def test_on_error_fail_stops_later_sync_handlers(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = event_input
+            _ = (event_input, extra_env)
             command = str(handler.command or "")
             self.commands.append(command)
             if command == "fail":
@@ -1062,7 +1130,9 @@ async def test_execute_publishes_hook_conflict_event(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
+            _ = (event_input, extra_env)
             if handler.name == "deny":
                 return HookDecision(decision=HookDecisionType.DENY)
             return HookDecision(
@@ -1138,8 +1208,9 @@ async def test_execute_runs_sync_handlers_concurrently(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = (handler, event_input)
+            _ = (handler, event_input, extra_env)
             self.started += 1
             if self.started == 2:
                 self.both_started.set()
@@ -1211,8 +1282,9 @@ async def test_execute_filters_handlers_by_tool_if_rule(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = event_input
+            _ = (event_input, extra_env)
             self.commands.append(str(handler.command or ""))
             return HookDecision(decision=HookDecisionType.ALLOW)
 
@@ -1282,8 +1354,9 @@ async def test_execute_deduplicates_identical_command_handlers(tmp_path: Path) -
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = (handler, event_input)
+            _ = (handler, event_input, extra_env)
             self.calls += 1
             return HookDecision(decision=HookDecisionType.ALLOW)
 
@@ -1340,8 +1413,9 @@ async def test_execute_normalizes_observe_only_control_decision(tmp_path: Path) 
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
-            _ = (handler, event_input)
+            _ = (handler, event_input, extra_env)
             return HookDecision(decision=HookDecisionType.DENY, reason="nope")
 
     source = HookSourceInfo(scope=HookSourceScope.USER, path=tmp_path / "hooks.json")
@@ -1411,7 +1485,9 @@ async def test_async_rewake_enqueues_followup_context(tmp_path: Path) -> None:
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
+            _ = (handler, event_input, extra_env)
             completed.set()
             return HookDecision(
                 decision=HookDecisionType.ADDITIONAL_CONTEXT,
@@ -1556,9 +1632,11 @@ async def test_tool_event_variants_use_tool_name_for_matching(
             *,
             handler: HookHandlerConfig,
             event_input: HookEventInput,
+            extra_env: dict[str, str] | None = None,
         ) -> HookDecision:
             _ = handler
             _ = event_input
+            _ = extra_env
             return HookDecision(decision=HookDecisionType.ALLOW)
 
     service = HookService(

@@ -16,6 +16,7 @@ from relay_teams.roles import (
     default_memory_profile,
 )
 from relay_teams.roles.settings_service import RoleSettingsService
+from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry.defaults import build_default_registry
 
@@ -77,6 +78,77 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
     assert "execution_surface: hybrid" in saved.content
     assert "mode: subagent" in saved.content
     assert captured_registry[-1].get("writer_v2").name == "Writer V2"
+
+
+def test_save_role_document_preserves_plugin_roles_on_reload(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    _write_role(
+        roles_dir / "writer.md",
+        role_id="writer",
+        name="Writer",
+        description="Drafts user-facing content.",
+        version="1.0.0",
+        tools=("orch_dispatch_task",),
+        system_prompt="Write clearly.",
+    )
+    plugin_root = tmp_path / "plugin"
+    plugin_roles_dir = plugin_root / "roles"
+    plugin_roles_dir.mkdir(parents=True)
+    _write_role(
+        plugin_roles_dir / "reviewer.md",
+        role_id="reviewer",
+        name="Reviewer",
+        description="Reviews plugin work.",
+        version="1.0.0",
+        tools=("orch_dispatch_task",),
+        mode=RoleMode.SUBAGENT,
+        system_prompt="Review carefully.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    captured_registry: list[RoleRegistry] = []
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: captured_registry.append(registry),
+        plugin_sources=(
+            PluginComponentSource(
+                plugin_name="quality",
+                root_dir=plugin_root,
+                data_dir=plugin_root / "data",
+                path=plugin_roles_dir,
+            ),
+        ),
+    )
+
+    service.save_role_document(
+        "writer",
+        draft=RoleDocumentDraft(
+            role_id="writer",
+            name="Writer",
+            description="Drafts user-facing content.",
+            version="1.0.1",
+            tools=("orch_dispatch_task",),
+            mcp_servers=(),
+            skills=(),
+            model_profile="default",
+            execution_surface=ExecutionSurface.API,
+            mode=RoleMode.PRIMARY,
+            memory_profile=default_memory_profile(),
+            system_prompt="Write clearly.",
+        ),
+    )
+
+    assert captured_registry[-1].get("quality:reviewer").name == "Reviewer"
 
 
 def test_validate_role_document_rejects_unknown_tools(tmp_path: Path) -> None:

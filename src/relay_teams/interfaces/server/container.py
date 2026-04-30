@@ -60,6 +60,7 @@ from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
+from relay_teams.env.runtime_env import sync_app_env_to_process_env
 from relay_teams.env.web_config_service import WebConfigService
 from relay_teams.external_agents import (
     ExternalAgentConfigService,
@@ -112,6 +113,8 @@ from relay_teams.notifications import NotificationConfigManager, NotificationSer
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
+from relay_teams.plugins import PluginConfigManager, PluginRegistry
+from relay_teams.plugins.mcp_sources import load_plugin_mcp_specs
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
@@ -270,10 +273,20 @@ class ServerContainer:
         )
         app_config_dir = runtime.paths.config_dir
         ensure_app_config_bootstrap(app_config_dir)
+        sync_app_env_to_process_env(runtime.paths.env_file)
         self.config_dir: Path = app_config_dir
         self.runtime: RuntimeConfig = runtime
         self._project_start_dir = Path.cwd().resolve()
         self._session_model_profile_lookup = session_model_profile_lookup
+        self.plugin_config_manager: PluginConfigManager = (
+            PluginConfigManager.from_environment(app_config_dir=app_config_dir)
+        )
+        self.plugin_registry: PluginRegistry = (
+            self.plugin_config_manager.load_registry()
+        )
+        self._plugin_mcp_specs = load_plugin_mcp_specs(
+            self.plugin_registry.mcp_sources()
+        )
 
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
             config_dir=app_config_dir
@@ -296,12 +309,7 @@ class ServerContainer:
             get_proxy_config=self.proxy_config_service.get_proxy_config,
         )
         self.hook_service = HookService(
-            loader=HookLoader(
-                app_config_dir=app_config_dir,
-                project_root=Path.cwd(),
-                get_role_registry=lambda: self.role_registry,
-                get_skill_registry=lambda: self.skill_registry,
-            ),
+            loader=self._build_hook_loader(),
             runtime_state=HookRuntimeState(),
             command_executor=CommandHookExecutor(),
             http_executor=HttpHookExecutor(
@@ -369,23 +377,29 @@ class ServerContainer:
             retry_config=runtime.llm_retry,
         )
         self.auto_harness_service.register_enabled_tools()
-        self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry()
+        self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry(
+            extra_specs=self._plugin_mcp_specs
+        )
         self.mcp_service: McpService = McpService(
             registry=self.mcp_registry,
             config_manager=self.mcp_config_manager,
             on_registry_changed=self.replace_mcp_registry,
+            extra_specs=self._plugin_mcp_specs,
         )
         self.command_registry: CommandRegistry = CommandRegistry(
-            app_config_dir=app_config_dir
+            app_config_dir=app_config_dir,
+            plugin_sources=self.plugin_registry.command_sources(),
         )
         self.skill_registry: SkillRegistry = SkillRegistry.from_config_dirs(
             app_config_dir=app_config_dir,
             project_start_dir=self._project_start_dir,
+            plugin_sources=self.plugin_registry.skill_sources(),
         )
         self.role_registry = self._sanitize_role_registry(
-            RoleLoader().load_builtin_and_app(
+            RoleLoader().load_builtin_app_and_plugins(
                 builtin_roles_dir=get_builtin_roles_dir(),
                 app_roles_dir=runtime.paths.roles_dir,
+                plugin_sources=self.plugin_registry.role_sources(),
                 allow_empty=True,
             )
         )
@@ -991,6 +1005,7 @@ class ServerContainer:
             get_mcp_registry=lambda: self.mcp_registry,
             get_skill_registry=lambda: self.skill_registry,
             get_proxy_status=self.proxy_config_service.get_proxy_status,
+            get_plugin_registry=lambda: self.plugin_registry,
         )
         self.model_config_service: ModelConfigService = ModelConfigService(
             config_dir=app_config_dir,
@@ -1018,16 +1033,19 @@ class ServerContainer:
             reload_skill_registry=lambda: (
                 self.skills_config_reload_service.reload_skills_config()
             ),
+            plugin_sources=self.plugin_registry.role_sources(),
         )
         self.mcp_config_reload_service: McpConfigReloadService = McpConfigReloadService(
             mcp_config_manager=self.mcp_config_manager,
             role_registry=self.role_registry,
             on_mcp_reloaded=self._on_mcp_reloaded,
+            extra_specs=self._plugin_mcp_specs,
         )
         self.skills_config_reload_service: SkillsConfigReloadService = (
             SkillsConfigReloadService(
                 config_dir=app_config_dir,
                 project_start_dir=self._project_start_dir,
+                plugin_sources=self.plugin_registry.skill_sources(),
                 role_registry=self.role_registry,
                 on_skill_reloaded=self._on_skill_reloaded,
             )
@@ -1174,6 +1192,15 @@ class ServerContainer:
             runtime_role_resolver=self.runtime_role_resolver,
             hook_service=self.hook_service,
             run_event_hub=self.run_event_hub,
+        )
+
+    def _build_hook_loader(self) -> HookLoader:
+        return HookLoader(
+            app_config_dir=self.runtime.paths.config_dir,
+            project_root=Path.cwd(),
+            get_role_registry=lambda: self.role_registry,
+            get_skill_registry=lambda: self.skill_registry,
+            plugin_hook_sources=self.plugin_registry.hook_sources(),
         )
 
     def _resolve_reflection_model_config(self) -> Optional[ModelEndpointConfig]:
@@ -1400,10 +1427,12 @@ class ServerContainer:
             mcp_config_manager=self.mcp_config_manager,
             role_registry=self.role_registry,
             on_mcp_reloaded=self._on_mcp_reloaded,
+            extra_specs=self._plugin_mcp_specs,
         )
         self.skills_config_reload_service = SkillsConfigReloadService(
             config_dir=self.runtime.paths.config_dir,
             project_start_dir=self._project_start_dir,
+            plugin_sources=self.plugin_registry.skill_sources(),
             role_registry=self.role_registry,
             on_skill_reloaded=self._on_skill_reloaded,
         )
@@ -1431,13 +1460,19 @@ class ServerContainer:
     def _on_proxy_reloaded(self, proxy_config: ProxyEnvConfig) -> None:
         sync_proxy_env_to_process_env(proxy_config)
         clear_llm_http_client_cache()
-        self._on_mcp_reloaded(self.mcp_config_manager.load_registry())
+        self._on_mcp_reloaded(
+            self.mcp_config_manager.load_registry(extra_specs=self._plugin_mcp_specs)
+        )
         self.feishu_subscription_service.reload()
         self.wechat_gateway_service.reload()
 
     def _reload_mcp_runtime_after_app_env_change(self) -> None:
         try:
-            self._on_mcp_reloaded(self.mcp_config_manager.load_registry())
+            self._on_mcp_reloaded(
+                self.mcp_config_manager.load_registry(
+                    extra_specs=self._plugin_mcp_specs
+                )
+            )
         except Exception as exc:
             LOGGER.warning(
                 "Failed to reload MCP runtime after app environment change: %s",
@@ -1453,6 +1488,62 @@ class ServerContainer:
                 exc,
             )
 
+    def _reload_plugin_runtime_after_app_env_change(self) -> None:
+        sync_app_env_to_process_env(self.runtime.paths.env_file)
+        self.plugin_config_manager = PluginConfigManager.from_environment(
+            app_config_dir=self.runtime.paths.config_dir
+        )
+        self.plugin_registry = self.plugin_config_manager.load_registry()
+        self._plugin_mcp_specs = load_plugin_mcp_specs(
+            self.plugin_registry.mcp_sources()
+        )
+        self.mcp_service.replace_extra_specs(self._plugin_mcp_specs)
+        self.command_registry = CommandRegistry(
+            app_config_dir=self.runtime.paths.config_dir,
+            plugin_sources=self.plugin_registry.command_sources(),
+        )
+        self.hook_service.replace_loader(self._build_hook_loader())
+        self.role_settings_service.replace_plugin_sources(
+            self.plugin_registry.role_sources()
+        )
+        self.skills_config_reload_service.replace_plugin_sources(
+            self.plugin_registry.skill_sources()
+        )
+        self._on_mcp_reloaded(
+            self.mcp_config_manager.load_registry(extra_specs=self._plugin_mcp_specs)
+        )
+        self.skill_registry = SkillRegistry.from_config_dirs(
+            app_config_dir=self.runtime.paths.config_dir,
+            project_start_dir=self._project_start_dir,
+            plugin_sources=self.plugin_registry.skill_sources(),
+        )
+        self.skill_runtime_service = self._build_skill_runtime_service(
+            skill_registry=self.skill_registry
+        )
+        self.role_registry = self._sanitize_role_registry(
+            RoleLoader().load_builtin_app_and_plugins(
+                builtin_roles_dir=get_builtin_roles_dir(),
+                app_roles_dir=self.runtime.paths.roles_dir,
+                plugin_sources=self.plugin_registry.role_sources(),
+                allow_empty=True,
+            )
+        )
+        self.mcp_config_reload_service = McpConfigReloadService(
+            mcp_config_manager=self.mcp_config_manager,
+            role_registry=self.role_registry,
+            on_mcp_reloaded=self._on_mcp_reloaded,
+            extra_specs=self._plugin_mcp_specs,
+        )
+        self.skills_config_reload_service = SkillsConfigReloadService(
+            config_dir=self.runtime.paths.config_dir,
+            project_start_dir=self._project_start_dir,
+            plugin_sources=self.plugin_registry.skill_sources(),
+            role_registry=self.role_registry,
+            on_skill_reloaded=self._on_skill_reloaded,
+        )
+        self._refresh_coordinator_runtime()
+        self._refresh_runtime_dependents()
+
     def _on_app_environment_changed(self, changed_keys: FrozenSet[str]) -> None:
         self.model_config_service.reload_model_config()
         proxy_related_keys = {
@@ -1463,6 +1554,8 @@ class ServerContainer:
             "SSL_VERIFY",
         }
         normalized_keys = {key.upper() for key in changed_keys}
+        if "RELAY_TEAMS_PLUGIN_DIRS" in normalized_keys:
+            self._reload_plugin_runtime_after_app_env_change()
         if normalized_keys.isdisjoint(proxy_related_keys):
             self._reload_mcp_runtime_after_app_env_change()
         else:

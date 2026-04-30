@@ -65,6 +65,7 @@ class HookSourceScope(str, Enum):
     USER = "user"
     PROJECT = "project"
     PROJECT_LOCAL = "project_local"
+    PLUGIN = "plugin"
     ROLE = "role"
     SKILL = "skill"
 
@@ -84,6 +85,9 @@ class HookSourceInfo(BaseModel):
 
     scope: HookSourceScope
     path: Path
+    plugin_name: str = ""
+    plugin_root: Path | None = None
+    plugin_data: Path | None = None
 
 
 class HookDecision(BaseModel):
