@@ -1089,6 +1089,42 @@ async def test_dispatch_task_uses_run_policy_parallel_slots(
 
 
 @pytest.mark.asyncio
+async def test_execution_slot_policy_falls_back_for_missing_or_plain_intent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_orchestration_policy_fallbacks.db"
+    task_repo = TaskRepository(db_path)
+    run_intent_repo = RunIntentRepository(db_path)
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=AgentInstanceRepository(db_path),
+        task_execution_service=cast(
+            TaskExecutionService,
+            _FakeTaskExecutionService(task_repo),
+        ),
+        message_repo=MessageRepository(db_path),
+        run_intent_repo=run_intent_repo,
+        default_max_parallel_delegated_tasks=7,
+    )
+
+    missing_value = await service._max_parallel_delegated_tasks_for_run(
+        run_id="missing-run"
+    )
+    run_intent_repo.upsert(
+        run_id="plain-run",
+        session_id="session-1",
+        intent=IntentInput(session_id="session-1"),
+    )
+    plain_value = await service._max_parallel_delegated_tasks_for_run(
+        run_id="plain-run"
+    )
+
+    assert missing_value == 7
+    assert plain_value == 7
+
+
+@pytest.mark.asyncio
 async def test_dispatch_task_binds_unassigned_created_task_to_requested_role(
     tmp_path: Path,
 ) -> None:

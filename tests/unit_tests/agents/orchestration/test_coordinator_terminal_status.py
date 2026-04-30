@@ -1130,6 +1130,76 @@ async def test_graph_mode_runs_dependency_chain_beyond_standard_cycle_limit(
 
 
 @pytest.mark.asyncio
+async def test_graph_mode_reports_disabled_parallel_policy_with_pending_tasks(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="run a graph with disabled delegated execution",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph.model_construct(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="blocked",
+                role_id="time",
+                objective="This node cannot run under the policy.",
+            ),
+        ),
+        edges=(),
+        max_parallel_tasks=0,
+        final_response_node_id=None,
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph-disabled",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("time",),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    graph_records = tuple(
+        record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    )
+    root_record = await task_repo.get_async(root_task.task_id)
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "delegated_task_execution_disabled"
+    assert "Delegated task execution is disabled" in result.output
+    assert root_record.status == TaskStatus.FAILED
+    assert root_record.error_message == result.error_message
+    assert len(graph_records) == 1
+    assert graph_records[0].status == TaskStatus.ASSIGNED
+    assert task_execution_service.calls == []
+
+
+@pytest.mark.asyncio
 async def test_graph_mode_reports_missing_node_role_without_creating_tasks(
     tmp_path: Path,
 ) -> None:
