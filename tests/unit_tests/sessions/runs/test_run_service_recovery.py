@@ -27,7 +27,11 @@ from relay_teams.monitors import (
 )
 from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.background_tasks.models import (
@@ -45,6 +49,7 @@ from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import (
     AudioGenerationConfig,
     ImageGenerationConfig,
+    InjectionMessage,
     IntentInput,
     RunEvent,
     RunKind,
@@ -4232,7 +4237,10 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
         run_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
     ) -> tuple[str, str, str]:
+        _ = (delivery_mode, client_message_id)
         lifecycle_calls.append(f"inject:{run_id}:{source.value}:{content}")
         return run_id, source.value, content
 
@@ -4257,6 +4265,11 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
     monkeypatch.setattr(
         manager._run_control_manager,
         "inject_to_running_agents_async",
+        _inject_message,
+    )
+    monkeypatch.setattr(
+        manager._run_control_manager,
+        "inject_to_coordinator_async",
         _inject_message,
     )
     monkeypatch.setattr(manager, "_stop_run_local_async", _stop_run)
@@ -4321,6 +4334,114 @@ async def test_bound_loop_helpers_dispatch_callbacks_to_service_loop(
         "resume:run-created",
         "resolve:run-created:call-1:approve:ok",
     ]
+
+
+def test_sync_user_injection_targets_coordinator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(tmp_path / "run_service_sync_user_inject.db")
+    calls: list[str] = []
+
+    def _inject_to_coordinator(
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
+    ) -> InjectionMessage:
+        _ = client_message_id
+        calls.append(f"coordinator:{run_id}:{source.value}:{content}")
+        return InjectionMessage(
+            run_id=run_id,
+            recipient_instance_id="inst-coordinator",
+            source=source,
+            delivery_mode=delivery_mode,
+            content=content,
+            priority=0,
+        )
+
+    def _inject_to_running_agents(
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
+        client_message_id: str | None = None,
+    ) -> InjectionMessage:
+        _ = client_message_id
+        calls.append(f"running:{run_id}:{source.value}:{content}")
+        return InjectionMessage(
+            run_id=run_id,
+            recipient_instance_id="inst-worker",
+            source=source,
+            delivery_mode=delivery_mode,
+            content=content,
+            priority=0,
+        )
+
+    monkeypatch.setattr(
+        manager._run_control_manager,
+        "inject_to_coordinator",
+        _inject_to_coordinator,
+    )
+    monkeypatch.setattr(
+        manager._run_control_manager,
+        "inject_to_running_agents",
+        _inject_to_running_agents,
+    )
+
+    user_message = manager.inject_message(
+        run_id="run-1",
+        source=InjectionSource.USER,
+        content="adjust",
+    )
+    system_message = manager.inject_message(
+        run_id="run-1",
+        source=InjectionSource.SYSTEM,
+        content="nudge",
+    )
+
+    assert user_message.recipient_instance_id == "inst-coordinator"
+    assert system_message.recipient_instance_id == "inst-worker"
+    assert calls == [
+        "coordinator:run-1:user:adjust",
+        "running:run-1:system:nudge",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_force_queued_injections_delegates_to_run_control_manager(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = _build_manager(tmp_path / "run_force_inject.db")
+    calls: list[str] = []
+
+    async def _force(*, run_id: str) -> InjectionMessage:
+        calls.append(run_id)
+        return InjectionMessage(
+            run_id=run_id,
+            recipient_instance_id="inst-1",
+            source=InjectionSource.USER,
+            delivery_mode=InjectionDeliveryMode.INTERRUPT,
+            content="first\n\nsecond",
+            priority=1,
+        )
+
+    monkeypatch.setattr(
+        manager._run_control_manager,
+        "force_user_queued_injections_async",
+        _force,
+    )
+
+    result = await manager.force_queued_injections_async("run-existing")
+
+    assert calls == ["run-existing"]
+    assert result.run_id == "run-existing"
+    assert result.content == "first\n\nsecond"
+    assert result.delivery_mode == InjectionDeliveryMode.INTERRUPT
 
 
 @pytest.mark.asyncio

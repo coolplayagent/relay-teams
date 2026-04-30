@@ -165,6 +165,7 @@ def test_prompt_controls_toggle_mode_specific_fields_and_thinking_effort(
         .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("./recovery.js", "./mockRecovery.mjs")
         .replace("../core/state.js", "./mockState.mjs")
@@ -287,6 +288,37 @@ export async function searchWorkspacePaths(workspaceId, query, limit) {
         results: [],
     };
 }
+
+export async function forceQueuedInject() {
+    return {
+        run_id: "run-flush",
+        session_id: "session-1",
+        content: "queued inject",
+        message_count: 1,
+    };
+}
+
+export async function injectMessage() {
+    return {
+        status: "queued",
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function replaceRuntimeInjectMessages() {
+    return undefined;
+}
+
+export function removeRuntimeInjectMessage() {
+    return undefined;
+}
+
+export function upsertRuntimeInjectMessage() {
+    return undefined;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -395,6 +427,10 @@ export function getRoleInputModalitySupport(roleId, modality) {
     (temp_dir / "mockStream.mjs").write_text(
         """
 export async function startIntentStream() {
+    return undefined;
+}
+
+export function attachRunStream() {
     return undefined;
 }
 """.strip(),
@@ -617,6 +653,7 @@ def test_handle_send_strips_leading_role_mention_and_targets_run_role(
         .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("./recovery.js", "./mockRecovery.mjs")
         .replace("../core/state.js", "./mockState.mjs")
@@ -731,6 +768,37 @@ export async function searchWorkspacePaths(workspaceId, query, limit) {
         query: "",
         results: [],
     };
+}
+
+export async function forceQueuedInject() {
+    return {
+        run_id: "run-flush",
+        session_id: "session-1",
+        content: "queued inject",
+        message_count: 1,
+    };
+}
+
+export async function injectMessage() {
+    return {
+        status: "queued",
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function replaceRuntimeInjectMessages() {
+    return undefined;
+}
+
+export function removeRuntimeInjectMessage() {
+    return undefined;
+}
+
+export function upsertRuntimeInjectMessage() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",
@@ -849,6 +917,10 @@ export async function startIntentStream(text, sessionId, onCompleted, options = 
         options.onRunCreated({ run_id: "run-1", target_role_id: options.targetRoleId || null });
     }
     return onCompleted;
+}
+
+export function attachRunStream() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",
@@ -986,6 +1058,7 @@ def test_prompt_role_mentions_offer_autocomplete_and_insert_selection(
         .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("./recovery.js", "./mockRecovery.mjs")
         .replace("../core/state.js", "./mockState.mjs")
@@ -1101,6 +1174,37 @@ export async function searchWorkspacePaths(workspaceId, query, limit) {
         results: [],
     };
 }
+
+export async function forceQueuedInject() {
+    return {
+        run_id: "run-flush",
+        session_id: "session-1",
+        content: "queued inject",
+        message_count: 1,
+    };
+}
+
+export async function injectMessage() {
+    return {
+        status: "queued",
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function replaceRuntimeInjectMessages() {
+    return undefined;
+}
+
+export function removeRuntimeInjectMessage() {
+    return undefined;
+}
+
+export function upsertRuntimeInjectMessage() {
+    return undefined;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -1213,6 +1317,10 @@ export function getRoleInputModalitySupport(roleId, modality) {
     (temp_dir / "mockStream.mjs").write_text(
         """
 export async function startIntentStream() {
+    return undefined;
+}
+
+export function attachRunStream() {
     return undefined;
 }
 """.strip(),
@@ -3111,6 +3219,10 @@ export function finishForegroundSubmission() {
     return undefined;
 }
 
+export function hasActiveForegroundSubmission() {
+    return false;
+}
+
 export function isForegroundSubmissionActive(submission) {
     return submission?.detached !== true;
 }
@@ -3139,6 +3251,7 @@ def _write_multimodal_prompt_fixture(
         .replace("../components/rounds.js", "./mockRounds.mjs")
         .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
         .replace("../core/api.js", "./mockApi.mjs")
         .replace("./recovery.js", "./mockRecovery.mjs")
         .replace("../core/state.js", "./mockState.mjs")
@@ -3264,6 +3377,37 @@ export async function searchWorkspacePaths(workspaceId, query, limit) {
         query: "",
         results: [],
     };
+}
+
+export async function forceQueuedInject() {
+    return {
+        run_id: "run-flush",
+        session_id: "session-1",
+        content: "queued inject",
+        message_count: 1,
+    };
+}
+
+export async function injectMessage() {
+    return {
+        status: "queued",
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function replaceRuntimeInjectMessages() {
+    return undefined;
+}
+
+export function removeRuntimeInjectMessage() {
+    return undefined;
+}
+
+export function upsertRuntimeInjectMessage() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",
@@ -3392,6 +3536,10 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
         options.onRunCreated({ run_id: "run-created-1" });
     }
     return onCompleted;
+}
+
+export function attachRunStream() {
+    return undefined;
 }
 """.strip(),
         encoding="utf-8",

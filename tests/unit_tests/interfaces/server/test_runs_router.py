@@ -17,6 +17,7 @@ from relay_teams.media import (
     MediaRefContentPart,
     content_parts_from_text,
 )
+from relay_teams.sessions.runs.enums import InjectionDeliveryMode, InjectionSource
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.run_service import SessionRunService
@@ -30,12 +31,13 @@ class _FakeRunService:
         self.started_run_ids: list[str] = []
         self.resolved_tool_approvals: list[tuple[str, str, str, str]] = []
         self.raise_on_tool_approval = False
-        self.inject_calls: list[tuple[str, str, str]] = []
+        self.inject_calls: list[tuple[str, str, str, str, str | None]] = []
         self.subagent_inject_calls: list[tuple[str, str, str]] = []
         self.raise_on_inject = False
         self.raise_on_subagent_inject = False
         self.created_run_inputs: list[IntentInput] = []
         self.multiplex_stream_calls: list[tuple[tuple[str, int], ...]] = []
+        self.forced_inject_run_ids: list[str] = []
         self.background_tasks: dict[str, dict[str, object]] = {
             "exec-1": {
                 "background_task_id": "exec-1",
@@ -118,18 +120,63 @@ class _FakeRunService:
     async def ensure_run_started_async(self, run_id: str) -> None:
         self.ensure_run_started(run_id)
 
-    def inject_message(self, *, run_id: str, source, content: str):
+    def inject_message(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode,
+        client_message_id: str | None = None,
+    ):
         if self.raise_on_inject:
             raise ValueError("Injection content must not be empty")
-        self.inject_calls.append((run_id, source.value, content))
+        self.inject_calls.append(
+            (run_id, source.value, content, delivery_mode.value, client_message_id)
+        )
         return type(
             "_InjectedRecord",
             (),
-            {"model_dump": lambda self: {"run_id": run_id, "content": content}},
+            {
+                "model_dump": lambda self: {
+                    "run_id": run_id,
+                    "content": content,
+                    "client_message_id": client_message_id,
+                }
+            },
         )()
 
-    async def inject_message_async(self, *, run_id: str, source, content: str):
-        return self.inject_message(run_id=run_id, source=source, content=content)
+    async def inject_message_async(
+        self,
+        *,
+        run_id: str,
+        source: InjectionSource,
+        content: str,
+        delivery_mode: InjectionDeliveryMode,
+        client_message_id: str | None = None,
+    ):
+        return self.inject_message(
+            run_id=run_id,
+            source=source,
+            content=content,
+            delivery_mode=delivery_mode,
+            client_message_id=client_message_id,
+        )
+
+    async def force_queued_injections_async(self, run_id: str):
+        self.forced_inject_run_ids.append(run_id)
+        return type(
+            "_ForceInjectRecord",
+            (),
+            {
+                "run_id": run_id,
+                "injection_id": "inj-forced",
+                "superseded_injection_ids": ("inj-queued-1", "inj-queued-2"),
+                "superseded_client_message_ids": ("client-1", "client-2"),
+                "content": "look here",
+                "delivery_mode": InjectionDeliveryMode.INTERRUPT,
+            },
+        )()
 
     def inject_subagent_message(
         self,
@@ -752,6 +799,46 @@ def test_inject_message_route_rejects_whitespace_only_content() -> None:
 
     assert response.status_code == 422
     assert fake_service.inject_calls == []
+
+
+def test_inject_message_route_accepts_interrupt_mode() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs/run-1/inject",
+        json={
+            "source": "user",
+            "content": "look here",
+            "mode": "interrupt",
+            "client_message_id": "client-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["client_message_id"] == "client-1"
+    assert fake_service.inject_calls == [
+        ("run-1", "user", "look here", "interrupt", "client-1")
+    ]
+
+
+def test_force_queued_inject_route_returns_interrupt_message() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post("/api/runs/run-1/inject:force")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "run_id": "run-1",
+        "injection_id": "inj-forced",
+        "applied_injection_ids": ["inj-queued-1", "inj-queued-2", "inj-forced"],
+        "superseded_client_message_ids": ["client-1", "client-2"],
+        "content": "look here",
+        "delivery_mode": "interrupt",
+    }
+    assert fake_service.forced_inject_run_ids == ["run-1"]
 
 
 def test_inject_message_route_maps_service_validation_errors_to_bad_request() -> None:

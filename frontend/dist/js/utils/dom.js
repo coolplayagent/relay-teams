@@ -47,6 +47,7 @@ export const els = {
   subagentStatusSummary: qs("#subagent-status-summary"),
   subagentRoleMeta: qs("#subagent-role-meta"),
   promptInput: qs("#prompt-input"),
+  runtimeInjectQueue: qs("#runtime-inject-queue"),
   promptAttachments: qs("#prompt-attachments"),
   promptMentionMenu: qs("#prompt-mention-menu"),
   promptInputHint: qs("#prompt-input-hint"),

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * core/api/index.js
  * Public API facade composed from domain-specific modules.
  */
@@ -33,6 +33,7 @@ export {
     injectMessage,
     injectSubagentMessage,
     listUserQuestions,
+    forceQueuedInject,
     resolveGate,
     resolveToolApproval,
     resumeRun,

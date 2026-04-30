@@ -1,10 +1,11 @@
-/**
+﻿/**
  * components/rounds.js
  * Re-export the rounds timeline public API.
  */
 export {
     appendRoundRetryEvent,
     appendRoundUserMessage,
+    upsertRoundInjectionMessage,
     removeRoundRetryEvent,
     updateRoundRetryEvent,
     currentRound,

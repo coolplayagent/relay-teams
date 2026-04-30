@@ -459,6 +459,38 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert tool_result_payloads[0]["result"] == result
 
 
+def test_execute_tool_marks_reported_failed_result_event_as_error() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-shell-failed"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "ls missing"},
+            action=lambda: ToolResultProjection(
+                visible_data={
+                    "status": "failed",
+                    "exit_code": 2,
+                    "output_excerpt": "missing",
+                },
+            ),
+        )
+    )
+
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert result["ok"] is True
+    assert len(tool_result_payloads) == 1
+    assert tool_result_payloads[0]["tool_name"] == "shell"
+    assert tool_result_payloads[0]["tool_call_id"] == "call-shell-failed"
+    assert tool_result_payloads[0]["error"] is True
+    assert tool_result_payloads[0]["result"] == result
+
+
 def test_tool_action_limits_live_unpersisted_batch_per_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

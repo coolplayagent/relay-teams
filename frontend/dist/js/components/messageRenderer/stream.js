@@ -78,6 +78,12 @@ export function appendStreamChunk(instanceId, text, runId = '', roleId = '', lab
     const stateKey = resolveStreamStateKey(instanceId, roleId, runId);
     const st = streamState.get(stateKey);
     if (!st) return;
+    ensureWritableStreamSegment(st, {
+        runId,
+        instanceId,
+        roleId,
+        label,
+    });
     const follow = captureStreamFollow(st.container);
 
     if (!st.activeTextEl) {
@@ -158,6 +164,12 @@ export function appendStreamOutputParts(
         streamState.set(stateKey, st);
     }
     if (!st || !Array.isArray(outputParts)) return;
+    ensureWritableStreamSegment(st, {
+        runId,
+        instanceId,
+        roleId,
+        label,
+    });
     const follow = captureStreamFollow(st.container || container);
     appendOverlayOutputParts(
         runId || st.runId,
@@ -193,6 +205,100 @@ export function appendStreamOutputParts(
     });
     syncMessageCopyButton(st.container || container);
     scheduleStreamScrollBottom(st.container || container, follow);
+}
+
+export function appendStreamInjectionMarker(
+    container,
+    instanceId,
+    payload,
+    options = {},
+) {
+    const runId = String(options.runId || '').trim();
+    const roleId = String(options.roleId || '').trim();
+    const label = String(options.label || '').trim();
+    const streamKey = resolveStreamKey(instanceId, roleId, runId);
+    const stateKey = resolveStreamStateKey(instanceId, roleId, runId);
+    let st = streamState.get(stateKey);
+    if (st && isStreamStateDetachedFromContainer(st, container || st.container)) {
+        streamState.delete(stateKey);
+        st = null;
+    }
+    const normalized = normalizeOverlayInjection(payload || {});
+    if (!normalized.content) {
+        return false;
+    }
+    const markerHost = (st && st.container) || container;
+    if (!markerHost) {
+        appendOverlayInjection(runId, streamKey, roleId, label, payload || {});
+        applyTimelineAction({
+            type: 'injection',
+            scope: streamScope(st, {
+                runId,
+                instanceId,
+                roleId,
+            }),
+            messageId: normalized.message_id,
+            injectionId: normalized.injection_id,
+            content: normalized.content,
+            contentParts: normalized.content_parts,
+            status: normalized.status,
+            mode: normalized.mode,
+            source: normalized.source,
+            supersedesPendingToolCalls: payload?.supersedes_pending_tool_calls === true,
+        });
+        return false;
+    }
+    const follow = captureStreamFollow(markerHost);
+    if (st) {
+        endActiveText(st);
+    }
+    if (payload?.supersedes_pending_tool_calls === true) {
+        discardPendingToolCallsForStream(runId, streamKey, roleId);
+        pruneEmptyStreamWrapper(st);
+    }
+    appendOverlayInjection(runId, streamKey, roleId, label, {
+        ...payload,
+        ...normalized,
+    });
+    applyTimelineAction({
+        type: 'injection',
+        scope: streamScope(st, {
+            runId,
+            instanceId,
+            roleId,
+        }),
+        messageId: normalized.message_id,
+        injectionId: normalized.injection_id,
+        content: normalized.content,
+        contentParts: normalized.content_parts,
+        status: normalized.status,
+        mode: normalized.mode,
+        source: normalized.source,
+        supersedesPendingToolCalls: payload?.supersedes_pending_tool_calls === true,
+    });
+    const existingMarker = findExistingStreamInjectionMarker(markerHost, normalized);
+    if (existingMarker) {
+        updateStreamInjectionMarker(existingMarker, normalized);
+        scheduleStreamScrollBottom(markerHost, follow);
+        return true;
+    }
+    const marker = renderStreamInjectionMarker(document.createElement('div'), normalized);
+    if (!marker) {
+        return false;
+    }
+    insertInjectionMarkerAfterStreamState(markerHost, marker, st);
+    if (st) {
+        st.segmentClosedAfterInjection = true;
+        st.activeTextEl = null;
+        st.activeRaw = '';
+        st.activeTextIsIdle = false;
+        st.pendingToolBlocks = {};
+        if (st.thinkingActiveByPart instanceof Map) {
+            st.thinkingActiveByPart.clear();
+        }
+    }
+    scheduleStreamScrollBottom(markerHost, follow);
+    return true;
 }
 
 export function finalizeStream(instanceId, roleId = '', options = {}) {
@@ -465,6 +571,12 @@ export function appendToolCallBlock(
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
 
+    ensureWritableStreamSegment(st, {
+        runId,
+        instanceId,
+        roleId,
+        label,
+    });
     const follow = captureStreamFollow(st.container || container);
     endActiveText(st);
     updateOverlayToolCall(st.runId || runId, st.instanceId || instanceId, roleId || st.roleId, st.label, {
@@ -523,6 +635,7 @@ export function updateToolResult(
     const resolvedRunId = (st && st.runId) || runId;
     const resolvedInstanceId = (st && st.instanceId) || instanceId;
     const resolvedRoleId = (st && st.roleId) || roleId;
+    const resultIsError = isStreamToolResultError(result, { isError });
     updateOverlayToolResult(
         resolvedRunId,
         resolvedInstanceId,
@@ -531,7 +644,7 @@ export function updateToolResult(
         toolName,
         toolCallId,
         result,
-        isError,
+        resultIsError,
     );
     applyTimelineAction({
         type: 'tool_result',
@@ -543,7 +656,7 @@ export function updateToolResult(
         toolName,
         toolCallId,
         result,
-        isError,
+        isError: resultIsError,
     });
     const follow = captureStreamFollow((st && st.container) || container);
     let toolBlock = resolveToolBlockTarget(st, container, toolName, toolCallId);
@@ -564,7 +677,7 @@ export function updateToolResult(
         toolBlock = materialized.toolBlock;
         boundState = materialized.streamState;
     }
-    applyToolReturn(toolBlock, result);
+    applyToolReturn(toolBlock, result, { isError: resultIsError });
     if (boundState && !hasActiveThinking(boundState)) {
         ensureIdleStreamingTail(boundState);
     }
@@ -641,6 +754,12 @@ export function startThinkingBlock(instanceId, partIndex, options = {}) {
         if (typeof st.activeRaw !== 'string') st.activeRaw = '';
     }
     if (!st) return false;
+    ensureWritableStreamSegment(st, {
+        runId,
+        instanceId,
+        roleId,
+        label,
+    });
     const follow = captureStreamFollow(st.container || container);
     endActiveText(st);
     ensureThinkingEntry(st, partIndex, { forceNew: true });
@@ -684,6 +803,12 @@ export function appendThinkingChunk(instanceId, partIndex, text, options = {}) {
         updateOverlayThinkingText(runId, instanceId, roleId, label, partIndex, text, { append: true });
         return false;
     }
+    ensureWritableStreamSegment(st, {
+        runId,
+        instanceId,
+        roleId,
+        label,
+    });
     const follow = captureStreamFollow((st && st.container) || container);
     const entry = resolveThinkingEntry(st, partIndex);
     const delta = String(text || '');
@@ -970,9 +1095,9 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
     if (evType === 'tool_result') {
         clearOverlayEntryCleanupTimer(runId, streamKey);
         const resultEnvelope = payload?.result || {};
-        const isError = typeof resultEnvelope === 'object'
-            ? resultEnvelope.ok === false
-            : !!payload?.error;
+        const isError = isStreamToolResultError(resultEnvelope, {
+            isError: payload?.error === true,
+        });
         updateOverlayToolResult(
             runId,
             streamKey,
@@ -1006,6 +1131,14 @@ export function applyStreamOverlayEvent(evType, payload, options = {}) {
             payload,
             String(payload?.action || '').toLowerCase() || 'resolved',
         );
+        return;
+    }
+    if (evType === 'injection_applied') {
+        clearOverlayEntryCleanupTimer(runId, streamKey);
+        if (payload?.supersedes_pending_tool_calls === true) {
+            discardPendingToolCallsForStream(runId, streamKey, roleId);
+        }
+        appendOverlayInjection(runId, streamKey, roleId, label, payload || {});
         return;
     }
     if (evType === 'model_step_finished') {
@@ -1299,6 +1432,12 @@ function materializeOverlayEntryIntoState(st, overlayEntry) {
             appendStructuredContentPart(st.contentEl, part);
             return;
         }
+        if (part.kind === 'injection') {
+            renderStreamInjectionMarker(st.contentEl, part);
+            st.activeTextEl = null;
+            st.activeRaw = '';
+            return;
+        }
         if (part.kind === 'thinking') {
             const safePartIndex = String(part.part_index ?? '');
             const key = String(part._key || `${safePartIndex}:${st.thinkingSequence}`);
@@ -1342,7 +1481,9 @@ function materializeOverlayEntryIntoState(st, overlayEntry) {
         );
         st.contentEl.appendChild(toolBlock);
         if (part.result !== undefined) {
-            applyToolReturn(toolBlock, part.result);
+            applyToolReturn(toolBlock, part.result, {
+                isError: String(part.status || '').trim().toLowerCase() === 'error',
+            });
         } else if (part.status && part.status !== 'pending') {
             setToolStatus(toolBlock, part.status);
         }
@@ -1668,6 +1809,123 @@ function endActiveText(st) {
     st.activeTextEl = null;
     st.activeRaw = '';
     st.activeTextIsIdle = false;
+}
+
+function ensureWritableStreamSegment(st, fallback = {}) {
+    if (!st || st.segmentClosedAfterInjection !== true) {
+        return;
+    }
+    const runId = String(st.runId || fallback.runId || '').trim();
+    const instanceId = String(st.instanceId || fallback.instanceId || '').trim();
+    const roleId = String(st.roleId || fallback.roleId || '').trim();
+    const label = String(st.label || fallback.label || 'Agent').trim();
+    const streamKey = String(st.streamKey || resolveStreamKey(instanceId, roleId, runId));
+    const next = renderMessageBlock(st.container, 'model', label, [], {
+        runId,
+        instanceId,
+        roleId,
+        streamKey,
+    });
+    st.wrapper = next.wrapper;
+    st.contentEl = next.contentEl;
+    st.pendingToolBlocks = {};
+    st.activeTextEl = null;
+    st.activeRaw = '';
+    st.activeTextIsIdle = false;
+    st.thinkingParts = new Map();
+    st.thinkingActiveByPart = new Map();
+    st.segmentClosedAfterInjection = false;
+    bindHeightObserver(st.container, st.wrapper);
+}
+
+function insertInjectionMarkerAfterStreamState(container, marker, st) {
+    if (!marker) {
+        return;
+    }
+    const anchor = st?.wrapper || null;
+    if (
+        anchor
+        && typeof container.insertBefore === 'function'
+        && typeof anchor.nextSibling !== 'undefined'
+    ) {
+        container.insertBefore(marker, anchor.nextSibling);
+        return;
+    }
+    if (Array.isArray(container.__messages) && anchor) {
+        const index = container.__messages.findIndex(item => (
+            item === anchor || item?.wrapper === anchor
+        ));
+        if (index !== -1) {
+            container.__messages.splice(index + 1, 0, marker);
+            return;
+        }
+    }
+    if (Array.isArray(container.messages) && anchor) {
+        const index = container.messages.findIndex(item => (
+            item === anchor || item?.wrapper === anchor
+        ));
+        if (index !== -1) {
+            container.messages.splice(index + 1, 0, marker);
+            return;
+        }
+    }
+    if (typeof container.appendChild === 'function') {
+        container.appendChild(marker);
+    }
+}
+
+function pruneEmptyStreamWrapper(st) {
+    if (!st?.wrapper || !st.contentEl || !isStreamContentEmpty(st.contentEl)) {
+        return false;
+    }
+    removeNodeFromKnownContainers(st.container, st.wrapper);
+    st.wrapper.remove?.();
+    st.wrapper = null;
+    st.contentEl = null;
+    st.pendingToolBlocks = {};
+    st.activeTextEl = null;
+    st.activeRaw = '';
+    st.activeTextIsIdle = false;
+    return true;
+}
+
+function isStreamContentEmpty(contentEl) {
+    if (!contentEl) {
+        return true;
+    }
+    if (Array.isArray(contentEl.children)) {
+        return contentEl.children.length === 0;
+    }
+    if (typeof contentEl.childElementCount === 'number') {
+        return contentEl.childElementCount === 0;
+    }
+    return false;
+}
+
+function removeNodeFromKnownContainers(container, node) {
+    if (!container || !node) return;
+    if (Array.isArray(container.__messages)) {
+        const index = container.__messages.findIndex(item => (
+            item === node || item?.wrapper === node
+        ));
+        if (index !== -1) {
+            container.__messages.splice(index, 1);
+        }
+    }
+    if (Array.isArray(container.messages)) {
+        const index = container.messages.findIndex(item => (
+            item === node || item?.wrapper === node
+        ));
+        if (index !== -1) {
+            container.messages.splice(index, 1);
+        }
+    }
+    if (Array.isArray(container.children)) {
+        const index = container.children.indexOf(node);
+        if (index !== -1) {
+            container.children.splice(index, 1);
+        }
+    }
 }
 
 function resolveToolBlockTarget(st, container, toolName, toolCallId, options = {}) {
@@ -2061,6 +2319,242 @@ function updateOverlayToolApproval(runId, instanceId, roleId, toolName, payload,
     part.approvalStatus = approvalStatus;
 }
 
+function appendOverlayInjection(runId, instanceId, roleId, label, payload) {
+    const entry = ensureOverlayEntry(runId, instanceId, roleId, label);
+    if (!entry || !payload || typeof payload !== 'object') return;
+    const normalized = normalizeOverlayInjection(payload);
+    if (!normalized.content) return;
+    const existing = entry.parts.find(part => (
+        part?.kind === 'injection'
+        && (
+            (normalized.injection_id && String(part.injection_id || '') === normalized.injection_id)
+            || (normalized.message_id && String(part.message_id || '') === normalized.message_id)
+        )
+    ));
+    if (existing) {
+        Object.assign(existing, normalized);
+    } else {
+        entry.parts.push(normalized);
+    }
+    entry.textStreaming = false;
+    entry.idleCursor = true;
+}
+
+function discardPendingToolCallsForStream(runId, streamKey, roleId) {
+    const safeRunId = String(runId || '').trim();
+    const safeStreamKey = String(streamKey || '').trim();
+    const safeRoleId = String(roleId || '').trim();
+    if (!safeRunId) return;
+    const runOverlay = overlayState.get(safeRunId);
+    const entry = runOverlay?.entries?.get(safeStreamKey);
+    if (entry && Array.isArray(entry.parts)) {
+        entry.parts = entry.parts.filter(part => (
+            part?.kind !== 'tool' || isTerminalOverlayToolPart(part)
+        ));
+    }
+    applyTimelineAction({
+        type: 'discard_pending_tools',
+        scope: {
+            runId: safeRunId,
+            roleId: safeRoleId,
+            streamKey: safeStreamKey,
+        },
+    });
+    Array.from(streamState.entries()).forEach(([, st]) => {
+        if (String(st?.runId || '').trim() !== safeRunId) {
+            return;
+        }
+        const stStreamKey = String(st?.streamKey || '').trim();
+        const stRoleId = String(st?.roleId || '').trim();
+        if (
+            safeStreamKey
+            && stStreamKey
+            && stStreamKey !== safeStreamKey
+        ) {
+            return;
+        }
+        if (
+            !safeStreamKey
+            && safeRoleId
+            && stRoleId
+            && stRoleId !== safeRoleId
+        ) {
+            return;
+        }
+        removePendingToolBlocksFromState(st);
+    });
+}
+
+function removePendingToolBlocksFromState(st) {
+    if (!st?.contentEl) return;
+    Array.from(st.contentEl.querySelectorAll?.('.tool-block') || []).forEach(block => {
+        const status = String(block?.dataset?.status || '').trim().toLowerCase();
+        if (!['completed', 'error', 'validation_failed'].includes(status)) {
+            block.remove();
+        }
+    });
+    st.pendingToolBlocks = {};
+}
+
+function normalizeOverlayInjection(payload) {
+    const content = streamInjectionContentText(payload);
+    const injectionId = String(payload.injection_id || payload.id || '').trim();
+    const messageId = String(payload.message_id || injectionId || [
+        payload.run_id || '',
+        payload.recipient_instance_id || '',
+        payload.applied_at || payload.occurred_at || payload.created_at || '',
+        payload.source || 'user',
+        content,
+    ].join('|')).trim();
+    return {
+        kind: 'injection',
+        message_id: messageId,
+        injection_id: injectionId || messageId,
+        source: String(payload.source || 'user'),
+        mode: String(payload.mode || payload.delivery_mode || 'queued'),
+        status: String(payload.status || 'applied'),
+        content,
+        content_parts: Array.isArray(payload.content_parts) ? payload.content_parts : [],
+        recipient_instance_id: String(payload.recipient_instance_id || ''),
+        queued_at: String(payload.queued_at || payload.created_at || ''),
+        applied_at: String(payload.applied_at || payload.occurred_at || ''),
+        occurred_at: String(payload.occurred_at || payload.applied_at || ''),
+    };
+}
+
+function streamInjectionContentText(rawMessage) {
+    if (!rawMessage || typeof rawMessage !== 'object') {
+        return '';
+    }
+    const direct = String(rawMessage.content || rawMessage.text || '').trim();
+    if (direct) {
+        return direct;
+    }
+    const parts = Array.isArray(rawMessage.content_parts)
+        ? rawMessage.content_parts
+        : Array.isArray(rawMessage.message?.parts)
+            ? rawMessage.message.parts
+            : [];
+    return parts
+        .map(part => String(part?.content || part?.text || '').trim())
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
+}
+
+function renderStreamInjectionMarker(container, rawMessage) {
+    if (!container || !rawMessage || typeof rawMessage !== 'object') {
+        return null;
+    }
+    const content = streamInjectionContentText(rawMessage);
+    if (!content || typeof document === 'undefined') {
+        return null;
+    }
+    const marker = document.createElement('div');
+    marker.className = 'message-inject-marker is-inline';
+    marker.dataset.status = String(rawMessage.status || 'applied');
+    const injectionId = String(rawMessage.injection_id || rawMessage.message_id || '').trim();
+    if (injectionId) {
+        marker.dataset.injectionId = injectionId;
+    }
+    const messageId = String(rawMessage.message_id || '').trim();
+    if (messageId) {
+        marker.dataset.messageId = messageId;
+    }
+    const icon = document.createElement('span');
+    icon.className = 'message-inject-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = '<svg viewBox="0 0 16 16" fill="none"><path d="M4 3.5v3.25a3.75 3.75 0 0 0 3.75 3.75h4.5M10 8.25l2.25 2.25L10 12.75" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const text = document.createElement('span');
+    text.className = 'message-inject-text';
+    text.textContent = content;
+    marker.append(icon, text);
+    container.appendChild(marker);
+    return marker;
+}
+
+function findExistingStreamInjectionMarker(container, rawMessage) {
+    if (!container || !rawMessage || typeof rawMessage !== 'object') {
+        return null;
+    }
+    const injectionId = String(rawMessage.injection_id || '').trim();
+    if (injectionId) {
+        const marker = queryStreamInjectionMarker(
+            container,
+            'injectionId',
+            injectionId,
+        );
+        if (marker) return marker;
+    }
+    const messageId = String(rawMessage.message_id || '').trim();
+    if (messageId) {
+        const marker = queryStreamInjectionMarker(container, 'messageId', messageId);
+        if (marker) return marker;
+    }
+    return null;
+}
+
+function queryStreamInjectionMarker(container, key, value) {
+    if (!container || !key || !value) {
+        return null;
+    }
+    const attrName = key === 'messageId' ? 'message-id' : 'injection-id';
+    const selector = `.message-inject-marker[data-${attrName}="${escapeSelectorValue(value)}"]`;
+    const queried = container.querySelector?.(selector);
+    if (queried) {
+        return queried;
+    }
+    return findStreamInjectionMarkerInChildren(container, key, value);
+}
+
+function findStreamInjectionMarkerInChildren(node, key, value) {
+    const children = Array.from(node?.children || []);
+    for (const child of children) {
+        const className = String(child?.className || '');
+        if (
+            className.split(/\s+/).includes('message-inject-marker')
+            && String(child?.dataset?.[key] || '') === value
+        ) {
+            return child;
+        }
+        const nested = findStreamInjectionMarkerInChildren(child, key, value);
+        if (nested) {
+            return nested;
+        }
+    }
+    return null;
+}
+
+function updateStreamInjectionMarker(marker, rawMessage) {
+    if (!marker || !rawMessage || typeof rawMessage !== 'object') {
+        return;
+    }
+    const status = String(rawMessage.status || 'applied');
+    if (marker.dataset) {
+        marker.dataset.status = status;
+        const injectionId = String(rawMessage.injection_id || '').trim();
+        if (injectionId) marker.dataset.injectionId = injectionId;
+        const messageId = String(rawMessage.message_id || '').trim();
+        if (messageId) marker.dataset.messageId = messageId;
+    }
+    const content = streamInjectionContentText(rawMessage);
+    if (!content) {
+        return;
+    }
+    const textEl = marker.querySelector?.('.message-inject-text');
+    if (textEl) {
+        textEl.textContent = content;
+        return;
+    }
+    const children = Array.from(marker.children || []);
+    const fallbackTextEl = children.find(child => (
+        String(child?.className || '').split(/\s+/).includes('message-inject-text')
+    ));
+    if (fallbackTextEl) {
+        fallbackTextEl.textContent = content;
+    }
+}
+
 function upsertOverlayToolPart(entry, toolName, toolCallId, args = {}, options = {}) {
     const safeToolCallId = String(toolCallId || '').trim();
     let part = findOverlayToolPart(entry, toolName, toolCallId, {
@@ -2383,6 +2877,50 @@ function ensureThinkingEntry(st, partIndex, options = {}) {
     st.thinkingActiveByPart?.set(safePartIndex, nextKey);
     st.activeTextEl = null;
     return entry;
+}
+
+function isStreamToolResultError(result, options = {}) {
+    if (options?.isError === true) {
+        return true;
+    }
+    if (!result || typeof result !== 'object') {
+        return false;
+    }
+    if (result.ok === false || result.error === true) {
+        return true;
+    }
+    if (hasFailedStreamToolData(result)) {
+        return true;
+    }
+    if (Object.prototype.hasOwnProperty.call(result, 'data')) {
+        return hasFailedStreamToolData(result.data);
+    }
+    return false;
+}
+
+function hasFailedStreamToolData(data) {
+    if (!data || typeof data !== 'object') {
+        return false;
+    }
+    const status = String(data.status || '').trim().toLowerCase();
+    if (status === 'failed' || status === 'error') {
+        return true;
+    }
+    const exitCode = normalizedStreamExitCode(data.exit_code);
+    return exitCode !== null && exitCode !== 0;
+}
+
+function normalizedStreamExitCode(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) {
+            return parsed;
+        }
+    }
+    return null;
 }
 
 function cloneOverlayEntry(entry) {

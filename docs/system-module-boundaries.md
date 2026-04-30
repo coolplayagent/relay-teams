@@ -98,6 +98,24 @@ Boundary:
 Cross-cutting behavior should land in these shared modules when it is reused across
 features.
 
+## Runtime Injection Boundary
+
+Runtime injection semantics are defined in `runtime-injection-semantics.md`.
+The implementation boundary is intentionally narrow:
+
+- `sessions/runs/*` owns injection queue state, API acceptance, run control, SSE
+  event publication, and persisted event projection.
+- `agents/execution/*` owns the timing decision for when queued injections are
+  drained into model history. The execution loop must drain queued injections at
+  the earliest safe model boundary: before a model request, after a complete
+  tool-call/tool-result batch is persisted, or before accepting a final answer.
+- Frontend code may render `injection_enqueued` and `injection_applied`, reconcile
+  optimistic queue UI by `client_message_id`, and position timeline markers from
+  backend events. It must not write model history, synthesize durable tool
+  transcripts, or decide whether an injection entered the model context.
+- Database writes for model-visible messages must flow through backend message
+  repository paths only. UI compensation paths must remain visual only.
+
 ## Event-Driven Substrate Placement
 
 The monitor substrate is intentionally separate from each event source.

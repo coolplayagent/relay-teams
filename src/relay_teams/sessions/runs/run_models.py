@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal, Optional, TypeAlias
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -15,6 +16,7 @@ from relay_teams.media import user_prompt_content_to_text
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.enums import (
     ExecutionMode,
+    InjectionDeliveryMode,
     InjectionSource,
     RunEventType,
 )
@@ -166,20 +168,29 @@ class RunResult(BaseModel):
         return content_parts_to_text(self.output)
 
 
+def _new_injection_id() -> str:
+    return f"inj_{uuid4().hex}"
+
+
 class InjectionMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    injection_id: RequiredIdentifierStr = Field(default_factory=_new_injection_id)
     run_id: RequiredIdentifierStr
     recipient_instance_id: RequiredIdentifierStr
     source: InjectionSource
+    delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED
     visibility: Literal["public", "internal"] = "public"
     internal_kind: str = ""
     internal_delivery_mode: str = ""
     internal_issue_key: str = ""
     # noinspection PyTypeHints
     content: UserPromptContent
+    client_message_id: OptionalIdentifierStr = None
     sender_instance_id: OptionalIdentifierStr = None
     sender_role_id: OptionalIdentifierStr = None
+    superseded_injection_ids: tuple[RequiredIdentifierStr, ...] = ()
+    superseded_client_message_ids: tuple[RequiredIdentifierStr, ...] = ()
     priority: int = Field(ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 

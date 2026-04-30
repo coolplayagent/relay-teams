@@ -249,6 +249,62 @@ body.light-theme .round-todo-status[data-status="pending"] {
     white-space: nowrap;
 }
 
+.session-round-section .message-inject-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 0.9rem;
+    height: 0.9rem;
+    flex: 0 0 auto;
+    color: color-mix(in srgb, var(--success) 72%, var(--text-secondary));
+}
+
+.session-round-section .message-inject-icon svg {
+    width: 0.9rem;
+    height: 0.9rem;
+}
+
+.session-round-section .message-inject-marker,
+.msg-content .message-inject-marker {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 0.42rem;
+    width: 100%;
+    margin: 0.32rem 0 0.72rem;
+    padding: 0.38rem 0 0.38rem 0.6rem;
+    border-left: 2px solid color-mix(in srgb, var(--success) 62%, var(--border-color));
+    color: var(--text-primary);
+    font-size: 0.88rem;
+    line-height: 1.55;
+}
+
+.msg-content .message-inject-marker.is-inline {
+    margin: 0.4rem 0;
+}
+
+.session-round-section .message-inject-marker[data-status="failed"],
+.msg-content .message-inject-marker[data-status="failed"] {
+    border-left-color: color-mix(in srgb, var(--danger) 74%, var(--border-color));
+}
+
+.session-round-section .message-inject-marker[data-status="failed"] .message-inject-icon,
+.msg-content .message-inject-marker[data-status="failed"] .message-inject-icon {
+    color: color-mix(in srgb, var(--danger) 82%, var(--text-secondary));
+}
+
+.session-round-section .message-inject-marker .message-inject-icon,
+.msg-content .message-inject-marker .message-inject-icon {
+    margin-top: 0.16rem;
+}
+
+.session-round-section .message-inject-text,
+.msg-content .message-inject-text {
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .session-round-section.round-section-emphasis .round-detail-header {
     border-color: color-mix(in srgb, var(--primary) 48%, var(--border-color) 52%);
     background: color-mix(in srgb, var(--bg-surface) 86%, var(--primary) 14%);

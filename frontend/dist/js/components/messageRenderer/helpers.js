@@ -35,6 +35,10 @@ export {
 } from './helpers/toolBlocks.js';
 
 export {
+    isToolResultError,
+} from './helpers/toolResultStatus.js';
+
+export {
     decoratePendingApprovalBlock,
     parseApprovalArgsPreview,
     syncApprovalStateFromEnvelope,

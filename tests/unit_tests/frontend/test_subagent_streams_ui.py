@@ -20,6 +20,25 @@ def test_background_discovery_does_not_poll_for_idle_selected_session() -> None:
     assert "pendingRunStart" in block
 
 
+def _write_stream_runtime_inject_mocks(tmp_path: Path) -> None:
+    (tmp_path / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function renderRuntimeInjectQueue() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return key;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+
 def test_normal_mode_subagent_streams_attach_route_and_detach(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "core" / "stream.js"
@@ -38,9 +57,12 @@ def test_normal_mode_subagent_streams_attach_route_and_detach(tmp_path: Path) ->
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -101,8 +123,8 @@ export function scheduleSessionsRefresh() {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
-    promptInput: { disabled: false, focus() {} },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
+    promptInput: { disabled: false, dataset: {}, placeholder: "", getAttribute() { return this.placeholder || ""; }, setAttribute(name, value) { this[name] = value; }, focus() {} },
     yoloToggle: { disabled: false },
     thinkingModeToggle: { disabled: false },
     thinkingEffortSelect: { disabled: false },
@@ -368,9 +390,12 @@ def test_active_parent_run_keeps_normal_subagent_discovery_polling(
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -436,8 +461,8 @@ export function scheduleSessionsRefresh() {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
-    promptInput: { disabled: false, focus() {} },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
+    promptInput: { disabled: false, dataset: {}, placeholder: "", getAttribute() { return this.placeholder || ""; }, setAttribute(name, value) { this[name] = value; }, focus() {} },
     yoloToggle: { disabled: false },
     thinkingModeToggle: { disabled: false },
     thinkingEffortSelect: { disabled: false },
@@ -645,9 +670,12 @@ def test_current_session_background_stream_routes_events_and_deduplicates_attach
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -729,8 +757,8 @@ export function scheduleSessionsRefresh() {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
-    promptInput: { disabled: false, focus() {} },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
+    promptInput: { disabled: false, dataset: {}, placeholder: "", getAttribute() { return this.placeholder || ""; }, setAttribute(name, value) { this[name] = value; }, focus() {} },
     yoloToggle: { disabled: false },
     thinkingModeToggle: { disabled: false },
     thinkingEffortSelect: { disabled: false },
@@ -988,9 +1016,12 @@ def test_foreground_navigation_caps_streams_and_cancels_stale_background_attach(
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -1072,8 +1103,8 @@ export function scheduleSessionsRefresh() {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
-    promptInput: { disabled: false, focus() {} },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
+    promptInput: { disabled: false, dataset: {}, placeholder: "", getAttribute() { return this.placeholder || ""; }, setAttribute(name, value) { this[name] = value; }, focus() {} },
     yoloToggle: { disabled: false },
     thinkingModeToggle: { disabled: false },
     thinkingEffortSelect: { disabled: false },
@@ -1356,9 +1387,12 @@ def test_pending_run_start_detaches_to_background_on_session_switch(
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -1422,9 +1456,17 @@ export function scheduleSessionsRefresh() {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
     promptInput: {
         disabled: false,
+        dataset: {},
+        placeholder: "",
+        getAttribute() {
+            return this.placeholder || "";
+        },
+        setAttribute(name, value) {
+            this[name] = value;
+        },
         focus() {
             globalThis.__focusCalls += 1;
         },
@@ -1675,9 +1717,12 @@ def test_active_multiplex_stream_releases_ui_on_run_paused(
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -1738,9 +1783,15 @@ export function scheduleSessionsRefresh(delay = null, options = {}) {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
     promptInput: {
         disabled: false,
+        dataset: {},
+        placeholder: "",
+        style: {},
+        getAttribute() {
+            return this.placeholder || "";
+        },
         focus() {
             globalThis.__focusCalls += 1;
         },
@@ -1936,8 +1987,8 @@ console.log(JSON.stringify({
 
     assert payload["beforePause"] == {
         "isGenerating": True,
-        "sendDisabled": True,
-        "promptDisabled": True,
+        "sendDisabled": False,
+        "promptDisabled": False,
         "activeRunId": "run-paused",
         "activeEventSourceUrl": "/api/runs/events?run_id=run-paused&after_event_id=0",
     }
@@ -1975,9 +2026,12 @@ def test_normal_mode_subagent_discovery_reconciles_sidebar_cache(
         .replace("../utils/logger.js", "./mockLogger.mjs")
         .replace("./eventRouter.js", "./mockEventRouter.mjs")
         .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("./state.js", "./mockState.mjs")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
 
     (tmp_path / "mockApi.mjs").write_text(
         """
@@ -2052,8 +2106,8 @@ export function scheduleSessionsRefresh() {
     (tmp_path / "mockDom.mjs").write_text(
         """
 export const els = {
-    sendBtn: { disabled: false },
-    promptInput: { disabled: false, focus() {} },
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
+    promptInput: { disabled: false, dataset: {}, placeholder: "", getAttribute() { return this.placeholder || ""; }, setAttribute(name, value) { this[name] = value; }, focus() {} },
     yoloToggle: { disabled: false },
     thinkingModeToggle: { disabled: false },
     thinkingEffortSelect: { disabled: false },

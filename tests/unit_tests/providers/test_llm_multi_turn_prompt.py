@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from openai import APIError, APIStatusError
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
+    FunctionToolResultEvent,
     ImageUrl,
     ModelRequest,
     ModelResponse,
@@ -67,7 +69,11 @@ from relay_teams.roles import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
@@ -487,6 +493,42 @@ class _SequentialAgent:
         return self._runs.pop(0)
 
 
+def _index_of_tool_call(messages: Sequence[object], tool_call_id: str) -> int:
+    for index, message in enumerate(messages):
+        if not isinstance(message, ModelResponse):
+            continue
+        if any(
+            isinstance(part, ToolCallPart) and part.tool_call_id == tool_call_id
+            for part in message.parts
+        ):
+            return index
+    raise AssertionError(f"missing tool call {tool_call_id}")
+
+
+def _index_of_tool_return(messages: Sequence[object], tool_call_id: str) -> int:
+    for index, message in enumerate(messages):
+        if not isinstance(message, ModelRequest):
+            continue
+        if any(
+            isinstance(part, ToolReturnPart) and part.tool_call_id == tool_call_id
+            for part in message.parts
+        ):
+            return index
+    raise AssertionError(f"missing tool return {tool_call_id}")
+
+
+def _index_of_user_prompt(messages: Sequence[object], content: str) -> int:
+    for index, message in enumerate(messages):
+        if not isinstance(message, ModelRequest):
+            continue
+        if any(
+            isinstance(part, UserPromptPart) and part.content == content
+            for part in message.parts
+        ):
+            return index
+    raise AssertionError(f"missing user prompt {content}")
+
+
 class _FakeNodeStream:
     def __init__(self, usage_snapshot: SimpleNamespace) -> None:
         self._usage_snapshot = usage_snapshot
@@ -519,6 +561,80 @@ class _FakeModelRequestNode:
     def stream(self, ctx: object) -> _FakeNodeStreamContext:
         _ = ctx
         return _FakeNodeStreamContext(_FakeNodeStream(self._usage_after))
+
+
+class _ScriptedEventStream:
+    def __init__(self, events: list[object], usage_snapshot: SimpleNamespace) -> None:
+        self._events = list(events)
+        self._usage_snapshot = usage_snapshot
+
+    async def stream_text(self, *, delta: bool):
+        _ = delta
+        if False:
+            yield ""
+
+    def __aiter__(self) -> _ScriptedEventStream:
+        return self
+
+    async def __anext__(self) -> object:
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+    def usage(self) -> SimpleNamespace:
+        return self._usage_snapshot
+
+
+class _ScriptedEventStreamContext:
+    def __init__(self, stream: _ScriptedEventStream) -> None:
+        self._stream = stream
+
+    async def __aenter__(self) -> _ScriptedEventStream:
+        return self._stream
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _ = (exc_type, exc, tb)
+        return False
+
+
+class _ScriptedStreamingModelRequestNode:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    def stream(self, ctx: object) -> _ScriptedEventStreamContext:
+        _ = ctx
+        return _ScriptedEventStreamContext(
+            _ScriptedEventStream(
+                self._events,
+                SimpleNamespace(
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    requests=1,
+                    tool_calls=1,
+                ),
+            )
+        )
+
+
+class _ScriptedStreamingToolCallNode:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+
+    def stream(self, ctx: object) -> _ScriptedEventStreamContext:
+        _ = ctx
+        return _ScriptedEventStreamContext(
+            _ScriptedEventStream(
+                self._events,
+                SimpleNamespace(
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    requests=0,
+                    tool_calls=0,
+                ),
+            )
+        )
 
 
 class _FakeResultLargeUsage:
@@ -753,6 +869,7 @@ def _build_provider(
     subagent_reflection_service: object | None = None,
     task_execution_service: object | None = None,
     tool_registry: ToolRegistry | None = None,
+    injection_manager: RunInjectionManager | None = None,
 ) -> tuple[OpenAICompatibleProvider, MessageRepository]:
     registry = (
         cast(SkillRegistry, skill_registry)
@@ -800,7 +917,8 @@ def _build_provider(
         shared_store=shared_store,
         event_bus=EventLog(db_path),
         injection_manager=cast(
-            RunInjectionManager, cast(object, _FakeInjectionManager())
+            RunInjectionManager,
+            cast(object, injection_manager or _FakeInjectionManager()),
         ),
         run_event_hub=cast(RunEventHub, cast(object, hub)),
         agent_repo=AgentInstanceRepository(db_path),
@@ -1064,15 +1182,15 @@ async def test_generate_recomputes_budget_after_injection_restart(
 
     class _OneShotInjectionManager:
         def __init__(self) -> None:
-            self._drained = False
+            self.calls = 0
 
         def drain_at_boundary(
             self, run_id: str, instance_id: str
         ) -> list[InjectionMessage]:
             _ = (run_id, instance_id)
-            if self._drained:
+            self.calls += 1
+            if self.calls != 2:
                 return []
-            self._drained = True
             return [
                 InjectionMessage(
                     run_id=run_id,
@@ -1238,6 +1356,98 @@ async def test_generate_persists_startup_system_reminders_before_first_agent_tur
 
 
 @pytest.mark.asyncio
+async def test_queued_user_followups_apply_before_next_model_request(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-queued-followup")
+    provider, message_repo = _build_provider(
+        tmp_path / "queued_user_followup_before_model.db",
+        fake_hub,
+        injection_manager=injection_manager,
+    )
+    injection_manager.enqueue(
+        "run-queued-followup",
+        "inst-queued-followup",
+        InjectionSource.USER,
+        "first follow-up",
+    )
+    injection_manager.enqueue(
+        "run-queued-followup",
+        "inst-queued-followup",
+        InjectionSource.USER,
+        "second follow-up",
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="updated answer")]),
+                    messages=[
+                        ModelResponse(parts=[TextPart(content="updated answer")])
+                    ],
+                ),
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    response = await provider.generate(
+        LLMRequest(
+            run_id="run-queued-followup",
+            trace_id="trace-queued-followup",
+            task_id="task-queued-followup",
+            session_id="session-queued-followup",
+            workspace_id="default",
+            instance_id="inst-queued-followup",
+            role_id="Coordinator",
+            system_prompt="system",
+            user_prompt="start",
+        )
+    )
+
+    assert response == "updated answer"
+    assert len(scripted_agent.histories) == 1
+    agent_history = cast(
+        list[ModelRequest | ModelResponse], scripted_agent.histories[0]
+    )
+    agent_user_prompts = [
+        part.content
+        for message in agent_history
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert agent_user_prompts == ["start", "first follow-up\n\nsecond follow-up"]
+    stored_user_prompts = [
+        part.content
+        for message in message_repo.get_history("inst-queued-followup")
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert stored_user_prompts == ["start", "first follow-up\n\nsecond follow-up"]
+    applied_payloads = [
+        json.loads(event.payload_json)
+        for event in fake_hub.events
+        if event.event_type == RunEventType.INJECTION_APPLIED
+    ]
+    assert len(applied_payloads) == 1
+    assert applied_payloads[0]["delivery_mode"] == "queued"
+    assert applied_payloads[0]["interrupted_current_step"] is False
+    assert applied_payloads[0]["restart_scope"] == "turn_boundary"
+    assert applied_payloads[0]["supersedes_pending_tool_calls"] is False
+
+
+@pytest.mark.asyncio
 async def test_generate_defers_injection_restart_until_pending_tool_call_completes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1251,12 +1461,14 @@ async def test_generate_defers_injection_restart_until_pending_tool_call_complet
     class _DeferredInjectionManager:
         def __init__(self) -> None:
             self.calls = 0
+            self.returned_on_call = 0
 
         def drain_at_boundary(
             self, run_id: str, instance_id: str
         ) -> list[InjectionMessage]:
             self.calls += 1
-            if self.calls == 1:
+            if self.calls == 2:
+                self.returned_on_call = self.calls
                 return [
                     InjectionMessage(
                         run_id=run_id,
@@ -1365,7 +1577,8 @@ async def test_generate_defers_injection_restart_until_pending_tool_call_complet
     response = await provider.generate(request)
 
     assert response == "done"
-    assert injection_manager.calls == 1
+    assert injection_manager.returned_on_call == 2
+    assert injection_manager.calls >= 2
     assert len(scripted_agent.histories) == 2
 
     second_history = cast(
@@ -1424,6 +1637,479 @@ async def test_generate_defers_injection_restart_until_pending_tool_call_complet
 
 
 @pytest.mark.asyncio
+async def test_generate_persists_stream_observed_tool_pair_before_injection_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "stream_observed_tool_pair_before_injection.db",
+        fake_hub,
+    )
+
+    class _AfterToolInjectionManager:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def drain_at_boundary(
+            self, run_id: str, instance_id: str
+        ) -> list[InjectionMessage]:
+            self.calls += 1
+            if self.calls == 2:
+                return [
+                    InjectionMessage(
+                        run_id=run_id,
+                        recipient_instance_id=instance_id,
+                        source=InjectionSource.USER,
+                        content="check the parent directory",
+                        priority=1,
+                    )
+                ]
+            return []
+
+    injection_manager = _AfterToolInjectionManager()
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, injection_manager),
+    )
+
+    tool_call = ToolCallPart(
+        tool_name="shell",
+        args={"command": "pwd"},
+        tool_call_id="call-stream-pwd",
+    )
+    tool_return = ToolReturnPart(
+        tool_name="shell",
+        tool_call_id="call-stream-pwd",
+        content="C:/Users/yex/Desktop",
+    )
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _ScriptedStreamingModelRequestNode(
+                        [PartEndEvent(index=0, part=tool_call)]
+                    ),
+                    _ScriptedStreamingToolCallNode(
+                        [FunctionToolResultEvent(result=tool_return)]
+                    ),
+                ],
+                messages_by_step=[[], []],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[]),
+                    messages=[],
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="done")]),
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        session_runtime_module,
+        "ModelRequestNode",
+        _ScriptedStreamingModelRequestNode,
+    )
+    monkeypatch.setattr(
+        session_runtime_module,
+        "CallToolsNode",
+        _ScriptedStreamingToolCallNode,
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-stream-observed-tool-pair",
+        trace_id="run-stream-observed-tool-pair",
+        task_id="task-stream-observed-tool-pair",
+        session_id="session-stream-observed-tool-pair",
+        workspace_id="default",
+        conversation_id=build_conversation_id(
+            "session-stream-observed-tool-pair",
+            "Coordinator",
+        ),
+        instance_id="inst-stream-observed-tool-pair",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="print pwd",
+    )
+
+    response = await provider.generate(request)
+
+    assert response == "done"
+    assert len(scripted_agent.histories) == 2
+
+    second_history = cast(
+        list[ModelRequest | ModelResponse],
+        scripted_agent.histories[1],
+    )
+    call_index = _index_of_tool_call(second_history, "call-stream-pwd")
+    return_index = _index_of_tool_return(second_history, "call-stream-pwd")
+    injection_index = _index_of_user_prompt(
+        second_history, "check the parent directory"
+    )
+    assert call_index < return_index < injection_index
+
+    stored_history = message_repo.get_history_for_conversation(
+        request.conversation_id or ""
+    )
+    stored_call_index = _index_of_tool_call(stored_history, "call-stream-pwd")
+    stored_return_index = _index_of_tool_return(stored_history, "call-stream-pwd")
+    stored_injection_index = _index_of_user_prompt(
+        stored_history,
+        "check the parent directory",
+    )
+    assert stored_call_index < stored_return_index < stored_injection_index
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.index(RunEventType.TOOL_CALL) < event_types.index(
+        RunEventType.TOOL_RESULT
+    )
+    assert event_types.index(RunEventType.TOOL_RESULT) < event_types.index(
+        RunEventType.INJECTION_APPLIED
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_applies_real_queued_injection_after_first_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-real-queued-injection")
+    provider, message_repo = _build_provider(
+        tmp_path / "real_queued_injection_after_first_tool_result.db",
+        fake_hub,
+        injection_manager=injection_manager,
+    )
+
+    tool_call = ToolCallPart(
+        tool_name="shell",
+        args={"command": "pwd"},
+        tool_call_id="call-real-pwd",
+    )
+    tool_return = ToolReturnPart(
+        tool_name="shell",
+        tool_call_id="call-real-pwd",
+        content="/c/Users/yex/Documents/workspace/agent-teams",
+    )
+
+    class _QueueingToolResultStream:
+        def __init__(self) -> None:
+            self._sent = False
+
+        def __aiter__(self) -> _QueueingToolResultStream:
+            return self
+
+        async def __anext__(self) -> FunctionToolResultEvent:
+            if self._sent:
+                raise StopAsyncIteration
+            self._sent = True
+            injection_manager.enqueue(
+                "run-real-queued-injection",
+                "inst-real-queued-injection",
+                InjectionSource.USER,
+                "上一级的",
+            )
+            return FunctionToolResultEvent(result=tool_return)
+
+    class _QueueingToolResultContext:
+        async def __aenter__(self) -> _QueueingToolResultStream:
+            return _QueueingToolResultStream()
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _QueueingToolResultNode:
+        def stream(self, ctx: object) -> _QueueingToolResultContext:
+            _ = ctx
+            return _QueueingToolResultContext()
+
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _ScriptedStreamingModelRequestNode(
+                        [PartEndEvent(index=0, part=tool_call)]
+                    ),
+                    _QueueingToolResultNode(),
+                ],
+                messages_by_step=[[], []],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[]),
+                    messages=[],
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="done")]),
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        session_runtime_module,
+        "ModelRequestNode",
+        _ScriptedStreamingModelRequestNode,
+    )
+    monkeypatch.setattr(
+        session_runtime_module,
+        "CallToolsNode",
+        _QueueingToolResultNode,
+    )
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-real-queued-injection",
+        trace_id="run-real-queued-injection",
+        task_id="task-real-queued-injection",
+        session_id="session-real-queued-injection",
+        workspace_id="default",
+        conversation_id=build_conversation_id(
+            "session-real-queued-injection",
+            "Coordinator",
+        ),
+        instance_id="inst-real-queued-injection",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="使用shell打印pwd",
+    )
+
+    response = await provider.generate(request)
+
+    assert response == "done"
+    assert len(scripted_agent.histories) == 2
+    second_history = cast(
+        list[ModelRequest | ModelResponse],
+        scripted_agent.histories[1],
+    )
+    call_index = _index_of_tool_call(second_history, "call-real-pwd")
+    return_index = _index_of_tool_return(second_history, "call-real-pwd")
+    injection_index = _index_of_user_prompt(second_history, "上一级的")
+    assert call_index < return_index < injection_index
+
+    stored_history = message_repo.get_history_for_conversation(
+        request.conversation_id or ""
+    )
+    stored_call_index = _index_of_tool_call(stored_history, "call-real-pwd")
+    stored_return_index = _index_of_tool_return(stored_history, "call-real-pwd")
+    stored_injection_index = _index_of_user_prompt(stored_history, "上一级的")
+    assert stored_call_index < stored_return_index < stored_injection_index
+
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.index(RunEventType.TOOL_CALL) < event_types.index(
+        RunEventType.TOOL_RESULT
+    )
+    assert event_types.index(RunEventType.TOOL_RESULT) < event_types.index(
+        RunEventType.INJECTION_APPLIED
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_applies_queued_injection_after_unstarted_tool_call_completes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    fake_hub = _FakeRunEventHub()
+    provider, message_repo = _build_provider(
+        tmp_path / "pre_tool_call_injection_restart.db",
+        fake_hub,
+    )
+
+    class _PreToolInjectionManager:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.returned_on_call = 0
+
+        def drain_at_boundary(
+            self, run_id: str, instance_id: str
+        ) -> list[InjectionMessage]:
+            self.calls += 1
+            if self.calls == 2:
+                self.returned_on_call = self.calls
+                return [
+                    InjectionMessage(
+                        run_id=run_id,
+                        recipient_instance_id=instance_id,
+                        source=InjectionSource.USER,
+                        content="inject before tool",
+                        priority=1,
+                    )
+                ]
+            return []
+
+    injection_manager = _PreToolInjectionManager()
+    provider._session._injection_manager = cast(
+        RunInjectionManager,
+        cast(object, injection_manager),
+    )
+
+    scripted_agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[
+                    _FakeModelRequestNode(
+                        SimpleNamespace(
+                            input_tokens=0,
+                            output_tokens=0,
+                            total_tokens=0,
+                            requests=1,
+                            tool_calls=1,
+                        )
+                    ),
+                    object(),
+                ],
+                messages_by_step=[
+                    [
+                        ModelResponse(
+                            parts=[
+                                ToolCallPart(
+                                    tool_name="wait_background_task",
+                                    args={"background_task_id": "bg-1"},
+                                    tool_call_id="call-wait",
+                                )
+                            ]
+                        )
+                    ],
+                    [
+                        ModelRequest(
+                            parts=[
+                                ToolReturnPart(
+                                    tool_name="wait_background_task",
+                                    tool_call_id="call-wait",
+                                    content={
+                                        "ok": True,
+                                        "data": {},
+                                        "error": None,
+                                        "meta": {},
+                                    },
+                                )
+                            ]
+                        )
+                    ],
+                ],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[]),
+                    messages=[],
+                ),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="done")]),
+                    messages=[ModelResponse(parts=[TextPart(content="done")])],
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _FakeModelRequestNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: scripted_agent,
+    )
+
+    request = LLMRequest(
+        run_id="run-pre-tool-injection",
+        trace_id="run-pre-tool-injection",
+        task_id="task-pre-tool-injection",
+        session_id="session-pre-tool-injection",
+        workspace_id="default",
+        conversation_id=build_conversation_id(
+            "session-pre-tool-injection",
+            "Coordinator",
+        ),
+        instance_id="inst-pre-tool-injection",
+        role_id="Coordinator",
+        system_prompt="system",
+        user_prompt="wait for the background task",
+    )
+
+    response = await provider.generate(request)
+
+    assert response == "done"
+    assert injection_manager.returned_on_call == 2
+    assert len(scripted_agent.histories) == 2
+    second_history = cast(
+        list[ModelRequest | ModelResponse],
+        scripted_agent.histories[1],
+    )
+    tool_call_index = next(
+        index
+        for index, message in enumerate(second_history)
+        if isinstance(message, ModelResponse)
+        and any(
+            isinstance(part, ToolCallPart) and part.tool_call_id == "call-wait"
+            for part in message.parts
+        )
+    )
+    tool_return_index = next(
+        index
+        for index, message in enumerate(second_history)
+        if isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, ToolReturnPart) and part.tool_call_id == "call-wait"
+            for part in message.parts
+        )
+    )
+    injection_index = next(
+        index
+        for index, message in enumerate(second_history)
+        if isinstance(message, ModelRequest)
+        and any(
+            isinstance(part, UserPromptPart) and part.content == "inject before tool"
+            for part in message.parts
+        )
+    )
+    assert tool_call_index < tool_return_index < injection_index
+
+    stored_history = message_repo.get_history_for_conversation(
+        request.conversation_id or ""
+    )
+    assert any(
+        isinstance(message, ModelResponse)
+        and any(
+            isinstance(part, ToolCallPart) and part.tool_call_id == "call-wait"
+            for part in message.parts
+        )
+        for message in stored_history
+    )
+    applied_payloads = [
+        json.loads(event.payload_json)
+        for event in fake_hub.events
+        if event.event_type == RunEventType.INJECTION_APPLIED
+    ]
+    assert len(applied_payloads) == 1
+    assert applied_payloads[0]["restart_scope"] == "turn_boundary"
+    assert applied_payloads[0]["supersedes_pending_tool_calls"] is False
+    event_types = [event.event_type for event in fake_hub.events]
+    assert event_types.index(RunEventType.TOOL_RESULT) < event_types.index(
+        RunEventType.INJECTION_APPLIED
+    )
+
+
+@pytest.mark.asyncio
 async def test_generate_discards_guidance_reminder_after_final_answer(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1442,7 +2128,7 @@ async def test_generate_discards_guidance_reminder_after_final_answer(
             self, run_id: str, recipient_instance_id: str
         ) -> tuple[InjectionMessage, ...]:
             self.calls += 1
-            if self.calls != 1:
+            if self.calls != 2:
                 return ()
             return (
                 InjectionMessage(
@@ -1510,7 +2196,7 @@ async def test_generate_discards_guidance_reminder_after_final_answer(
     history = message_repo.get_history_for_conversation(request.conversation_id or "")
 
     assert response == "done"
-    assert injection_manager.calls == 1
+    assert injection_manager.calls == 2
     assert len(scripted_agent.histories) == 1
     assert RunEventType.INJECTION_APPLIED not in [
         event.event_type for event in fake_hub.events
@@ -1537,7 +2223,7 @@ async def test_generate_applies_completion_guard_reminder_after_final_answer(
             self, run_id: str, recipient_instance_id: str
         ) -> tuple[InjectionMessage, ...]:
             self.calls += 1
-            if self.calls != 1:
+            if self.calls != 2:
                 return ()
             return (
                 InjectionMessage(
@@ -1794,15 +2480,15 @@ async def test_generate_rebuilds_agent_when_restart_updates_compaction_summary(
 
     class _OneShotInjectionManager:
         def __init__(self) -> None:
-            self._drained = False
+            self.calls = 0
 
         def drain_at_boundary(
             self, run_id: str, instance_id: str
         ) -> list[InjectionMessage]:
             _ = (run_id, instance_id)
-            if self._drained:
+            self.calls += 1
+            if self.calls != 2:
                 return []
-            self._drained = True
             return [
                 InjectionMessage(
                     run_id=run_id,
@@ -2761,6 +3447,261 @@ async def test_subagent_resume_after_stream_cancellation_reuses_db_history(
     assert isinstance(history_after_resume[-1], ModelResponse)
     assert isinstance(history_after_resume[-1].parts[0], TextPart)
     assert history_after_resume[-1].parts[0].content == "fresh answer"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_injection_restarts_from_safe_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "interrupt_injection_restart.db"
+    hub = _FakeRunEventHub()
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    provider, message_repo = _build_provider(
+        db_path,
+        hub,
+        injection_manager=injection_manager,
+    )
+
+    class _InterruptingTextNode:
+        def stream(self, ctx: object):
+            _ = ctx
+
+            class _Stream:
+                async def stream_text(self, *, delta: bool):
+                    _ = delta
+                    yield "partial "
+                    injection_manager.enqueue(
+                        "run-1",
+                        "inst-1",
+                        InjectionSource.USER,
+                        "inject now",
+                        delivery_mode=InjectionDeliveryMode.INTERRUPT,
+                    )
+                    yield "ignored"
+
+                def usage(self) -> SimpleNamespace:
+                    return SimpleNamespace(
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        requests=1,
+                        tool_calls=0,
+                    )
+
+            class _Ctx:
+                async def __aenter__(self):
+                    return _Stream()
+
+                async def __aexit__(self, exc_type, exc, tb) -> bool:
+                    _ = (exc_type, exc, tb)
+                    return False
+
+            return _Ctx()
+
+    agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_InterruptingTextNode()],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="unused", messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="fresh answer")]),
+                    messages=[ModelResponse(parts=[TextPart(content="fresh answer")])],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _InterruptingTextNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: agent,
+    )
+
+    result = await provider.generate(
+        LLMRequest(
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            session_id="session-1",
+            workspace_id="default",
+            instance_id="inst-1",
+            role_id="Coordinator",
+            system_prompt="system",
+            user_prompt="start",
+        )
+    )
+
+    assert result == "fresh answer"
+    history = message_repo.get_history("inst-1")
+    user_prompts = [
+        part.content
+        for message in history
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert user_prompts == ["start", "inject now"]
+    applied_payloads = [
+        json.loads(event.payload_json)
+        for event in hub.events
+        if event.event_type == RunEventType.INJECTION_APPLIED
+    ]
+    assert applied_payloads == [
+        {
+            "injection_id": applied_payloads[0]["injection_id"],
+            "run_id": "run-1",
+            "recipient_instance_id": "inst-1",
+            "source": "user",
+            "delivery_mode": "interrupt",
+            "visibility": "public",
+            "internal_kind": "",
+            "internal_delivery_mode": "",
+            "internal_issue_key": "",
+            "content": "inject now",
+            "client_message_id": None,
+            "sender_instance_id": None,
+            "sender_role_id": None,
+            "superseded_injection_ids": [],
+            "superseded_client_message_ids": [],
+            "priority": 1,
+            "created_at": applied_payloads[0]["created_at"],
+            "applied_injection_ids": [applied_payloads[0]["injection_id"]],
+            "interrupted_current_step": True,
+            "restart_scope": "interrupt",
+            "supersedes_pending_tool_calls": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_queued_injection_applies_before_accepting_final_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "queued_injection_final_boundary.db"
+    hub = _FakeRunEventHub()
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    provider, message_repo = _build_provider(
+        db_path,
+        hub,
+        injection_manager=injection_manager,
+    )
+    queued_injection_ids: list[str] = []
+
+    class _QueueingTextNode:
+        def stream(self, ctx: object):
+            _ = ctx
+
+            class _Stream:
+                async def stream_text(self, *, delta: bool):
+                    _ = delta
+                    yield "old answer"
+                    first_injection = injection_manager.enqueue(
+                        "run-1",
+                        "inst-1",
+                        InjectionSource.USER,
+                        "change direction",
+                    )
+                    second_injection = injection_manager.enqueue(
+                        "run-1",
+                        "inst-1",
+                        InjectionSource.USER,
+                        "also mention why",
+                    )
+                    queued_injection_ids.extend(
+                        [
+                            first_injection.injection_id,
+                            second_injection.injection_id,
+                        ]
+                    )
+
+                def usage(self) -> SimpleNamespace:
+                    return SimpleNamespace(
+                        input_tokens=0,
+                        output_tokens=0,
+                        total_tokens=0,
+                        requests=1,
+                        tool_calls=0,
+                    )
+
+            class _Ctx:
+                async def __aenter__(self):
+                    return _Stream()
+
+                async def __aexit__(self, exc_type, exc, tb) -> bool:
+                    _ = (exc_type, exc, tb)
+                    return False
+
+            return _Ctx()
+
+    agent = _SequentialAgent(
+        [
+            _ScriptedAgentRun(
+                nodes=[_QueueingTextNode()],
+                messages_by_step=[[]],
+                result=_ScriptedResult(response="old answer", messages=[]),
+            ),
+            _ScriptedAgentRun(
+                nodes=[],
+                messages_by_step=[],
+                result=_ScriptedResult(
+                    response=ModelResponse(parts=[TextPart(content="changed answer")]),
+                    messages=[
+                        ModelResponse(parts=[TextPart(content="changed answer")])
+                    ],
+                ),
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_module, "ModelRequestNode", _QueueingTextNode)
+    monkeypatch.setattr(
+        llm_module,
+        "build_coordination_agent",
+        lambda **kwargs: agent,
+    )
+
+    result = await provider.generate(
+        LLMRequest(
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            session_id="session-1",
+            workspace_id="default",
+            instance_id="inst-1",
+            role_id="Coordinator",
+            system_prompt="system",
+            user_prompt="start",
+        )
+    )
+
+    assert result == "changed answer"
+    user_prompts = [
+        part.content
+        for message in message_repo.get_history("inst-1")
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert user_prompts == ["start", "change direction\n\nalso mention why"]
+    applied_payloads = [
+        json.loads(event.payload_json)
+        for event in hub.events
+        if event.event_type == RunEventType.INJECTION_APPLIED
+    ]
+    assert applied_payloads[0]["delivery_mode"] == "queued"
+    assert applied_payloads[0]["content"] == "change direction\n\nalso mention why"
+    assert applied_payloads[0]["applied_injection_ids"] == queued_injection_ids
+    assert applied_payloads[0]["interrupted_current_step"] is False
+    assert applied_payloads[0]["restart_scope"] == "turn_boundary"
+    assert applied_payloads[0]["supersedes_pending_tool_calls"] is False
 
 
 @pytest.mark.asyncio

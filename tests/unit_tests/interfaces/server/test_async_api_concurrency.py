@@ -12,7 +12,7 @@ from relay_teams.interfaces.server.deps import (
     get_skill_registry,
 )
 from relay_teams.interfaces.server.routers import runs, sessions
-from relay_teams.sessions.runs.enums import InjectionSource
+from relay_teams.sessions.runs.enums import InjectionDeliveryMode, InjectionSource
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_models import SessionRecord
 
@@ -74,7 +74,7 @@ class _AsyncRunService:
         self._lock = asyncio.Lock()
         self._created_runs: dict[str, IntentInput] = {}
         self.started_run_ids: list[str] = []
-        self.injected_messages: list[tuple[str, str, str]] = []
+        self.injected_messages: list[tuple[str, str, str, str]] = []
         self.resolved_tool_approvals: list[tuple[str, str, str, str]] = []
 
     def create_run(self, intent_input: IntentInput) -> tuple[str, str]:
@@ -107,10 +107,15 @@ class _AsyncRunService:
         run_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode,
+        client_message_id: str | None = None,
     ) -> _InjectedRecord:
+        _ = client_message_id
         await asyncio.sleep(0.001)
         async with self._lock:
-            self.injected_messages.append((run_id, source.value, content))
+            self.injected_messages.append(
+                (run_id, source.value, content, delivery_mode.value)
+            )
         return _InjectedRecord(run_id=run_id, source=source, content=content)
 
     async def list_open_tool_approvals_async(

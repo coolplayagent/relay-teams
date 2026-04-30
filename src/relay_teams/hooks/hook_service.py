@@ -45,7 +45,11 @@ from relay_teams.hooks.hook_models import (
 )
 from relay_teams.hooks.hook_runtime_state import HookRuntimeState
 from relay_teams.logger import get_logger, log_event
-from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
+from relay_teams.sessions.runs.enums import (
+    InjectionDeliveryMode,
+    InjectionSource,
+    RunEventType,
+)
 from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
 
@@ -72,6 +76,7 @@ class _RunInjectionManager(Protocol):
         recipient_instance_id: str,
         source: InjectionSource,
         content: str,
+        delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
         sender_instance_id: Optional[str] = None,
         sender_role_id: Optional[str] = None,
     ) -> object:

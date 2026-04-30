@@ -17,10 +17,23 @@ class ManagedProcess:
 
 
 def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        sock.listen(1)
-        return int(sock.getsockname()[1])
+    return find_free_ports(1)[0]
+
+
+def find_free_ports(count: int) -> tuple[int, ...]:
+    if count < 1:
+        raise ValueError("count must be positive")
+    sockets: list[socket.socket] = []
+    try:
+        for _ in range(count):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(1)
+            sockets.append(sock)
+        return tuple(int(sock.getsockname()[1]) for sock in sockets)
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 def start_process(

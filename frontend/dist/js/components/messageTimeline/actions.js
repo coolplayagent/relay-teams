@@ -3,6 +3,7 @@
  * Converts SSE payloads and renderer compatibility calls into timeline actions.
  */
 import { applyTimelineAction } from './store.js';
+import { isToolResultError } from '../messageRenderer/helpers/toolResultStatus.js';
 
 export function applyRunEventToTimeline(evType, payload = {}, eventMeta = {}, scope = {}) {
     const eventId = payload?.event_id || eventMeta?.event_id || '';
@@ -35,8 +36,19 @@ export function applyRunEventToTimeline(evType, payload = {}, eventMeta = {}, sc
         action.toolCallId = payload?.tool_call_id || '';
         action.args = payload?.args || {};
         action.result = payload?.result || {};
-        action.isError = payload?.result?.ok === false || payload?.error === true;
+        action.isError = isToolResultError(payload?.result || {}, {
+            isError: payload?.error === true,
+        });
         action.action = payload?.action || '';
+    } else if (type === 'injection') {
+        action.messageId = payload?.message_id || payload?.injection_id || '';
+        action.injectionId = payload?.injection_id || payload?.message_id || '';
+        action.content = payload?.content || '';
+        action.contentParts = Array.isArray(payload?.content_parts) ? payload.content_parts : [];
+        action.status = payload?.status || 'applied';
+        action.mode = payload?.mode || payload?.delivery_mode || 'queued';
+        action.source = payload?.source || 'user';
+        action.supersedesPendingToolCalls = payload?.supersedes_pending_tool_calls === true;
     }
     return applyTimelineAction(action);
 }
@@ -67,6 +79,8 @@ function mapEventType(evType) {
             return 'tool_approval_requested';
         case 'tool_approval_resolved':
             return 'tool_approval_resolved';
+        case 'injection_applied':
+            return 'injection';
         case 'model_step_finished':
             return 'stream_finished';
         case 'run_completed':

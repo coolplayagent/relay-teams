@@ -9,9 +9,11 @@ import {
     stopRun,
 } from './api.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
+import { renderRuntimeInjectQueue } from '../components/runtimeInjectQueue.js';
 import { refreshSessionTopologyControls } from '../app/prompt.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import { els } from '../utils/dom.js';
+import { t } from '../utils/i18n.js';
 import {
     errorToPayload,
     logError,
@@ -70,10 +72,23 @@ const RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS = 360;
 
 function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
     state.isGenerating = isBusy;
-    if (els.sendBtn) els.sendBtn.disabled = isBusy;
+    const runtimeInjectEnabled = isBusy && !!String(state.activeRunId || '').trim();
+    renderRuntimeInjectQueue(runtimeInjectEnabled ? state.activeRunId : '');
+    if (els.sendBtn) {
+        els.sendBtn.disabled = isBusy && !runtimeInjectEnabled;
+        if (els.sendBtn.style) els.sendBtn.style.display = '';
+        els.sendBtn.title = t('composer.send_title');
+        els.sendBtn.setAttribute('aria-label', t('composer.send_title'));
+    }
     if (els.promptInput) {
-        els.promptInput.disabled = isBusy;
-        if (!isBusy && focusPrompt) {
+        if (!els.promptInput.dataset.idlePlaceholder) {
+            els.promptInput.dataset.idlePlaceholder = els.promptInput.getAttribute('placeholder') || '';
+        }
+        els.promptInput.disabled = isBusy && !runtimeInjectEnabled;
+        els.promptInput.placeholder = runtimeInjectEnabled
+            ? t('inject.queue.placeholder')
+            : els.promptInput.dataset.idlePlaceholder;
+        if ((!isBusy || runtimeInjectEnabled) && focusPrompt) {
             els.promptInput.focus();
         }
     }
@@ -148,6 +163,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
             return;
         }
         state.activeRunId = runId;
+        setStreamUiBusy(true, { focusPrompt: false });
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
         }

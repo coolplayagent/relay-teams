@@ -13,6 +13,7 @@ import {
     setToolValidationFailureState,
 } from '../messageRenderer/helpers.js';
 import { syncLastAnswerCopyButton } from '../messageRenderer/messageActions.js';
+import { renderInjectionMarker } from '../messageRenderer/injectionMarker.js';
 
 export function renderTimelineStream(container, stream, options = {}) {
     if (!container || !stream) return null;
@@ -92,6 +93,9 @@ function renderPart(part, scope = {}) {
         appendStructuredContentPart(host, part);
         return host.firstElementChild;
     }
+    if (part.kind === 'injection') {
+        return renderInjectionPart(part);
+    }
     return null;
 }
 
@@ -129,7 +133,9 @@ function applyToolState(block, part) {
         return;
     }
     if (part.result !== undefined) {
-        applyToolReturn(block, part.result);
+        applyToolReturn(block, part.result, {
+            isError: String(part.status || '').trim().toLowerCase() === 'error',
+        });
         return;
     }
     const status = String(part.status || 'pending');
@@ -140,6 +146,12 @@ function applyToolState(block, part) {
     } else {
         setToolStatus(block, 'running');
     }
+}
+
+function renderInjectionPart(part) {
+    const host = document.createElement('div');
+    renderInjectionMarker(host, part);
+    return host.firstElementChild;
 }
 
 function escapeSelector(value) {

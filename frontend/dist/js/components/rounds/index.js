@@ -1,9 +1,10 @@
-/**
+﻿/**
  * components/rounds/index.js
  * Public API for rounds timeline modules.
  */
 export {
     appendRoundUserMessage,
+    upsertRoundInjectionMessage,
     appendRoundRetryEvent,
     removeRoundRetryEvent,
     updateRoundRetryEvent,

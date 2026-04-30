@@ -60,6 +60,13 @@ export function applyTimelineAction(action) {
         upsertToolPart(stream, scope, action, {
             approvalStatus: String(action.approvalStatus || action.action || 'resolved').toLowerCase(),
         });
+    } else if (type === 'injection') {
+        if (action.supersedesPendingToolCalls === true) {
+            discardPendingToolParts(stream);
+        }
+        appendInjectionPart(stream, scope, action);
+    } else if (type === 'discard_pending_tools') {
+        discardPendingToolParts(stream);
     } else if (type === 'stream_idle') {
         stream.idleCursor = true;
         stream.textStreaming = false;
@@ -355,6 +362,93 @@ function upsertToolPart(stream, scope, action, updates = {}) {
     Object.assign(part, updates);
     stream.textStreaming = false;
     stream.idleCursor = updates.status === 'completed' || updates.status === 'error';
+}
+
+function appendInjectionPart(stream, scope, action) {
+    finishTextTail(stream);
+    const content = String(
+        action.content
+        || summarizeInjectionContentParts(action.contentParts)
+        || action.payload?.content
+        || '',
+    ).trim();
+    if (!content) {
+        return;
+    }
+    const messageId = String(
+        action.messageId
+        || action.injectionId
+        || action.payload?.message_id
+        || action.payload?.injection_id
+        || '',
+    ).trim();
+    const injectionId = String(
+        action.injectionId
+        || action.payload?.injection_id
+        || messageId
+        || '',
+    ).trim();
+    const id = timelinePartId(scope, {
+        kind: 'injection',
+        messageId: messageId || injectionId || action.eventId,
+        eventId: action.eventId,
+    });
+    let part = stream.parts.find(item => (
+        item.kind === 'injection'
+        && (
+            item.id === id
+            || (injectionId && String(item.injection_id || '') === injectionId)
+        )
+    ));
+    if (!part) {
+        part = {
+            id,
+            kind: 'injection',
+        };
+        stream.parts.push(part);
+    }
+    Object.assign(part, {
+        message_id: messageId || injectionId || id,
+        injection_id: injectionId || messageId || id,
+        source: String(action.source || action.payload?.source || 'user'),
+        mode: String(action.mode || action.payload?.mode || action.payload?.delivery_mode || 'queued'),
+        status: String(action.status || action.payload?.status || 'applied'),
+        content,
+        content_parts: Array.isArray(action.contentParts) ? action.contentParts : [],
+        updatedAt: Date.now(),
+    });
+    stream.textStreaming = false;
+    stream.idleCursor = true;
+}
+
+function discardPendingToolParts(stream) {
+    if (!stream || !Array.isArray(stream.parts)) {
+        return;
+    }
+    stream.parts = stream.parts.filter(part => {
+        if (part?.kind !== 'tool') {
+            return true;
+        }
+        const status = String(part.status || '').trim().toLowerCase();
+        return (
+            status === 'completed'
+            || status === 'error'
+            || status === 'validation_failed'
+            || part.result !== undefined
+            || part.validation !== undefined
+        );
+    });
+}
+
+function summarizeInjectionContentParts(parts) {
+    if (!Array.isArray(parts)) {
+        return '';
+    }
+    return parts
+        .map(part => String(part?.content || part?.text || '').trim())
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
 }
 
 function finishStream(stream) {

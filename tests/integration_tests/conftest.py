@@ -15,7 +15,7 @@ from integration_tests.support.config_builder import (
 from integration_tests.support.environment import IntegrationEnvironment
 from integration_tests.support.process_control import (
     ManagedProcess,
-    find_free_port,
+    find_free_ports,
     start_process,
     stop_process,
     wait_for_http_ready,
@@ -74,8 +74,7 @@ def integration_env(
     runtime_root = tmp_path_factory.mktemp("agent-teams-integration")
     config_dir = runtime_root / ".relay-teams"
 
-    fake_llm_port = find_free_port()
-    backend_port = find_free_port()
+    fake_llm_port, backend_port = find_free_ports(2)
 
     fake_llm_admin_url = f"http://127.0.0.1:{fake_llm_port}"
     fake_llm_v1_base_url = f"{fake_llm_admin_url}/v1"

@@ -5,7 +5,7 @@ from pydantic_ai.messages import ImageUrl
 from relay_teams.media import user_prompt_content_to_text
 from relay_teams.reminders import render_system_reminder
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.sessions.runs.enums import InjectionSource
+from relay_teams.sessions.runs.enums import InjectionDeliveryMode, InjectionSource
 from relay_teams.sessions.runs.run_models import InjectionMessage
 
 
@@ -90,6 +90,89 @@ def test_injection_manager_drains_system_reminders_at_start_only() -> None:
     ]
 
 
+def test_injection_manager_drains_interrupt_messages_first() -> None:
+    mgr = RunInjectionManager()
+    mgr.activate("run1")
+
+    mgr.enqueue("run1", "a1", InjectionSource.USER, "queued")
+    mgr.enqueue(
+        "run1",
+        "a1",
+        InjectionSource.USER,
+        "interrupt",
+        delivery_mode=InjectionDeliveryMode.INTERRUPT,
+    )
+
+    interrupted = mgr.drain_interrupt("run1", "a1")
+    remaining = mgr.drain_at_boundary("run1", "a1")
+
+    assert [message.content for message in interrupted] == ["interrupt"]
+    assert interrupted[0].delivery_mode == InjectionDeliveryMode.INTERRUPT
+    assert [message.content for message in remaining] == ["queued"]
+
+
+def test_injection_manager_forces_queued_user_injections_to_interrupt() -> None:
+    mgr = RunInjectionManager()
+    mgr.activate("run1")
+
+    first = mgr.enqueue(
+        "run1",
+        "a1",
+        InjectionSource.USER,
+        "first",
+        client_message_id="client-first",
+    )
+    mgr.enqueue("run1", "a1", InjectionSource.SYSTEM, "system note")
+    second = mgr.enqueue(
+        "run1",
+        "a1",
+        InjectionSource.USER,
+        "second",
+        client_message_id="client-second",
+    )
+
+    promoted = mgr.force_user_queued_to_interrupt("run1", "a1")
+    interrupted = mgr.drain_interrupt("run1", "a1")
+    remaining = mgr.drain_at_boundary("run1", "a1")
+
+    assert promoted.delivery_mode == InjectionDeliveryMode.INTERRUPT
+    assert promoted.content == "first\n\nsecond"
+    assert promoted.superseded_injection_ids == (
+        first.injection_id,
+        second.injection_id,
+    )
+    assert promoted.superseded_client_message_ids == (
+        "client-first",
+        "client-second",
+    )
+    assert [message.content for message in interrupted] == ["first\n\nsecond"]
+    assert [message.content for message in remaining] == ["system note"]
+
+
+def test_injection_manager_force_requires_active_run() -> None:
+    mgr = RunInjectionManager()
+
+    with pytest.raises(KeyError, match="Run is not active"):
+        mgr.force_user_queued_to_interrupt("run1", "a1")
+
+
+def test_injection_manager_force_requires_queued_message() -> None:
+    mgr = RunInjectionManager()
+    mgr.activate("run1")
+
+    with pytest.raises(ValueError, match="No queued injections"):
+        mgr.force_user_queued_to_interrupt("run1", "a1")
+
+
+def test_injection_manager_force_requires_user_queued_message() -> None:
+    mgr = RunInjectionManager()
+    mgr.activate("run1")
+    mgr.enqueue("run1", "a1", InjectionSource.SYSTEM, "system note")
+
+    with pytest.raises(ValueError, match="No queued injections"):
+        mgr.force_user_queued_to_interrupt("run1", "a1")
+
+
 def test_injection_manager_startup_drain_returns_empty_without_runtime_reminders() -> (
     None
 ):
@@ -128,6 +211,21 @@ def test_injection_message_serializes_structured_prompt_content() -> None:
     assert image_payload["url"] == "/api/sessions/session-1/media/asset-1/file"
     assert image_payload["kind"] == "image-url"
     assert image_payload["media_type"] == "image/png"
+
+
+def test_injection_message_serializes_client_message_id() -> None:
+    message = InjectionMessage(
+        run_id="run-1",
+        recipient_instance_id="a1",
+        source=InjectionSource.USER,
+        content="follow up",
+        client_message_id="client-1",
+        priority=1,
+    )
+
+    payload = message.model_dump(mode="json")
+
+    assert payload["client_message_id"] == "client-1"
 
 
 def test_injection_message_rejects_whitespace_only_content() -> None:

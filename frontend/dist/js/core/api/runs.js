@@ -1,4 +1,4 @@
-/**
+﻿/**
  * core/api/runs.js
  * Run, gate, and tool-approval related API wrappers.
  */
@@ -95,15 +95,27 @@ export async function dispatchHumanTask(sessionId, runId, taskId) {
         'Failed to dispatch task',
     );
 }
-export async function injectMessage(runId, content) {
+export async function injectMessage(runId, content, { mode = 'queued', clientMessageId = '' } = {}) {
+    const payload = { content, mode };
+    if (clientMessageId) {
+        payload.client_message_id = clientMessageId;
+    }
     return requestJson(
         `/api/runs/${runId}/inject`,
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content }),
+            body: JSON.stringify(payload),
         },
         'Failed to inject message',
+    );
+}
+
+export async function forceQueuedInject(runId) {
+    return requestJson(
+        `/api/runs/${runId}/inject:force`,
+        { method: 'POST' },
+        'Failed to force queued inject',
     );
 }
 

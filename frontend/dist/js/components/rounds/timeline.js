@@ -582,6 +582,7 @@ export function createLiveRound(runId, intentText, intentParts = null) {
         intent_parts: normalizedIntentParts,
         primary_role_id: getRunPrimaryRoleId(safeRunId) || null,
         coordinator_messages: [],
+        injection_messages: [],
         instance_role_map: {},
         role_instance_map: {},
         run_status: 'running',
@@ -820,6 +821,195 @@ export function appendRoundUserMessage(runId, promptPayload) {
     }
 }
 
+export function upsertRoundInjectionMessage(runId, injectionMessage, options = {}) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId || !injectionMessage || typeof injectionMessage !== 'object') return;
+    const normalized = normalizeInjectionMessage(safeRunId, injectionMessage);
+    const patchInjection = round => ({
+        ...round,
+        injection_messages: upsertInjectionMessages(round.injection_messages || [], normalized),
+        has_user_messages: true,
+    });
+    const buildRound = () => ({
+        run_id: safeRunId,
+        created_at: normalized.applied_at || normalized.occurred_at || normalized.queued_at || new Date().toISOString(),
+        intent: '',
+        intent_parts: null,
+        primary_role_id: getRunPrimaryRoleId(safeRunId) || null,
+        coordinator_messages: [],
+        injection_messages: [normalized],
+        instance_role_map: {},
+        role_instance_map: {},
+        run_status: 'running',
+        run_phase: 'running',
+        is_recoverable: true,
+        pending_tool_approval_count: 0,
+        has_user_messages: true,
+        __liveOnly: true,
+    });
+    roundsState.currentRounds = upsertRound(
+        roundsState.currentRounds,
+        safeRunId,
+        buildRound,
+        patchInjection,
+    );
+    roundsState.timelineRounds = upsertRound(
+        roundsState.timelineRounds,
+        safeRunId,
+        buildRound,
+        patchInjection,
+    );
+    if (roundsState.currentRound?.run_id === safeRunId) {
+        roundsState.currentRound = roundsState.currentRounds.find(
+            round => round.run_id === safeRunId,
+        ) || roundsState.currentRound;
+    }
+    syncExportedState();
+    rememberLiveRoundForSession(state.currentSessionId, (
+        roundsState.currentRounds.find(round => round.run_id === safeRunId)
+        || null
+    ));
+    if (options.render !== false && !shouldPreserveSubagentView(state.currentSessionId)) {
+        renderSessionTimeline(roundsState.currentRounds, {
+            scrollPolicy: options.scrollPolicy || 'preserve-anchor',
+            navigatorLayoutReason: 'structure',
+        });
+    } else {
+        renderNavigatorForTimeline({ layoutReason: 'structure' });
+    }
+}
+
+function upsertInjectionMessages(currentMessages, nextMessage) {
+    const messages = Array.isArray(currentMessages) ? currentMessages : [];
+    const existingIndex = findInjectionMessageIndex(messages, nextMessage);
+    if (existingIndex === -1) {
+        return [...messages, nextMessage].sort(compareInjectionMessages);
+    }
+    return messages.map((item, index) => (
+        index === existingIndex
+            ? mergeInjectionMessage(item, nextMessage)
+            : item
+    )).sort(compareInjectionMessages);
+}
+
+function findInjectionMessageIndex(messages, nextMessage) {
+    const nextId = String(nextMessage?.message_id || '').trim();
+    const nextInjectionId = String(nextMessage?.injection_id || '').trim();
+    const nextSortAt = injectionSortAt(nextMessage);
+    const injectionIndex = messages.findIndex(item => {
+        const itemInjectionId = String(item?.injection_id || '').trim();
+        return itemInjectionId && nextInjectionId && itemInjectionId === nextInjectionId;
+    });
+    if (injectionIndex !== -1) {
+        return injectionIndex;
+    }
+    const directIndex = messages.findIndex(item => {
+        const itemId = String(item?.message_id || '').trim();
+        return itemId && nextId && itemId === nextId;
+    });
+    if (directIndex !== -1) {
+        return directIndex;
+    }
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const item = messages[index];
+        const itemRecipient = String(item?.recipient_instance_id || '');
+        const nextRecipient = String(nextMessage?.recipient_instance_id || '');
+        const itemSortAt = injectionSortAt(item);
+        if (
+            String(item?.content || '').trim() === String(nextMessage?.content || '').trim()
+            && String(item?.source || 'user') === String(nextMessage?.source || 'user')
+            && String(item?.mode || 'queued') === String(nextMessage?.mode || 'queued')
+            && (!itemRecipient || !nextRecipient || itemRecipient === nextRecipient)
+            && (!itemSortAt || !nextSortAt || itemSortAt === nextSortAt)
+        ) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+function mergeInjectionMessage(current, next) {
+    return {
+        ...current,
+        ...next,
+        message_id: preferredInjectionMessageId(current, next),
+        injection_id: next.injection_id || current.injection_id,
+        content: next.content || current.content,
+        content_parts: next.content_parts?.length ? next.content_parts : current.content_parts || [],
+        queued_at: current.queued_at || next.queued_at,
+        applied_at: next.applied_at || current.applied_at,
+        occurred_at: current.occurred_at || next.occurred_at,
+    };
+}
+
+function preferredInjectionMessageId(current, next) {
+    const currentId = String(current?.message_id || '').trim();
+    const nextId = String(next?.message_id || '').trim();
+    if (currentId.startsWith('local-') && nextId && !nextId.startsWith('local-')) {
+        return nextId;
+    }
+    return currentId || nextId;
+}
+
+function compareInjectionMessages(a, b) {
+    return injectionSortAt(a).localeCompare(injectionSortAt(b));
+}
+
+function normalizeInjectionMessage(runId, rawMessage) {
+    const contentParts = normalizePromptContentParts(rawMessage.content_parts || rawMessage.content);
+    const content = String(
+        rawMessage.content
+        || summarizePromptContentParts(contentParts)
+        || '',
+    ).trim();
+    const queuedAt = injectionQueuedAt(rawMessage) || new Date().toISOString();
+    const appliedAt = String(rawMessage.applied_at || '');
+    const occurredAt = String(rawMessage.occurred_at || appliedAt || queuedAt);
+    const recipient = String(rawMessage.recipient_instance_id || '').trim();
+    const injectionId = String(rawMessage.injection_id || rawMessage.id || '').trim();
+    const messageId = String(rawMessage.message_id || [
+        injectionId,
+        recipient,
+        appliedAt || occurredAt || queuedAt,
+        rawMessage.source || 'user',
+        content,
+    ].join('|')).trim();
+    return {
+        message_id: messageId,
+        injection_id: injectionId || messageId,
+        run_id: runId,
+        source: String(rawMessage.source || 'user'),
+        mode: String(rawMessage.mode || rawMessage.delivery_mode || 'queued'),
+        status: String(rawMessage.status || 'queued'),
+        content,
+        content_parts: contentParts || [],
+        recipient_instance_id: recipient,
+        queued_at: queuedAt,
+        applied_at: appliedAt,
+        occurred_at: occurredAt,
+        interrupted_current_step: rawMessage.interrupted_current_step === true,
+    };
+}
+
+function injectionSortAt(message) {
+    return String(
+        message?.applied_at
+        || message?.occurred_at
+        || message?.queued_at
+        || message?.created_at
+        || '',
+    );
+}
+
+function injectionQueuedAt(message) {
+    return String(
+        message?.queued_at
+        || message?.created_at
+        || message?.occurred_at
+        || '',
+    );
+}
+
 function rememberLiveRoundForSession(sessionId, round) {
     const safeSessionId = String(sessionId || '').trim();
     const safeRunId = String(round?.run_id || '').trim();
@@ -857,6 +1047,9 @@ function mergeLiveRoundsForSession(sessionId) {
             coordinator_messages: Array.isArray(round.coordinator_messages)
                 ? round.coordinator_messages
                 : liveRound.coordinator_messages || [],
+            injection_messages: Array.isArray(round.injection_messages)
+                ? round.injection_messages
+                : liveRound.injection_messages || [],
         });
         roundsState.currentRounds = upsertRound(
             roundsState.currentRounds,
@@ -1444,6 +1637,14 @@ function renderSessionTimeline(rounds, opts = { preserveScroll: true }) {
     syncRetryTimelineTimer();
 }
 
+export function renderCurrentSessionTimeline(opts = {}) {
+    if (!Array.isArray(roundsState.currentRounds) || roundsState.currentRounds.length === 0) {
+        return false;
+    }
+    renderSessionTimeline(roundsState.currentRounds, opts);
+    return true;
+}
+
 function bindScrollSync() {
     const container = els.chatMessages;
     if (!container) return;
@@ -1684,7 +1885,6 @@ function renderRoundSection(round, index) {
     if (round.compaction_marker_before) {
         section.appendChild(renderRoundHistoryDivider(round.compaction_marker_before));
     }
-
     const pendingCoordinatorApprovals = (round.pending_tool_approvals || []).filter(item => {
         const roleId = item?.role_id || '';
         return roleId === '' || isRunPrimaryRoleId(roleId, round.run_id);
@@ -1693,8 +1893,12 @@ function renderRoundSection(round, index) {
     const primaryRoleLabel = getRunPrimaryRoleLabel(round.run_id);
     const isLatestRound = index === roundsState.currentRounds.length - 1;
 
-    if (round.coordinator_messages?.length > 0) {
-        renderHistoricalMessageList(section, round.coordinator_messages, {
+    const mainMessages = mergeRoundMessagesAndInjectionMessages(
+        round.coordinator_messages || [],
+        round.injection_messages || [],
+    );
+    if (mainMessages.length > 0) {
+        renderHistoricalMessageList(section, mainMessages, {
             collapsibleUserPrompts: true,
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
@@ -1735,6 +1939,7 @@ function renderRoundSection(round, index) {
         const tokenSessionId = String(state.currentSessionId || '').trim();
         const tokenRunId = String(round.run_id || '').trim();
         const tokenSignal = roundTokenUsageController?.signal || null;
+        const renderedToolCallCount = countRoundToolCalls(round);
         void fetchRunTokenUsage(tokenSessionId, tokenRunId, { signal: tokenSignal }).then(usage => {
             if (
                 tokenSignal?.aborted
@@ -1744,6 +1949,10 @@ function renderRoundSection(round, index) {
             }
             if (!usage || usage.total_tokens === 0) return;
             const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+            const toolCallCount = Math.max(
+                Number(usage.total_tool_calls || 0),
+                renderedToolCallCount,
+            );
             const pill = document.createElement('div');
             pill.className = 'round-token-summary';
             pill.title = formatMessage('rounds.token_title', {
@@ -1754,7 +1963,7 @@ function renderRoundSection(round, index) {
             pill.innerHTML = `
                 <span class="token-in">${esc(formatMessage('rounds.token_in', { value: fmt(usage.total_input_tokens) }))}</span>
                 <span class="token-out">${esc(formatMessage('rounds.token_out', { value: fmt(usage.total_output_tokens) }))}</span>
-                ${usage.total_tool_calls > 0 ? `<span class="token-tools">${esc(formatMessage('rounds.token_tools', { value: usage.total_tool_calls }))}</span>` : ''}
+                ${toolCallCount > 0 ? `<span class="token-tools">${esc(formatMessage('rounds.token_tools', { value: toolCallCount }))}</span>` : ''}
             `;
             const tokenHost = headerEl.querySelector('.round-detail-token-host');
             if (tokenHost) {
@@ -1768,6 +1977,114 @@ function renderRoundSection(round, index) {
     }
 
     return section;
+}
+
+function countRoundToolCalls(round) {
+    const messages = Array.isArray(round?.coordinator_messages)
+        ? round.coordinator_messages
+        : [];
+    const toolCallIds = new Set();
+    let anonymousCount = 0;
+    messages.forEach(message => {
+        const parts = Array.isArray(message?.message?.parts)
+            ? message.message.parts
+            : [];
+        parts.forEach(part => {
+            const kind = String(part?.part_kind || part?.kind || '').trim();
+            if (kind !== 'tool-call' && !(part?.tool_name && part?.args !== undefined)) {
+                return;
+            }
+            const toolCallId = String(part?.tool_call_id || '').trim();
+            if (toolCallId) {
+                toolCallIds.add(toolCallId);
+            } else {
+                anonymousCount += 1;
+            }
+        });
+    });
+    return toolCallIds.size + anonymousCount;
+}
+
+function mergeRoundMessagesAndInjectionMessages(messages, injectionMessages) {
+    const normalizedMessages = Array.isArray(messages)
+        ? messages.map((message, index) => ({
+            ...message,
+            __timelineSortAt: String(message?.created_at || ''),
+            __timelineSortIndex: index,
+        }))
+        : [];
+    const syntheticInjectionMessages = Array.isArray(injectionMessages)
+        ? injectionMessages
+            .map((message, index) => injectionMessageToHistoryMessage(message, index))
+            .filter(Boolean)
+        : [];
+    return [...normalizedMessages, ...syntheticInjectionMessages]
+        .sort(compareTimelineMessages)
+        .map(message => {
+            const cleaned = { ...message };
+            delete cleaned.__timelineSortAt;
+            delete cleaned.__timelineSortIndex;
+            return cleaned;
+        });
+}
+
+function injectionMessageToHistoryMessage(rawMessage, index) {
+    if (!rawMessage || typeof rawMessage !== 'object') {
+        return null;
+    }
+    const contentParts = normalizePromptContentParts(rawMessage.content_parts || rawMessage.content);
+    const content = String(
+        rawMessage.content
+        || summarizePromptContentParts(contentParts)
+        || '',
+    ).trim();
+    if (!content) {
+        return null;
+    }
+    const occurredAt = injectionSortAt(rawMessage);
+    const source = String(rawMessage.source || 'user');
+    return {
+        entry_type: 'injection',
+        message_id: String(rawMessage.message_id || rawMessage.injection_id || occurredAt || ''),
+        injection_id: String(rawMessage.injection_id || rawMessage.message_id || ''),
+        source,
+        status: String(rawMessage.status || 'queued'),
+        content,
+        content_parts: contentParts || [],
+        role: 'user',
+        role_id: '',
+        instance_id: String(rawMessage.recipient_instance_id || ''),
+        label: source === 'subagent'
+            ? t('inject.message.subagent_label')
+            : t('inject.message.label'),
+        created_at: occurredAt,
+        injection_status: String(rawMessage.status || 'queued'),
+        message: {
+            parts: [
+                {
+                    part_kind: 'text',
+                    content,
+                },
+            ],
+        },
+        __timelineSortAt: occurredAt,
+        __timelineSortIndex: 100000 + index,
+    };
+}
+
+function compareTimelineMessages(a, b) {
+    const leftAt = Date.parse(String(a?.__timelineSortAt || ''));
+    const rightAt = Date.parse(String(b?.__timelineSortAt || ''));
+    if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt) {
+        return leftAt - rightAt;
+    }
+    if (Number.isFinite(leftAt) && !Number.isFinite(rightAt)) {
+        return 1;
+    }
+    if (!Number.isFinite(leftAt) && Number.isFinite(rightAt)) {
+        return -1;
+    }
+    return Number(a?.__timelineSortIndex || 0) - Number(b?.__timelineSortIndex || 0);
 }
 
 function buildRoundIntentBlock(runId, intentText, intentParts = null, options = {}) {

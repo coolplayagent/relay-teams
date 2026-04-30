@@ -97,9 +97,10 @@ def test_live_streaming_tool_overlay_skips_processed_group_summary() -> None:
     ).read_text(encoding="utf-8")
 
     assert (
-        "if (shouldCollapseIntermediateMessages(filteredOverlayEntry, options)) {"
+        "shouldCollapseIntermediateMessages(filteredOverlayEntry, options)"
         in history_script
     )
+    assert "!hasVisibleFailedToolBlock(container)" not in history_script
     assert "const filteredOverlayEntry = filterPersistedOverlayParts(" in history_script
     assert (
         "function normalizeCanonicalHistoryStreamKey(options = {}) {" in history_script

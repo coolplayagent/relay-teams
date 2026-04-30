@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
@@ -31,6 +32,10 @@ ROUND_PROJECTION_EVENT_TYPES = (
     RunEventType.LLM_RETRY_EXHAUSTED.value,
     RunEventType.LLM_FALLBACK_ACTIVATED.value,
     RunEventType.LLM_FALLBACK_EXHAUSTED.value,
+    RunEventType.INJECTION_ENQUEUED.value,
+    RunEventType.INJECTION_APPLIED.value,
+    RunEventType.TOOL_CALL.value,
+    RunEventType.TOOL_RESULT.value,
     RunEventType.MODEL_STEP_STARTED.value,
     RunEventType.MODEL_STEP_FINISHED.value,
     RunEventType.RUN_COMPLETED.value,
@@ -134,6 +139,8 @@ def build_session_rounds(
 
     retry_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
     fallback_events_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    injection_messages_by_run = _project_injection_messages(session_events)
+    tool_messages_by_run = _project_tool_messages_from_events(session_events)
     final_output_by_run = _project_terminal_final_outputs(session_events)
     microcompact_by_run: dict[str, dict[str, object]] = {}
     retry_clear_events = {
@@ -262,6 +269,8 @@ def build_session_rounds(
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
     run_ids.update(retry_events_by_run.keys())
+    run_ids.update(injection_messages_by_run.keys())
+    run_ids.update(tool_messages_by_run.keys())
     run_ids.update(final_output_by_run.keys())
     run_ids.update(delegated_tasks_by_run.keys())
     run_ids.update(run_runtime.keys())
@@ -281,11 +290,19 @@ def build_session_rounds(
             str(message.get("role") or "") == "user" for message in run_messages
         ) or bool(intent_input_parts)
         coordinator_role_id = None
+        coordinator_instance_id = None
         if root_task is not None:
             envelope = getattr(root_task, "envelope", None)
             candidate_role_id = getattr(envelope, "role_id", None)
             if isinstance(candidate_role_id, str) and candidate_role_id:
                 coordinator_role_id = candidate_role_id
+            candidate_instance_id = getattr(root_task, "assigned_instance_id", None)
+            if isinstance(candidate_instance_id, str) and candidate_instance_id:
+                coordinator_instance_id = candidate_instance_id
+        if coordinator_instance_id is None and coordinator_role_id is not None:
+            coordinator_instance_id = role_instance_by_run.get(run_id, {}).get(
+                coordinator_role_id
+            )
         coordinator_messages = [
             projected
             for message in run_messages
@@ -296,6 +313,14 @@ def build_session_rounds(
             )
             is not None
         ]
+        coordinator_messages = _merge_event_tool_messages(
+            coordinator_messages,
+            _coordinator_event_tool_messages(
+                tool_messages_by_run.get(run_id, []),
+                coordinator_role_id=coordinator_role_id,
+                coordinator_instance_id=coordinator_instance_id,
+            ),
+        )
         if not coordinator_messages:
             reconstructed = _reconstruct_completed_output_message(
                 run_id=run_id,
@@ -323,6 +348,7 @@ def build_session_rounds(
             "intent_parts": intent_parts,
             "primary_role_id": coordinator_role_id,
             "coordinator_messages": coordinator_messages,
+            "injection_messages": injection_messages_by_run.get(run_id, []),
             "retry_events": retry_events_by_run.get(run_id, []),
             "has_user_messages": has_user_messages,
             "tasks": delegated_tasks_by_run.get(run_id, []),
@@ -387,6 +413,7 @@ def build_session_timeline_rounds(
     retry_events_by_run, microcompact_by_run = _project_timeline_event_overlays(
         session_events
     )
+    injection_messages_by_run = _project_injection_messages(session_events)
     final_output_by_run = _project_terminal_final_outputs(session_events)
 
     root_task_by_run: dict[str, object] = {}
@@ -408,6 +435,7 @@ def build_session_timeline_rounds(
     run_ids = set(root_task_by_run.keys())
     run_ids.update(messages_by_run.keys())
     run_ids.update(retry_events_by_run.keys())
+    run_ids.update(injection_messages_by_run.keys())
     run_ids.update(final_output_by_run.keys())
     run_ids.update(run_runtime.keys())
     if excluded_run_ids:
@@ -440,6 +468,7 @@ def build_session_timeline_rounds(
                 ),
                 "intent_parts": intent_parts,
                 "primary_role_id": primary_role_by_run.get(run_id),
+                "injection_messages": injection_messages_by_run.get(run_id, []),
                 "retry_events": retry_events_by_run.get(run_id, []),
                 "has_user_messages": bool(run_messages) or bool(intent_input_parts),
                 "pending_tool_approval_count": len(pending_approvals),
@@ -620,6 +649,317 @@ def _project_timeline_event_overlays(
     return dict(retry_events_by_run), microcompact_by_run
 
 
+def _project_injection_messages(
+    session_events: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    projected_by_run: dict[str, dict[str, dict[str, object]]] = defaultdict(dict)
+    sorted_session_events = sorted(
+        session_events,
+        key=lambda item: str(item.get("occurred_at") or ""),
+    )
+    for event in sorted_session_events:
+        event_type = str(event.get("event_type") or "")
+        if event_type != RunEventType.INJECTION_APPLIED.value:
+            continue
+        run_id = str(event.get("trace_id") or event.get("run_id") or "")
+        if not run_id:
+            continue
+        payload = _parse_event_payload(event.get("payload_json"))
+        if not _is_public_injection_payload(payload):
+            continue
+        recipient_instance_id = str(
+            payload.get("recipient_instance_id") or event.get("instance_id") or ""
+        )
+        created_at = str(payload.get("created_at") or event.get("occurred_at") or "")
+        content = payload.get("content")
+        content_parts = _coerce_user_prompt_content_parts(content)
+        content_text = user_prompt_content_to_text(content).strip()
+        if not content_text and content_parts:
+            content_text = _intent_parts_to_text(content_parts) or ""
+        if not content_text and not content_parts:
+            continue
+        key = "|".join(
+            (
+                str(payload.get("injection_id") or ""),
+                recipient_instance_id,
+                created_at,
+                str(payload.get("source") or ""),
+                content_text,
+            )
+        )
+        existing = projected_by_run[run_id].get(key)
+        if existing is None:
+            existing = {
+                "message_id": key,
+                "injection_id": str(payload.get("injection_id") or key),
+                "run_id": run_id,
+                "source": str(payload.get("source") or "user"),
+                "mode": str(payload.get("delivery_mode") or "queued"),
+                "status": "applied",
+                "content": content_text,
+                "content_parts": content_parts or [],
+                "recipient_instance_id": recipient_instance_id,
+                "sender_instance_id": str(payload.get("sender_instance_id") or ""),
+                "sender_role_id": str(payload.get("sender_role_id") or ""),
+                "queued_at": created_at,
+                "applied_at": str(event.get("occurred_at") or created_at),
+                "occurred_at": str(event.get("occurred_at") or created_at),
+                "interrupted_current_step": payload.get("interrupted_current_step")
+                is True,
+                "restart_scope": str(payload.get("restart_scope") or ""),
+                "supersedes_pending_tool_calls": payload.get(
+                    "supersedes_pending_tool_calls"
+                )
+                is True,
+            }
+            projected_by_run[run_id][key] = existing
+    return {
+        run_id: sorted(
+            items.values(),
+            key=lambda item: str(
+                item.get("applied_at") or item.get("occurred_at") or ""
+            ),
+        )
+        for run_id, items in projected_by_run.items()
+    }
+
+
+def _is_public_injection_payload(payload: dict[str, object]) -> bool:
+    if str(payload.get("visibility") or "public") != "public":
+        return False
+    if payload.get("content_redacted"):
+        return False
+    source = str(payload.get("source") or "")
+    return source in {"user", "subagent"}
+
+
+def _project_tool_messages_from_events(
+    session_events: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    calls_by_key: dict[tuple[str, int], dict[str, object]] = {}
+    results_by_key: dict[tuple[str, int], dict[str, object]] = {}
+    order_by_run: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    pending_by_identity: dict[tuple[str, str, str, str], list[tuple[str, int]]] = (
+        defaultdict(list)
+    )
+    sorted_session_events = sorted(
+        session_events,
+        key=lambda item: str(item.get("occurred_at") or ""),
+    )
+    for event in sorted_session_events:
+        event_type = str(event.get("event_type") or "")
+        if event_type not in {
+            RunEventType.TOOL_CALL.value,
+            RunEventType.TOOL_RESULT.value,
+        }:
+            continue
+        payload = _parse_event_payload(event.get("payload_json"))
+        run_id = str(
+            event.get("trace_id") or payload.get("run_id") or event.get("run_id") or ""
+        )
+        tool_call_id = str(payload.get("tool_call_id") or "").strip()
+        tool_name = str(payload.get("tool_name") or "").strip()
+        role_id = str(payload.get("role_id") or event.get("role_id") or "")
+        instance_id = str(payload.get("instance_id") or event.get("instance_id") or "")
+        if not run_id or not tool_call_id or not tool_name:
+            continue
+        identity_key = (run_id, instance_id, role_id, tool_call_id)
+        if event_type == RunEventType.TOOL_CALL.value:
+            record_key = (run_id, len(order_by_run[run_id]))
+            calls_by_key[record_key] = {
+                "run_id": run_id,
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "args": payload.get("args") or {},
+                "role_id": role_id,
+                "instance_id": instance_id,
+                "task_id": str(event.get("task_id") or ""),
+                "occurred_at": str(event.get("occurred_at") or ""),
+            }
+            order_by_run[run_id].append(record_key)
+            pending_by_identity[identity_key].append(record_key)
+            continue
+        pending_keys = pending_by_identity.get(identity_key, [])
+        if not pending_keys:
+            continue
+        record_key = pending_keys.pop(0)
+        results_by_key[record_key] = {
+            "run_id": run_id,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "result": payload.get("result"),
+            "error": payload.get("error") is True,
+            "role_id": role_id,
+            "instance_id": instance_id,
+            "task_id": str(event.get("task_id") or ""),
+            "occurred_at": str(event.get("occurred_at") or ""),
+        }
+
+    projected_by_run: dict[str, list[dict[str, object]]] = defaultdict(list)
+    for run_id, tool_call_keys in order_by_run.items():
+        for record_key in tool_call_keys:
+            call = calls_by_key.get(record_key)
+            result = results_by_key.get(record_key)
+            if call is None or result is None:
+                continue
+            call_tool_name = str(call.get("tool_name") or "")
+            result_tool_name = str(result.get("tool_name") or "")
+            if (
+                call_tool_name
+                and result_tool_name
+                and call_tool_name != result_tool_name
+            ):
+                continue
+            projected_by_run[run_id].append(_event_tool_call_message(call))
+            projected_by_run[run_id].append(_event_tool_result_message(result))
+    return dict(projected_by_run)
+
+
+def _event_tool_call_message(record: dict[str, object]) -> dict[str, object]:
+    run_id = str(record.get("run_id") or "")
+    tool_call_id = str(record.get("tool_call_id") or "")
+    tool_name = str(record.get("tool_name") or "")
+    role_id = str(record.get("role_id") or "")
+    instance_id = str(record.get("instance_id") or "")
+    occurred_at = str(record.get("occurred_at") or "")
+    return {
+        "conversation_id": "",
+        "agent_role_id": role_id,
+        "instance_id": instance_id,
+        "task_id": str(record.get("task_id") or ""),
+        "trace_id": run_id,
+        "role": "assistant",
+        "role_id": role_id,
+        "created_at": occurred_at,
+        "reconstructed": True,
+        "message": {
+            "parts": [
+                {
+                    "part_kind": "tool-call",
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "args": record.get("args") or {},
+                }
+            ]
+        },
+    }
+
+
+def _event_tool_result_message(record: dict[str, object]) -> dict[str, object]:
+    run_id = str(record.get("run_id") or "")
+    tool_call_id = str(record.get("tool_call_id") or "")
+    tool_name = str(record.get("tool_name") or "")
+    role_id = str(record.get("role_id") or "")
+    instance_id = str(record.get("instance_id") or "")
+    occurred_at = str(record.get("occurred_at") or "")
+    return {
+        "conversation_id": "",
+        "agent_role_id": role_id,
+        "instance_id": instance_id,
+        "task_id": str(record.get("task_id") or ""),
+        "trace_id": run_id,
+        "role": "user",
+        "role_id": role_id,
+        "created_at": occurred_at,
+        "reconstructed": True,
+        "message": {
+            "parts": [
+                {
+                    "part_kind": "tool-return",
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "content": record.get("result"),
+                    "is_error": record.get("error") is True,
+                }
+            ]
+        },
+    }
+
+
+def _coordinator_event_tool_messages(
+    messages: list[dict[str, object]],
+    *,
+    coordinator_role_id: str | None,
+    coordinator_instance_id: str | None,
+) -> list[dict[str, object]]:
+    if coordinator_role_id is None and coordinator_instance_id is None:
+        return []
+    filtered: list[dict[str, object]] = []
+    for message in messages:
+        role_id = str(message.get("role_id") or message.get("agent_role_id") or "")
+        instance_id = str(message.get("instance_id") or "")
+        if coordinator_instance_id is not None:
+            if instance_id != coordinator_instance_id:
+                continue
+            if (
+                coordinator_role_id is None
+                or not role_id
+                or role_id == coordinator_role_id
+            ):
+                filtered.append(message)
+            continue
+        if coordinator_role_id is not None and role_id == coordinator_role_id:
+            filtered.append(message)
+    return filtered
+
+
+def _merge_event_tool_messages(
+    coordinator_messages: list[dict[str, object]],
+    event_tool_messages: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if not event_tool_messages:
+        return coordinator_messages
+    existing_tool_part_counts = _message_tool_part_counts(coordinator_messages)
+    event_tool_part_counts: Counter[tuple[str, str]] = Counter()
+    missing: list[dict[str, object]] = []
+    for message in event_tool_messages:
+        include_message = False
+        for key in _message_tool_part_keys(message):
+            event_tool_part_counts[key] += 1
+            if event_tool_part_counts[key] > existing_tool_part_counts[key]:
+                include_message = True
+        if include_message:
+            missing.append(message)
+    if not missing:
+        return coordinator_messages
+    return sorted(
+        [*coordinator_messages, *missing],
+        key=lambda item: (
+            str(item.get("created_at") or ""),
+            1 if str(item.get("role") or "") == "user" else 0,
+        ),
+    )
+
+
+def _message_tool_part_counts(
+    messages: list[dict[str, object]],
+) -> Counter[tuple[str, str]]:
+    tool_part_counts: Counter[tuple[str, str]] = Counter()
+    for message in messages:
+        tool_part_counts.update(_message_tool_part_keys(message))
+    return tool_part_counts
+
+
+def _message_tool_part_keys(message: dict[str, object]) -> list[tuple[str, str]]:
+    tool_part_keys: list[tuple[str, str]] = []
+    for part in _message_parts(message):
+        part_kind = str(part.get("part_kind") or "").strip()
+        tool_call_id = str(part.get("tool_call_id") or "").strip()
+        if part_kind and tool_call_id:
+            tool_part_keys.append((part_kind, tool_call_id))
+    return tool_part_keys
+
+
+def _message_parts(message: dict[str, object]) -> list[dict[str, object]]:
+    raw_message = message.get("message")
+    if not isinstance(raw_message, dict):
+        return []
+    raw_parts = raw_message.get("parts")
+    if not isinstance(raw_parts, list):
+        return []
+    return [part for part in raw_parts if isinstance(part, dict)]
+
+
 def _project_terminal_final_outputs(
     session_events: list[dict[str, object]],
 ) -> dict[str, dict[str, str]]:
@@ -688,6 +1028,7 @@ _TIMELINE_ROUND_KEYS = (
     "intent",
     "intent_parts",
     "primary_role_id",
+    "injection_messages",
     "retry_events",
     "has_user_messages",
     "pending_tool_approval_count",
