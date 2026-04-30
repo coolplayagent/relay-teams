@@ -26,6 +26,7 @@ def test_default_tool_groups_include_expected_buckets() -> None:
         "skill-teams",
         "task",
         "todo",
+        "auto-harness",
     ]
     workspace_group = next(group for group in groups if group.group_id == "workspace")
     assert "shell" in workspace_group.tools
@@ -46,6 +47,13 @@ def test_default_tool_groups_include_expected_buckets() -> None:
     assert task_group.tools == ("spawn_subagent", "ask_question")
     todo_group = next(group for group in groups if group.group_id == "todo")
     assert todo_group.tools == ("todo_read", "todo_write")
+    auto_harness_group = next(
+        group for group in groups if group.group_id == "auto-harness"
+    )
+    assert auto_harness_group.tools == (
+        "auto_harness_synthesize_tool",
+        "auto_harness_enable_tool",
+    )
 
 
 def test_default_tool_groups_filter_hidden_and_missing_tools() -> None:

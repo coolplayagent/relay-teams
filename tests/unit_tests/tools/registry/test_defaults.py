@@ -17,6 +17,8 @@ def test_registry_contains_registered_local_tools() -> None:
     assert registry.list_names() == (
         "activate_skill_roles",
         "ask_question",
+        "auto_harness_enable_tool",
+        "auto_harness_synthesize_tool",
         "capture_screen",
         "click_at",
         "create_monitor",

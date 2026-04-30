@@ -10,6 +10,9 @@ import pytest
 from pydantic_ai.messages import FunctionToolResultEvent, ToolCallPart, ToolReturnPart
 
 from relay_teams.agents.execution import session_runtime as session_runtime_module
+from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.tools.registry import ToolRegistry
 from .agent_llm_session_test_support import (
     AgentLlmSession,
     APIStatusError,
@@ -816,3 +819,75 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
     assert len(fallback_exhausted_calls) == 1
     assert retry_scheduled_calls == []
     assert retry_exhausted_calls == []
+
+
+def test_resolve_role_allowed_tools_uses_updated_role_registry_tools() -> None:
+    role_registry = RoleRegistry()
+    role_registry.register(
+        RoleDefinition(
+            role_id="Crafter",
+            name="Crafter",
+            description="Builds things.",
+            version="1",
+            tools=("alpha", "generated_sum"),
+            system_prompt="Build things.",
+        )
+    )
+    tool_registry = ToolRegistry(
+        {
+            "alpha": lambda _agent: None,
+            "generated_sum": lambda _agent: None,
+        }
+    )
+
+    resolved = session_runtime_module.resolve_role_allowed_tools(
+        tool_registry=tool_registry,
+        role_registry=role_registry,
+        role_id="Crafter",
+        fallback_allowed_tools=("alpha",),
+        session_id="session-1",
+    )
+
+    assert resolved == ("alpha", "generated_sum")
+
+
+def test_resolve_role_allowed_tools_uses_fallback_for_missing_runtime_role() -> None:
+    role_registry = RoleRegistry()
+    tool_registry = ToolRegistry({"alpha": lambda _agent: None})
+
+    resolved = session_runtime_module.resolve_role_allowed_tools(
+        tool_registry=tool_registry,
+        role_registry=role_registry,
+        role_id="Temporary",
+        fallback_allowed_tools=("alpha",),
+        session_id="session-1",
+    )
+
+    assert resolved == ("alpha",)
+
+
+def test_consume_auto_harness_dirty_tools_returns_pending_runtime_refresh() -> None:
+    class _DirtyService:
+        def consume_tools_dirty(
+            self,
+            *,
+            run_id: str,
+            instance_id: str,
+        ) -> tuple[str, ...]:
+            assert run_id == "run-1"
+            assert instance_id == "instance-1"
+            return ("generated_sum",)
+
+    assert session_runtime_module.consume_auto_harness_dirty_tools(
+        _DirtyService(),
+        run_id="run-1",
+        instance_id="instance-1",
+    ) == ("generated_sum",)
+    assert (
+        session_runtime_module.consume_auto_harness_dirty_tools(
+            None,
+            run_id="run-1",
+            instance_id="instance-1",
+        )
+        == ()
+    )

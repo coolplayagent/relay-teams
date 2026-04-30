@@ -27,6 +27,8 @@ tools:
   - stop_monitor
   - webfetch
   - websearch
+  - auto_harness_synthesize_tool
+  - auto_harness_enable_tool
 ---
 
 

@@ -46,6 +46,7 @@ from relay_teams.metrics.adapters import (
 from relay_teams.media import user_prompt_content_to_text
 from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.injection_classification import (
@@ -157,6 +158,11 @@ class CoordinationAgent(Protocol):
     ) -> AgentRun: ...
 
 
+class AutoHarnessRuntimeService(Protocol):
+    def consume_tools_dirty(self, *, run_id: str, instance_id: str) -> tuple[str, ...]:
+        raise NotImplementedError
+
+
 def resolve_allowed_tools(
     tool_registry: object,
     allowed_tools: tuple[str, ...],
@@ -172,6 +178,40 @@ def resolve_allowed_tools(
         )
     except AttributeError:
         return allowed_tools
+
+
+def resolve_role_allowed_tools(
+    *,
+    tool_registry: object,
+    role_registry: object,
+    role_id: str,
+    fallback_allowed_tools: tuple[str, ...],
+    session_id: str,
+) -> tuple[str, ...]:
+    try:
+        role = cast(RoleRegistry, role_registry).get(role_id)
+        configured_tools = role.tools
+    except KeyError:
+        configured_tools = fallback_allowed_tools
+    return resolve_allowed_tools(
+        tool_registry,
+        configured_tools,
+        session_id=session_id,
+    )
+
+
+def consume_auto_harness_dirty_tools(
+    service: object | None,
+    *,
+    run_id: str,
+    instance_id: str,
+) -> tuple[str, ...]:
+    if service is None:
+        return ()
+    return cast(AutoHarnessRuntimeService, service).consume_tools_dirty(
+        run_id=run_id,
+        instance_id=instance_id,
+    )
 
 
 def model_step_payload(
@@ -389,6 +429,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 ),
                 hook_service=hook_service,
                 reminder_service=getattr(self, "_reminder_service", None),
+                auto_harness_service=getattr(self, "_auto_harness_service", None),
                 model_capabilities=self._config.capabilities,
                 hook_runtime_env=hook_runtime_env,
             )
@@ -524,7 +565,6 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             )
             seen_count = 0
             buffered_messages: list[ModelRequest | ModelResponse] = []
-            restarted = False
             result: AgentRunResult | None = None
             request_level_input_tokens = 0
             request_level_cached_input_tokens = 0
@@ -1051,6 +1091,51 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                             attempt_tool_outcome_event_emitted = True
                         if len(history) > history_size_before_final_commit:
                             attempt_messages_committed = True
+                        dirty_tool_names = consume_auto_harness_dirty_tools(
+                            getattr(self, "_auto_harness_service", None),
+                            run_id=request.run_id,
+                            instance_id=request.instance_id,
+                        )
+                        if dirty_tool_names:
+                            allowed_tools = resolve_role_allowed_tools(
+                                tool_registry=self._tool_registry,
+                                role_registry=self._role_registry,
+                                role_id=request.role_id,
+                                fallback_allowed_tools=self._allowed_tools,
+                                session_id=request.session_id,
+                            )
+                            log_event(
+                                LOGGER,
+                                logging.INFO,
+                                event="llm.autoharness_tools.rebuild",
+                                message=(
+                                    "Restarting agent iteration after AutoHarness "
+                                    "enabled generated tools"
+                                ),
+                                payload={
+                                    "role_id": request.role_id,
+                                    "instance_id": request.instance_id,
+                                    "tool_names": list(dirty_tool_names),
+                                },
+                            )
+                            (
+                                prepared_prompt,
+                                history,
+                                agent_system_prompt,
+                                agent,
+                            ) = await self._build_agent_iteration_context(
+                                request=request,
+                                conversation_id=resolved_conversation_id,
+                                system_prompt=request.system_prompt,
+                                reserve_user_prompt_tokens=False,
+                                allowed_tools=allowed_tools,
+                                allowed_mcp_servers=self._allowed_mcp_servers,
+                                allowed_skills=self._allowed_skills,
+                            )
+                            coordination_agent = cast(CoordinationAgent, agent)
+                            seen_count = 0
+                            buffered_messages = []
+                            continue
                         usage = maybe_result.usage()
                         input_tokens = request_level_input_tokens
                         cached_input_tokens = request_level_cached_input_tokens

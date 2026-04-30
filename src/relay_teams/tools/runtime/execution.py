@@ -203,6 +203,7 @@ async def execute_tool(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
+    force_approval: bool = False,
     allow_tool_return: Literal[False] = False,
 ) -> dict[str, JsonValue]: ...
 
@@ -229,6 +230,7 @@ async def execute_tool(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
+    force_approval: bool = False,
     allow_tool_return: Literal[True] = True,
 ) -> ToolReturn | dict[str, JsonValue]: ...
 
@@ -254,6 +256,7 @@ async def execute_tool(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
+    force_approval: bool = False,
     allow_tool_return: bool = False,
 ) -> ToolReturn | dict[str, JsonValue]:
     """Run a tool action with approval, logging, and normalized envelopes."""
@@ -287,11 +290,12 @@ async def execute_tool(
         meta: dict[str, JsonValue] = {}
         effective_tool_input = dict(args_summary if tool_input is None else tool_input)
         _raise_if_stopped(ctx)
-        force_approval = False
+        requested_force_approval = force_approval
+        hook_force_approval = False
         (
             effective_tool_input,
             pre_tool_error,
-            force_approval,
+            hook_force_approval,
         ) = await _apply_pre_tool_hooks(
             ctx=ctx,
             tool_name=tool_name,
@@ -342,7 +346,7 @@ async def execute_tool(
                 meta=meta,
                 tool_call_id=tool_call_id,
                 approval_request=resolved_approval_request,
-                force_approval=force_approval,
+                force_approval=requested_force_approval or hook_force_approval,
             )
         if approval_error is not None:
             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -597,6 +601,7 @@ async def execute_tool_call(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
+    force_approval: bool = False,
     allow_tool_return: Literal[False] = False,
 ) -> dict[str, JsonValue]: ...
 
@@ -622,6 +627,7 @@ async def execute_tool_call(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
+    force_approval: bool = False,
     allow_tool_return: Literal[True] = True,
 ) -> ToolReturn | dict[str, JsonValue]: ...
 
@@ -646,6 +652,7 @@ async def execute_tool_call(
     ]
     | None = None,
     keep_approval_ticket_reusable: bool = False,
+    force_approval: bool = False,
     allow_tool_return: bool = False,
 ) -> ToolReturn | dict[str, JsonValue]:
     """Run a tool through the hook-aware runtime using natural Python params.
@@ -668,6 +675,21 @@ async def execute_tool_call(
             exclude=args_exclude,
         )
     )
+    if allow_tool_return:
+        return await execute_tool(
+            ctx,
+            tool_name=tool_name,
+            args_summary=args_summary,
+            action=action,
+            tool_input=tool_input,
+            approval_request=approval_request,
+            approval_request_factory=approval_request_factory,
+            approval_args_summary=approval_args_summary,
+            approval_args_summary_factory=approval_args_summary_factory,
+            keep_approval_ticket_reusable=keep_approval_ticket_reusable,
+            force_approval=force_approval,
+            allow_tool_return=True,
+        )
     return await execute_tool(
         ctx,
         tool_name=tool_name,
@@ -679,7 +701,8 @@ async def execute_tool_call(
         approval_args_summary=approval_args_summary,
         approval_args_summary_factory=approval_args_summary_factory,
         keep_approval_ticket_reusable=keep_approval_ticket_reusable,
-        allow_tool_return=allow_tool_return,
+        force_approval=force_approval,
+        allow_tool_return=False,
     )
 
 
@@ -1580,7 +1603,10 @@ async def _apply_permission_request_hooks(
                 retryable=False,
             ),
         )
-    return bundle.decision == HookDecisionType.ALLOW, None
+    hook_approved = (
+        bool(bundle.executions) and bundle.decision == HookDecisionType.ALLOW
+    )
+    return hook_approved, None
 
 
 async def _apply_permission_denied_hooks(

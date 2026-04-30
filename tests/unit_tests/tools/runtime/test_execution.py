@@ -25,7 +25,16 @@ from relay_teams.reminders import ToolResultObservation
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
-from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
+from relay_teams.hooks import (
+    HookDecision,
+    HookDecisionBundle,
+    HookDecisionType,
+    HookEventName,
+    HookExecutionResult,
+    HookExecutionStatus,
+    HookHandlerType,
+)
+from relay_teams.hooks.hook_models import HookSourceInfo, HookSourceScope
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.media import (
@@ -701,6 +710,45 @@ def test_execute_tool_skips_approval_flow_when_yolo_enabled() -> None:
     assert deps.approval_ticket_repo.get("call-model-yolo") is None
     assert manager.last_open is None
     assert not any(
+        event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
+        for event in deps.run_event_hub.events
+    )
+
+
+def test_execute_tool_force_approval_uses_approval_flow_even_when_yolo_enabled() -> (
+    None
+):
+    manager = _FakeApprovalManager(wait_result=("approve", ""))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            timeout_seconds=0.01,
+        ),
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-force-approval"
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com"},
+            action=lambda: {"enabled": True},
+            force_approval=True,
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-force-approval",
+    )
+    assert result["ok"] is True
+    assert manager.last_open is not None
+    assert state is not None
+    assert state.run_yolo is True
+    assert state.approval_mode == ToolApprovalMode.APPROVAL_FLOW
+    assert any(
         event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
         for event in deps.run_event_hub.events
     )
@@ -1469,6 +1517,36 @@ def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
     assert state.call_state == {}
 
 
+def test_execute_tool_call_allows_tool_return_passthrough() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    deps.media_asset_service = SimpleNamespace()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-image-wrapper"
+
+    result = asyncio.run(
+        execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "docs/relay_teams.png"},
+            action=lambda path: ToolResultProjection(
+                visible_data={"path": path},
+                tool_content_parts=(TextContentPart(text="attached image"),),
+            ),
+            raw_args={"ctx": ctx, "path": "docs/relay_teams.png"},
+            allow_tool_return=True,
+        )
+    )
+
+    assert isinstance(result, ToolReturn)
+    assert result.content == "attached image"
+    assert cast(dict[str, JsonValue], result.return_value)["data"] == {
+        "path": "docs/relay_teams.png"
+    }
+
+
 def test_execute_tool_reuses_duplicate_tool_return_content() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
@@ -1839,6 +1917,20 @@ class _FakeHookService:
         return HookDecisionBundle(decision=self.decision, reason=self.reason)
 
 
+def _hook_execution(
+    event_name: HookEventName,
+    decision: HookDecisionType,
+) -> HookExecutionResult:
+    return HookExecutionResult(
+        source=HookSourceInfo(scope=HookSourceScope.USER, path=Path("hooks.json")),
+        event_name=event_name,
+        handler_name="test-hook",
+        handler_type=HookHandlerType.COMMAND,
+        status=HookExecutionStatus.COMPLETED,
+        decision=HookDecision(decision=decision),
+    )
+
+
 def test_execute_tool_call_reuses_duplicate_after_pre_tool_rewrite() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
@@ -1993,6 +2085,40 @@ def test_permission_denied_hook_failure_is_best_effort() -> None:
     assert deps.injection_manager.records == []
 
 
+def test_execute_tool_default_permission_request_hook_decision_keeps_approval() -> None:
+    manager = _FakeApprovalManager(wait_result=("approve", ""))
+    deps = _FakeDeps(
+        manager=manager,
+        policy=_FakePolicy(needs_approval=True),
+    )
+    deps.hook_service = _FakeHookService()
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-default-hook-approval"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="write",
+            args_summary={"path": "a.txt"},
+            action=lambda: "written",
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-default-hook-approval",
+    )
+    assert result["ok"] is True
+    assert state is not None
+    assert state.approval_mode == ToolApprovalMode.APPROVAL_FLOW
+    assert manager.last_open is not None
+    assert any(
+        event.event_type == RunEventType.TOOL_APPROVAL_REQUESTED
+        for event in deps.run_event_hub.events
+    )
+
+
 def test_execute_tool_allows_permission_request_when_hook_overrides_approval() -> None:
     manager = _FakeApprovalManager(wait_result=("approve", ""))
     deps = _FakeDeps(
@@ -2006,6 +2132,12 @@ def test_execute_tool_allows_permission_request_when_hook_overrides_approval() -
             ),
             HookEventName.PERMISSION_REQUEST: HookDecisionBundle(
                 decision=HookDecisionType.ALLOW,
+                executions=(
+                    _hook_execution(
+                        HookEventName.PERMISSION_REQUEST,
+                        HookDecisionType.ALLOW,
+                    ),
+                ),
             ),
         }
     )

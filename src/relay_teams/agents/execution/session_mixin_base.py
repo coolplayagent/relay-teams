@@ -140,6 +140,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     _computer_runtime: ComputerRuntime | None
     _shell_approval_repo: ShellApprovalRepository | None
     _hook_service: HookService | None
+    _auto_harness_service: object | None
     _mcp_tool_context_token_cache: dict[str, int]
 
     async def _generate_async(

@@ -53,3 +53,21 @@ LLM 不执行显式登录，也不接收用于登录的工具参数。LLM 只调
 工具错误应描述可操作的失败原因，例如认证失败、连接超时、profile 不存在、远端路径不可访问。错误中不得包含 secret 值、临时认证文件路径或完整环境变量。
 
 生产日志必须继续通过 logger 脱敏链路输出。涉及 secret 的模块不得用 `print()` 输出，也不得绕过 `log_event()` / project logger。
+
+## AutoHarness 生成工具边界
+
+AutoHarness 只生成确定性的 JSON utility tool。生成工具必须以 `generated_` 开头，先保存为 pending 角色资产，再经过 `auto_harness_enable_tool` 的强制审批后才能注册和调用。
+
+生成工具资产保存在 app config 的 `generated_tools/{tool_name}/` 下：
+
+- `tool.json` 保存描述、输入 schema、测试用例、状态、目标角色和代码 hash。
+- `implementation.py` 保存被验证的 `run(tool_input)` 实现。
+
+安全边界：
+
+- 合成阶段必须通过 AST 校验和测试用例执行；启用阶段会重新校验代码、核对 `code_hash` 并重跑测试，执行已启用工具前也会再次核对 `implementation.py` 与已审批 hash。
+- 同名 pending 资产不可被新合成覆盖；持久化 manifest 的 `tool_name` 必须保持 `generated_` 命名空间，否则运行时加载会记录 warning 并跳过。
+- 生成代码不得使用 import、文件系统、网络、subprocess、动态 import、显式循环、`range`、dunder/private attribute、attribute mutation、未批准的 attribute call、`eval`、`exec`、`compile`、`open` 等能力。
+- 执行环境只注入受限 builtins 与 `json`、`math`、`re`、`datetime`、`statistics` 模块；模块/对象方法调用必须在 AST allowlist 中，并在可终止的子进程内通过超时限制运行。
+- 生成工具通过共享 `execute_tool_call(..., raw_args=locals())` 路径执行，保留 hook、审批、状态持久化和观测语义。
+- 启用工具会修改持久角色工具列表；显式启用必须失败于未知角色或 hash 不匹配，同一 run 中会刷新当前角色或已解析目标角色实例的运行时工具目录。

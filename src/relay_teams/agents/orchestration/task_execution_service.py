@@ -337,6 +337,9 @@ class TaskExecutionService(BaseModel):
         else:
             role = self.role_registry.get(role_id)
         instance_record = await self.agent_repo.get_instance_async(instance_id)
+        prompt_harness = self._prompt_harness()
+        llm_harness = self._llm_harness()
+        persistence_harness = self._full_persistence_harness()
         workspace = self.workspace_manager.resolve(
             session_id=task.session_id,
             role_id=role_id,
@@ -344,7 +347,7 @@ class TaskExecutionService(BaseModel):
             workspace_id=instance_record.workspace_id,
             conversation_id=instance_record.conversation_id,
         )
-        role_for_run = self._role_with_memory(
+        role_for_run = prompt_harness.role_with_memory(
             role=role,
             role_id=role_id,
             workspace_id=workspace.ref.workspace_id,
@@ -369,25 +372,25 @@ class TaskExecutionService(BaseModel):
             session_mode=session_mode,
             run_kind=run_kind,
         )
-        snapshot = await self._shared_state_snapshot_async(
+        snapshot = await prompt_harness.shared_state_snapshot_async(
             session_id=task.session_id,
             role_id=role_id,
             conversation_id=workspace.ref.conversation_id,
         )
         try:
-            prepared_runtime_snapshot = await self._prepare_runtime_snapshot(
+            prepared_runtime_snapshot = await prompt_harness.prepare_runtime_snapshot(
                 role=role_for_run,
                 task=task,
                 working_directory=workspace.resolve_workdir(),
                 worktree_root=workspace.scope_root,
                 workspace=workspace,
                 shared_state_snapshot=snapshot,
-                objective=self._resolve_turn_objective(
+                objective=prompt_harness.resolve_turn_objective(
                     task=task,
                     user_prompt_override=user_prompt_override,
                 ),
             )
-            await self._ensure_committed_task_prompt_async(
+            await prompt_harness.ensure_committed_task_prompt_async(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
                 conversation_id=workspace.ref.conversation_id,
@@ -398,7 +401,7 @@ class TaskExecutionService(BaseModel):
             )
             runtime_prompt_sections = prepared_runtime_snapshot.prompt_sections
             runtime_tools_json = prepared_runtime_snapshot.runtime_tools_json
-            runtime_system_prompt = self._compose_runtime_system_prompt(
+            runtime_system_prompt = prompt_harness.compose_runtime_system_prompt(
                 runtime_prompt_sections=runtime_prompt_sections,
                 skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
@@ -407,11 +410,11 @@ class TaskExecutionService(BaseModel):
                 runtime_system_prompt=runtime_system_prompt,
                 runtime_tools_json=runtime_tools_json,
             )
-            provider_system_prompt = self._compose_provider_system_prompt(
+            provider_system_prompt = prompt_harness.compose_provider_system_prompt(
                 runtime_prompt_sections=runtime_prompt_sections,
                 skill_instructions=prepared_runtime_snapshot.skill_instructions,
             )
-            guarded_result = await self._run_with_completion_guard(
+            guarded_result = await llm_harness.run_with_completion_guard(
                 runner=runner,
                 task=task,
                 instance_id=instance_id,
@@ -430,7 +433,7 @@ class TaskExecutionService(BaseModel):
             if isinstance(guarded_result, TaskExecutionResult):
                 return guarded_result
             result = guarded_result
-            await self._execute_task_completed_hooks(
+            await persistence_harness.execute_task_completed_hooks(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -442,7 +445,7 @@ class TaskExecutionService(BaseModel):
             await self.agent_repo.mark_status_async(
                 instance_id, InstanceStatus.COMPLETED
             )
-            await self._mark_runtime_idle_after_success_async(
+            await persistence_harness.mark_runtime_idle_after_success_async(
                 run_id=task.trace_id,
                 completed_task_id=task.task_id,
             )
@@ -456,7 +459,7 @@ class TaskExecutionService(BaseModel):
                     payload_json="{}",
                 )
             )
-            await self._record_memory_if_needed_async(
+            await persistence_harness.record_memory_if_needed_async(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
                 task=task,
@@ -524,7 +527,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            return await self._complete_with_assistant_error_async(
+            return await persistence_harness.complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -593,7 +596,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            return await self._complete_with_assistant_error_async(
+            return await persistence_harness.complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -613,7 +616,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            return await self._complete_with_assistant_error_async(
+            return await persistence_harness.complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,

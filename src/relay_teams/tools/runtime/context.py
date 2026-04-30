@@ -174,6 +174,7 @@ class ToolDeps(BaseModel):
     gateway_session_lookup: GatewaySessionLookupLike | None = None
     hook_service: SkipValidation[HookService | None] = None
     reminder_service: SkipValidation[SystemReminderService | None] = None
+    auto_harness_service: SkipValidation[object | None] = None
     model_capabilities: SkipValidation[ModelCapabilities] = Field(
         default_factory=ModelCapabilities
     )
