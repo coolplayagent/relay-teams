@@ -548,6 +548,26 @@ class _FakeSystemService:
                         "description": "General delegation flow.",
                         "role_ids": ["writer", "reviewer"],
                         "orchestration_prompt": "Delegate by capability and keep the final answer concise.",
+                        "graph": {
+                            "nodes": [
+                                {
+                                    "node_id": "write",
+                                    "role_id": "writer",
+                                    "objective": "Write the update.",
+                                },
+                                {
+                                    "node_id": "review",
+                                    "role_id": "reviewer",
+                                    "objective": "Review the update.",
+                                },
+                            ],
+                            "edges": [
+                                {
+                                    "from_node_id": "write",
+                                    "to_node_id": "review",
+                                }
+                            ],
+                        },
                     }
                 ],
             }
@@ -1651,6 +1671,7 @@ def test_get_orchestration_config() -> None:
     payload = response.json()
     assert payload["default_orchestration_preset_id"] == "default"
     assert payload["presets"][0]["role_ids"] == ["writer", "reviewer"]
+    assert payload["presets"][0]["graph"]["nodes"][0]["node_id"] == "write"
 
 
 def test_save_github_config() -> None:
@@ -2060,6 +2081,15 @@ def test_save_orchestration_config() -> None:
                     "description": "Release work.",
                     "role_ids": ["writer"],
                     "orchestration_prompt": "Use writer for outward-facing updates.",
+                    "graph": {
+                        "nodes": [
+                            {
+                                "node_id": "ship",
+                                "role_id": "writer",
+                                "objective": "Write the release update.",
+                            }
+                        ]
+                    },
                 }
             ],
         },
@@ -2071,6 +2101,12 @@ def test_save_orchestration_config() -> None:
     assert service.saved_orchestration_config["default_orchestration_preset_id"] == (
         "shipping"
     )
+    saved_presets = cast(
+        list[dict[str, JsonValue]], service.saved_orchestration_config["presets"]
+    )
+    saved_graph = cast(dict[str, JsonValue], saved_presets[0]["graph"])
+    saved_nodes = cast(list[dict[str, JsonValue]], saved_graph["nodes"])
+    assert saved_nodes[0]["node_id"] == "ship"
 
 
 def test_save_orchestration_config_accepts_legacy_wrapper_payload() -> None:

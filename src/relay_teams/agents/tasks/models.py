@@ -246,11 +246,24 @@ class TaskEnvelope(BaseModel):
     spec: TaskSpec | None = None
     lifecycle: TaskLifecyclePolicy = Field(default_factory=TaskLifecyclePolicy)
     handoff: TaskHandoff | None = None
+    orchestration_node_id: OptionalIdentifierStr = None
+    depends_on_task_ids: tuple[str, ...] = ()
 
     @field_validator("skills", mode="before")
     @classmethod
     def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
         return normalize_identifier_tuple(value, field_name="skills")
+
+    @field_validator("depends_on_task_ids", mode="before")
+    @classmethod
+    def _normalize_depends_on_task_ids(cls, value: object) -> tuple[str, ...]:
+        return (
+            normalize_identifier_tuple(
+                value,
+                field_name="depends_on_task_ids",
+            )
+            or ()
+        )
 
 
 class TaskRecord(BaseModel):

@@ -15,6 +15,9 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.agents.instances.models import RuntimeToolsSnapshot
+from relay_teams.agents.orchestration.graph_models import (
+    build_orchestration_graph_prompt,
+)
 from relay_teams.agents.execution.prompt_instructions import (
     LoadedPromptInstructions,
     PromptInstructionResolver,
@@ -695,6 +698,10 @@ async def build_runtime_system_prompt_result(
     if topology is not None and topology.orchestration_prompt.strip():
         workspace_context_sections.append(
             "## Orchestration Prompt\n" + topology.orchestration_prompt.strip()
+        )
+    if topology is not None and topology.orchestration_graph is not None:
+        workspace_context_sections.append(
+            build_orchestration_graph_prompt(topology.orchestration_graph)
         )
     if roles_prompt:
         capability_summary_sections.append(roles_prompt)

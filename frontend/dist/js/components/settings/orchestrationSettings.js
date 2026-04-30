@@ -188,6 +188,7 @@ function handleAddOrchestration() {
         description: '',
         role_ids: [orchestrationRoleOptions[0].role_id],
         orchestration_prompt: '',
+        graph: null,
         is_default: orchestrationConfig.presets.length === 0,
     };
     renderStatus('', '');
@@ -263,6 +264,12 @@ function renderOrchestrationEditor() {
                     <h5>${t('settings.orchestration.prompt_title')}</h5>
                 </div>
                 <textarea id="orchestration-prompt-input" class="config-textarea orchestration-prompt-textarea" placeholder="${escapeHtml(t('settings.orchestration.prompt_placeholder'))}">${escapeHtml(editingDraft.orchestration_prompt)}</textarea>
+            </section>
+            <section class="role-editor-section">
+                <div class="role-prompt-header">
+                    <h5>${t('settings.orchestration.graph_title')}</h5>
+                </div>
+                <textarea id="orchestration-graph-input" class="config-textarea orchestration-prompt-textarea" placeholder="${escapeHtml(t('settings.orchestration.graph_placeholder'))}">${escapeHtml(formatGraphForEditor(editingDraft.graph))}</textarea>
             </section>
         </div>
     `;
@@ -385,6 +392,9 @@ function readDraftFromForm() {
     const orchestrationPrompt = String(
         document.getElementById('orchestration-prompt-input')?.value || '',
     ).trim();
+    const graph = parseGraphFromEditor(
+        String(document.getElementById('orchestration-graph-input')?.value || '').trim(),
+    );
     const roleIds = [];
     document.getElementById('orchestration-role-picker')
         ?.querySelectorAll('input[type="checkbox"]')
@@ -414,6 +424,7 @@ function readDraftFromForm() {
         description,
         role_ids: roleIds.filter(Boolean),
         orchestration_prompt: orchestrationPrompt,
+        graph,
         is_default: isDefault,
     };
     return { ...editingDraft };
@@ -495,13 +506,14 @@ function cloneOrchestration(source) {
             ? source.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
             : [],
         orchestration_prompt: String(source?.orchestration_prompt || '').trim(),
+        graph: normalizeGraph(source?.graph),
         is_default: orchestrationId === String(orchestrationConfig.default_orchestration_preset_id || '').trim()
             || source?.is_default === true,
     };
 }
 
 function serializeOrchestration(orchestration) {
-    return {
+    const serialized = {
         preset_id: String(orchestration?.preset_id || '').trim(),
         name: String(orchestration?.name || '').trim(),
         description: String(orchestration?.description || '').trim(),
@@ -510,6 +522,41 @@ function serializeOrchestration(orchestration) {
             : [],
         orchestration_prompt: String(orchestration?.orchestration_prompt || '').trim(),
     };
+    const graph = normalizeGraph(orchestration?.graph);
+    if (graph) {
+        serialized.graph = graph;
+    }
+    return serialized;
+}
+
+function normalizeGraph(graph) {
+    if (!graph || typeof graph !== 'object' || Array.isArray(graph)) {
+        return null;
+    }
+    return JSON.parse(JSON.stringify(graph));
+}
+
+function formatGraphForEditor(graph) {
+    const normalizedGraph = normalizeGraph(graph);
+    return normalizedGraph ? JSON.stringify(normalizedGraph, null, 2) : '';
+}
+
+function parseGraphFromEditor(rawGraph) {
+    if (!rawGraph) {
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(rawGraph);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error(t('settings.orchestration.graph_object_required'));
+        }
+        return parsed;
+    } catch (error) {
+        if (error?.message === t('settings.orchestration.graph_object_required')) {
+            throw error;
+        }
+        throw new Error(t('settings.orchestration.graph_invalid'));
+    }
 }
 
 function hasDuplicateIds(orchestrations) {
