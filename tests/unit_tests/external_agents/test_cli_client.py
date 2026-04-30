@@ -284,7 +284,7 @@ def test_stdio_transport_rejects_non_stdio_config() -> None:
     config = ExternalAgentConfig(
         agent_id="cli_agent",
         name="CLI Agent",
-        protocol=ExternalAgentProtocol.CLI,
+        protocol=ExternalAgentProtocol.ACP,
         transport=StreamableHttpTransportConfig(url="http://127.0.0.1:8000/rpc"),
     )
 
@@ -313,6 +313,23 @@ def test_cli_command_exists_checks_direct_paths_and_path_entries(
 def test_codex_command_uses_app_server_stdio_runtime() -> None:
     args = _build_command_args(
         transport=StdioTransportConfig(command="codex", args=()),
+    )
+
+    assert args == ("app-server", "--listen", "stdio://")
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "codex.exe",
+        "codex.cmd",
+        "codex-agent.bat",
+        "C:\\Tools\\codex.ps1",
+    ),
+)
+def test_codex_platform_executable_names_use_app_server(command: str) -> None:
+    args = _build_command_args(
+        transport=StdioTransportConfig(command=command, args=()),
     )
 
     assert args == ("app-server", "--listen", "stdio://")

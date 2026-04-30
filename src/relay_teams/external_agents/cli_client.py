@@ -263,7 +263,11 @@ def _has_codex_app_server_listen(args: tuple[str, ...]) -> bool:
 
 
 def _is_codex_command(command: str) -> bool:
-    name = Path(command).name.lower()
+    name = Path(command.replace("\\", "/")).name.lower()
+    for suffix in (".exe", ".cmd", ".bat", ".ps1"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
     return name == "codex" or name.startswith("codex-")
 
 

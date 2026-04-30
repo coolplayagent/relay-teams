@@ -4,8 +4,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from relay_teams.validation import RequiredIdentifierStr
 
@@ -76,6 +77,20 @@ class ExternalAgentConfig(BaseModel):
     description: str = ""
     protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportConfig = Field(discriminator="transport")
+
+    @model_validator(mode="after")
+    def _validate_protocol_transport(self) -> Self:
+        if self.protocol == ExternalAgentProtocol.A2A and not isinstance(
+            self.transport,
+            StreamableHttpTransportConfig,
+        ):
+            raise ValueError("A2A agent runtimes require streamable_http transport")
+        if self.protocol == ExternalAgentProtocol.CLI and not isinstance(
+            self.transport,
+            StdioTransportConfig,
+        ):
+            raise ValueError("CLI agent runtimes require stdio transport")
+        return self
 
 
 class ExternalAgentCollection(BaseModel):
