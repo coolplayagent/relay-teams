@@ -540,12 +540,17 @@ def test_cli_command_exists_checks_direct_paths_and_path_entries(
     executable.chmod(0o755)
     non_executable = tmp_path / "not-executable"
     non_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable_directory = tmp_path / "runtime-directory"
+    executable_directory.mkdir()
+    executable_directory.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
 
     assert _cli_command_exists(str(executable)) is True
     assert _cli_command_exists("runtime-agent") is True
     if os.name != "nt":
+        assert _cli_command_exists(str(non_executable)) is False
         assert _cli_command_exists("not-executable") is False
+    assert _cli_command_exists(str(executable_directory)) is False
     assert _cli_command_exists("missing-agent") is False
     assert _cli_command_exists("./runtime-agent", runtime_cwd=tmp_path) is True
     assert (

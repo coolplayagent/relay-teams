@@ -97,6 +97,7 @@ Protocol rules:
 - The runtime is initialized with `initialize`, followed by an `initialized` notification.
 - Runtime test/probe starts the CLI with an explicit cwd and resolves relative command paths from that same cwd. The Settings/API test endpoint uses the default workspace workdir; session execution uses the active session workspace.
 - Runtime test/probe uses the configured stdio transport env, including `PATH`, when validating whether the CLI command can be started.
+- Runtime test/probe accepts command paths only when they resolve to executable files; existing directories or non-executable files are rejected before subprocess startup.
 - Agent Teams creates an ephemeral thread with `thread/start`.
 - Prompt execution uses `turn/start` with the composed runtime prompt as a text input item.
 - Assistant output is collected from `item/agentMessage/delta`; if no deltas are emitted, the completed `agentMessage` item is used as a fallback.

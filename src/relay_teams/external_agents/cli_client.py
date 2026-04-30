@@ -205,7 +205,7 @@ def _cli_command_exists(
         candidate = Path(command)
         if not candidate.is_absolute() and runtime_cwd is not None:
             candidate = runtime_cwd / candidate
-        return candidate.exists()
+        return _executable_path_exists(candidate)
     lookup_env = env or os.environ
     for directory in os.get_exec_path(lookup_env):
         candidate = Path(directory) / command
@@ -221,10 +221,10 @@ def _cli_command_exists(
 
 
 def _executable_path_exists(path: Path) -> bool:
-    if not path.exists():
+    if not path.is_file():
         return False
     if os.name == "nt":
-        return path.is_file()
+        return True
     return os.access(path, os.X_OK)
 
 
