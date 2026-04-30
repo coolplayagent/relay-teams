@@ -19,7 +19,8 @@ from relay_teams.external_agents.models import (
 from relay_teams.net.clients import create_async_http_client
 
 _A2A_AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent.json"
-_A2A_TERMINAL_TASK_STATES = {"completed", "canceled", "failed", "rejected"}
+_A2A_SUCCESS_TASK_STATES = {"completed"}
+_A2A_FAILURE_TASK_STATES = {"canceled", "failed", "rejected"}
 _A2A_POLL_INTERVAL_SECONDS = 1.0
 _A2A_MAX_POLL_ATTEMPTS = 60
 
@@ -62,6 +63,7 @@ class A2aPromptResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     text: str
+    is_message: bool = False
     task_id: str | None = None
     context_id: str | None = None
     state: str | None = None
@@ -224,13 +226,18 @@ class A2aHttpClient:
                 "metadata": metadata,
             },
         }
-        response = await self._post_json_rpc(endpoint=endpoint, payload=payload)
+        response = await self._post_json_rpc(
+            endpoint=endpoint,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
         result = _json_object(response.get("result"))
         parsed = _extract_prompt_result(result)
-        if parsed.text or parsed.state in _A2A_TERMINAL_TASK_STATES:
+        _raise_for_failed_task_state(parsed)
+        if parsed.is_message or parsed.state in _A2A_SUCCESS_TASK_STATES:
             return parsed
         if parsed.task_id is None:
-            return parsed
+            raise A2aClientError("A2A task response did not include a task id")
         return await self._poll_task(
             endpoint=endpoint,
             task_id=parsed.task_id,
@@ -258,10 +265,14 @@ class A2aHttpClient:
                     "method": "tasks/get",
                     "params": {"id": task_id},
                 },
+                timeout_seconds=timeout_seconds,
             )
             latest = _extract_prompt_result(_json_object(response.get("result")))
-            if latest.text or latest.state in _A2A_TERMINAL_TASK_STATES:
+            _raise_for_failed_task_state(latest)
+            if latest.is_message or latest.state in _A2A_SUCCESS_TASK_STATES:
                 return latest
+            if latest.task_id is None:
+                raise A2aClientError("A2A task response did not include a task id")
         raise A2aClientError(f"A2A task {task_id} did not complete before timeout")
 
     async def _resolve_endpoint_url(self) -> str:
@@ -277,10 +288,12 @@ class A2aHttpClient:
         *,
         endpoint: str,
         payload: dict[str, JsonValue],
+        timeout_seconds: float,
     ) -> dict[str, JsonValue]:
         response = await self._require_client().post(
             endpoint,
             json=payload,
+            timeout=timeout_seconds,
             headers={
                 **self._headers(),
                 "Content-Type": "application/json",
@@ -350,6 +363,7 @@ def _extract_prompt_result(payload: dict[str, JsonValue]) -> A2aPromptResult:
     if kind == "message":
         return A2aPromptResult(
             text=_extract_message_text(payload),
+            is_message=True,
             context_id=_optional_str(payload.get("contextId")),
         )
     status = _json_object(payload.get("status"))
@@ -366,6 +380,17 @@ def _extract_prompt_result(payload: dict[str, JsonValue]) -> A2aPromptResult:
         context_id=_optional_str(payload.get("contextId")),
         state=state,
     )
+
+
+def _raise_for_failed_task_state(result: A2aPromptResult) -> None:
+    if result.state not in _A2A_FAILURE_TASK_STATES:
+        return
+    state_text = result.state or "failed"
+    message = result.text.strip()
+    if not message:
+        task_text = f" {result.task_id}" if result.task_id is not None else ""
+        message = f"A2A task{task_text} ended with state {state_text}"
+    raise A2aClientError(message)
 
 
 def _extract_message_text(message: dict[str, JsonValue]) -> str:

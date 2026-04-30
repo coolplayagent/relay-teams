@@ -77,8 +77,11 @@ Endpoint resolution:
 Prompt execution:
 
 - `message/send` sends a user message with text parts and Relay Teams metadata.
-- If the response contains text or a terminal task state, it returns immediately.
-- If the response contains a task id, the runtime polls `tasks/get` until text or a terminal task state is available.
+- `message/send` and `tasks/get` POST requests apply the configured prompt timeout as the per-request HTTP timeout.
+- Explicit `message` responses return immediately.
+- Task responses return successfully only when the task state is `completed`.
+- Task states `failed`, `rejected`, and `canceled` raise runtime errors using the status message when available.
+- If the response contains an active task id, the runtime polls `tasks/get` until the task completes or fails.
 
 ## 5. CLI Runtime Flow
 
