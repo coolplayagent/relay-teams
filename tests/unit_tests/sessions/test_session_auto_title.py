@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -369,6 +370,55 @@ def test_mark_latest_terminal_run_viewed_clears_unread_without_touching_session_
     assert stored.last_viewed_terminal_run_id == "run-1"
     assert stored.updated_at == original_updated_at
     assert session.has_unread_terminal_run is False
+
+
+def test_mark_latest_terminal_run_viewed_async_clears_unread(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_terminal_viewed_async.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+    _ = RunRuntimeRepository(db_path).upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            status=RunRuntimeStatus.COMPLETED,
+            updated_at=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+        )
+    )
+
+    asyncio.run(service.mark_latest_terminal_run_viewed_async("session-1"))
+
+    stored = SessionRepository(db_path).get("session-1")
+    assert stored.last_viewed_terminal_run_id == "run-1"
+
+
+def test_mark_latest_terminal_run_viewed_async_noops_without_terminal_run(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_terminal_viewed_async_noop.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    asyncio.run(service.mark_latest_terminal_run_viewed_async("session-1"))
+
+    stored = SessionRepository(db_path).get("session-1")
+    assert stored.last_viewed_terminal_run_id is None
+
+
+def test_session_repository_mark_terminal_run_viewed_async_rejects_missing_session(
+    tmp_path: Path,
+) -> None:
+    repository = SessionRepository(tmp_path / "session_terminal_missing_async.db")
+
+    async def exercise() -> None:
+        with pytest.raises(KeyError, match="Unknown session_id: missing-session"):
+            await repository.mark_terminal_run_viewed_async(
+                "missing-session",
+                "run-1",
+            )
+
+    asyncio.run(exercise())
 
 
 def test_mark_latest_terminal_run_viewed_noops_without_terminal_run(
