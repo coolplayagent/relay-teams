@@ -37,6 +37,7 @@ from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_tools import runtime_tools_for_role
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
@@ -195,6 +196,11 @@ def create_provider_factory(
             LlmFallbackMiddleware | DisabledLlmFallbackMiddleware
         ) = build_fallback_middleware(runtime_to_use)
 
+        runtime_tool_names = runtime_tools_for_role(
+            role_registry=role_registry,
+            role=role,
+            consumer=f"providers.provider_factory.role:{role.role_id}",
+        )
         provider_registry = create_default_provider_registry(
             openai_compatible_builder=lambda config: OpenAICompatibleProvider(
                 config,
@@ -221,7 +227,7 @@ def create_provider_factory(
                 mcp_registry=mcp_registry,
                 skill_registry=skill_registry,
                 allowed_tools=tool_registry.resolve_known(
-                    role.tools,
+                    runtime_tool_names,
                     context=ToolResolutionContext(session_id=session_id or ""),
                     strict=False,
                     consumer=f"providers.provider_factory.role:{role.role_id}",

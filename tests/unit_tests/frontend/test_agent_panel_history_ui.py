@@ -165,6 +165,187 @@ function createNode() {
     assert payload["summaryStatus"] == "Completed"
 
 
+def test_sync_agent_panel_state_hides_coordinator_tools_for_non_coordinator(
+    tmp_path: Path,
+) -> None:
+    payload = _run_history_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { syncAgentPanelState } = await import('./history.mjs');
+const { state } = await import('./mockState.mjs');
+const { setPanel } = await import('./mockPanelState.mjs');
+
+state.coordinatorRoleId = 'Coordinator';
+state.sessionAgents = [
+    {
+        instance_id: 'inst-1',
+        role_id: 'writer',
+        status: 'completed',
+        runtime_system_prompt: 'You are the runtime writer.',
+        runtime_tools_json: JSON.stringify({
+            local_tools: [
+                { source: 'local', name: 'read' },
+                { source: 'local', name: 'orch_dispatch_task' },
+                'orch_update_task',
+            ],
+            skill_tools: [],
+            mcp_tools: [],
+        }),
+    },
+];
+
+const panelEl = createPanelElement();
+setPanel('inst-1', {
+    panelEl,
+    scrollEl: panelEl.querySelector('.agent-panel-scroll'),
+    loadedSessionId: 'session-1',
+    loadedRunId: 'run-1',
+});
+
+syncAgentPanelState('inst-1', 'writer');
+
+console.log(JSON.stringify({
+    toolsHtml: panelEl.querySelector('.agent-panel-runtime-tools-body').innerHTML,
+    toolsMeta: panelEl.querySelector('.agent-panel-runtime-tools-meta').textContent,
+}));
+
+function createPanelElement() {
+    return {
+        _nodes: new Map([
+            ['.agent-panel-scroll', createNode()],
+            ['.agent-panel-runtime-prompt-meta', createNode()],
+            ['.agent-panel-runtime-prompt-body', createNode()],
+            ['.agent-panel-runtime-tools-meta', createNode()],
+            ['.agent-panel-runtime-tools-body', createNode()],
+            ['.agent-panel-reflection-meta', createNode()],
+            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-summary-status', createNode()],
+            ['.agent-panel-summary-updated', createNode()],
+            ['.agent-panel-summary-tasks', createNode()],
+            ['.agent-token-usage[data-instance-id="inst-1"]', createNode()],
+        ]),
+        querySelector(selector) {
+            return this._nodes.get(selector) || null;
+        },
+    };
+}
+
+function createNode() {
+    return {
+        innerHTML: '',
+        textContent: '',
+        className: '',
+        dataset: {},
+    };
+}
+""".strip(),
+    )
+
+    tools_html = cast(str, payload["toolsHtml"])
+    assert "read" in tools_html
+    assert "orch_dispatch_task" not in tools_html
+    assert "orch_update_task" not in tools_html
+    assert payload["toolsMeta"] == "1 tools"
+
+
+def test_load_agent_history_keeps_rendered_history_when_auxiliary_fetch_fails(
+    tmp_path: Path,
+) -> None:
+    payload = _run_history_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+export async function fetchAgentMessages() {
+    return [
+        {
+            role: 'assistant',
+            role_id: 'writer',
+            instance_id: 'inst-1',
+            message: {
+                parts: [{ part_kind: 'text', content: 'persisted history' }],
+            },
+        },
+    ];
+}
+
+export async function fetchAgentReflection() {
+    throw new Error('reflection unavailable');
+}
+
+export async function fetchRunTokenUsage() {
+    throw new Error('usage unavailable');
+}
+""".strip(),
+        mock_message_renderer_source="""
+export function getInstanceStreamOverlay() {
+    return null;
+}
+
+export function bindStreamOverlayToContainer() {
+    return null;
+}
+
+export function renderHistoricalMessageList(container, messages) {
+    container.innerHTML = `rendered:${messages.length}`;
+}
+""".strip(),
+        runner_source="""
+const { loadAgentHistory } = await import('./history.mjs');
+const { state } = await import('./mockState.mjs');
+const { setPanel } = await import('./mockPanelState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+
+const panelEl = createPanelElement();
+setPanel('inst-1', {
+    panelEl,
+    scrollEl: panelEl.querySelector('.agent-panel-scroll'),
+    loadedSessionId: '',
+    loadedRunId: '',
+});
+
+await loadAgentHistory('inst-1', 'writer');
+
+console.log(JSON.stringify({
+    scrollHtml: panelEl.querySelector('.agent-panel-scroll').innerHTML,
+    loadedSessionId: panelEl.__panelRecord?.loadedSessionId || '',
+}));
+
+function createPanelElement() {
+    return {
+        _nodes: new Map([
+            ['.agent-panel-scroll', createNode()],
+            ['.agent-panel-runtime-prompt-meta', createNode()],
+            ['.agent-panel-runtime-prompt-body', createNode()],
+            ['.agent-panel-runtime-tools-meta', createNode()],
+            ['.agent-panel-runtime-tools-body', createNode()],
+            ['.agent-panel-reflection-meta', createNode()],
+            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-summary-status', createNode()],
+            ['.agent-panel-summary-updated', createNode()],
+            ['.agent-panel-summary-tasks', createNode()],
+            ['.agent-token-usage[data-instance-id="inst-1"]', createNode()],
+        ]),
+        querySelector(selector) {
+            return this._nodes.get(selector) || null;
+        },
+    };
+}
+
+function createNode() {
+    return {
+        innerHTML: '',
+        textContent: '',
+        className: '',
+        dataset: {},
+    };
+}
+""".strip(),
+    )
+
+    assert payload["scrollHtml"] == "rendered:1"
+
+
 def _run_history_script(
     tmp_path: Path,
     runner_source: str,

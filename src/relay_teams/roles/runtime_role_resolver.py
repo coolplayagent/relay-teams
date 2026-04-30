@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
+
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
+from relay_teams.logger import get_logger, log_event
+from relay_teams.roles.default_role_tools import COORDINATOR_ONLY_TOOLS
+from relay_teams.roles.role_registry import is_coordinator_role_definition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.temporary_role_models import (
     TemporaryRoleRecord,
@@ -9,6 +14,8 @@ from relay_teams.roles.temporary_role_models import (
     TemporaryRoleSpec,
 )
 from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
+
+LOGGER = get_logger(__name__)
 
 
 class RuntimeRoleResolver:
@@ -98,6 +105,7 @@ class RuntimeRoleResolver:
             )
         if role.template_role_id is not None:
             role = self._merge_with_template(run_id=run_id, role=role)
+        role = self._strip_coordinator_only_tools(role)
         record = self._temporary_role_repository.upsert(
             TemporaryRoleRecord(
                 run_id=run_id,
@@ -121,6 +129,12 @@ class RuntimeRoleResolver:
         if template_role_id is None:
             return role
         template = self.get_effective_role(run_id=run_id, role_id=template_role_id)
+        if self._role_registry.is_coordinator_role(
+            template.role_id
+        ) or is_coordinator_role_definition(template):
+            raise ValueError(
+                "Coordinator role cannot be used as a temporary role template"
+            )
         return TemporaryRoleSpec(
             role_id=role.role_id,
             name=role.name,
@@ -141,3 +155,25 @@ class RuntimeRoleResolver:
             system_prompt=role.system_prompt,
             template_role_id=role.template_role_id,
         )
+
+    @staticmethod
+    def _strip_coordinator_only_tools(role: TemporaryRoleSpec) -> TemporaryRoleSpec:
+        filtered_tools = tuple(
+            tool for tool in role.tools if tool not in COORDINATOR_ONLY_TOOLS
+        )
+        if filtered_tools == role.tools:
+            return role
+        removed_tools = tuple(
+            tool for tool in role.tools if tool in COORDINATOR_ONLY_TOOLS
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="roles.temporary.filtered_coordinator_only_tools",
+            message="Filtered coordinator-only tools from temporary role",
+            payload={
+                "role_id": role.role_id,
+                "removed_tools": list(removed_tools),
+            },
+        )
+        return role.model_copy(update={"tools": filtered_tools})

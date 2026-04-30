@@ -17,6 +17,15 @@ import {
     getPendingApprovalsForPanel,
 } from './state.js';
 
+const COORDINATOR_ONLY_TOOL_NAMES = new Set([
+    'orch_create_tasks',
+    'orch_create_temporary_role',
+    'orch_update_task',
+    'orch_list_available_roles',
+    'orch_list_delegated_tasks',
+    'orch_dispatch_task',
+]);
+
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
         (result, [name, value]) => result.replaceAll(`{${name}}`, String(value)),
@@ -94,12 +103,44 @@ function renderRuntimeTools(panelEl, sessionAgent) {
         parsed = null;
     }
 
-    const pretty = parsed ? JSON.stringify(parsed, null, 2) : raw;
-    const toolCount = parsed ? countRuntimeTools(parsed) : 0;
+    const displayPayload = sanitizeRuntimeToolsForDisplay(parsed, sessionAgent);
+    const pretty = displayPayload ? JSON.stringify(displayPayload, null, 2) : raw;
+    const toolCount = displayPayload ? countRuntimeTools(displayPayload) : 0;
     metaEl.textContent = toolCount > 0
         ? t('subagent.tools_count').replace('{count}', String(toolCount))
         : t('subagent.json_snapshot');
     bodyEl.innerHTML = `<pre class="agent-panel-json-pre"><code>${escapeHtml(pretty)}</code></pre>`;
+}
+
+function sanitizeRuntimeToolsForDisplay(payload, sessionAgent) {
+    if (!payload || typeof payload !== 'object' || isCoordinatorRuntimeRole(sessionAgent)) {
+        return payload;
+    }
+    if (!Array.isArray(payload.local_tools)) {
+        return payload;
+    }
+    return {
+        ...payload,
+        local_tools: payload.local_tools.filter(
+            tool => !COORDINATOR_ONLY_TOOL_NAMES.has(getRuntimeToolName(tool)),
+        ),
+    };
+}
+
+function getRuntimeToolName(tool) {
+    if (tool && typeof tool === 'object') {
+        return String(tool.name || '').trim();
+    }
+    return String(tool || '').trim();
+}
+
+function isCoordinatorRuntimeRole(sessionAgent) {
+    const roleId = String(sessionAgent?.role_id || '').trim();
+    if (!roleId) {
+        return false;
+    }
+    const coordinatorRoleId = String(state.coordinatorRoleId || 'Coordinator').trim();
+    return roleId.toLowerCase() === coordinatorRoleId.toLowerCase();
 }
 
 function countRuntimeTools(payload) {
@@ -432,43 +473,62 @@ export async function loadAgentHistory(instanceId, roleId = null) {
     if (!panel) return;
     const scrollEl = panel.scrollEl;
     const runId = state.activeRunId || getActiveRoundRunId();
+    const recoveryApprovals = (
+        state.currentRecoverySnapshot?.pendingToolApprovals || []
+    ).filter(item => {
+        const itemInstance = String(item?.instance_id || '');
+        if (itemInstance && itemInstance === instanceId) return true;
+        const itemRole = String(item?.role_id || '');
+        return !!roleId && itemRole === roleId;
+    });
+    const pendingToolApprovals = [
+        ...getPendingApprovalsForPanel(instanceId, roleId),
+        ...recoveryApprovals,
+    ];
     try {
         scrollEl.innerHTML = `<div class="panel-loading">${escapeHtml(t('agent_panel.history.loading'))}</div>`;
-        const recoveryApprovals = (
-            state.currentRecoverySnapshot?.pendingToolApprovals || []
-        ).filter(item => {
-            const itemInstance = String(item?.instance_id || '');
-            if (itemInstance && itemInstance === instanceId) return true;
-            const itemRole = String(item?.role_id || '');
-            return !!roleId && itemRole === roleId;
+        const historyResult = await renderInstanceHistoryInto(scrollEl, {
+            sessionId: state.currentSessionId,
+            instanceId,
+            runId,
+            pendingToolApprovals,
+            emptyLabel: t('agent_panel.history.empty'),
+            loadFailedLabel: t('agent_panel.history.load_failed'),
+            userRoleLabel: t('subagent.task_prompt'),
         });
-        const pendingToolApprovals = [
-            ...getPendingApprovalsForPanel(instanceId, roleId),
-            ...recoveryApprovals,
-        ];
-        const [historyResult, runUsage, reflection] = await Promise.all([
-            renderInstanceHistoryInto(scrollEl, {
-                sessionId: state.currentSessionId,
-                instanceId,
-                runId,
-                pendingToolApprovals,
-                emptyLabel: t('agent_panel.history.empty'),
-                loadFailedLabel: t('agent_panel.history.load_failed'),
-                userRoleLabel: t('subagent.task_prompt'),
-            }),
-            runId && runId !== '__live__'
-                ? fetchRunTokenUsage(state.currentSessionId, runId)
-                : Promise.resolve(null),
-            fetchAgentReflection(state.currentSessionId, instanceId),
-        ]);
         panel.loadedSessionId = state.currentSessionId || '';
         panel.loadedRunId = runId || '';
-        renderTokenBadge(panel.panelEl, instanceId, runUsage);
         syncAgentPanelState(instanceId, roleId);
-        renderReflection(panel.panelEl, reflection);
         void historyResult;
     } catch (e) {
         scrollEl.innerHTML =
             `<div class="panel-empty" style="color:var(--danger)">${escapeHtml(t('agent_panel.history.load_failed'))}</div>`;
+        syncAgentPanelState(instanceId, roleId);
+        return;
+    }
+    const [runUsage, reflection] = await Promise.all([
+        fetchRunUsageForPanel(state.currentSessionId, runId),
+        fetchReflectionForPanel(state.currentSessionId, instanceId),
+    ]);
+    renderTokenBadge(panel.panelEl, instanceId, runUsage);
+    renderReflection(panel.panelEl, reflection);
+}
+
+async function fetchRunUsageForPanel(sessionId, runId) {
+    if (!runId || runId === '__live__') {
+        return null;
+    }
+    try {
+        return await fetchRunTokenUsage(sessionId, runId);
+    } catch {
+        return null;
+    }
+}
+
+async function fetchReflectionForPanel(sessionId, instanceId) {
+    try {
+        return await fetchAgentReflection(sessionId, instanceId);
+    } catch {
+        return null;
     }
 }

@@ -144,7 +144,7 @@ def _build_factory(
         skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
-        role_registry=cast(RoleRegistry, object()),
+        role_registry=RoleRegistry(),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
@@ -294,7 +294,7 @@ def test_create_provider_factory_uses_session_override_for_default_profile(
         skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
-        role_registry=cast(RoleRegistry, object()),
+        role_registry=RoleRegistry(),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
@@ -366,7 +366,7 @@ def test_create_provider_factory_keeps_fallback_middleware_for_session_override(
         skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
-        role_registry=cast(RoleRegistry, object()),
+        role_registry=RoleRegistry(),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
@@ -451,7 +451,7 @@ def test_create_provider_factory_scopes_cooldown_registry_to_effective_profiles(
         skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
-        role_registry=cast(RoleRegistry, object()),
+        role_registry=RoleRegistry(),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
@@ -540,7 +540,12 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
         base_url="https://default.example/v1",
         api_key="default-key",
     )
-    tool_registry = ToolRegistry({"read": lambda _agent: None})
+    tool_registry = ToolRegistry(
+        {
+            "read": lambda _agent: None,
+            "orch_dispatch_task": lambda _agent: None,
+        }
+    )
     mcp_registry = McpRegistry(
         (
             McpServerSpec(
@@ -601,7 +606,7 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
         skill_registry=skill_registry,
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
-        role_registry=cast(RoleRegistry, object()),
+        role_registry=RoleRegistry(),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),
@@ -619,7 +624,7 @@ def test_create_provider_factory_filters_unknown_runtime_capabilities(
             name="Spec Coder",
             description="Implements requested changes.",
             version="1.0.0",
-            tools=("read", "missing_tool"),
+            tools=("read", "orch_dispatch_task", "missing_tool"),
             mcp_servers=("docs", "missing_server"),
             skills=("time", "missing_skill"),
             model_profile="default",
@@ -679,7 +684,7 @@ def test_create_provider_factory_passes_background_task_service_to_provider(
         skill_registry=SkillRegistry(directory=_missing_skill_directory()),
         message_repo=cast(MessageRepository, object()),
         session_history_marker_repo=cast(SessionHistoryMarkerRepository, object()),
-        role_registry=cast(RoleRegistry, object()),
+        role_registry=RoleRegistry(),
         get_task_service=lambda: cast(TaskOrchestrationService, object()),
         run_control_manager=cast(RunControlManager, object()),
         tool_approval_manager=cast(ToolApprovalManager, object()),

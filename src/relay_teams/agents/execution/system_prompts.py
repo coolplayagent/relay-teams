@@ -37,6 +37,7 @@ from relay_teams.roles.role_registry import (
     is_coordinator_role_definition,
     is_main_agent_role_definition,
 )
+from relay_teams.roles.runtime_tools import runtime_tools_for_role
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.run_models import (
     RuntimePromptConversationContext,
@@ -749,6 +750,7 @@ async def build_available_roles_prompt(
     role_blocks = await asyncio.gather(
         *[
             _build_available_role_block(
+                role_registry=role_registry,
                 role=role,
                 role_source=(
                     "static" if role.role_id in static_role_ids else "temporary"
@@ -930,17 +932,23 @@ async def _emit_instructions_loaded_hook(
 
 async def _build_available_role_block(
     *,
+    role_registry: RoleRegistry,
     role: RoleDefinition,
     role_source: str,
     mcp_registry: McpRegistry,
 ) -> str:
     mcp_tools = await _list_role_mcp_tools(role=role, mcp_registry=mcp_registry)
+    runtime_tools = runtime_tools_for_role(
+        role_registry=role_registry,
+        role=role,
+        consumer="agents.execution.system_prompts.available_roles",
+    )
     return "\n".join(
         (
             ROLE_BLOCK_HEADING_PREFIX + role.role_id,
             ROLE_BLOCK_SOURCE_PREFIX + role_source,
             ROLE_BLOCK_DESCRIPTION_PREFIX + role.description,
-            ROLE_BLOCK_TOOLS_PREFIX + _format_names(role.tools),
+            ROLE_BLOCK_TOOLS_PREFIX + _format_names(runtime_tools),
             ROLE_BLOCK_MCP_TOOLS_PREFIX + _format_names(mcp_tools),
             ROLE_BLOCK_SKILLS_PREFIX + _format_names(role.skills),
         )

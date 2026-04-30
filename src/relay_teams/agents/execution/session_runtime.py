@@ -47,6 +47,7 @@ from relay_teams.media import user_prompt_content_to_text
 from relay_teams.providers.llm_retry import extract_retry_error_info
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.runtime_tools import runtime_tools_for_role
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.injection_classification import (
@@ -190,7 +191,11 @@ def resolve_role_allowed_tools(
 ) -> tuple[str, ...]:
     try:
         role = cast(RoleRegistry, role_registry).get(role_id)
-        configured_tools = role.tools
+        configured_tools = runtime_tools_for_role(
+            role_registry=cast(RoleRegistry, role_registry),
+            role=role,
+            consumer="agents.execution.session_runtime.resolve_role_allowed_tools",
+        )
     except KeyError:
         configured_tools = fallback_allowed_tools
     return resolve_allowed_tools(

@@ -5,6 +5,8 @@ from pydantic import JsonValue
 
 from pydantic_ai import Agent
 
+from relay_teams.roles.role_registry import is_coordinator_role_definition
+from relay_teams.roles.runtime_tools import runtime_tools_for_role
 from relay_teams.tools._description_loader import load_tool_description
 from relay_teams.tools.runtime.context import (
     ToolContext,
@@ -32,6 +34,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 role
                 for role in source_roles
                 if not ctx.deps.role_registry.is_coordinator_role(role.role_id)
+                and not is_coordinator_role_definition(role)
                 and not ctx.deps.role_registry.is_main_agent_role(role.role_id)
             ]
             return {
@@ -39,7 +42,15 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     {
                         "role_id": role.role_id,
                         "name": role.name,
-                        "tools": list(role.tools),
+                        "tools": list(
+                            runtime_tools_for_role(
+                                role_registry=ctx.deps.role_registry,
+                                role=role,
+                                consumer=(
+                                    "tools.orchestration_tools.list_available_roles"
+                                ),
+                            )
+                        ),
                         "source": (
                             "static"
                             if any(
