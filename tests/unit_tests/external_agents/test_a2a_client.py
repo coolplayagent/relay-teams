@@ -35,6 +35,47 @@ def _request_read_timeout(request: httpx.Request) -> float | None:
     return float(read_timeout)
 
 
+class _PollingA2aClient(a2a_client.A2aHttpClient):
+    def __init__(self, *, complete_after_attempts: int) -> None:
+        super().__init__(
+            transport=StreamableHttpTransportConfig(url="http://agent.test/a2a")
+        )
+        self.complete_after_attempts = complete_after_attempts
+        self.requests = 0
+
+    async def _post_json_rpc(
+        self,
+        *,
+        endpoint: str,
+        payload: dict[str, JsonValue],
+        timeout_seconds: float,
+    ) -> dict[str, JsonValue]:
+        _ = (endpoint, payload, timeout_seconds)
+        self.requests += 1
+        state = (
+            "completed" if self.requests >= self.complete_after_attempts else "working"
+        )
+        artifacts: list[JsonValue] = []
+        if state == "completed":
+            artifacts.append(
+                {
+                    "artifactId": "artifact-1",
+                    "parts": [{"kind": "text", "text": "done"}],
+                }
+            )
+        return {
+            "jsonrpc": "2.0",
+            "id": "a2a-test",
+            "result": {
+                "kind": "task",
+                "id": "task-remote",
+                "contextId": "ctx-1",
+                "status": {"state": state},
+                "artifacts": artifacts,
+            },
+        }
+
+
 @pytest.mark.asyncio
 async def test_probe_a2a_agent_fetches_agent_card(
     monkeypatch: pytest.MonkeyPatch,
@@ -314,6 +355,28 @@ async def test_send_a2a_prompt_raises_for_failed_task_state(
             metadata={},
             timeout_seconds=3,
         )
+
+
+@pytest.mark.asyncio
+async def test_poll_task_uses_deadline_instead_of_fixed_attempt_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_sleep(_seconds: float) -> None:
+        return
+
+    monkeypatch.setattr(a2a_client.asyncio, "sleep", fake_sleep)
+    client = _PollingA2aClient(complete_after_attempts=65)
+    deadline = a2a_client.asyncio.get_running_loop().time() + 10
+
+    result = await client._poll_task(
+        endpoint="http://agent.test/a2a",
+        task_id="task-remote",
+        deadline=deadline,
+        timeout_seconds=10,
+    )
+
+    assert result.text == "done"
+    assert client.requests == 65
 
 
 @pytest.mark.asyncio

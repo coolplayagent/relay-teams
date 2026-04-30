@@ -24,7 +24,6 @@ _A2A_AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent.json"
 _A2A_SUCCESS_TASK_STATES = {"completed"}
 _A2A_FAILURE_TASK_STATES = {"canceled", "failed", "rejected"}
 _A2A_POLL_INTERVAL_SECONDS = 1.0
-_A2A_MAX_POLL_ATTEMPTS = 60
 
 
 class A2aClientError(RuntimeError):
@@ -283,7 +282,7 @@ class A2aHttpClient:
         deadline: float,
         timeout_seconds: float,
     ) -> A2aPromptResult:
-        for _index in range(_A2A_MAX_POLL_ATTEMPTS):
+        while True:
             await asyncio.sleep(
                 min(
                     _A2A_POLL_INTERVAL_SECONDS,
@@ -312,7 +311,6 @@ class A2aHttpClient:
                 return latest
             if latest.task_id is None:
                 raise A2aClientError("A2A task response did not include a task id")
-        raise A2aClientError(f"A2A task {task_id} did not complete before timeout")
 
     async def _resolve_endpoint_url(self, *, timeout_seconds: float) -> str:
         if _looks_like_agent_card_url(self._transport.url):
