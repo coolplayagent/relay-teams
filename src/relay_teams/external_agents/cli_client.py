@@ -90,8 +90,8 @@ async def probe_cli_agent(config: ExternalAgentConfig) -> ExternalAgentTestResul
     client: _StdioCliJsonRpcClient | None = None
     try:
         transport = _stdio_transport(config)
-        command = str(transport.command)
-        resolved = shutil.which(command)
+        command: str = str(transport.command)
+        resolved = shutil.which(cmd=command)
         if resolved is None and not Path(command).exists():
             raise CliAgentError(f"CLI command not found: {command}")
         client = _StdioCliJsonRpcClient(
@@ -193,7 +193,7 @@ def _build_codex_app_server_args(args: tuple[str, ...]) -> tuple[str, ...]:
 def _ensure_codex_stdio_listener(args: tuple[str, ...]) -> tuple[str, ...]:
     if _has_codex_app_server_listen(args):
         return args
-    return (*args, "--listen", _CODEX_APP_SERVER_LISTENER)
+    return args + ("--listen", _CODEX_APP_SERVER_LISTENER)
 
 
 def _migrate_legacy_codex_args(args: tuple[str, ...]) -> tuple[str, ...]:
@@ -498,7 +498,8 @@ class _StdioCliJsonRpcClient:
         try:
             return await future
         finally:
-            self._pending.pop(request_id, None)
+            if request_id in self._pending:
+                del self._pending[request_id]
 
     async def send_notification(
         self,
