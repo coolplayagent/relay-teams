@@ -357,8 +357,10 @@ def test_codex_global_app_server_options_are_preserved_during_migration() -> Non
         transport=StdioTransportConfig(
             command="codex",
             args=(
-                "--config",
+                "-c",
                 "model='gpt-5.5'",
+                "--config",
+                "provider='openai'",
                 "--disable",
                 "telemetry",
                 "--analytics-default-enabled",
@@ -370,8 +372,10 @@ def test_codex_global_app_server_options_are_preserved_during_migration() -> Non
         "app-server",
         "--listen",
         "stdio://",
-        "--config",
+        "-c",
         "model='gpt-5.5'",
+        "--config",
+        "provider='openai'",
         "--disable",
         "telemetry",
         "--analytics-default-enabled",

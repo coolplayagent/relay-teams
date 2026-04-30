@@ -235,14 +235,14 @@ def _migrate_legacy_codex_args(args: tuple[str, ...]) -> tuple[str, ...]:
             break
         if arg in _CODEX_LEGACY_EXEC_SUBCOMMANDS:
             continue
-        if option_name in _CODEX_LEGACY_EXEC_VALUE_OPTIONS:
-            skip_next = "=" not in arg
-            continue
         if arg in _CODEX_LEGACY_EXEC_FLAG_OPTIONS:
             continue
         if option_name in _CODEX_APP_SERVER_VALUE_OPTIONS:
             migrated.append(arg)
             copy_next = "=" not in arg
+            continue
+        if option_name in _CODEX_LEGACY_EXEC_VALUE_OPTIONS:
+            skip_next = "=" not in arg
             continue
         if arg == "--analytics-default-enabled":
             migrated.append(arg)
