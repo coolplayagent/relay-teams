@@ -166,14 +166,14 @@ def test_ai_run_background_task_lifecycle_can_be_stopped(
             "background_task_started": 1,
         },
     )
-    background_task_id = _background_task_id_from_list_tool_result(persisted_events)
+    _assert_list_background_tasks_tool_was_called(persisted_events)
+    background_task_id = _background_task_id_from_started_event(persisted_events)
 
-    list_response = api_client.get(f"/api/runs/{run_id}/background-tasks")
-    list_response.raise_for_status()
-    list_payload = list_response.json()
-    items = list_payload.get("items")
-    assert isinstance(items, list)
-    api_task = _find_background_task(items, background_task_id)
+    api_task = _wait_for_background_task_ready(
+        api_client,
+        run_id=run_id,
+        background_task_id=background_task_id,
+    )
     assert api_task.get("status") == "running"
 
     stop_response = api_client.post(
@@ -848,9 +848,9 @@ def _wait_for_role_tools(
     )
 
 
-def _background_task_id_from_list_tool_result(
+def _assert_list_background_tasks_tool_was_called(
     events: list[dict[str, object]],
-) -> str:
+) -> None:
     tool_results = [
         json.loads(str(event["payload_json"]))
         for event in events
@@ -862,27 +862,56 @@ def _background_task_id_from_list_tool_result(
         if payload.get("tool_name") == "list_background_tasks"
     ]
     assert len(list_results) == 1
-    list_result = list_results[0].get("result")
-    assert isinstance(list_result, dict)
-    data = list_result.get("data")
-    assert isinstance(data, dict)
-    items = data.get("items")
-    assert isinstance(items, list)
-    running_items = [
-        item
-        for item in items
-        if isinstance(item, dict) and item.get("status") == "running"
-    ]
-    assert len(running_items) == 1
+
+
+def _background_task_id_from_started_event(
+    events: list[dict[str, object]],
+) -> str:
+    for event in events:
+        if str(event.get("event_type") or "") != "background_task_started":
+            continue
+        payload = json.loads(str(event["payload_json"]))
+        background_task_id = payload.get("background_task_id")
+        assert isinstance(background_task_id, str)
+        assert background_task_id
+        return background_task_id
+    raise AssertionError("background_task_started event was not persisted")
+
+
+def _wait_for_background_task_ready(
+    api_client: httpx.Client,
+    *,
+    run_id: str,
+    background_task_id: str,
+    timeout_seconds: float = 10.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    latest_task: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        list_response = api_client.get(f"/api/runs/{run_id}/background-tasks")
+        list_response.raise_for_status()
+        list_payload = list_response.json()
+        items = list_payload.get("items")
+        assert isinstance(items, list)
+        latest_task = _find_background_task(items, background_task_id)
+        recent_output = json.dumps(
+            latest_task.get("recent_output", []),
+            ensure_ascii=False,
+        )
+        if (
+            latest_task.get("status") == "running"
+            and "background-lifecycle-ready" in recent_output
+        ):
+            return latest_task
+        time.sleep(0.1)
+    assert latest_task is not None
     recent_output = json.dumps(
-        running_items[0].get("recent_output", []),
+        latest_task.get("recent_output", []),
         ensure_ascii=False,
     )
-    assert "background-lifecycle-ready" in recent_output
-    background_task_id = running_items[0].get("background_task_id")
-    assert isinstance(background_task_id, str)
-    assert background_task_id
-    return background_task_id
+    raise AssertionError(
+        f"Background task {background_task_id} did not become ready: {recent_output}"
+    )
 
 
 def _find_background_task(

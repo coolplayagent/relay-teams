@@ -81,7 +81,8 @@ class _AsyncBlockingRunner:
             running_loop = None
         if running_loop is loop:
             raise RuntimeError("Cannot block on SQLite async bridge from its own loop")
-        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result()
 
     def _run_loop(self) -> None:
         loop = asyncio.new_event_loop()

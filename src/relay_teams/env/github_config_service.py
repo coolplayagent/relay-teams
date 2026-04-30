@@ -70,6 +70,12 @@ class GitHubConfigService:
             webhook_base_url=config.webhook_base_url,
         )
 
+    def has_configured_token_reference(self) -> bool:
+        env_values = load_env_file(self._config_dir / ".env")
+        if resolve_github_token_from_env(env_values) is not None:
+            return True
+        return self._secret_store.has_token_reference(self._config_dir)
+
     def reveal_github_token(self) -> GitHubTokenRevealView:
         config = self.get_github_config()
         return GitHubTokenRevealView(token=config.token)

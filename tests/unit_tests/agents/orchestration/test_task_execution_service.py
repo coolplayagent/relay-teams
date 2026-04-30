@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import gc
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import cast
 
 import pytest
 import pytest_asyncio
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, UserPromptPart
 
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -18,6 +18,7 @@ from relay_teams.agents.execution.system_prompts import RuntimePromptSections
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agents.orchestration.harnesses.tool_harness import TaskToolHarness
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventType
@@ -31,8 +32,8 @@ from relay_teams.media import (
 )
 from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.persistence import close_live_sqlite_repositories_async
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.reminders import ReminderStateRepository, SystemReminderService
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.roles.memory_repository import RoleMemoryRepository
@@ -72,7 +73,9 @@ from relay_teams.skills.skill_routing_models import (
 )
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry.defaults import build_default_registry
+from relay_teams.tools.registry.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.workspace import (
     WorkspaceManager,
     build_conversation_id,
@@ -82,13 +85,7 @@ from relay_teams.workspace import (
 @pytest_asyncio.fixture(autouse=True)
 async def _close_async_sqlite_repositories_after_test() -> AsyncIterator[None]:
     yield
-    repositories = tuple(
-        repository
-        for repository in gc.get_objects()
-        if issubclass(type(repository), SharedSqliteRepository)
-    )
-    for repository in repositories:
-        await repository.close_async()
+    await close_live_sqlite_repositories_async()
 
 
 class _CapturingProvider:
@@ -1629,6 +1626,48 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
         "Write full file contents to the workspace."
     )
     assert "orch_dispatch_task" not in writer_tools
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_tools_snapshot_accepts_agent_tool_keyword_options(
+    tmp_path: Path,
+) -> None:
+    role_registry = RoleRegistry()
+    role = RoleDefinition(
+        role_id="generated_tool_user",
+        name="Generated Tool User",
+        description="Uses generated tools.",
+        version="1",
+        tools=("generated_runtime_tool",),
+        mcp_servers=(),
+        skills=(),
+        system_prompt="Use generated tools.",
+    )
+    role_registry.register(role)
+
+    def register_generated_tool(agent: Agent[ToolDeps, str]) -> None:
+        @agent.tool(
+            name="generated_runtime_tool",
+            description="Generated tool description.",
+            timeout=31.0,
+            metadata={"source": "unit-test"},
+        )
+        def generated_tool(ctx: RunContext[ToolDeps]) -> str:
+            _ = ctx
+            return "ok"
+
+    harness = TaskToolHarness(
+        role_registry=role_registry,
+        tool_registry=ToolRegistry({"generated_runtime_tool": register_generated_tool}),
+        skill_registry=SkillRegistry.from_config_dirs(app_config_dir=tmp_path),
+        mcp_registry=McpRegistry(),
+    )
+
+    snapshot = await harness.build_runtime_tools_snapshot(role)
+
+    assert len(snapshot.local_tools) == 1
+    assert snapshot.local_tools[0].name == "generated_runtime_tool"
+    assert snapshot.local_tools[0].description == "Generated tool description."
 
 
 @pytest.mark.asyncio

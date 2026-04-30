@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import cast
@@ -758,6 +759,7 @@ def test_message_repo_skips_invalid_history_rows(tmp_path: Path) -> None:
     assert history[0].parts[0].content == "continue"
 
 
+@pytest.mark.timeout(15)
 def test_message_repo_append_is_thread_safe_under_parallel_writes(
     tmp_path: Path,
 ) -> None:
@@ -779,11 +781,51 @@ def test_message_repo_append_is_thread_safe_under_parallel_writes(
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = [pool.submit(_write, i) for i in range(200)]
         for future in futures:
-            future.result()
+            future.result(timeout=10)
 
     row = repo._conn.execute("SELECT COUNT(*) AS c FROM messages").fetchone()
     assert row is not None
     assert int(row["c"]) == 200
+
+
+def test_message_repo_first_append_after_restart_preserves_created_at_order(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "message_repo_restart_created_at.db"
+    repo = MessageRepository(db_path)
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[ModelRequest(parts=[UserPromptPart(content="existing")])],
+    )
+    persisted_created_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    repo._conn.execute(
+        "UPDATE messages SET created_at=? WHERE session_id=?",
+        (persisted_created_at.isoformat(), "session-1"),
+    )
+    repo._conn.commit()
+
+    restarted_repo = MessageRepository(db_path)
+    restarted_repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        instance_id="inst-1",
+        task_id="task-2",
+        trace_id="run-2",
+        messages=[ModelRequest(parts=[UserPromptPart(content="after restart")])],
+    )
+
+    rows = restarted_repo._conn.execute(
+        "SELECT created_at FROM messages WHERE session_id=? ORDER BY id ASC",
+        ("session-1",),
+    ).fetchall()
+    created_at_values = [datetime.fromisoformat(str(row["created_at"])) for row in rows]
+
+    assert len(created_at_values) == 2
+    assert created_at_values[1] > created_at_values[0]
 
 
 def test_message_repo_normalizes_repaired_tool_call_args_before_persist(

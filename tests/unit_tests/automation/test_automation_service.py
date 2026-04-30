@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import sqlite3
@@ -36,19 +37,23 @@ from relay_teams.agents.orchestration.settings_models import (
     OrchestrationSettings,
 )
 from relay_teams.automation.automation_repository import AutomationProjectRepository
-from relay_teams.automation.automation_service import AutomationService
+import relay_teams.automation.automation_service as automation_service_module
 from relay_teams.automation.feishu_binding_service import (
     AutomationFeishuBindingService,
 )
 from relay_teams.automation.xiaoluban_binding_service import (
     AutomationXiaolubanBindingService,
 )
+from relay_teams.gateway.session_ingress_service import (
+    GatewaySessionIngressResult,
+    GatewaySessionIngressStatus,
+)
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.roles import RoleRegistry
 from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.session_repository import SessionRepository
-from relay_teams.sessions.session_models import SessionMode
+from relay_teams.sessions.session_models import ProjectKind, SessionMode
 from relay_teams.sessions.session_service import SessionService
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.workspace import WorkspaceRepository, WorkspaceService
@@ -64,8 +69,14 @@ class _FakeRunService:
         self.create_calls.append(intent)
         return (f"run-{len(self.create_calls)}", cast(str, session_id))
 
+    async def create_run_async(self, intent: object) -> tuple[str, str]:
+        return self.create_run(intent)
+
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
 
 
 class _FakeBoundSessionQueueService:
@@ -101,6 +112,9 @@ class _FakeFeishuBindingService:
     def validate_binding(self, binding: object) -> object:
         return binding
 
+    def list_candidates(self) -> tuple[object, ...]:
+        return ()
+
 
 class _FakeXiaolubanBindingService:
     def __init__(self) -> None:
@@ -113,17 +127,52 @@ class _FakeXiaolubanBindingService:
             raise ValueError("Xiaoluban account cannot receive delivery")
         return binding
 
+    def list_candidates(self) -> tuple[object, ...]:
+        return ()
+
 
 class _FakeDeliveryService:
     def __init__(self, *, has_project_deliveries: bool = False) -> None:
         self._has_project_deliveries = has_project_deliveries
         self.deleted_project_ids: list[str] = []
+        self.register_calls: list[tuple[str, str, str, str]] = []
 
     def has_project_deliveries(self, automation_project_id: str) -> bool:
         return self._has_project_deliveries
 
     def delete_project_deliveries(self, automation_project_id: str) -> None:
         self.deleted_project_ids.append(automation_project_id)
+
+    def register_run(
+        self,
+        *,
+        project: object,
+        session_id: str,
+        run_id: str,
+        reason: str,
+    ) -> object:
+        automation_project_id = getattr(project, "automation_project_id")
+        self.register_calls.append(
+            (cast(str, automation_project_id), session_id, run_id, reason)
+        )
+        return object()
+
+
+class _FakeSessionIngressService:
+    def __init__(self, *, run_id: str | None = "ingress-run-1") -> None:
+        self._run_id = run_id
+        self.requests: list[object] = []
+
+    async def require_started_async(
+        self,
+        request: object,
+    ) -> GatewaySessionIngressResult:
+        self.requests.append(request)
+        return GatewaySessionIngressResult(
+            status=GatewaySessionIngressStatus.STARTED,
+            session_id="ingress-session-1",
+            run_id=self._run_id,
+        )
 
 
 class _FakeRoleRegistry:
@@ -184,10 +233,13 @@ def _build_service(
     delivery_service: _FakeDeliveryService | None = None,
     feishu_binding_service: object | None = None,
     xiaoluban_binding_service: object | None = None,
+    session_ingress_service: object | None = None,
     role_registry: _FakeRoleRegistry | None = None,
     get_role_registry: Callable[[], _FakeRoleRegistry | None] | None = None,
     orchestration_settings_service: _FakeOrchestrationSettingsService | None = None,
-) -> tuple[AutomationService, _FakeRunService, SessionService]:
+) -> tuple[
+    automation_service_module.AutomationService, _FakeRunService, SessionService
+]:
     db_path = tmp_path / "automation.db"
     run_service = _FakeRunService()
     session_service = _build_session_service(db_path)
@@ -196,7 +248,7 @@ def _build_service(
         workspace_id="default",
         root_path=tmp_path,
     )
-    service = AutomationService(
+    service = automation_service_module.AutomationService(
         repository=AutomationProjectRepository(db_path),
         event_repository=AutomationEventRepository(db_path),
         session_service=session_service,
@@ -215,6 +267,10 @@ def _build_service(
             bound_session_queue_service,
         ),
         workspace_service=workspace_service,
+        session_ingress_service=cast(
+            automation_service_module.GatewaySessionIngressService | None,
+            session_ingress_service,
+        ),
         role_registry=cast(RoleRegistry | None, role_registry),
         get_role_registry=cast(
             Callable[[], RoleRegistry | None] | None, get_role_registry
@@ -283,6 +339,585 @@ def test_run_now_creates_automation_session_and_starts_run(tmp_path: Path) -> No
         "请直接完成以下任务：\n"
         "Draft a nightly report."
     )
+
+
+def test_async_run_now_creates_automation_session_and_starts_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, run_service, session_service = _build_service(tmp_path)
+
+    def fail_sync_create_session(**_kwargs: object) -> object:
+        raise AssertionError("async automation run path used sync session creation")
+
+    monkeypatch.setattr(session_service, "create_session", fail_sync_create_session)
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="nightly-report",
+                workspace_id="default",
+                prompt="Draft a nightly report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+            )
+        )
+
+        result = await service.run_now_async(created.automation_project_id)
+        sessions = await service.list_project_sessions_async(
+            created.automation_project_id
+        )
+
+        assert result["automation_project_id"] == created.automation_project_id
+        assert result["run_id"] == "run-1"
+        assert result["queued"] is False
+        assert len(sessions) == 1
+        session_payload = cast(dict[str, object], sessions[0])
+        metadata = cast(dict[str, str], session_payload["metadata"])
+        assert session_payload["project_id"] == created.automation_project_id
+        assert metadata["automation_reason"] == "manual"
+        assert len(run_service.create_calls) == 1
+        assert run_service.started_run_ids == ["run-1"]
+
+    asyncio.run(exercise())
+
+
+def test_async_project_queries_return_repository_records(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="query-report",
+            workspace_id="default",
+            prompt="Draft a query report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+        )
+    )
+
+    async def exercise() -> None:
+        records = await service.list_projects_async()
+        loaded = await service.get_project_async(created.automation_project_id)
+
+        assert [record.automation_project_id for record in records] == [
+            created.automation_project_id
+        ]
+        assert loaded.name == "query-report"
+
+    asyncio.run(exercise())
+
+
+def test_async_run_now_offloads_delivery_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delivery_service = _FakeDeliveryService()
+    service, _, _ = _build_service(
+        tmp_path,
+        delivery_service=delivery_service,
+        xiaoluban_binding_service=_FakeXiaolubanBindingService(),
+    )
+    offloaded_functions: list[str] = []
+
+    async def fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_functions.append(getattr(function, "__name__", ""))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(automation_service_module.asyncio, "to_thread", fake_to_thread)
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="delivery-report",
+                workspace_id="default",
+                prompt="Draft a delivery report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                delivery_binding=AutomationXiaolubanBinding(
+                    account_id="account-1",
+                    display_name="Xiaoluban",
+                    derived_uid="uid-1",
+                    source_label="Xiaoluban Account",
+                ),
+            )
+        )
+
+        result = await service.run_now_async(created.automation_project_id)
+
+        assert "register_run" in offloaded_functions
+        assert result["run_id"] == "run-1"
+        assert delivery_service.register_calls == [
+            (created.automation_project_id, result["session_id"], "run-1", "manual")
+        ]
+
+    asyncio.run(exercise())
+
+
+def test_async_run_now_uses_session_ingress_service(tmp_path: Path) -> None:
+    session_ingress_service = _FakeSessionIngressService(run_id="ingress-run-1")
+    service, run_service, _ = _build_service(
+        tmp_path,
+        session_ingress_service=session_ingress_service,
+    )
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="ingress-report",
+                workspace_id="default",
+                prompt="Draft an ingress report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+            )
+        )
+
+        result = await service.run_now_async(created.automation_project_id)
+
+        assert result["run_id"] == "ingress-run-1"
+        assert run_service.create_calls == []
+        assert len(session_ingress_service.requests) == 1
+        request = session_ingress_service.requests[0]
+        assert (
+            getattr(request, "busy_policy")
+            == automation_service_module.GatewaySessionIngressBusyPolicy.START_IF_IDLE
+        )
+
+    asyncio.run(exercise())
+
+
+def test_async_run_now_offloads_bound_session_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bound_queue_service = _FakeBoundSessionQueueService(
+        AutomationExecutionHandle(
+            session_id="bound-session-1",
+            run_id="bound-run-1",
+            queued=False,
+            reused_bound_session=False,
+        )
+    )
+    service, run_service, _ = _build_service(
+        tmp_path,
+        bound_session_queue_service=bound_queue_service,
+        feishu_binding_service=_FakeFeishuBindingService(),
+    )
+    offloaded_functions: list[str] = []
+
+    async def fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_functions.append(getattr(function, "__name__", ""))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(automation_service_module.asyncio, "to_thread", fake_to_thread)
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="nightly-report",
+                workspace_id="default",
+                prompt="Draft a nightly report.",
+                schedule_mode=AutomationScheduleMode.ONE_SHOT,
+                run_at=datetime(2026, 1, 1, tzinfo=UTC),
+                timezone="UTC",
+                delivery_binding=AutomationFeishuBinding(
+                    trigger_id="trg_feishu",
+                    tenant_key="tenant-1",
+                    chat_id="oc_123",
+                    session_id="bound-session-1",
+                    chat_type="group",
+                    source_label="Release Updates",
+                ),
+            )
+        )
+
+        result = await service.run_now_async(created.automation_project_id)
+        updated = await service.get_project_async(created.automation_project_id)
+
+        assert "_materialize_bound_session_execution" in offloaded_functions
+        assert result["session_id"] == "bound-session-1"
+        assert result["run_id"] == "bound-run-1"
+        assert result["reused_bound_session"] is True
+        assert updated.status == AutomationProjectStatus.DISABLED
+        assert bound_queue_service.materialize_calls == [
+            (created.automation_project_id, "manual")
+        ]
+        assert run_service.create_calls == []
+
+    asyncio.run(exercise())
+
+
+def test_async_binding_lists_offload_sync_binding_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        feishu_binding_service=_FakeFeishuBindingService(),
+        xiaoluban_binding_service=_FakeXiaolubanBindingService(),
+    )
+    offloaded_functions: list[str] = []
+
+    async def fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_functions.append(getattr(function, "__name__", ""))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(automation_service_module.asyncio, "to_thread", fake_to_thread)
+
+    async def exercise() -> None:
+        feishu_bindings = await service.list_feishu_bindings_async()
+        delivery_bindings = await service.list_delivery_bindings_async()
+
+        assert feishu_bindings == ()
+        assert delivery_bindings == ()
+        assert offloaded_functions == [
+            "list_feishu_bindings",
+            "list_delivery_bindings",
+        ]
+
+    asyncio.run(exercise())
+
+
+def test_async_project_mutations_offload_delivery_binding_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        xiaoluban_binding_service=_FakeXiaolubanBindingService(),
+    )
+    offloaded_functions: list[str] = []
+
+    async def fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_functions.append(getattr(function, "__name__", ""))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(automation_service_module.asyncio, "to_thread", fake_to_thread)
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="delivery-report",
+                workspace_id="default",
+                prompt="Draft a delivery report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+                delivery_binding=AutomationXiaolubanBinding(
+                    account_id="account-1",
+                    display_name="Xiaoluban",
+                    derived_uid="uid-1",
+                    source_label="Xiaoluban Account",
+                ),
+            )
+        )
+        updated = await service.update_project_async(
+            created.automation_project_id,
+            AutomationProjectUpdateInput(
+                delivery_binding=AutomationXiaolubanBinding(
+                    account_id="account-2",
+                    display_name="Xiaoluban",
+                    derived_uid="uid-2",
+                    source_label="Xiaoluban Account",
+                ),
+            ),
+        )
+
+        assert created.delivery_binding is not None
+        assert updated.delivery_binding is not None
+        assert offloaded_functions.count("_resolve_delivery_binding") == 2
+
+    asyncio.run(exercise())
+
+
+def test_list_project_sessions_async_offloads_session_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, session_service = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="nightly-report",
+            workspace_id="default",
+            prompt="Draft a nightly report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+        )
+    )
+    _ = session_service.create_session(
+        session_id="session-automation",
+        workspace_id="default",
+        metadata={"title": "Automation Run"},
+        project_kind=ProjectKind.AUTOMATION,
+        project_id=created.automation_project_id,
+    )
+    offloaded_functions: list[str] = []
+
+    async def fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_functions.append(getattr(function, "__name__", ""))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(automation_service_module.asyncio, "to_thread", fake_to_thread)
+
+    async def exercise() -> None:
+        sessions = await service.list_project_sessions_async(
+            created.automation_project_id
+        )
+
+        assert offloaded_functions == ["_list_project_sessions_for_record"]
+        assert len(sessions) == 1
+        assert sessions[0]["session_id"] == "session-automation"
+
+    asyncio.run(exercise())
+
+
+def test_async_project_mutations_validate_workspace_without_sync_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _, _ = _build_service(tmp_path)
+    existing = service.create_project(
+        AutomationProjectCreateInput(
+            name="disabled-report",
+            workspace_id="default",
+            prompt="Draft a disabled report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            enabled=False,
+        )
+    )
+
+    def fail_sync_require_workspace(
+        self: WorkspaceService,
+        workspace_id: str,
+    ) -> object:
+        _ = (self, workspace_id)
+        raise AssertionError("async automation API used sync workspace validation")
+
+    monkeypatch.setattr(
+        WorkspaceService, "require_workspace", fail_sync_require_workspace
+    )
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="async-report",
+                workspace_id="default",
+                prompt="Draft an async report.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+            )
+        )
+        updated = await service.update_project_async(
+            existing.automation_project_id,
+            AutomationProjectUpdateInput(prompt="Draft the updated report."),
+        )
+        enabled = await service.set_project_status_async(
+            existing.automation_project_id,
+            AutomationProjectStatus.ENABLED,
+        )
+
+        assert created.workspace_id == "default"
+        assert updated.prompt == "Draft the updated report."
+        assert enabled.status == AutomationProjectStatus.ENABLED
+
+    asyncio.run(exercise())
+
+
+def test_update_project_async_handles_schedule_and_delivery_changes(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(
+        tmp_path,
+        xiaoluban_binding_service=_FakeXiaolubanBindingService(),
+    )
+    existing = service.create_project(
+        AutomationProjectCreateInput(
+            name="schedule-report",
+            workspace_id="default",
+            prompt="Draft a scheduled report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+        )
+    )
+    run_at = datetime(2026, 1, 1, tzinfo=UTC)
+
+    async def exercise() -> None:
+        one_shot = await service.update_project_async(
+            existing.automation_project_id,
+            AutomationProjectUpdateInput(
+                schedule_mode=AutomationScheduleMode.ONE_SHOT,
+                run_at=run_at,
+                delivery_binding=AutomationXiaolubanBinding(
+                    account_id="account-1",
+                    display_name="Xiaoluban",
+                    derived_uid="uid-1",
+                    source_label="Xiaoluban Account",
+                ),
+            ),
+        )
+        back_to_cron = await service.update_project_async(
+            existing.automation_project_id,
+            AutomationProjectUpdateInput(
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 2 * * *",
+            ),
+        )
+
+        assert one_shot.schedule_mode == AutomationScheduleMode.ONE_SHOT
+        assert one_shot.cron_expression is None
+        assert one_shot.delivery_binding is not None
+        assert back_to_cron.schedule_mode == AutomationScheduleMode.CRON
+        assert back_to_cron.run_at is None
+        assert back_to_cron.cron_expression == "0 2 * * *"
+
+    asyncio.run(exercise())
+
+
+def test_delete_project_async_cascades_dependent_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delivery_service = _FakeDeliveryService(has_project_deliveries=True)
+    bound_queue_service = _FakeBoundSessionQueueService(has_project_queue=True)
+    service, _, _ = _build_service(
+        tmp_path,
+        delivery_service=delivery_service,
+        bound_session_queue_service=bound_queue_service,
+    )
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="delete-report",
+            workspace_id="default",
+            prompt="Draft a deleted report.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 1 * * *",
+            timezone="UTC",
+            enabled=False,
+        )
+    )
+    offloaded_functions: list[str] = []
+
+    async def fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_functions.append(getattr(function, "__name__", ""))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(automation_service_module.asyncio, "to_thread", fake_to_thread)
+
+    async def exercise() -> None:
+        await service.delete_project_async(created.automation_project_id, cascade=True)
+
+        assert offloaded_functions == [
+            "has_project_deliveries",
+            "delete_project_deliveries",
+            "delete_project_queue",
+        ]
+        assert delivery_service.deleted_project_ids == [created.automation_project_id]
+        assert bound_queue_service.deleted_project_ids == [
+            created.automation_project_id
+        ]
+        with pytest.raises(KeyError):
+            await service.get_project_async(created.automation_project_id)
+
+    asyncio.run(exercise())
+
+
+def test_process_due_projects_async_runs_due_projects(tmp_path: Path) -> None:
+    service, run_service, _ = _build_service(tmp_path)
+    run_at = datetime.now(tz=UTC) + timedelta(minutes=5)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="due-report",
+            workspace_id="default",
+            prompt="Run the due report.",
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            run_at=run_at,
+            timezone="UTC",
+        )
+    )
+
+    async def exercise() -> None:
+        processed = await service.process_due_projects_async(
+            now=run_at + timedelta(minutes=1)
+        )
+        updated = await service.get_project_async(created.automation_project_id)
+
+        assert processed == (created.automation_project_id,)
+        assert updated.status == AutomationProjectStatus.DISABLED
+        assert run_service.started_run_ids == ["run-1"]
+
+    asyncio.run(exercise())
+
+
+def test_async_run_failure_updates_project_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, run_service, _ = _build_service(tmp_path)
+    run_at = datetime(2026, 1, 1, tzinfo=UTC)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="failing-report",
+            workspace_id="default",
+            prompt="Run the failing report.",
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            run_at=run_at,
+            timezone="UTC",
+        )
+    )
+
+    async def fail_create_run_async(intent: object) -> tuple[str, str]:
+        _ = intent
+        raise RuntimeError("run failed")
+
+    monkeypatch.setattr(run_service, "create_run_async", fail_create_run_async)
+
+    async def exercise() -> None:
+        with pytest.raises(RuntimeError, match="run failed"):
+            await service.run_now_async(created.automation_project_id)
+        updated = await service.get_project_async(created.automation_project_id)
+
+        assert updated.status == AutomationProjectStatus.DISABLED
+        assert updated.last_error == "run failed"
+        assert updated.next_run_at is None
+
+    asyncio.run(exercise())
 
 
 def test_create_project_persists_normal_root_role_id(tmp_path: Path) -> None:

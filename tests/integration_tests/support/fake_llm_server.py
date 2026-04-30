@@ -580,9 +580,7 @@ def _build_tool_pressure_shell_command(*, index: int, delay_ms: int) -> str:
     script = (
         f"import time; time.sleep({sleep_seconds:.3f}); print('tool-pressure-{index}')"
     )
-    if sys.platform.startswith("win"):
-        return f'& "{sys.executable}" -c "{script}"'
-    return f'"{sys.executable}" -c "{script}"'
+    return _build_python_inline_command(script)
 
 
 def _orch_tool_pressure_mode(messages: list[object]) -> bool:
@@ -1016,14 +1014,8 @@ def _plan_hook_shell_env_response(
         }
     last_tool_call_id = _extract_last_tool_call_id(messages)
     if last_tool_call_id is None:
-        command = (
-            "Write-Output $env:RT_HOOK_TEST"
-            if sys.platform.startswith("win")
-            else f'"{sys.executable}" -c '
-            "'"
+        command = _build_python_inline_command(
             'import os; print(os.environ.get("RT_HOOK_TEST", "missing"))'
-            "'"
-            ""
         )
         return {
             "kind": "tool_call",
@@ -1094,7 +1086,12 @@ def _build_background_task_lifecycle_command() -> str:
         "time.sleep(30); "
         "print('background-lifecycle-finished', flush=True)"
     )
-    return f'"{sys.executable}" -c {json.dumps(code)}'
+    return _build_python_inline_command(code)
+
+
+def _build_python_inline_command(script: str) -> str:
+    executable = sys.executable.replace("\\", "/")
+    return f'"{executable}" -c {json.dumps(script)}'
 
 
 def _hook_deferred_followup_mode(messages: list[object]) -> bool:

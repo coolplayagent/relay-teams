@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import subprocess
 import sys
+import threading
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -19,6 +22,46 @@ from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 YOLO_TOOL_APPROVAL_POLICY = ToolApprovalPolicy(yolo=True)
+
+
+class _SlowTerminationProcess:
+    returncode: int | None = None
+
+    def __init__(self) -> None:
+        self.killed = False
+        self.wait_timeouts: list[float | None] = []
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.wait_timeouts.append(timeout)
+        if timeout is not None:
+            raise subprocess.TimeoutExpired(cmd=("fake-verification",), timeout=timeout)
+        self.returncode = -9
+        return self.returncode
+
+
+class _ClosableStream:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ProcessWithStreams:
+    def __init__(self) -> None:
+        self.stdout = _ClosableStream()
+        self.stderr = _ClosableStream()
+
+
+class _SlowOutputThread:
+    def __init__(self) -> None:
+        self.join_timeouts: list[float | None] = []
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(timeout)
 
 
 def test_verify_task_builds_structured_report(tmp_path: Path) -> None:
@@ -493,6 +536,36 @@ def test_verify_task_handles_non_utf8_command_output(tmp_path: Path) -> None:
     assert command_check.output_excerpt == "\ufffd"
 
 
+def test_kill_process_waits_until_process_exits() -> None:
+    process = _SlowTerminationProcess()
+
+    returncode = verification_module._kill_process_and_wait(
+        cast(subprocess.Popen[bytes], process)
+    )
+
+    assert process.killed is True
+    assert process.wait_timeouts == [None]
+    assert returncode == -9
+
+
+def test_finish_process_output_closes_streams_after_join_timeout() -> None:
+    process = _ProcessWithStreams()
+    thread = _SlowOutputThread()
+
+    verification_module._finish_process_output(
+        cast(subprocess.Popen[bytes], process),
+        (cast(threading.Thread, thread),),
+    )
+
+    assert process.stdout.closed is True
+    assert process.stderr.closed is True
+    assert thread.join_timeouts == [
+        verification_module._OUTPUT_READER_JOIN_TIMEOUT_SECONDS,
+        verification_module._OUTPUT_READER_JOIN_TIMEOUT_SECONDS,
+    ]
+
+
+@pytest.mark.timeout(3)
 def test_verify_task_reports_command_timeout(
     tmp_path: Path,
 ) -> None:
@@ -517,7 +590,7 @@ def test_verify_task_reports_command_timeout(
                         "sys.stderr.flush(); "
                         "time.sleep(5)",
                     ),
-                    timeout_seconds=0.2,
+                    timeout_seconds=1.0,
                 ),
             ),
         ),

@@ -1089,6 +1089,7 @@ console.log(JSON.stringify({
         capture_output=True,
         check=False,
         cwd=str(repo_root),
+        encoding="utf-8",
         text=True,
         timeout=3,
     )
@@ -5255,6 +5256,7 @@ installGlobals(createDomEnvironment());
         capture_output=True,
         check=False,
         cwd=str(repo_root),
+        encoding="utf-8",
         text=True,
         timeout=3,
     )

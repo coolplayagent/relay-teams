@@ -47,6 +47,8 @@ from relay_teams.workspace import (
     build_local_workspace_mount,
 )
 
+_ORIGINAL_PACKAGE_TOOL_RESOLVER = system_prompts._resolve_package_tool_path
+
 
 @pytest.fixture(autouse=True)
 def _suppress_host_github_prompt_line(
@@ -800,6 +802,56 @@ def test_runtime_environment_prompt_mentions_package_tools_and_uv_fallback_hint(
     )
 
 
+def test_package_tool_resolver_uses_first_path_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_which(command_name: str) -> str | None:
+        if command_name == "relay-teams-pip":
+            return None
+        if command_name == "relay-teams-pip3":
+            return "/opt/relay-teams/bin/pip3"
+        raise AssertionError(f"Unexpected package tool lookup: {command_name}")
+
+    monkeypatch.setattr(system_prompts.shutil, "which", fake_which)
+
+    assert _ORIGINAL_PACKAGE_TOOL_RESOLVER(
+        ("relay-teams-pip", "relay-teams-pip3")
+    ) == Path("/opt/relay-teams/bin/pip3")
+
+
+def test_prompt_runtime_shell_describes_windows_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(system_prompts.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
+
+    assert system_prompts._describe_prompt_runtime_shell() == (
+        "Windows shell",
+        r"C:\Windows\System32\cmd.exe",
+    )
+
+
+def test_prompt_runtime_shell_handles_unknown_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(system_prompts.platform, "system", lambda: "Linux")
+    monkeypatch.delenv("SHELL", raising=False)
+
+    assert system_prompts._describe_prompt_runtime_shell() == ("Unknown", "Unknown")
+
+
+def test_prompt_runtime_shell_handles_windows_without_comspec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(system_prompts.platform, "system", lambda: "Windows")
+    monkeypatch.delenv("COMSPEC", raising=False)
+
+    assert system_prompts._describe_prompt_runtime_shell() == (
+        "Windows shell",
+        "Unknown",
+    )
+
+
 def test_runtime_environment_prompt_omits_uv_fallback_hint_when_uv_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -822,18 +874,17 @@ def test_runtime_environment_prompt_omits_uv_fallback_hint_when_uv_is_unavailabl
 def test_runtime_environment_prompt_uses_runtime_shell_summary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from relay_teams.tools.workspace_tools.shell_executor import ShellRuntimeSummary
-
     monkeypatch.setattr(
         system_prompts,
         "_get_github_cli_environment_status",
         lambda: (False, None),
     )
     monkeypatch.setattr(
-        "relay_teams.tools.workspace_tools.shell_executor.describe_runtime_shell",
-        lambda: ShellRuntimeSummary(
-            shell_info="PowerShell",
-            shell_path=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        system_prompts,
+        "_describe_prompt_runtime_shell",
+        lambda: (
+            "PowerShell",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
         ),
     )
 

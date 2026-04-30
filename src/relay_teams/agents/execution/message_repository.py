@@ -59,6 +59,7 @@ class MessageRepository(SharedSqliteRepository):
     ) -> None:
         super().__init__(db_path)
         self._session_history_marker_repo = session_history_marker_repo
+        self._latest_created_at_by_session: dict[str, datetime] = {}
         self._init_tables()
 
     def _init_tables(self) -> None:
@@ -1199,16 +1200,20 @@ class MessageRepository(SharedSqliteRepository):
 
     def _next_created_at(self, *, session_id: str) -> str:
         candidate = datetime.now(tz=timezone.utc)
-        latest_message_row = self._conn.execute(
-            "SELECT created_at FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 1",
-            (session_id,),
-        ).fetchone()
-        candidate = _ensure_after_iso_value(
-            candidate,
-            None
-            if latest_message_row is None
-            else str(latest_message_row["created_at"]),
-        )
+        latest_created_at = self._latest_created_at_by_session.get(session_id)
+        if latest_created_at is not None:
+            candidate = _ensure_after_datetime(candidate, latest_created_at)
+        else:
+            latest_message_row = self._conn.execute(
+                "SELECT created_at FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            candidate = _ensure_after_iso_value(
+                candidate,
+                None
+                if latest_message_row is None
+                else str(latest_message_row["created_at"]),
+            )
         if self._session_history_marker_repo is not None:
             latest_clear = self._session_history_marker_repo.get_latest(
                 session_id,
@@ -1216,6 +1221,7 @@ class MessageRepository(SharedSqliteRepository):
             )
             if latest_clear is not None:
                 candidate = _ensure_after_datetime(candidate, latest_clear.created_at)
+        self._latest_created_at_by_session[session_id] = candidate
         return candidate.isoformat()
 
     def _filter_rows_for_read(

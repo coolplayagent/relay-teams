@@ -319,7 +319,7 @@ class AppSecretStore:
             return False
 
     def secrets_file_path(self, config_dir: Path) -> Path:
-        return config_dir.expanduser().resolve() / _SECRETS_FILE_NAME
+        return config_dir.expanduser() / _SECRETS_FILE_NAME
 
     def _load_index(self, config_dir: Path) -> SecretIndexDocument:
         secrets_file = self.secrets_file_path(config_dir)

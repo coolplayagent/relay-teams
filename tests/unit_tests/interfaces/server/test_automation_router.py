@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -34,6 +33,7 @@ class _FakeAutomationService:
         self.delete_error: Exception | None = None
         self.list_feishu_bindings_calls = 0
         self.list_delivery_bindings_calls = 0
+        self.async_calls: list[str] = []
 
     def create_project(
         self, req: AutomationProjectCreateInput
@@ -71,8 +71,18 @@ class _FakeAutomationService:
             else None,
         )
 
+    async def create_project_async(
+        self, req: AutomationProjectCreateInput
+    ) -> AutomationProjectRecord:
+        self.async_calls.append("create_project_async")
+        return self.create_project(req)
+
     def list_projects(self) -> tuple[AutomationProjectRecord, ...]:
         return (self.get_project("aut_1"),)
+
+    async def list_projects_async(self) -> tuple[AutomationProjectRecord, ...]:
+        self.async_calls.append("list_projects_async")
+        return self.list_projects()
 
     def get_project(self, automation_project_id: str) -> AutomationProjectRecord:
         if automation_project_id != "aut_1":
@@ -105,6 +115,12 @@ class _FakeAutomationService:
             next_run_at=datetime(2026, 3, 23, 9, 0, tzinfo=UTC),
         )
 
+    async def get_project_async(
+        self, automation_project_id: str
+    ) -> AutomationProjectRecord:
+        self.async_calls.append("get_project_async")
+        return self.get_project(automation_project_id)
+
     def list_feishu_bindings(self) -> tuple[AutomationFeishuBindingCandidate, ...]:
         self.list_feishu_bindings_calls += 1
         return (
@@ -121,6 +137,12 @@ class _FakeAutomationService:
             ),
         )
 
+    async def list_feishu_bindings_async(
+        self,
+    ) -> tuple[AutomationFeishuBindingCandidate, ...]:
+        self.async_calls.append("list_feishu_bindings_async")
+        return self.list_feishu_bindings()
+
     def list_delivery_bindings(
         self,
     ) -> tuple[AutomationDeliveryBindingCandidate, ...]:
@@ -136,6 +158,12 @@ class _FakeAutomationService:
             ),
         )
 
+    async def list_delivery_bindings_async(
+        self,
+    ) -> tuple[AutomationDeliveryBindingCandidate, ...]:
+        self.async_calls.append("list_delivery_bindings_async")
+        return self.list_delivery_bindings()
+
     def update_project(
         self, automation_project_id: str, req: AutomationProjectUpdateInput
     ) -> AutomationProjectRecord:
@@ -146,6 +174,12 @@ class _FakeAutomationService:
                 "display_name": req.display_name or "Daily Briefing",
             }
         )
+
+    async def update_project_async(
+        self, automation_project_id: str, req: AutomationProjectUpdateInput
+    ) -> AutomationProjectRecord:
+        self.async_calls.append("update_project_async")
+        return self.update_project(automation_project_id, req)
 
     def delete_project(
         self,
@@ -160,6 +194,20 @@ class _FakeAutomationService:
             raise KeyError(f"Unknown automation_project_id: {automation_project_id}")
         self.deleted_calls.append((automation_project_id, force, cascade))
 
+    async def delete_project_async(
+        self,
+        automation_project_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        self.async_calls.append("delete_project_async")
+        self.delete_project(
+            automation_project_id,
+            force=force,
+            cascade=cascade,
+        )
+
     def run_now(self, automation_project_id: str) -> dict[str, str | bool | None]:
         self.run_calls.append(automation_project_id)
         return {
@@ -169,6 +217,12 @@ class _FakeAutomationService:
             "queued": False,
             "reused_bound_session": False,
         }
+
+    async def run_now_async(
+        self, automation_project_id: str
+    ) -> dict[str, str | bool | None]:
+        self.async_calls.append("run_now_async")
+        return self.run_now(automation_project_id)
 
     def set_project_status(
         self,
@@ -183,6 +237,14 @@ class _FakeAutomationService:
         return self.get_project(automation_project_id).model_copy(
             update={"status": status}
         )
+
+    async def set_project_status_async(
+        self,
+        automation_project_id: str,
+        status: AutomationProjectStatus,
+    ) -> AutomationProjectRecord:
+        self.async_calls.append("set_project_status_async")
+        return self.set_project_status(automation_project_id, status)
 
     def list_project_sessions(
         self, automation_project_id: str
@@ -207,6 +269,12 @@ class _FakeAutomationService:
                 "updated_at": "2026-03-23T00:00:00+00:00",
             },
         )
+
+    async def list_project_sessions_async(
+        self, automation_project_id: str
+    ) -> tuple[dict[str, object], ...]:
+        self.async_calls.append("list_project_sessions_async")
+        return self.list_project_sessions(automation_project_id)
 
 
 def _client(fake_service: _FakeAutomationService) -> TestClient:
@@ -374,19 +442,7 @@ def test_list_delivery_bindings_route_returns_mixed_candidates() -> None:
     assert fake_service.list_delivery_bindings_calls == 1
 
 
-def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(automation, "call_maybe_async", fake_run_in_threadpool)
+def test_automation_routes_call_async_service_methods() -> None:
     fake_service = _FakeAutomationService()
     client = _client(fake_service)
 
@@ -418,18 +474,18 @@ def test_automation_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
-    assert [call[0] for call in calls] == [
-        "list_delivery_bindings",
-        "list_feishu_bindings",
-        "create_project",
-        "list_projects",
-        "get_project",
-        "update_project",
-        "delete_project",
-        "run_now",
-        "set_project_status",
-        "set_project_status",
-        "list_project_sessions",
+    assert fake_service.async_calls == [
+        "list_delivery_bindings_async",
+        "list_feishu_bindings_async",
+        "create_project_async",
+        "list_projects_async",
+        "get_project_async",
+        "update_project_async",
+        "delete_project_async",
+        "run_now_async",
+        "set_project_status_async",
+        "set_project_status_async",
+        "list_project_sessions_async",
     ]
 
 

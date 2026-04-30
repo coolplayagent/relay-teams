@@ -634,12 +634,12 @@ print(json.dumps({
         api_client,
         session_id=new_session_id("hook-compact"),
     )
-    max_phase = 2
+    max_phase = 3
     for phase in range(1, max_phase + 1):
         run_id = create_run(
             api_client,
             session_id=session_id,
-            intent=_phase_prompt(phase=phase, line_count=300, block_count=1),
+            intent=_phase_prompt(phase=phase, line_count=360, block_count=2),
             execution_mode="ai",
             yolo=True,
         )

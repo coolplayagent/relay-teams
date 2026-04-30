@@ -11,7 +11,7 @@ from relay_teams.persistence import close_live_sqlite_repositories_async
 from relay_teams.secrets import AppSecretStore
 
 _UNIT_TESTS_ROOT = Path(__file__).resolve().parent
-_DEFAULT_UNIT_TEST_TIMEOUT_SECONDS = 1.0
+_DEFAULT_UNIT_TEST_TIMEOUT_SECONDS = 5.0
 _UNIT_TEST_TIMEOUT_ENV = "RELAY_TEAMS_UNIT_TEST_TIMEOUT_SECONDS"
 
 

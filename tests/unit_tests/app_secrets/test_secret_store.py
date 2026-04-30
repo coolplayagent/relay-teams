@@ -205,6 +205,32 @@ def test_has_usable_keyring_backend_ignores_backend_runtime_errors() -> None:
     assert store.has_usable_keyring_backend() is False
 
 
+def test_list_owner_fields_does_not_resolve_config_dir(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = _FileOnlySecretStore()
+    store.set_secret(
+        tmp_path,
+        namespace="github_config",
+        owner_id="default",
+        field_name="token",
+        value="secret",
+    )
+
+    def _raise_resolve(_self: Path, strict: bool = False) -> Path:
+        _ = strict
+        raise AssertionError("list_owner_fields should not resolve the config dir")
+
+    monkeypatch.setattr(Path, "resolve", _raise_resolve)
+
+    assert store.list_owner_fields(
+        tmp_path,
+        namespace="github_config",
+        owner_id="default",
+    ) == ("token",)
+
+
 def test_delete_owner_removes_all_secret_fields(tmp_path: Path) -> None:
     store = _FileOnlySecretStore()
     store.set_secret(

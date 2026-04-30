@@ -87,6 +87,22 @@ def test_load_env_file_ignores_invalid_lines_and_strips_quotes(tmp_path: Path) -
     assert values == {"A": "1", "B": "two", "C": "three"}
 
 
+def test_load_env_file_does_not_resolve_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("A=1\n", encoding="utf-8")
+
+    def _raise_resolve(_self: Path, strict: bool = False) -> Path:
+        _ = strict
+        raise AssertionError("load_env_file should not resolve the path")
+
+    monkeypatch.setattr(Path, "resolve", _raise_resolve)
+
+    assert runtime_env.load_env_file(env_file) == {"A": "1"}
+
+
 def test_get_env_var_returns_default_when_missing(tmp_path: Path) -> None:
     user_home = tmp_path / "home"
 

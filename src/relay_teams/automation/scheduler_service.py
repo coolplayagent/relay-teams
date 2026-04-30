@@ -42,7 +42,7 @@ class AutomationSchedulerService:
 
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
-            processed = self._automation_service.process_due_projects(
+            processed = await self._automation_service.process_due_projects_async(
                 now=datetime.now(tz=UTC)
             )
             if processed:

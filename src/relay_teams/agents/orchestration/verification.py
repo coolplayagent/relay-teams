@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import subprocess
 import threading
 import time
@@ -25,7 +26,7 @@ _COMMAND_OUTPUT_CAPTURE_BYTES = 64 * 1024
 _OUTPUT_READ_CHUNK_BYTES = 8192
 _OUTPUT_EXCERPT_CHARS = 2000
 _PROCESS_POLL_INTERVAL_SECONDS = 0.05
-_OUTPUT_READER_JOIN_TIMEOUT_SECONDS = 1.0
+_OUTPUT_READER_JOIN_TIMEOUT_SECONDS = 0.05
 
 
 class _BoundedCommandResult(NamedTuple):
@@ -398,22 +399,18 @@ def _run_bounded_command(
                 break
             if capture.limit_exceeded:
                 output_truncated = True
-                process.kill()
-                returncode = process.wait()
+                returncode = _kill_process_and_wait(process)
                 break
             remaining_seconds = deadline - time.monotonic()
             if remaining_seconds <= 0:
                 timed_out = True
-                process.kill()
-                returncode = process.wait()
+                returncode = _kill_process_and_wait(process)
                 break
             time.sleep(min(_PROCESS_POLL_INTERVAL_SECONDS, remaining_seconds))
     finally:
         if process.poll() is None:
-            process.kill()
-            returncode = process.wait()
-        _close_process_streams(process)
-        _join_output_reader_threads(output_threads)
+            returncode = _kill_process_and_wait(process)
+        _finish_process_output(process, output_threads)
 
     if timed_out:
         raise subprocess.TimeoutExpired(
@@ -484,12 +481,18 @@ def _read_process_output(
 ) -> None:
     while True:
         try:
-            chunk = stream.read(_OUTPUT_READ_CHUNK_BYTES)
+            chunk = _read_process_output_chunk(stream)
         except (OSError, ValueError):
             return
         if not chunk:
             return
         capture.append(stream_name, chunk)
+
+
+def _read_process_output_chunk(stream: IO[bytes]) -> bytes:
+    if isinstance(stream, io.BufferedReader):
+        return stream.read1(_OUTPUT_READ_CHUNK_BYTES)
+    return stream.read(_OUTPUT_READ_CHUNK_BYTES)
 
 
 def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
@@ -502,6 +505,24 @@ def _close_process_streams(process: subprocess.Popen[bytes]) -> None:
 def _join_output_reader_threads(threads: tuple[threading.Thread, ...]) -> None:
     for thread in threads:
         thread.join(timeout=_OUTPUT_READER_JOIN_TIMEOUT_SECONDS)
+
+
+def _finish_process_output(
+    process: subprocess.Popen[bytes],
+    threads: tuple[threading.Thread, ...],
+) -> None:
+    _join_output_reader_threads(threads)
+    _close_process_streams(process)
+    _join_output_reader_threads(threads)
+
+
+def _kill_process_and_wait(process: subprocess.Popen[bytes]) -> int:
+    try:
+        process.kill()
+    except OSError:
+        # The process may have already exited; still wait for its final return code.
+        pass
+    return process.wait()
 
 
 def _run_spec_evidence_checks(
