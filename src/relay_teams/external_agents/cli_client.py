@@ -627,8 +627,16 @@ class _StdioCliJsonRpcClient:
                 process.kill()
                 try:
                     await asyncio.wait_for(process.wait(), timeout=2.0)
-                except (asyncio.TimeoutError, ProcessLookupError):
-                    pass
+                except (asyncio.TimeoutError, ProcessLookupError) as exc:
+                    log_event(
+                        LOGGER,
+                        logging.DEBUG,
+                        event="external_agent.cli_jsonrpc.kill_wait_failed",
+                        message=(
+                            "Timed out waiting for killed CLI JSON-RPC runtime to exit"
+                        ),
+                        payload={"error": str(exc) or exc.__class__.__name__},
+                    )
         self._process = None
         self._read_task = None
         self._stderr_task = None
