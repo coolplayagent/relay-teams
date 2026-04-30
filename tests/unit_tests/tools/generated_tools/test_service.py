@@ -556,6 +556,61 @@ async def test_synthesize_and_enable_generated_tool_updates_role_asset(
 
 
 @pytest.mark.asyncio
+async def test_generated_tool_record_io_is_offloaded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    offloaded_calls: list[str] = []
+
+    async def _fake_to_thread(
+        function: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        offloaded_calls.append(getattr(function, "__name__", type(function).__name__))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(generated_service_module.asyncio, "to_thread", _fake_to_thread)
+    service, _role_registry, _tool_registry, role = _build_service(
+        tmp_path,
+        code=SAFE_CODE,
+    )
+
+    synthesis = await service.synthesize_tool(
+        role=role,
+        session_id="session-1",
+        run_id="run-1",
+        task_id="task-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        instance_id="instance-1",
+        tool_name="sum",
+        description="Add two integers",
+        input_schema=_schema(),
+        behavior="Return a + b as total.",
+        test_cases=_test_cases(),
+        target_role_id=None,
+        thinking=RunThinkingConfig(),
+    )
+    await service.enable_tool(
+        current_role_id=role.role_id,
+        tool_name=synthesis.tool_name,
+        code_hash=synthesis.code_hash,
+        target_role_id=None,
+    )
+    result = await service.execute_generated_tool(
+        tool_name=synthesis.tool_name,
+        tool_input={"a": 4, "b": 7},
+    )
+
+    assert result == {"total": 11}
+    assert offloaded_calls.count("_write_record") == 2
+    assert offloaded_calls.count("_load_record") == 2
+    assert offloaded_calls.count("_load_validated_record_implementation") == 2
+
+
+@pytest.mark.asyncio
 async def test_enable_tool_marks_target_role_instance_dirty(tmp_path: Path) -> None:
     resolver_calls: list[tuple[str, str]] = []
 
@@ -1214,6 +1269,18 @@ async def test_autoharness_synthesize_action_and_register_wrapper(
     assert result["tool_name"] == "generated_sum"
     assert resolver.calls == [("run-1", "Worker")]
     assert service.calls == [("Worker", "sum", "Add", None, 1)]
+
+    raw_test_cases = [case.model_dump(mode="json") for case in _test_cases()]
+    raw_result = await synthesize_tool_module._run_synthesize_action(
+        ctx,
+        tool_name="sum_raw",
+        description="Add raw",
+        input_schema=_schema(),
+        behavior="Add raw values.",
+        test_cases=cast(list[GeneratedToolTestCase], cast(object, raw_test_cases)),
+    )
+    assert raw_result["tool_name"] == "generated_sum_raw"
+    assert service.calls[-1] == ("Worker", "sum_raw", "Add raw", None, 1)
 
     with pytest.raises(RuntimeError, match="not configured"):
         await synthesize_tool_module._run_synthesize_action(

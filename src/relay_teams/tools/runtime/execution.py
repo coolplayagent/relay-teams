@@ -1603,7 +1603,10 @@ async def _apply_permission_request_hooks(
                 retryable=False,
             ),
         )
-    return bundle.decision == HookDecisionType.ALLOW, None
+    hook_approved = (
+        bool(bundle.executions) and bundle.decision == HookDecisionType.ALLOW
+    )
+    return hook_approved, None
 
 
 async def _apply_permission_denied_hooks(

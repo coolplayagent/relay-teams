@@ -313,7 +313,7 @@ class AutoHarnessService:
             target_role_id=target_role.role_id,
             created_by_role_id=role.role_id,
         )
-        self._write_record(record=record, code=code)
+        await self._write_record_async(record=record, code=code)
         return GeneratedToolSynthesisResult(
             tool_name=record.tool_name,
             code_hash=record.code_hash,
@@ -334,7 +334,7 @@ class AutoHarnessService:
         session_id: str | None = None,
     ) -> GeneratedToolEnableResult:
         normalized_tool_name = _normalize_generated_tool_name(tool_name)
-        record = self._load_record(normalized_tool_name)
+        record = await self._load_record_async(normalized_tool_name)
         if record.status != GeneratedToolStatus.PENDING:
             raise ValueError(f"Generated tool is not pending: {normalized_tool_name}")
         if record.code_hash != code_hash.strip():
@@ -343,7 +343,7 @@ class AutoHarnessService:
             current_role_id=current_role_id,
             target_role_id=target_role_id or record.target_role_id,
         )
-        code = self._load_validated_record_implementation(
+        code = await self._load_validated_record_implementation_async(
             record,
             hash_mismatch_message=(
                 "implementation.py does not match the recorded code_hash"
@@ -372,7 +372,7 @@ class AutoHarnessService:
         except Exception:
             self._tool_registry.unregister_tool(enabled.tool_name)
             raise
-        self._write_record(record=enabled, code=code)
+        await self._write_record_async(record=enabled, code=code)
         if run_id:
             dirty_instance_ids: list[str] = []
             if target_role.role_id == current_role_id and instance_id:
@@ -430,11 +430,11 @@ class AutoHarnessService:
         tool_name: str,
         tool_input: dict[str, JsonValue],
     ) -> JsonValue:
-        record = self._load_record(tool_name)
+        record = await self._load_record_async(tool_name)
         if record.status != GeneratedToolStatus.ENABLED:
             raise PermissionError(f"Generated tool is not enabled: {tool_name}")
         _validate_input_schema(record.input_schema)
-        code = self._load_validated_record_implementation(
+        code = await self._load_validated_record_implementation_async(
             record,
             hash_mismatch_message=(
                 f"Generated tool implementation hash mismatch: {tool_name}"
@@ -561,6 +561,18 @@ class AutoHarnessService:
             raise ValueError(hash_mismatch_message)
         return code
 
+    async def _load_validated_record_implementation_async(
+        self,
+        record: GeneratedToolRecord,
+        *,
+        hash_mismatch_message: str,
+    ) -> str:
+        return await asyncio.to_thread(
+            self._load_validated_record_implementation,
+            record,
+            hash_mismatch_message=hash_mismatch_message,
+        )
+
     def _build_tool_register(self, record: GeneratedToolRecord) -> ToolRegister:
         service = self
         description = _build_runtime_tool_description(record)
@@ -604,6 +616,9 @@ class AutoHarnessService:
             raise KeyError(f"Generated tool not found: {tool_name}")
         return self._load_record_from_manifest(manifest_path)
 
+    async def _load_record_async(self, tool_name: str) -> GeneratedToolRecord:
+        return await asyncio.to_thread(self._load_record, tool_name)
+
     @staticmethod
     def _load_record_from_manifest(manifest_path: Path) -> GeneratedToolRecord:
         record = GeneratedToolRecord.model_validate_json(
@@ -620,6 +635,14 @@ class AutoHarnessService:
             record.model_dump_json(indent=2),
             encoding="utf-8",
         )
+
+    async def _write_record_async(
+        self,
+        *,
+        record: GeneratedToolRecord,
+        code: str,
+    ) -> None:
+        await asyncio.to_thread(self._write_record, record=record, code=code)
 
     def _resolve_target_role(
         self,

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import partial
 from typing import Protocol, cast
 
@@ -67,6 +68,7 @@ async def _run_synthesize_action(
     if raw_service is None:
         raise RuntimeError("AutoHarness service is not configured")
     service = cast(AutoHarnessSynthesisServiceLike, raw_service)
+    coerced_test_cases = _coerce_test_cases(test_cases)
     result = await service.synthesize_tool(
         role=await _resolve_current_role(ctx),
         session_id=ctx.deps.session_id,
@@ -79,11 +81,22 @@ async def _run_synthesize_action(
         description=description,
         input_schema=input_schema,
         behavior=behavior,
-        test_cases=tuple(test_cases),
+        test_cases=coerced_test_cases,
         target_role_id=target_role_id,
         thinking=RunThinkingConfig(),
     )
     return result.model_dump(mode="json")
+
+
+def _coerce_test_cases(
+    test_cases: Sequence[object],
+) -> tuple[GeneratedToolTestCase, ...]:
+    return tuple(
+        item
+        if isinstance(item, GeneratedToolTestCase)
+        else GeneratedToolTestCase.model_validate(item)
+        for item in test_cases
+    )
 
 
 def register(agent: Agent[ToolDeps, str]) -> None:
