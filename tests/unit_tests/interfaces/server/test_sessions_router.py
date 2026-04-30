@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
+import logging
 from pathlib import Path
 import threading
 import time
@@ -76,6 +77,9 @@ class _FakeSessionService:
         if self.raise_missing:
             raise KeyError(session_id)
         self.terminal_view_calls.append(session_id)
+
+    async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
+        self.mark_latest_terminal_run_viewed(session_id)
 
     def list_sessions(self) -> tuple[SessionRecord, ...]:
         self.list_calls += 1
@@ -356,6 +360,29 @@ class _BlockingRecoveryService(_FakeSessionService):
         return {"session_id": session_id, "runs": []}
 
 
+class _BlockingTerminalViewService(_FakeSessionService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancelled = False
+
+    async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        self.terminal_view_calls.append(session_id)
+
+
+class _FailingTerminalViewService(_BlockingTerminalViewService):
+    async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
+        await super().mark_latest_terminal_run_viewed_async(session_id)
+        raise RuntimeError("terminal marker failed")
+
+
 def _create_client(fake_service: _FakeSessionService) -> TestClient:
     app = FastAPI()
     app.include_router(sessions.router, prefix="/api")
@@ -417,6 +444,31 @@ def test_mark_session_terminal_viewed_route_calls_service() -> None:
     assert fake_service.terminal_view_calls == ["session-1"]
 
 
+def test_mark_session_terminal_viewed_route_uses_session_read_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_operations: list[str] = []
+
+    async def call_session_read(
+        operation: str,
+        function: Callable[[str], Awaitable[None]],
+        session_id: str,
+    ) -> None:
+        observed_operations.append(operation)
+        await function(session_id)
+
+    fake_service = _FakeSessionService()
+    monkeypatch.setattr(sessions, "_call_session_read", call_session_read)
+    client = _create_client(fake_service)
+
+    response = client.post("/api/sessions/session-1/terminal-view")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert observed_operations == ["sessions.terminal_view"]
+    assert fake_service.terminal_view_calls == ["session-1"]
+
+
 def test_mark_session_terminal_viewed_route_returns_404_for_missing_session() -> None:
     fake_service = _FakeSessionService()
     fake_service.raise_missing = True
@@ -426,6 +478,117 @@ def test_mark_session_terminal_viewed_route_returns_404_for_missing_session() ->
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Session not found"
+
+
+@pytest.mark.asyncio
+async def test_mark_session_terminal_viewed_timeout_keeps_marker_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_service = _BlockingTerminalViewService()
+    monkeypatch.setattr(sessions, "SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS", 0.01)
+    app = _create_client(fake_service).app
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        timeout=1.0,
+    ) as client:
+        response = await client.post("/api/sessions/session-1/terminal-view")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "deferred"}
+    await asyncio.wait_for(fake_service.started.wait(), timeout=1.0)
+    assert fake_service.cancelled is False
+
+    fake_service.release.set()
+    for _ in range(50):
+        if fake_service.terminal_view_calls:
+            break
+        await asyncio.sleep(0.02)
+
+    assert fake_service.cancelled is False
+    assert fake_service.terminal_view_calls == ["session-1"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_terminal_view_result_logs_missing_session(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def raise_missing() -> None:
+        raise KeyError("session-1")
+
+    caplog.set_level(logging.WARNING)
+    marker_task = asyncio.create_task(raise_missing())
+    await asyncio.sleep(0)
+
+    sessions._log_deferred_terminal_view_result(marker_task, "session-1")
+
+    assert "Deferred session terminal view marker found no session" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_deferred_terminal_view_result_logs_cancelled_task(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    marker_task = asyncio.create_task(asyncio.sleep(1))
+    marker_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await marker_task
+
+    sessions._log_deferred_terminal_view_result(marker_task, "session-1")
+
+    assert "Deferred session terminal view marker was cancelled" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_mark_session_terminal_viewed_cancelled_request_observes_marker_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    fake_service = _FailingTerminalViewService()
+    app = _create_client(fake_service).app
+    transport = httpx.ASGITransport(app=app)
+
+    caplog.set_level(logging.ERROR)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        timeout=1.0,
+    ) as client:
+        request_task = asyncio.create_task(
+            client.post("/api/sessions/session-1/terminal-view")
+        )
+        await asyncio.wait_for(fake_service.started.wait(), timeout=1.0)
+
+        request_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            _ = await request_task
+
+    fake_service.release.set()
+    for _ in range(50):
+        if "Deferred session terminal view marker failed" in caplog.text:
+            break
+        await asyncio.sleep(0.02)
+
+    assert fake_service.cancelled is False
+    assert "Deferred session terminal view marker failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_deferred_terminal_view_result_logs_unexpected_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def raise_unexpected() -> None:
+        raise RuntimeError("boom")
+
+    caplog.set_level(logging.ERROR)
+    marker_task = asyncio.create_task(raise_unexpected())
+    await asyncio.sleep(0)
+
+    sessions._log_deferred_terminal_view_result(marker_task, "session-1")
+
+    assert "Deferred session terminal view marker failed" in caplog.text
 
 
 @pytest.mark.timeout(5)

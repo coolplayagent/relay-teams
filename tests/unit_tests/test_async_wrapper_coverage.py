@@ -194,6 +194,11 @@ _SESSION_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
     _WrapperSpec(
         "relay_teams.sessions.session_repository",
         "SessionRepository",
+        "mark_terminal_run_viewed_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.sessions.session_repository",
+        "SessionRepository",
         "update_workspace_async",
     ),
     _WrapperSpec(
@@ -251,6 +256,132 @@ _TEMPORARY_ROLE_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
         "relay_teams.roles.temporary_role_repository",
         "TemporaryRoleRepository",
         "delete_by_run_async",
+    ),
+)
+
+_AUTOMATION_DELIVERY_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "create_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "update_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "get_by_run_id_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "list_pending_started_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "list_pending_terminal_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "claim_started_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "claim_terminal_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "list_pending_started_cleanup_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "claim_started_cleanup_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "has_project_records_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_delivery_repository",
+        "AutomationDeliveryRepository",
+        "delete_by_project_async",
+    ),
+)
+
+_AUTOMATION_BOUND_SESSION_QUEUE_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "create_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "update_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "get_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "has_non_terminal_item_for_run_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "count_non_terminal_by_session_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "count_non_terminal_ahead_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "list_ready_to_start_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "list_waiting_for_result_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "claim_starting_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "list_pending_queue_cleanup_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "claim_queue_cleanup_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "has_project_records_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.automation.automation_bound_session_queue_repository",
+        "AutomationBoundSessionQueueRepository",
+        "delete_by_project_async",
     ),
 )
 
@@ -353,6 +484,32 @@ def test_run_event_publisher_async_methods_do_not_use_call_sync_async(
 
 @pytest.mark.parametrize("spec", _TEMPORARY_ROLE_REPOSITORY_ASYNC_METHODS)
 def test_temporary_role_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize("spec", _AUTOMATION_DELIVERY_REPOSITORY_ASYNC_METHODS)
+def test_automation_delivery_repository_async_methods_do_not_use_call_sync_async(
+    spec: _WrapperSpec,
+) -> None:
+    module = importlib.import_module(spec.module_name)
+    class_object = _module_class(module=module, class_name=spec.class_name)
+    method = getattr(class_object, spec.method_name)
+    source = inspect.getsource(method)
+
+    assert "_call_sync_async" not in source
+
+
+@pytest.mark.parametrize(
+    "spec", _AUTOMATION_BOUND_SESSION_QUEUE_REPOSITORY_ASYNC_METHODS
+)
+def test_automation_bound_session_queue_repository_async_methods_do_not_use_call_sync_async(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
