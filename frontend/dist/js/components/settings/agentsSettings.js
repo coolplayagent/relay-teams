@@ -3,12 +3,12 @@
  * External agent runtime settings panel bindings.
  */
 import {
-    deleteExternalAgent,
-    fetchExternalAgent,
-    fetchExternalAgents,
+    deleteAgentRuntime,
+    fetchAgentRuntime,
+    fetchAgentRuntimes,
     fetchEnvironmentVariables,
-    saveExternalAgent,
-    testExternalAgent,
+    saveAgentRuntime,
+    testAgentRuntime,
 } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
@@ -72,7 +72,7 @@ export function bindAgentSettingsHandlers() {
 export async function loadAgentSettingsPanel(preferredAgentId = '') {
     try {
         const [summaries, environmentBindings] = await Promise.all([
-            fetchExternalAgents(),
+            fetchAgentRuntimes(),
             loadEnvironmentBindings(),
         ]);
         agentSummaries = Array.isArray(summaries) ? summaries.map(normalizeAgentSummary) : [];
@@ -94,7 +94,7 @@ export async function loadAgentSettingsPanel(preferredAgentId = '') {
     } catch (error) {
         logError(
             'frontend.agents_settings.load_failed',
-            'Failed to load external agents',
+            'Failed to load agent runtimes',
             errorToPayload(error),
         );
         showAgentsList();
@@ -297,7 +297,7 @@ function renderAgentsList() {
 async function loadAgentDocument(agentId) {
     selectedAgentId = String(agentId || '').trim();
     renderAgentsList();
-    const record = normalizeAgentConfig(await fetchExternalAgent(agentId));
+    const record = normalizeAgentConfig(await fetchAgentRuntime(agentId));
     selectedAgentId = record.agent_id;
     selectedSourceAgentId = record.agent_id;
     applyAgentRecord(record);
@@ -511,7 +511,7 @@ async function handleSaveAgent() {
     try {
         const draft = buildDraftFromForm();
         const pathAgentId = selectedSourceAgentId || draft.agent_id;
-        const saved = normalizeAgentConfig(await saveExternalAgent(pathAgentId, draft));
+        const saved = normalizeAgentConfig(await saveAgentRuntime(pathAgentId, draft));
         selectedAgentId = saved.agent_id;
         selectedSourceAgentId = saved.agent_id;
         showToast({
@@ -535,8 +535,8 @@ async function handleTestAgent() {
     try {
         const draft = buildDraftFromForm();
         const pathAgentId = selectedSourceAgentId || draft.agent_id;
-        const saved = normalizeAgentConfig(await saveExternalAgent(pathAgentId, draft));
-        const result = await testExternalAgent(saved.agent_id);
+        const saved = normalizeAgentConfig(await saveAgentRuntime(pathAgentId, draft));
+        const result = await testAgentRuntime(saved.agent_id);
         selectedAgentId = saved.agent_id;
         selectedSourceAgentId = saved.agent_id;
         await loadAgentSettingsPanel(saved.agent_id);
@@ -563,7 +563,7 @@ async function handleDeleteAgent() {
         return;
     }
     try {
-        await deleteExternalAgent(agentId);
+        await deleteAgentRuntime(agentId);
         selectedAgentId = '';
         selectedSourceAgentId = '';
         showToast({

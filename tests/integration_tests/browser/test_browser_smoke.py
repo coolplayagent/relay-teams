@@ -1148,7 +1148,7 @@ def test_browser_settings_save_role_and_agent_configs(
         lambda request: (
             request.method == "PUT"
             and request.url
-            == f"{integration_env.api_base_url}/api/system/configs/agents/{agent_id}"
+            == f"{integration_env.api_base_url}/api/system/configs/agent-runtimes/{agent_id}"
         )
     ) as save_agent_request_info:
         page.locator("#save-agent-btn").click()
@@ -1259,7 +1259,7 @@ def test_browser_settings_save_role_and_agent_configs(
         lambda request: (
             request.method == "DELETE"
             and request.url
-            == f"{integration_env.api_base_url}/api/system/configs/agents/{agent_id}"
+            == f"{integration_env.api_base_url}/api/system/configs/agent-runtimes/{agent_id}"
         )
     ):
         page.locator("#delete-agent-btn").click()

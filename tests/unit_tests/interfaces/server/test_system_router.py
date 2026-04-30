@@ -1238,8 +1238,8 @@ def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) ->
         client.get("/api/system/configs/notifications"),
         client.get("/api/system/configs/proxy"),
         client.get("/api/system/configs/web"),
-        client.get("/api/system/configs/agents"),
-        client.get("/api/system/configs/agents/codex_local"),
+        client.get("/api/system/configs/agent-runtimes"),
+        client.get("/api/system/configs/agent-runtimes/codex_local"),
         client.get("/api/system/configs/github"),
         client.post("/api/system/configs/github:reveal"),
         client.get("/api/system/configs/clawhub"),
@@ -1387,7 +1387,7 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
             },
         ),
         client.put(
-            "/api/system/configs/agents/claude_http",
+            "/api/system/configs/agent-runtimes/claude_http",
             json={
                 "agent_id": "claude_http",
                 "name": "Claude HTTP",
@@ -1400,8 +1400,8 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
                 },
             },
         ),
-        client.delete("/api/system/configs/agents/claude_http"),
-        client.post("/api/system/configs/agents/codex_local:test"),
+        client.delete("/api/system/configs/agent-runtimes/claude_http"),
+        client.post("/api/system/configs/agent-runtimes/codex_local:test"),
         client.put("/api/system/configs/clawhub", json={"token": "ch_secret"}),
         client.put(
             "/api/system/configs/clawhub/skills/demo-skill",
@@ -2595,10 +2595,10 @@ def test_save_web_config_accepts_disabled_fallback_provider() -> None:
     }
 
 
-def test_list_external_agents() -> None:
+def test_list_agent_runtimes() -> None:
     client = _create_test_client(_FakeSystemService())
 
-    response = client.get("/api/system/configs/agents")
+    response = client.get("/api/system/configs/agent-runtimes")
 
     assert response.status_code == 200
     assert response.json() == [
@@ -2612,10 +2612,10 @@ def test_list_external_agents() -> None:
     ]
 
 
-def test_get_external_agent_omits_stdio_working_directory() -> None:
+def test_get_agent_runtime_omits_stdio_working_directory() -> None:
     client = _create_test_client(_FakeSystemService())
 
-    response = client.get("/api/system/configs/agents/codex_local")
+    response = client.get("/api/system/configs/agent-runtimes/codex_local")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -2632,12 +2632,12 @@ def test_get_external_agent_omits_stdio_working_directory() -> None:
     }
 
 
-def test_save_external_agent() -> None:
+def test_save_agent_runtime() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)
 
     response = client.put(
-        "/api/system/configs/agents/claude_http",
+        "/api/system/configs/agent-runtimes/claude_http",
         json={
             "agent_id": "claude_http",
             "name": "Claude HTTP",
@@ -2658,7 +2658,7 @@ def test_save_external_agent() -> None:
     )
 
 
-def test_test_external_agent(monkeypatch) -> None:
+def test_test_agent_runtime(monkeypatch) -> None:
     async def fake_probe(_config: ExternalAgentConfig) -> ExternalAgentTestResult:
         return ExternalAgentTestResult(
             ok=True,
@@ -2672,7 +2672,7 @@ def test_test_external_agent(monkeypatch) -> None:
     monkeypatch.setattr(system, "probe_agent_runtime", fake_probe)
     client = _create_test_client(_FakeSystemService())
 
-    response = client.post("/api/system/configs/agents/codex_local:test")
+    response = client.post("/api/system/configs/agent-runtimes/codex_local:test")
 
     assert response.status_code == 200
     assert response.json() == {

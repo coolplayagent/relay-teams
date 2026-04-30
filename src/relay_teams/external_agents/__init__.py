@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from relay_teams.external_agents.config_service import ExternalAgentConfigService
-from relay_teams.external_agents.agent_cli import build_external_agents_app
+from relay_teams.external_agents.agent_cli import build_agent_runtimes_app
 from relay_teams.external_agents.models import (
     CustomTransportConfig,
     ExternalAgentConfig,
@@ -26,7 +26,7 @@ from relay_teams.external_agents.session_repository import (
 
 __all__ = [
     "CustomTransportConfig",
-    "build_external_agents_app",
+    "build_agent_runtimes_app",
     "ExternalAgentConfig",
     "ExternalAgentConfigService",
     "ExternalAgentOption",

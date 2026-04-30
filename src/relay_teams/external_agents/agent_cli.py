@@ -18,36 +18,19 @@ class AgentOutputFormat(str, Enum):
     JSON = "json"
 
 
-def build_external_agents_app(
+def build_agent_runtimes_app(
     *,
     request_json: RequestJsonCallable,
     auto_start_if_needed: AutoStartCallable,
     default_base_url: str,
 ) -> typer.Typer:
-    agents_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+    agent_runtimes_app = typer.Typer(
+        no_args_is_help=True,
+        pretty_exceptions_enable=False,
+    )
 
-    @agents_app.command("list")
-    def agents_list(
-        output_format: AgentOutputFormat = typer.Option(
-            AgentOutputFormat.TABLE,
-            "--format",
-            help="Render as an ASCII table or JSON.",
-            case_sensitive=False,
-        ),
-        base_url: str = typer.Option(default_base_url, "--base-url"),
-        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
-    ) -> None:
-        auto_start_if_needed(base_url, autostart)
-        payload = request_json(base_url, "GET", "/api/system/configs/agents", None)
-        items = _require_list_response(payload, "/api/system/configs/agents")
-        if output_format == AgentOutputFormat.JSON:
-            typer.echo(json.dumps(items, ensure_ascii=False))
-            return
-        _render_agent_summary_table(items)
-
-    @agents_app.command("get")
-    def agents_get(
-        agent_id: str = typer.Argument(..., help="External agent id."),
+    @agent_runtimes_app.command("list")
+    def agent_runtimes_list(
         output_format: AgentOutputFormat = typer.Option(
             AgentOutputFormat.TABLE,
             "--format",
@@ -61,24 +44,49 @@ def build_external_agents_app(
         payload = request_json(
             base_url,
             "GET",
-            f"/api/system/configs/agents/{agent_id}",
+            "/api/system/configs/agent-runtimes",
+            None,
+        )
+        items = _require_list_response(payload, "/api/system/configs/agent-runtimes")
+        if output_format == AgentOutputFormat.JSON:
+            typer.echo(json.dumps(items, ensure_ascii=False))
+            return
+        _render_agent_summary_table(items)
+
+    @agent_runtimes_app.command("get")
+    def agent_runtimes_get(
+        agent_id: str = typer.Argument(..., help="Agent runtime id."),
+        output_format: AgentOutputFormat = typer.Option(
+            AgentOutputFormat.TABLE,
+            "--format",
+            help="Render as an ASCII table or JSON.",
+            case_sensitive=False,
+        ),
+        base_url: str = typer.Option(default_base_url, "--base-url"),
+        autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+    ) -> None:
+        auto_start_if_needed(base_url, autostart)
+        payload = request_json(
+            base_url,
+            "GET",
+            f"/api/system/configs/agent-runtimes/{agent_id}",
             None,
         )
         data = _require_object_response(
-            payload, f"/api/system/configs/agents/{agent_id}"
+            payload, f"/api/system/configs/agent-runtimes/{agent_id}"
         )
         if output_format == AgentOutputFormat.JSON:
             typer.echo(json.dumps(data, ensure_ascii=False))
             return
         _render_agent_detail(data)
 
-    @agents_app.command("save")
-    def agents_save(
-        agent_id: str = typer.Argument(..., help="External agent id."),
+    @agent_runtimes_app.command("save")
+    def agent_runtimes_save(
+        agent_id: str = typer.Argument(..., help="Agent runtime id."),
         config_json: str = typer.Option(
             ...,
             "--config-json",
-            help="Full ExternalAgentConfig JSON payload.",
+            help="Full agent runtime config JSON payload.",
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
@@ -88,18 +96,19 @@ def build_external_agents_app(
         result = request_json(
             base_url,
             "PUT",
-            f"/api/system/configs/agents/{agent_id}",
+            f"/api/system/configs/agent-runtimes/{agent_id}",
             payload,
         )
         typer.echo(
             json.dumps(
-                _require_object_response(result, "agents save"), ensure_ascii=False
+                _require_object_response(result, "agent-runtimes save"),
+                ensure_ascii=False,
             )
         )
 
-    @agents_app.command("delete")
-    def agents_delete(
-        agent_id: str = typer.Argument(..., help="External agent id."),
+    @agent_runtimes_app.command("delete")
+    def agent_runtimes_delete(
+        agent_id: str = typer.Argument(..., help="Agent runtime id."),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
     ) -> None:
@@ -107,18 +116,19 @@ def build_external_agents_app(
         result = request_json(
             base_url,
             "DELETE",
-            f"/api/system/configs/agents/{agent_id}",
+            f"/api/system/configs/agent-runtimes/{agent_id}",
             None,
         )
         typer.echo(
             json.dumps(
-                _require_object_response(result, "agents delete"), ensure_ascii=False
+                _require_object_response(result, "agent-runtimes delete"),
+                ensure_ascii=False,
             )
         )
 
-    @agents_app.command("test")
-    def agents_test(
-        agent_id: str = typer.Argument(..., help="External agent id."),
+    @agent_runtimes_app.command("test")
+    def agent_runtimes_test(
+        agent_id: str = typer.Argument(..., help="Agent runtime id."),
         output_format: AgentOutputFormat = typer.Option(
             AgentOutputFormat.TABLE,
             "--format",
@@ -132,18 +142,18 @@ def build_external_agents_app(
         payload = request_json(
             base_url,
             "POST",
-            f"/api/system/configs/agents/{agent_id}:test",
+            f"/api/system/configs/agent-runtimes/{agent_id}:test",
             None,
         )
         data = _require_object_response(
-            payload, f"/api/system/configs/agents/{agent_id}:test"
+            payload, f"/api/system/configs/agent-runtimes/{agent_id}:test"
         )
         if output_format == AgentOutputFormat.JSON:
             typer.echo(json.dumps(data, ensure_ascii=False))
             return
         _render_test_result(agent_id, data)
 
-    return agents_app
+    return agent_runtimes_app
 
 
 def _parse_config_json(raw: str) -> dict[str, object]:
@@ -174,7 +184,7 @@ def _require_object_response(
 
 def _render_agent_summary_table(items: list[dict[str, object]]) -> None:
     if not items:
-        typer.echo("No external agents configured.")
+        typer.echo("No agent runtimes configured.")
         return
     id_width = max(
         len("Agent ID"), *(len(str(item.get("agent_id") or "")) for item in items)
@@ -223,7 +233,7 @@ def _render_agent_detail(item: dict[str, object]) -> None:
 
 
 def _render_test_result(agent_id: str, item: dict[str, object]) -> None:
-    typer.echo(f"Agent: {agent_id}")
+    typer.echo(f"Agent Runtime: {agent_id}")
     typer.echo(f"OK: {item.get('ok', False)}")
     typer.echo(f"Protocol: {item.get('protocol', 'acp')}")
     message = str(item.get("message") or "").strip()

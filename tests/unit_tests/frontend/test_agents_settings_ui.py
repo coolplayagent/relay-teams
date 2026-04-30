@@ -59,8 +59,8 @@ console.log(JSON.stringify({
         },
     }
     assert test_calls == ["codex_local"]
-    assert toasts[0]["title"] == "Agent Saved"
-    assert toasts[1]["title"] == "Agent Test Passed"
+    assert toasts[0]["title"] == "Runtime Saved"
+    assert toasts[1]["title"] == "Runtime Test Passed"
     assert payload["statusText"] == "Connected"
 
 
@@ -84,7 +84,7 @@ console.log(JSON.stringify({
 
     assert payload["deleteCalls"] == ["codex_local"]
     toasts = cast(list[dict[str, JsonValue]], payload["toasts"])
-    assert toasts[0]["title"] == "Agent Deleted"
+    assert toasts[0]["title"] == "Runtime Deleted"
 
 
 def test_agents_settings_stdio_environment_bindings_use_settings_variables(
@@ -197,7 +197,7 @@ const agentRecords = {
     },
 };
 
-export async function fetchExternalAgents() {
+export async function fetchAgentRuntimes() {
     return [
         {
             agent_id: "codex_local",
@@ -209,7 +209,7 @@ export async function fetchExternalAgents() {
     ];
 }
 
-export async function fetchExternalAgent(agentId) {
+export async function fetchAgentRuntime(agentId) {
     return agentRecords[agentId];
 }
 
@@ -240,13 +240,13 @@ export async function fetchEnvironmentVariables() {
     };
 }
 
-export async function saveExternalAgent(agentId, payload) {
+export async function saveAgentRuntime(agentId, payload) {
     globalThis.__saveCalls.push({ agentId, payload });
     agentRecords[payload.agent_id] = payload;
     return payload;
 }
 
-export async function testExternalAgent(agentId) {
+export async function testAgentRuntime(agentId) {
     globalThis.__testCalls.push(agentId);
     return {
         ok: true,
@@ -254,7 +254,7 @@ export async function testExternalAgent(agentId) {
     };
 }
 
-export async function deleteExternalAgent(agentId) {
+export async function deleteAgentRuntime(agentId) {
     globalThis.__deleteCalls.push(agentId);
     delete agentRecords[agentId];
     return { status: "ok" };
@@ -274,21 +274,21 @@ export function showToast(payload) {
         """
 const TRANSLATIONS = {
     "settings.roles.edit": "Edit",
-    "settings.agents.saved": "Agent Saved",
+    "settings.agents.saved": "Runtime Saved",
     "settings.agents.saved_message": "saved and reloaded.",
     "settings.agents.saved_status": "Saved successfully.",
     "settings.agents.save_failed": "Save Failed",
-    "settings.agents.save_failed_message": "Failed to save external agent config.",
-    "settings.agents.test_passed": "Agent Test Passed",
+    "settings.agents.save_failed_message": "Failed to save agent runtime config.",
+    "settings.agents.test_passed": "Runtime Test Passed",
     "settings.agents.test_passed_message": "Connection succeeded.",
     "settings.agents.test_passed_detail": "responded to the selected protocol probe.",
-    "settings.agents.test_failed": "Agent Test Failed",
-    "settings.agents.test_failed_message": "Failed to test external agent config.",
-    "settings.agents.deleted": "Agent Deleted",
+    "settings.agents.test_failed": "Runtime Test Failed",
+    "settings.agents.test_failed_message": "Failed to test agent runtime config.",
+    "settings.agents.deleted": "Runtime Deleted",
     "settings.agents.deleted_message": "removed from settings.",
     "settings.agents.delete_failed": "Delete Failed",
-    "settings.agents.delete_failed_message": "Failed to delete external agent config.",
-    "settings.agents.select_to_delete": "Select an agent to delete.",
+    "settings.agents.delete_failed_message": "Failed to delete agent runtime config.",
+    "settings.agents.select_to_delete": "Select an agent runtime to delete.",
     "settings.agents.id_required": "Agent ID is required.",
     "settings.agents.name_required": "Agent name is required.",
     "settings.agents.http_url_required": "HTTP transport URL is required.",

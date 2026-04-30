@@ -302,7 +302,7 @@ def _agent_card_url_candidates(url: str) -> tuple[str, ...]:
 
 def _looks_like_agent_card_url(url: str) -> bool:
     path = urlsplit(url.strip()).path
-    return path.endswith(".json") or "/.well-known/" in path
+    return path.rstrip("/").endswith(_A2A_AGENT_CARD_WELL_KNOWN_PATH)
 
 
 def _extract_prompt_result(payload: dict[str, JsonValue]) -> A2aPromptResult:

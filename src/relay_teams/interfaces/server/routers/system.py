@@ -818,15 +818,15 @@ async def save_web_config(
         )
 
 
-@router.get("/configs/agents", response_model=list[ExternalAgentSummary])
-async def list_external_agents(
+@router.get("/configs/agent-runtimes", response_model=list[ExternalAgentSummary])
+async def list_agent_runtimes(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> tuple[ExternalAgentSummary, ...]:
     return await call_maybe_async(service.list_agents)
 
 
-@router.get("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-async def get_external_agent(
+@router.get("/configs/agent-runtimes/{agent_id}", response_model=ExternalAgentConfig)
+async def get_agent_runtime(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
@@ -836,8 +836,8 @@ async def get_external_agent(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.put("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-async def save_external_agent(
+@router.put("/configs/agent-runtimes/{agent_id}", response_model=ExternalAgentConfig)
+async def save_agent_runtime(
     agent_id: RequiredIdentifierStr,
     req: ExternalAgentConfig,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
@@ -848,8 +848,8 @@ async def save_external_agent(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.delete("/configs/agents/{agent_id}")
-async def delete_external_agent(
+@router.delete("/configs/agent-runtimes/{agent_id}")
+async def delete_agent_runtime(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> dict[str, str]:
@@ -860,8 +860,11 @@ async def delete_external_agent(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/configs/agents/{agent_id}:test", response_model=ExternalAgentTestResult)
-async def test_external_agent(
+@router.post(
+    "/configs/agent-runtimes/{agent_id}:test",
+    response_model=ExternalAgentTestResult,
+)
+async def test_agent_runtime(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentTestResult:

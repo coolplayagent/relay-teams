@@ -994,7 +994,7 @@ def test_root_help_lists_env_module() -> None:
     assert "directory. Requires" in normalized_output
     assert "env" in normalized_output
     assert "mcp" in normalized_output
-    assert "agents" in normalized_output
+    assert "agent-runtimes" in normalized_output
     assert "roles" in normalized_output
     assert "skills" in normalized_output
     assert "gateway" in normalized_output

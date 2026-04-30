@@ -213,47 +213,47 @@ export async function fetchProxyConfig() {
     return requestJson('/api/system/configs/proxy', undefined, 'Failed to fetch proxy config');
 }
 
-export async function fetchExternalAgents() {
-    return requestJson('/api/system/configs/agents', undefined, 'Failed to fetch agents');
+export async function fetchAgentRuntimes() {
+    return requestJson('/api/system/configs/agent-runtimes', undefined, 'Failed to fetch agent runtimes');
 }
 
-export async function fetchExternalAgent(agentId) {
+export async function fetchAgentRuntime(agentId) {
     return requestJson(
-        `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
+        `/api/system/configs/agent-runtimes/${encodeURIComponent(agentId)}`,
         undefined,
-        'Failed to fetch agent config',
+        'Failed to fetch agent runtime config',
     );
 }
 
-export async function saveExternalAgent(agentId, payload) {
+export async function saveAgentRuntime(agentId, payload) {
     const result = await requestJson(
-        `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
+        `/api/system/configs/agent-runtimes/${encodeURIComponent(agentId)}`,
         {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         },
-        'Failed to save agent config',
+        'Failed to save agent runtime config',
     );
     invalidateRoleOptionDependencies();
     return result;
 }
 
-export async function deleteExternalAgent(agentId) {
+export async function deleteAgentRuntime(agentId) {
     const result = await requestJson(
-        `/api/system/configs/agents/${encodeURIComponent(agentId)}`,
+        `/api/system/configs/agent-runtimes/${encodeURIComponent(agentId)}`,
         { method: 'DELETE' },
-        'Failed to delete agent config',
+        'Failed to delete agent runtime config',
     );
     invalidateRoleOptionDependencies();
     return result;
 }
 
-export async function testExternalAgent(agentId) {
+export async function testAgentRuntime(agentId) {
     return requestJson(
-        `/api/system/configs/agents/${encodeURIComponent(agentId)}:test`,
+        `/api/system/configs/agent-runtimes/${encodeURIComponent(agentId)}:test`,
         { method: 'POST' },
-        'Failed to test agent config',
+        'Failed to test agent runtime config',
     );
 }
 

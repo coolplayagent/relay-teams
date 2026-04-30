@@ -10,7 +10,7 @@ from relay_teams.interfaces.cli import app as cli_app
 runner = CliRunner()
 
 
-def test_agents_list_supports_json_output(monkeypatch) -> None:
+def test_agent_runtimes_list_supports_json_output(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -37,7 +37,7 @@ def test_agents_list_supports_json_output(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
 
-    result = runner.invoke(cli_app.app, ["agents", "list", "--format", "json"])
+    result = runner.invoke(cli_app.app, ["agent-runtimes", "list", "--format", "json"])
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == [
@@ -48,10 +48,10 @@ def test_agents_list_supports_json_output(monkeypatch) -> None:
             "transport": "stdio",
         }
     ]
-    assert calls == [("GET", "/api/system/configs/agents", None)]
+    assert calls == [("GET", "/api/system/configs/agent-runtimes", None)]
 
 
-def test_agents_save_and_delete_call_expected_endpoints(monkeypatch) -> None:
+def test_agent_runtimes_save_and_delete_call_expected_endpoints(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
     def fake_autostart(base_url: str, autostart: bool) -> None:
@@ -74,7 +74,7 @@ def test_agents_save_and_delete_call_expected_endpoints(monkeypatch) -> None:
     save_result = runner.invoke(
         cli_app.app,
         [
-            "agents",
+            "agent-runtimes",
             "save",
             "codex_local",
             "--config-json",
@@ -92,14 +92,17 @@ def test_agents_save_and_delete_call_expected_endpoints(monkeypatch) -> None:
             ),
         ],
     )
-    delete_result = runner.invoke(cli_app.app, ["agents", "delete", "codex_local"])
+    delete_result = runner.invoke(
+        cli_app.app,
+        ["agent-runtimes", "delete", "codex_local"],
+    )
 
     assert save_result.exit_code == 0
     assert delete_result.exit_code == 0
     assert calls == [
         (
             "PUT",
-            "/api/system/configs/agents/codex_local",
+            "/api/system/configs/agent-runtimes/codex_local",
             {
                 "agent_id": "codex_local",
                 "name": "Codex Local",
@@ -111,11 +114,11 @@ def test_agents_save_and_delete_call_expected_endpoints(monkeypatch) -> None:
                 },
             },
         ),
-        ("DELETE", "/api/system/configs/agents/codex_local", None),
+        ("DELETE", "/api/system/configs/agent-runtimes/codex_local", None),
     ]
 
 
-def test_agents_test_supports_table_output(monkeypatch) -> None:
+def test_agent_runtimes_test_supports_table_output(monkeypatch) -> None:
     def fake_autostart(base_url: str, autostart: bool) -> None:
         _ = (base_url, autostart)
 
@@ -138,9 +141,9 @@ def test_agents_test_supports_table_output(monkeypatch) -> None:
     monkeypatch.setattr(cli_app, "_auto_start_if_needed", fake_autostart)
     monkeypatch.setattr(cli_app, "_request_json", fake_request_json)
 
-    result = runner.invoke(cli_app.app, ["agents", "test", "codex_local"])
+    result = runner.invoke(cli_app.app, ["agent-runtimes", "test", "codex_local"])
 
     assert result.exit_code == 0
-    assert "Agent: codex_local" in result.stdout
+    assert "Agent Runtime: codex_local" in result.stdout
     assert "OK: True" in result.stdout
     assert "Message: Connected" in result.stdout

@@ -558,9 +558,9 @@ Validation rules:
 
 Deletes one ClawHub-managed app skill directory and reloads the runtime skill registry.
 
-### `GET /system/configs/agents`
+### `GET /system/configs/agent-runtimes`
 
-Returns configured external agent runtimes.
+Returns configured agent runtimes.
 
 Each item includes:
 - `agent_id`
@@ -569,9 +569,9 @@ Each item includes:
 - `protocol`: `acp`, `a2a`, or `cli`
 - `transport`: `stdio`, `streamable_http`, or `custom`
 
-### `GET /system/configs/agents/{agent_id}`
+### `GET /system/configs/agent-runtimes/{agent_id}`
 
-Returns one saved external agent config.
+Returns one saved agent runtime config.
 
 The `transport` field is a discriminated union:
 - `stdio`: `command`, `args[]`, optional `env[]`
@@ -581,7 +581,7 @@ The `transport` field is a discriminated union:
 The `protocol` field selects the runtime protocol:
 - `acp`: existing Agent Client Protocol session lifecycle over stdio, HTTP, or custom transport
 - `a2a`: Agent2Agent JSON-RPC over HTTP; `streamable_http.url` may point at an Agent Card or direct JSON-RPC endpoint
-- `cli`: non-interactive CLI execution for open coding agents such as local Codex; requires `stdio` transport
+- `cli`: stdio JSON-RPC execution for open coding agent runtimes such as local Codex app-server; requires `stdio` transport
 
 Binding items under `env[]` or `headers[]` include:
 - `name`
@@ -591,27 +591,28 @@ Binding items under `env[]` or `headers[]` include:
 
 Notes:
 - Secret binding values are not returned on read. Instead, `configured=true` tells the UI that a secret exists in the unified secret store.
-- Any ACP-compatible external agent may be configured here, including tools such as Claude Code or OpenCode, as long as it speaks the expected transport.
+- Any ACP-compatible agent runtime may be configured here, including tools such as Claude Code or OpenCode, as long as it speaks the expected transport.
 - A2A runtimes follow the public Agent2Agent Agent Card and `message/send` JSON-RPC flow.
-- CLI runtimes are process-based and receive the composed runtime prompt on stdin. Codex CLI configs may use `--yolo`; the runtime normalizes it to Codex's current non-interactive bypass flag when invoking `codex exec`.
-- `stdio` external agents always start inside the active session workspace. The working directory is runtime-derived from the session's project context and is not stored in agent config.
+- CLI runtimes are process-based JSON-RPC servers over stdio. The backend performs `initialize`, sends `initialized`, creates an ephemeral `thread/start`, submits the composed runtime prompt through `turn/start`, collects assistant output from `item/agentMessage/delta` or completed `agentMessage` items, and waits for `turn/completed`.
+- Bare `codex` CLI configs are launched as `codex app-server --listen stdio://`. Legacy `codex exec` prompt flags are not forwarded to app-server; approval policy is set through JSON-RPC thread/turn params.
+- `stdio` runtimes always start inside the active session workspace. The working directory is runtime-derived from the session's project context and is not stored in the saved runtime config.
 
-### `PUT /system/configs/agents/{agent_id}`
+### `PUT /system/configs/agent-runtimes/{agent_id}`
 
-Upserts one external ACP agent config.
+Upserts one agent runtime config.
 
 Rules:
 - Path `agent_id` must match body `agent_id`.
 - Secret env/header values are persisted only through the unified secret store.
 - Sending a secret binding with `configured=false` and no value removes the stored secret for that binding.
 
-### `DELETE /system/configs/agents/{agent_id}`
+### `DELETE /system/configs/agent-runtimes/{agent_id}`
 
-Deletes one saved external ACP agent config and its stored secrets.
+Deletes one saved agent runtime config and its stored secrets.
 
-### `POST /system/configs/agents/{agent_id}:test`
+### `POST /system/configs/agent-runtimes/{agent_id}:test`
 
-Tests connectivity against the saved runtime-resolved external agent config.
+Tests connectivity against the saved runtime-resolved agent runtime config.
 
 Response fields:
 - `ok`
@@ -2122,7 +2123,7 @@ Rules:
   with warnings until they are cleaned up.
 - When `source_role_id` is omitted and the file does not exist yet, a new role file is created.
 - Renaming a role writes a new file and removes the previous file when validation succeeds.
-- When `bound_agent_id` is set, that role executes through the external ACP provider instead of the local model provider chain.
+- When `bound_agent_id` is set, that role executes through the configured agent runtime provider instead of the local model provider chain.
 - `mode` controls where the role can be selected: `primary` for normal-mode root roles, `subagent` for background/delegated subagent roles, `all` for both.
 - Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`), fixed `mode`, and fixed `system_prompt` through this API.
 

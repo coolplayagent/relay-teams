@@ -8,7 +8,6 @@ import pytest
 from pydantic import JsonValue
 
 import relay_teams.external_agents.a2a_client as a2a_client
-from relay_teams.external_agents.a2a_client import probe_a2a_agent, send_a2a_prompt
 from relay_teams.external_agents.models import (
     ExternalAgentConfig,
     ExternalAgentProtocol,
@@ -55,7 +54,7 @@ async def test_probe_a2a_agent_fetches_agent_card(
         ),
     )
 
-    result = await probe_a2a_agent(_build_a2a_agent("http://agent.test/a2a"))
+    result = await a2a_client.probe_a2a_agent(_build_a2a_agent("http://agent.test/a2a"))
 
     assert result.ok is True
     assert result.protocol == ExternalAgentProtocol.A2A
@@ -132,7 +131,7 @@ async def test_send_a2a_prompt_uses_message_send_and_polls_task(
         ),
     )
 
-    result = await send_a2a_prompt(
+    result = await a2a_client.send_a2a_prompt(
         config=_build_a2a_agent("http://agent.test/.well-known/agent.json"),
         prompt="Please work.",
         metadata={"relay_teams": {"run_id": "run-1"}},
@@ -150,3 +149,47 @@ async def test_send_a2a_prompt_uses_message_send_and_polls_task(
     assert isinstance(message, dict)
     assert message["role"] == "user"
     assert message["parts"] == [{"kind": "text", "text": "Please work."}]
+
+
+@pytest.mark.asyncio
+async def test_send_a2a_prompt_treats_rpc_json_as_direct_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.method == "GET":
+            return httpx.Response(404)
+        payload = json.loads(request.content.decode("utf-8"))
+        assert isinstance(payload, dict)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {
+                    "kind": "message",
+                    "contextId": "ctx-1",
+                    "parts": [{"kind": "text", "text": "direct endpoint"}],
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        a2a_client,
+        "create_async_http_client",
+        lambda ssl_verify=None: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    result = await a2a_client.send_a2a_prompt(
+        config=_build_a2a_agent("http://agent.test/rpc.json"),
+        prompt="Please work.",
+        metadata={},
+        timeout_seconds=3,
+    )
+
+    assert result.text == "direct endpoint"
+    assert "http://agent.test/rpc.json" == requested_urls[-1]
