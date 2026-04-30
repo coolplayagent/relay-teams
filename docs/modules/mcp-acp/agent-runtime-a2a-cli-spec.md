@@ -77,7 +77,8 @@ Endpoint resolution:
 Prompt execution:
 
 - `message/send` sends a user message with text parts and Relay Teams metadata.
-- `message/send` and `tasks/get` POST requests apply the configured prompt timeout as the per-request HTTP timeout.
+- Agent Card discovery, `message/send`, and `tasks/get` share the configured prompt timeout as a global execution budget.
+- Each outbound A2A request uses the remaining prompt budget as its per-request HTTP timeout.
 - Explicit `message` responses return immediately.
 - Task responses return successfully only when the task state is `completed`.
 - Task states `failed`, `rejected`, and `canceled` raise runtime errors using the status message when available.

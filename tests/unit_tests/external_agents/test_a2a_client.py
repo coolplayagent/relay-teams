@@ -25,6 +25,16 @@ def _build_a2a_agent(url: str) -> ExternalAgentConfig:
     )
 
 
+def _request_read_timeout(request: httpx.Request) -> float | None:
+    timeout_extension: object = request.extensions.get("timeout")
+    if not isinstance(timeout_extension, Mapping):
+        return None
+    read_timeout: object = timeout_extension.get("read")
+    if not isinstance(read_timeout, int | float):
+        return None
+    return float(read_timeout)
+
+
 @pytest.mark.asyncio
 async def test_probe_a2a_agent_fetches_agent_card(
     monkeypatch: pytest.MonkeyPatch,
@@ -121,10 +131,14 @@ async def test_send_a2a_prompt_uses_message_send_and_polls_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests: list[dict[str, JsonValue]] = []
-    observed_timeouts: list[float] = []
+    observed_card_timeouts: list[float] = []
+    observed_post_timeouts: list[tuple[str, float]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
+            read_timeout = _request_read_timeout(request)
+            if read_timeout is not None:
+                observed_card_timeouts.append(read_timeout)
             return httpx.Response(
                 200,
                 json={
@@ -139,15 +153,13 @@ async def test_send_a2a_prompt_uses_message_send_and_polls_task(
                     "skills": [],
                 },
             )
-        timeout_extension: object = request.extensions.get("timeout")
-        if isinstance(timeout_extension, Mapping):
-            read_timeout: object = timeout_extension.get("read")
-            if isinstance(read_timeout, int | float):
-                observed_timeouts.append(float(read_timeout))
+        read_timeout = _request_read_timeout(request)
         payload = json.loads(request.content.decode("utf-8"))
         assert isinstance(payload, dict)
         normalized = {str(key): value for key, value in payload.items()}
         requests.append(normalized)
+        if read_timeout is not None:
+            observed_post_timeouts.append((str(normalized["method"]), read_timeout))
         if normalized["method"] == "message/send":
             return httpx.Response(
                 200,
@@ -208,7 +220,16 @@ async def test_send_a2a_prompt_uses_message_send_and_polls_task(
     assert isinstance(message, dict)
     assert message["role"] == "user"
     assert message["parts"] == [{"kind": "text", "text": "Please work."}]
-    assert observed_timeouts == [3.0, 3.0]
+    assert len(observed_card_timeouts) == 1
+    assert 0 < observed_card_timeouts[0] <= 3.0
+    assert [method for method, _timeout in observed_post_timeouts] == [
+        "message/send",
+        "tasks/get",
+    ]
+    message_send_timeout = observed_post_timeouts[0][1]
+    task_poll_timeout = observed_post_timeouts[1][1]
+    assert 0 < message_send_timeout <= 3.0
+    assert 0 < task_poll_timeout < message_send_timeout
 
 
 @pytest.mark.asyncio

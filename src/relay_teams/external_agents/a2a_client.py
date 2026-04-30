@@ -152,14 +152,25 @@ class A2aHttpClient:
         await self._client.aclose()
         self._client = None
 
-    async def fetch_agent_card(self) -> A2aAgentCard:
+    async def fetch_agent_card(
+        self,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> A2aAgentCard:
         if self._agent_card is not None:
             return self._agent_card
         client = self._require_client()
         errors: list[str] = []
         for card_url in _agent_card_url_candidates(self._transport.url):
             try:
-                response = await client.get(card_url, headers=self._headers())
+                if timeout_seconds is None:
+                    response = await client.get(card_url, headers=self._headers())
+                else:
+                    response = await client.get(
+                        card_url,
+                        headers=self._headers(),
+                        timeout=timeout_seconds,
+                    )
                 response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, dict):
@@ -208,7 +219,13 @@ class A2aHttpClient:
         metadata: dict[str, JsonValue],
         timeout_seconds: float,
     ) -> A2aPromptResult:
-        endpoint = await self._resolve_endpoint_url()
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        endpoint = await self._resolve_endpoint_url(
+            timeout_seconds=_remaining_timeout(
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
+            )
+        )
         request_id = self._next_request_id()
         message_id = str(uuid4())
         payload: dict[str, JsonValue] = {
@@ -229,7 +246,10 @@ class A2aHttpClient:
         response = await self._post_json_rpc(
             endpoint=endpoint,
             payload=payload,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_remaining_timeout(
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
+            ),
         )
         result = _json_object(response.get("result"))
         parsed = _extract_prompt_result(result)
@@ -241,6 +261,7 @@ class A2aHttpClient:
         return await self._poll_task(
             endpoint=endpoint,
             task_id=parsed.task_id,
+            deadline=deadline,
             timeout_seconds=timeout_seconds,
         )
 
@@ -249,14 +270,19 @@ class A2aHttpClient:
         *,
         endpoint: str,
         task_id: str,
+        deadline: float,
         timeout_seconds: float,
     ) -> A2aPromptResult:
-        attempts = min(
-            _A2A_MAX_POLL_ATTEMPTS,
-            max(1, int(timeout_seconds // _A2A_POLL_INTERVAL_SECONDS)),
-        )
-        for _index in range(attempts):
-            await asyncio.sleep(_A2A_POLL_INTERVAL_SECONDS)
+        for _index in range(_A2A_MAX_POLL_ATTEMPTS):
+            await asyncio.sleep(
+                min(
+                    _A2A_POLL_INTERVAL_SECONDS,
+                    _remaining_timeout(
+                        deadline=deadline,
+                        timeout_seconds=timeout_seconds,
+                    ),
+                )
+            )
             response = await self._post_json_rpc(
                 endpoint=endpoint,
                 payload={
@@ -265,7 +291,10 @@ class A2aHttpClient:
                     "method": "tasks/get",
                     "params": {"id": task_id},
                 },
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=_remaining_timeout(
+                    deadline=deadline,
+                    timeout_seconds=timeout_seconds,
+                ),
             )
             latest = _extract_prompt_result(_json_object(response.get("result")))
             _raise_for_failed_task_state(latest)
@@ -275,11 +304,11 @@ class A2aHttpClient:
                 raise A2aClientError("A2A task response did not include a task id")
         raise A2aClientError(f"A2A task {task_id} did not complete before timeout")
 
-    async def _resolve_endpoint_url(self) -> str:
+    async def _resolve_endpoint_url(self, *, timeout_seconds: float) -> str:
         if _looks_like_agent_card_url(self._transport.url):
-            return (await self.fetch_agent_card()).url
+            return (await self.fetch_agent_card(timeout_seconds=timeout_seconds)).url
         try:
-            return (await self.fetch_agent_card()).url
+            return (await self.fetch_agent_card(timeout_seconds=timeout_seconds)).url
         except A2aClientError:
             return self._transport.url
 
@@ -356,6 +385,13 @@ def _agent_card_url_candidates(url: str) -> tuple[str, ...]:
 def _looks_like_agent_card_url(url: str) -> bool:
     path = urlsplit(url.strip()).path
     return path.rstrip("/").endswith(_A2A_AGENT_CARD_WELL_KNOWN_PATH)
+
+
+def _remaining_timeout(*, deadline: float, timeout_seconds: float) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise A2aClientError(f"A2A prompt timed out after {timeout_seconds:g} seconds")
+    return remaining
 
 
 def _extract_prompt_result(payload: dict[str, JsonValue]) -> A2aPromptResult:
