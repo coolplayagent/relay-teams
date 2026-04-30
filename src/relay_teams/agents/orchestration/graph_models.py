@@ -127,8 +127,10 @@ class OrchestrationGraph(BaseModel):
 def build_orchestration_graph_prompt(graph: OrchestrationGraph) -> str:
     lines = [
         "## Orchestration Graph",
-        "The selected orchestration preset includes a DAG template. "
-        "Coordinator should respect node dependencies, use completed upstream node results as downstream context, and summarize the completed graph in the final response.",
+        (
+            "The selected orchestration preset includes a DAG template. "
+            + "Coordinator should respect node dependencies, use completed upstream node results as downstream context, and summarize the completed graph in the final response."
+        ),
         "",
         "Nodes:",
     ]

@@ -512,9 +512,34 @@ class CoordinatorGraph(BaseModel):
                 "node_count": len(graph.nodes),
             },
         )
-        cycle = 0
-        while cycle < MAX_ORCHESTRATION_CYCLES:
-            cycle += 1
+        missing_role_ids = self._missing_graph_role_ids(graph)
+        if missing_role_ids:
+            role_list = ", ".join(missing_role_ids)
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.graph.role_missing",
+                message="Coordinator graph references missing roles",
+                payload={
+                    "trace_id": trace_id,
+                    "root_task_id": root_task.task_id,
+                    "missing_role_ids": list(missing_role_ids),
+                },
+            )
+            graph_status = await self._graph_status_async(
+                trace_id=trace_id, graph=graph
+            )
+            return TaskExecutionResult(
+                output=(
+                    self._graph_execution_summary(graph_status=graph_status)
+                    + f"\n\nMissing graph node roles: {role_list}"
+                ),
+                completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                error_code="graph_role_missing",
+                error_message=f"Graph references missing role(s): {role_list}.",
+            )
+
+        while True:
             created_any = await self._create_ready_graph_tasks_async(
                 graph=graph,
                 root_task=root_task,
@@ -528,6 +553,8 @@ class CoordinatorGraph(BaseModel):
                 trace_id=trace_id,
                 graph=graph,
             )
+            if graph_status.failed:
+                break
             if graph_status.completed:
                 break
             if not created_any and not ran_any:
@@ -551,7 +578,7 @@ class CoordinatorGraph(BaseModel):
                 output=self._graph_execution_summary(graph_status=graph_status),
                 completion_reason=RunCompletionReason.ASSISTANT_ERROR,
                 error_code="graph_execution_incomplete",
-                error_message="Graph execution did not complete within the cycle limit.",
+                error_message="Graph execution did not complete.",
             )
 
         final_output = self._graph_final_response(
@@ -825,8 +852,17 @@ class CoordinatorGraph(BaseModel):
         )
         return _GraphStatus(graph=graph, records_by_node=records_by_node)
 
+    def _missing_graph_role_ids(self, graph: OrchestrationGraph) -> tuple[str, ...]:
+        missing_role_ids: list[str] = []
+        for role_id in sorted({node.role_id for node in graph.nodes}):
+            try:
+                _ = self.role_registry.get(role_id)
+            except KeyError:
+                missing_role_ids.append(role_id)
+        return tuple(missing_role_ids)
+
+    @staticmethod
     def _graph_node_objective(
-        self,
         *,
         node: OrchestrationGraphNode,
         root_task: TaskEnvelope,
@@ -843,8 +879,8 @@ class CoordinatorGraph(BaseModel):
             )
         return "\n\n".join(sections)
 
+    @staticmethod
     def _graph_final_response(
-        self,
         *,
         root_task: TaskEnvelope,
         graph_status: "_GraphStatus",
@@ -857,7 +893,7 @@ class CoordinatorGraph(BaseModel):
         sections = [
             "Graph-based orchestration completed.",
             f"Original user objective:\n{root_task.objective}",
-            self._graph_execution_summary(graph_status=graph_status),
+            CoordinatorGraph._graph_execution_summary(graph_status=graph_status),
         ]
         if final_record is not None and final_record.result:
             sections.append(
@@ -865,7 +901,8 @@ class CoordinatorGraph(BaseModel):
             )
         return "\n\n".join(sections)
 
-    def _graph_execution_summary(self, *, graph_status: "_GraphStatus") -> str:
+    @staticmethod
+    def _graph_execution_summary(*, graph_status: "_GraphStatus") -> str:
         lines = ["Graph execution summary:"]
         for node_id in graph_status.graph.topological_node_ids():
             node = graph_status.graph.node_by_id(node_id)
