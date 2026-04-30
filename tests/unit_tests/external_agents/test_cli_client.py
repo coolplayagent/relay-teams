@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from pydantic import JsonValue
 
+import relay_teams.external_agents.cli_client as cli_client
 from relay_teams.external_agents.cli_client import (
     CliAgentError,
     _CliJsonRpcNotification,
@@ -342,6 +343,87 @@ async def test_run_cli_agent_prompt_raises_when_runtime_closes_during_turn(
             runtime_cwd=tmp_path,
             timeout_seconds=5,
         )
+
+
+@pytest.mark.asyncio
+async def test_run_cli_agent_prompt_uses_shared_timeout_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    observed_timeouts: list[tuple[str, float]] = []
+
+    async def fake_initialize_cli_runtime(
+        *,
+        client: _StdioCliJsonRpcClient,
+        timeout_seconds: float,
+    ) -> dict[str, JsonValue]:
+        observed_timeouts.append(("initialize", timeout_seconds))
+        await asyncio.sleep(0.02)
+        return {}
+
+    async def fake_start_cli_thread(
+        *,
+        client: _StdioCliJsonRpcClient,
+        runtime_cwd: Path,
+        timeout_seconds: float,
+    ) -> str:
+        observed_timeouts.append(("thread/start", timeout_seconds))
+        await asyncio.sleep(0.02)
+        return "thread-1"
+
+    async def fake_start_cli_turn(
+        *,
+        client: _StdioCliJsonRpcClient,
+        prompt: str,
+        runtime_cwd: Path,
+        thread_id: str,
+        timeout_seconds: float,
+    ) -> str:
+        observed_timeouts.append(("turn/start", timeout_seconds))
+        await asyncio.sleep(0.02)
+        return "turn-1"
+
+    async def fake_wait_for_cli_turn_output(
+        *,
+        client: _StdioCliJsonRpcClient,
+        thread_id: str,
+        turn_id: str,
+        timeout_seconds: float,
+    ) -> str:
+        observed_timeouts.append(("turn/wait", timeout_seconds))
+        return "done"
+
+    monkeypatch.setattr(
+        cli_client,
+        "_initialize_cli_runtime",
+        fake_initialize_cli_runtime,
+    )
+    monkeypatch.setattr(cli_client, "_start_cli_thread", fake_start_cli_thread)
+    monkeypatch.setattr(cli_client, "_start_cli_turn", fake_start_cli_turn)
+    monkeypatch.setattr(
+        cli_client,
+        "_wait_for_cli_turn_output",
+        fake_wait_for_cli_turn_output,
+    )
+
+    result = await run_cli_agent_prompt(
+        config=_build_cli_agent(sys.executable, ("-c", "")),
+        prompt="hello runtime",
+        runtime_cwd=tmp_path,
+        timeout_seconds=2,
+    )
+
+    assert result == "done"
+    assert [name for name, _timeout in observed_timeouts] == [
+        "initialize",
+        "thread/start",
+        "turn/start",
+        "turn/wait",
+    ]
+    timeout_values = [timeout for _name, timeout in observed_timeouts]
+    assert all(0 < timeout <= 2 for timeout in timeout_values)
+    assert timeout_values == sorted(timeout_values, reverse=True)
+    assert len(set(timeout_values)) == len(timeout_values)
 
 
 def test_stdio_transport_rejects_non_stdio_config() -> None:

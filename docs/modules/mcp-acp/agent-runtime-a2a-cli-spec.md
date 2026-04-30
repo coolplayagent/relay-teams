@@ -91,6 +91,7 @@ A CLI runtime uses stdio transport and starts in the active session workspace.
 Protocol rules:
 
 - stdin/stdout carry newline-delimited JSON-RPC messages.
+- Initialization, `thread/start`, `turn/start`, and turn output waiting share the configured prompt timeout as one global execution budget.
 - The runtime is initialized with `initialize`, followed by an `initialized` notification.
 - Agent Teams creates an ephemeral thread with `thread/start`.
 - Prompt execution uses `turn/start` with the composed runtime prompt as a text input item.

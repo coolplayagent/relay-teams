@@ -137,27 +137,43 @@ async def run_cli_agent_prompt(
         transport=transport,
     )
     try:
+        deadline = asyncio.get_running_loop().time() + timeout_seconds
         await _initialize_cli_runtime(
             client=client,
-            timeout_seconds=min(timeout_seconds, _CLI_INITIALIZE_TIMEOUT_SECONDS),
+            timeout_seconds=min(
+                _remaining_cli_timeout(
+                    deadline=deadline,
+                    timeout_seconds=timeout_seconds,
+                ),
+                _CLI_INITIALIZE_TIMEOUT_SECONDS,
+            ),
         )
         thread_id = await _start_cli_thread(
             client=client,
             runtime_cwd=runtime_cwd,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_remaining_cli_timeout(
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
+            ),
         )
         turn_id = await _start_cli_turn(
             client=client,
             prompt=prompt,
             runtime_cwd=runtime_cwd,
             thread_id=thread_id,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_remaining_cli_timeout(
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
+            ),
         )
         return await _wait_for_cli_turn_output(
             client=client,
             thread_id=thread_id,
             turn_id=turn_id,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_remaining_cli_timeout(
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
+            ),
         )
     finally:
         await client.close()
@@ -477,6 +493,15 @@ def _turn_error_message(params: dict[str, JsonValue]) -> str | None:
     if message is not None and details is not None:
         return f"{message}: {details}"
     return message or details
+
+
+def _remaining_cli_timeout(*, deadline: float, timeout_seconds: float) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise CliAgentError(
+            f"External CLI agent timed out after {timeout_seconds:g} seconds"
+        )
+    return remaining
 
 
 class _StdioCliJsonRpcClient:
