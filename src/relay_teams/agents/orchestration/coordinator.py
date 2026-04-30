@@ -87,6 +87,26 @@ class CoordinatorRunResult(BaseModel):
     error_message: str | None = None
 
 
+class DelegatedTaskExecutionDisabledError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        trace_id: str,
+        root_task_id: str,
+        pending_lane_count: int,
+        max_parallel_tasks: int,
+    ) -> None:
+        self.trace_id = trace_id
+        self.root_task_id = root_task_id
+        self.pending_lane_count = pending_lane_count
+        self.max_parallel_tasks = max_parallel_tasks
+        message = (
+            "Delegated task execution is disabled by the orchestration policy "
+            f"while {pending_lane_count} delegated task lane(s) are ready."
+        )
+        super().__init__(message)
+
+
 class CoordinatorGraph(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
@@ -463,11 +483,37 @@ class CoordinatorGraph(BaseModel):
                 message="Coordinator cycle started",
                 payload={"cycle": cycle},
             )
-            ran_any = await self._run_pending_delegated_tasks(
-                trace_id=trace_id,
-                root_task_id=root_task.task_id,
-                max_parallel_tasks=policy.max_parallel_delegated_tasks,
-            )
+            try:
+                ran_any = await self._run_pending_delegated_tasks(
+                    trace_id=trace_id,
+                    root_task_id=root_task.task_id,
+                    max_parallel_tasks=policy.max_parallel_delegated_tasks,
+                )
+            except DelegatedTaskExecutionDisabledError as exc:
+                error_message = str(exc)
+                assistant_message = build_assistant_error_message(
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="coord.cycle.blocked",
+                    message="Coordinator cycle blocked by orchestration policy",
+                    payload={
+                        "cycle": cycle,
+                        "trace_id": trace_id,
+                        "root_task_id": root_task.task_id,
+                        "pending_lane_count": exc.pending_lane_count,
+                        "max_parallel_tasks": exc.max_parallel_tasks,
+                    },
+                )
+                return TaskExecutionResult(
+                    output=assistant_message,
+                    completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
             if not ran_any:
                 log_event(
                     LOGGER,
@@ -559,11 +605,34 @@ class CoordinatorGraph(BaseModel):
                 graph=graph,
                 root_task=root_task,
             )
-            ran_any = await self._run_pending_delegated_tasks(
-                trace_id=trace_id,
-                root_task_id=root_task.task_id,
-                max_parallel_tasks=graph.max_parallel_tasks,
-            )
+            try:
+                ran_any = await self._run_pending_delegated_tasks(
+                    trace_id=trace_id,
+                    root_task_id=root_task.task_id,
+                    max_parallel_tasks=graph.max_parallel_tasks,
+                )
+            except DelegatedTaskExecutionDisabledError as exc:
+                graph_status = await self._graph_status_async(
+                    trace_id=trace_id,
+                    graph=graph,
+                )
+                error_message = str(exc)
+                await self._fail_graph_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
+                return TaskExecutionResult(
+                    output=(
+                        self._graph_execution_summary(graph_status=graph_status)
+                        + f"\n\n{error_message}"
+                    ),
+                    completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
             graph_status = await self._graph_status_async(
                 trace_id=trace_id,
                 graph=graph,
@@ -1068,9 +1137,9 @@ class CoordinatorGraph(BaseModel):
         if resolved_max_parallel_tasks < 1:
             log_event(
                 LOGGER,
-                logging.INFO,
-                event="coord.delegated_tasks.skipped",
-                message="Delegated task execution skipped by orchestration policy",
+                logging.WARNING,
+                event="coord.delegated_tasks.blocked",
+                message="Delegated task execution blocked by orchestration policy",
                 payload={
                     "trace_id": trace_id,
                     "root_task_id": root_task_id,
@@ -1078,7 +1147,12 @@ class CoordinatorGraph(BaseModel):
                     "max_parallel_tasks": resolved_max_parallel_tasks,
                 },
             )
-            return False
+            raise DelegatedTaskExecutionDisabledError(
+                trace_id=trace_id,
+                root_task_id=root_task_id,
+                pending_lane_count=len(lanes),
+                max_parallel_tasks=resolved_max_parallel_tasks,
+            )
 
         semaphore = asyncio.Semaphore(resolved_max_parallel_tasks)
 

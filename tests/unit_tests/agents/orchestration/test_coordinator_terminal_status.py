@@ -773,6 +773,88 @@ async def test_ai_mode_respects_zero_cycle_orchestration_policy(
 
 
 @pytest.mark.asyncio
+async def test_ai_mode_reports_disabled_parallel_policy_with_pending_tasks(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="answer through a delegated task",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    child_task = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    _ = task_repo.create(child_task)
+    child_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=child_instance.instance_id,
+        role_id="time",
+        workspace_id=child_instance.workspace_id,
+        conversation_id=child_instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    task_repo.update_status(
+        child_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=child_instance.instance_id,
+    )
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="simple",
+        orchestration_prompt="Delegation is disabled by policy.",
+        allowed_role_ids=("time",),
+        orchestration_policy=OrchestrationPolicy(
+            max_orchestration_cycles=1,
+            max_parallel_delegated_tasks=0,
+        ),
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        coordinator_first=False,
+        topology=topology,
+    )
+
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "delegated_task_execution_disabled"
+    assert "Delegated task execution is disabled" in result.output
+    assert task_execution_service.calls == []
+    assert task_repo.get(child_task.task_id).status == TaskStatus.ASSIGNED
+
+
+@pytest.mark.asyncio
 async def test_ai_mode_uses_policy_parallel_limit(tmp_path: Path) -> None:
     coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
         tmp_path
