@@ -12,14 +12,11 @@ import multiprocessing
 import re
 import statistics
 import time
-import warnings
 import yaml
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
-from typing import NoReturn
-from typing import Protocol
+from typing import Literal, NoReturn, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 from pydantic_ai import Agent, ModelRequestNode
@@ -169,10 +166,10 @@ RoleInstanceResolver = Callable[[str, str], str | None]
 
 
 async def _run_generated_tool_action(
+    tool_input: dict[str, JsonValue],
     *,
     service: AutoHarnessService,
     tool_name: str,
-    tool_input: dict[str, JsonValue],
 ) -> ToolResultProjection:
     result = await service.execute_generated_tool(
         tool_name=tool_name,
@@ -579,11 +576,15 @@ class AutoHarnessService:
                 tool_input: dict[str, JsonValue],
             ) -> dict[str, JsonValue]:
                 input_keys: list[JsonValue] = [key for key in sorted(tool_input.keys())]
-                action = partial(
-                    _run_generated_tool_action,
-                    service=service,
-                    tool_name=record.tool_name,
-                )
+
+                async def action(
+                    tool_args: dict[str, JsonValue],
+                ) -> ToolResultProjection:
+                    return await _run_generated_tool_action(
+                        tool_args,
+                        service=service,
+                        tool_name=record.tool_name,
+                    )
 
                 return await execute_tool_call(
                     ctx,
@@ -592,7 +593,7 @@ class AutoHarnessService:
                         "input_keys": input_keys,
                     },
                     action=action,
-                    raw_args=locals(),
+                    raw_args=tool_input,
                 )
 
         return register
@@ -669,19 +670,46 @@ class AutoHarnessService:
             if source == RoleConfigSource.BUILTIN
             else source_path
         )
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(
-            _render_role_markdown(front_matter=parsed, body=body),
-            encoding="utf-8",
-        )
-        updated_registry = RoleLoader().load_builtin_and_app(
-            builtin_roles_dir=self._builtin_roles_dir,
-            app_roles_dir=self._roles_dir,
-            allow_empty=True,
+        previous_content = (
+            target_path.read_text(encoding="utf-8") if target_path.exists() else None
         )
         current_registry = self._get_role_registry()
-        current_registry.register(updated_registry.get(role.role_id))
-        self._on_roles_reloaded(updated_registry)
+        previous_role = current_registry.get(role.role_id)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target_path.write_text(
+                _render_role_markdown(front_matter=parsed, body=body),
+                encoding="utf-8",
+            )
+            updated_registry = RoleLoader().load_builtin_and_app(
+                builtin_roles_dir=self._builtin_roles_dir,
+                app_roles_dir=self._roles_dir,
+                allow_empty=True,
+            )
+            current_registry.register(updated_registry.get(role.role_id))
+            self._on_roles_reloaded(updated_registry)
+        except Exception as exc:
+            try:
+                if previous_content is None:
+                    target_path.unlink(missing_ok=True)
+                else:
+                    target_path.write_text(previous_content, encoding="utf-8")
+                current_registry.register(previous_role)
+            except Exception as rollback_exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="autoharness.role_attach_rollback_failed",
+                    message="Failed to roll back generated tool role attachment",
+                    payload={
+                        "role_id": role.role_id,
+                        "tool_name": tool_name,
+                        "target_path": str(target_path),
+                        "error_type": type(exc).__name__,
+                    },
+                    exc_info=rollback_exc,
+                )
+            raise
         return True
 
     def _tool_dir(self, tool_name: str) -> Path:
@@ -913,23 +941,75 @@ class _GeneratedCodeOutputConnection(Protocol):
         raise NotImplementedError
 
 
+class _GeneratedCodeInputConnection(Protocol):
+    def poll(self) -> bool:
+        raise NotImplementedError
+
+    def recv(self) -> object:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+
+class _GeneratedCodeProcess(Protocol):
+    def start(self) -> None:
+        raise NotImplementedError
+
+    def join(self, timeout: float | None = None) -> None:
+        raise NotImplementedError
+
+    def is_alive(self) -> bool:
+        raise NotImplementedError
+
+    def terminate(self) -> None:
+        raise NotImplementedError
+
+    def kill(self) -> None:
+        raise NotImplementedError
+
+
+class _GeneratedCodeProcessContext(Protocol):
+    def Pipe(
+        self,
+        *,
+        duplex: bool,
+    ) -> tuple[_GeneratedCodeInputConnection, _GeneratedCodeOutputConnection]:
+        raise NotImplementedError
+
+    def Process(
+        self,
+        *,
+        target: Callable[
+            [str, dict[str, JsonValue], _GeneratedCodeOutputConnection],
+            None,
+        ],
+        args: tuple[str, dict[str, JsonValue], _GeneratedCodeOutputConnection],
+    ) -> _GeneratedCodeProcess:
+        raise NotImplementedError
+
+
+def _generated_code_process_context() -> _GeneratedCodeProcessContext:
+    method: Literal["forkserver", "spawn"] = (
+        "forkserver"
+        if "forkserver" in multiprocessing.get_all_start_methods()
+        else "spawn"
+    )
+    return cast(_GeneratedCodeProcessContext, multiprocessing.get_context(method))
+
+
 async def _execute_generated_code_in_process(
     code: str,
     tool_input: dict[str, JsonValue],
 ) -> JsonValue:
     _validate_generated_code(code)
-    parent_connection, child_connection = multiprocessing.Pipe(duplex=False)
-    process = multiprocessing.Process(
+    process_context = _generated_code_process_context()
+    parent_connection, child_connection = process_context.Pipe(duplex=False)
+    process = process_context.Process(
         target=_execute_generated_code_process_worker,
         args=(code, dict(tool_input), child_connection),
     )
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            category=DeprecationWarning,
-            message=r".*multi-threaded.*",
-        )
-        process.start()
+    process.start()
     child_connection.close()
     try:
         deadline = time.monotonic() + _EXECUTION_TIMEOUT_SECONDS
@@ -1011,12 +1091,31 @@ def _raise_generated_code_process_error(
     )
 
 
-def _execute_generated_code_sync(
-    code: str,
-    tool_input: dict[str, JsonValue],
-) -> JsonValue:
-    _validate_generated_code(code)
-    globals_map: dict[str, object] = {
+class _SafeModuleFacade:
+    __slots__ = ("_attrs",)
+
+    _attrs: dict[str, object]
+
+    def __init__(self, attrs: Mapping[str, object]) -> None:
+        object.__setattr__(self, "_attrs", dict(attrs))
+
+    def __getattr__(self, name: str) -> object:
+        try:
+            return self._attrs[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name: str, value: object) -> NoReturn:
+        _ = (name, value)
+        raise AttributeError("Generated tool globals are read-only")
+
+    def __delattr__(self, name: str) -> NoReturn:
+        _ = name
+        raise AttributeError("Generated tool globals are read-only")
+
+
+def _build_generated_code_globals() -> dict[str, object]:
+    return {
         "__builtins__": {
             "ValueError": ValueError,
             "TypeError": TypeError,
@@ -1040,12 +1139,66 @@ def _execute_generated_code_sync(
             "sum": sum,
             "tuple": tuple,
         },
-        "json": json,
-        "math": math,
-        "re": re,
-        "datetime": datetime_module,
-        "statistics": statistics,
+        "json": _SafeModuleFacade(
+            {
+                "dumps": json.dumps,
+                "loads": json.loads,
+            }
+        ),
+        "math": _SafeModuleFacade(
+            {
+                "ceil": math.ceil,
+                "e": math.e,
+                "fabs": math.fabs,
+                "floor": math.floor,
+                "isfinite": math.isfinite,
+                "isinf": math.isinf,
+                "isnan": math.isnan,
+                "pi": math.pi,
+                "sqrt": math.sqrt,
+                "tau": math.tau,
+                "trunc": math.trunc,
+            }
+        ),
+        "re": _SafeModuleFacade(
+            {
+                "ASCII": re.ASCII,
+                "DOTALL": re.DOTALL,
+                "IGNORECASE": re.IGNORECASE,
+                "MULTILINE": re.MULTILINE,
+                "fullmatch": re.fullmatch,
+                "match": re.match,
+                "search": re.search,
+                "split": re.split,
+                "sub": re.sub,
+            }
+        ),
+        "datetime": _SafeModuleFacade(
+            {
+                "date": datetime_module.date,
+                "datetime": datetime_module.datetime,
+                "time": datetime_module.time,
+            }
+        ),
+        "statistics": _SafeModuleFacade(
+            {
+                "mean": statistics.mean,
+                "median": statistics.median,
+                "pstdev": statistics.pstdev,
+                "pvariance": statistics.pvariance,
+                "stdev": statistics.stdev,
+                "variance": statistics.variance,
+            }
+        ),
     }
+
+
+def _execute_generated_code_sync(
+    code: str,
+    tool_input: dict[str, JsonValue],
+) -> JsonValue:
+    _validate_generated_code(code)
+    globals_map = _build_generated_code_globals()
     exec(compile(code, "<generated_tool>", "exec"), globals_map, globals_map)
     run_callable = globals_map.get("run")
     if not callable(run_callable):

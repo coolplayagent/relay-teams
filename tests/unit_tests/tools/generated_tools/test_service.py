@@ -87,6 +87,19 @@ class _DraftAutoHarnessService(AutoHarnessService):
         )
         return self._draft
 
+    @staticmethod
+    async def _execute_code(
+        *,
+        code: str,
+        tool_input: dict[str, JsonValue],
+        expected: JsonValue | None,
+        has_expected: bool,
+    ) -> JsonValue:
+        result = generated_service_module._execute_generated_code_sync(code, tool_input)
+        if has_expected and result != expected:
+            raise ValueError("Generated tool test case failed")
+        return result
+
 
 class _ToolCaptureAgent:
     def __init__(self) -> None:
@@ -284,6 +297,38 @@ class _FakeProcess:
 
     def kill(self) -> None:
         self.killed = True
+
+
+class _FakeProcessContext:
+    def __init__(
+        self,
+        *,
+        parent_connection: _FakeParentConnection,
+        child_connection: _FakeChildConnection,
+        process: _FakeProcess,
+    ) -> None:
+        self.parent_connection = parent_connection
+        self.child_connection = child_connection
+        self.process = process
+        self.process_args: tuple[object, ...] | None = None
+
+    def Pipe(
+        self,
+        *,
+        duplex: bool,
+    ) -> tuple[_FakeParentConnection, _FakeChildConnection]:
+        assert duplex is False
+        return self.parent_connection, self.child_connection
+
+    def Process(
+        self,
+        *,
+        target: Callable[[str, dict[str, JsonValue], object], None],
+        args: tuple[object, ...],
+    ) -> _FakeProcess:
+        _ = target
+        self.process_args = args
+        return self.process
 
 
 def _write_role(
@@ -734,6 +779,53 @@ async def test_enable_tool_does_not_persist_enabled_state_when_role_update_fails
     assert tool_registry.list_names() == ()
 
 
+@pytest.mark.asyncio
+async def test_enable_tool_rolls_back_role_file_when_reload_fails(
+    tmp_path: Path,
+) -> None:
+    def _fail_reload(_registry: ToolRegistry) -> None:
+        raise RuntimeError("reload failed")
+
+    service, role_registry, tool_registry, role = _build_service(
+        tmp_path,
+        code=SAFE_CODE,
+        reload_observer=_fail_reload,
+    )
+    role_path = tmp_path / "roles" / "worker.md"
+    original_role_content = role_path.read_text(encoding="utf-8")
+    synthesis = await service.synthesize_tool(
+        role=role,
+        session_id="session-1",
+        run_id="run-1",
+        task_id="task-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        instance_id="instance-1",
+        tool_name="sum",
+        description="Add two integers",
+        input_schema=_schema(),
+        behavior="Return a + b as total.",
+        test_cases=_test_cases(),
+        target_role_id=None,
+        thinking=RunThinkingConfig(),
+    )
+
+    with pytest.raises(RuntimeError, match="reload failed"):
+        await service.enable_tool(
+            current_role_id=role.role_id,
+            tool_name=synthesis.tool_name,
+            code_hash=synthesis.code_hash,
+            target_role_id=None,
+        )
+
+    assert role_path.read_text(encoding="utf-8") == original_role_content
+    assert (
+        service._load_record(synthesis.tool_name).status == GeneratedToolStatus.PENDING
+    )
+    assert tool_registry.list_names() == ()
+    assert role_registry.get("Worker").tools == role.tools
+
+
 def test_generated_tool_record_listing_and_startup_skip_invalid_records(
     tmp_path: Path,
 ) -> None:
@@ -798,9 +890,8 @@ async def test_generated_tool_runtime_register_invokes_shared_runtime(
         _ = ctx
         assert tool_name == "generated_sum"
         assert args_summary == {"input_keys": ["a", "b"]}
-        projection = await action(
-            tool_input=cast(dict[str, JsonValue], raw_args["tool_input"])
-        )
+        assert dict(raw_args) == {"b": 4, "a": 6}
+        projection = await action(cast(dict[str, JsonValue], dict(raw_args)))
         return {"ok": True, "data": projection.visible_data}
 
     monkeypatch.setattr(
@@ -1184,6 +1275,14 @@ def test_generated_code_safety_and_json_conversion_branches() -> None:
         generated_service_module._validate_generated_code(
             "def run(tool_input):\n    return eval('1')\n"
         )
+    globals_map = generated_service_module._build_generated_code_globals()
+    with pytest.raises(AttributeError, match="read-only"):
+        setattr(globals_map["json"], "loads", str)
+    assert generated_service_module._execute_generated_code_sync(
+        "def run(tool_input):\n"
+        "    return {'match': re.search('x', 'X', re.IGNORECASE) is not None}\n",
+        {},
+    ) == {"match": True}
     assert generated_service_module._execute_generated_code_sync(
         "def run(tool_input):\n    return {'root': math.sqrt(9)}\n",
         {},
@@ -1272,26 +1371,15 @@ async def test_generated_code_process_timeout_terminates_and_kills_worker(
     parent_connection = _FakeParentConnection(message=None)
     child_connection = _FakeChildConnection()
     process = _FakeProcess(alive_results=(True, True))
-
-    def _fake_pipe(
-        *, duplex: bool
-    ) -> tuple[_FakeParentConnection, _FakeChildConnection]:
-        assert duplex is False
-        return parent_connection, child_connection
-
-    def _fake_process(
-        *,
-        target: Callable[[str, dict[str, JsonValue], object], None],
-        args: tuple[object, ...],
-    ) -> _FakeProcess:
-        _ = (target, args)
-        return process
-
-    monkeypatch.setattr(generated_service_module.multiprocessing, "Pipe", _fake_pipe)
+    process_context = _FakeProcessContext(
+        parent_connection=parent_connection,
+        child_connection=child_connection,
+        process=process,
+    )
     monkeypatch.setattr(
-        generated_service_module.multiprocessing,
-        "Process",
-        _fake_process,
+        generated_service_module,
+        "_generated_code_process_context",
+        lambda: process_context,
     )
     monkeypatch.setattr(generated_service_module, "_EXECUTION_TIMEOUT_SECONDS", 0.0)
 
@@ -1307,6 +1395,11 @@ async def test_generated_code_process_timeout_terminates_and_kills_worker(
     assert process.join_timeouts == [1.0, 1.0]
     assert child_connection.closed is True
     assert parent_connection.closed is True
+    assert process_context.process_args == (
+        SAFE_CODE,
+        {"a": 1, "b": 2},
+        child_connection,
+    )
 
 
 @pytest.mark.asyncio
@@ -1316,26 +1409,15 @@ async def test_generated_code_process_exit_without_result_raises(
     parent_connection = _FakeParentConnection(message=None)
     child_connection = _FakeChildConnection()
     process = _FakeProcess()
-
-    def _fake_pipe(
-        *, duplex: bool
-    ) -> tuple[_FakeParentConnection, _FakeChildConnection]:
-        assert duplex is False
-        return parent_connection, child_connection
-
-    def _fake_process(
-        *,
-        target: Callable[[str, dict[str, JsonValue], object], None],
-        args: tuple[object, ...],
-    ) -> _FakeProcess:
-        _ = (target, args)
-        return process
-
-    monkeypatch.setattr(generated_service_module.multiprocessing, "Pipe", _fake_pipe)
+    process_context = _FakeProcessContext(
+        parent_connection=parent_connection,
+        child_connection=child_connection,
+        process=process,
+    )
     monkeypatch.setattr(
-        generated_service_module.multiprocessing,
-        "Process",
-        _fake_process,
+        generated_service_module,
+        "_generated_code_process_context",
+        lambda: process_context,
     )
 
     with pytest.raises(RuntimeError, match="without a result"):
