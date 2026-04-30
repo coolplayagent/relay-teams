@@ -15,7 +15,6 @@ import time
 import yaml
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from multiprocessing.context import ForkServerContext, SpawnContext
 from pathlib import Path
 from typing import NoReturn, Protocol
 
@@ -966,7 +965,7 @@ class _GeneratedCodeOutputConnection(Protocol):
         raise NotImplementedError
 
 
-def _generated_code_process_context() -> ForkServerContext | SpawnContext:
+def _generated_code_process_context():
     if "forkserver" in multiprocessing.get_all_start_methods():
         return multiprocessing.get_context("forkserver")
     return multiprocessing.get_context("spawn")
