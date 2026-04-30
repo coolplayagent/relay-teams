@@ -18,6 +18,8 @@ from relay_teams.external_agents.models import (
 )
 from relay_teams.net.clients import create_async_http_client
 
+JsonRpcId = str | int
+
 _A2A_AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent.json"
 _A2A_SUCCESS_TASK_STATES = {"completed"}
 _A2A_FAILURE_TASK_STATES = {"canceled", "failed", "rejected"}
@@ -190,9 +192,10 @@ class A2aHttpClient:
 
     async def probe_direct_endpoint(self, endpoint: str | None = None) -> None:
         target_endpoint = endpoint or self._transport.url
+        request_id = self._next_request_id()
         payload: dict[str, JsonValue] = {
             "jsonrpc": "2.0",
-            "id": self._next_request_id(),
+            "id": request_id,
             "method": "tasks/get",
             "params": {"id": "relay-teams-probe"},
         }
@@ -209,7 +212,14 @@ class A2aHttpClient:
         if not isinstance(parsed, dict):
             raise A2aClientError("A2A JSON-RPC probe response must be a JSON object")
         response_payload = {str(key): item for key, item in parsed.items()}
-        if "result" not in response_payload and "error" not in response_payload:
+        if _optional_str(response_payload.get("jsonrpc")) != "2.0":
+            raise A2aClientError("A2A JSON-RPC probe response missing jsonrpc 2.0")
+        if _optional_id(response_payload) != request_id:
+            raise A2aClientError("A2A JSON-RPC probe response id did not match")
+        if "result" in response_payload:
+            return
+        error = _json_object(response_payload.get("error"))
+        if not error:
             raise A2aClientError("A2A JSON-RPC probe response missing result or error")
 
     async def send_message(
@@ -469,6 +479,13 @@ def _json_array(value: JsonValue | None) -> tuple[JsonValue, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(cast(JsonValue, item) for item in value)
+
+
+def _optional_id(payload: dict[str, JsonValue]) -> JsonRpcId | None:
+    raw_id = payload.get("id")
+    if isinstance(raw_id, str | int):
+        return raw_id
+    return None
 
 
 def _optional_str(value: JsonValue | None) -> str | None:

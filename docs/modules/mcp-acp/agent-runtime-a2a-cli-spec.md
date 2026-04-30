@@ -74,7 +74,7 @@ Endpoint resolution:
 - Other URLs are first probed through root and path-relative Agent Card candidates.
 - If Agent Card discovery fails for a non-card URL, the original URL is treated as a direct JSON-RPC endpoint.
 - A direct endpoint such as `/rpc.json` is not treated as an Agent Card just because it ends in `.json`.
-- Runtime `:test` uses the same endpoint semantics. When an Agent Card is available, the resolved `card.url` JSON-RPC endpoint is probed with a non-mutating `tasks/get` request before returning success. When no Agent Card is available for a non-card URL, the same probe is sent to the original direct endpoint. JSON-RPC result or error both prove that the endpoint is reachable.
+- Runtime `:test` uses the same endpoint semantics. When an Agent Card is available, the resolved `card.url` JSON-RPC endpoint is probed with a non-mutating `tasks/get` request before returning success. When no Agent Card is available for a non-card URL, the same probe is sent to the original direct endpoint. A response must be JSON-RPC shaped with `jsonrpc: "2.0"`, the matching id, and either a result field or object error field before it is considered reachable.
 
 Prompt execution:
 
@@ -96,6 +96,7 @@ Protocol rules:
 - Initialization, `thread/start`, `turn/start`, and turn output waiting share the configured prompt timeout as one global execution budget.
 - The runtime is initialized with `initialize`, followed by an `initialized` notification.
 - Runtime test/probe starts the CLI with an explicit cwd and resolves relative command paths from that same cwd.
+- Runtime test/probe uses the configured stdio transport env, including `PATH`, when validating whether the CLI command can be started.
 - Agent Teams creates an ephemeral thread with `thread/start`.
 - Prompt execution uses `turn/start` with the composed runtime prompt as a text input item.
 - Assistant output is collected from `item/agentMessage/delta`; if no deltas are emitted, the completed `agentMessage` item is used as a fallback.

@@ -95,7 +95,12 @@ async def probe_cli_agent(
         transport = _stdio_transport(config)
         command: str = str(transport.command)
         probe_cwd = runtime_cwd or Path.cwd()
-        if not _cli_command_exists(command, runtime_cwd=probe_cwd):
+        runtime_env = _runtime_env(transport)
+        if not _cli_command_exists(
+            command,
+            runtime_cwd=probe_cwd,
+            env=runtime_env,
+        ):
             raise CliAgentError(f"CLI command not found: {command}")
         client = _StdioCliJsonRpcClient(
             command=command,
@@ -190,18 +195,24 @@ def _stdio_transport(config: ExternalAgentConfig) -> StdioTransportConfig:
     return config.transport
 
 
-def _cli_command_exists(command: str, *, runtime_cwd: Path | None = None) -> bool:
+def _cli_command_exists(
+    command: str,
+    *,
+    runtime_cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> bool:
     if "/" in command or "\\" in command:
         candidate = Path(command)
         if not candidate.is_absolute() and runtime_cwd is not None:
             candidate = runtime_cwd / candidate
         return candidate.exists()
-    for directory in os.get_exec_path():
+    lookup_env = env or os.environ
+    for directory in os.get_exec_path(lookup_env):
         candidate = Path(directory) / command
         if _executable_path_exists(candidate):
             return True
         if os.name == "nt":
-            for suffix in os.environ.get("PATHEXT", "").split(os.pathsep):
+            for suffix in lookup_env.get("PATHEXT", "").split(os.pathsep):
                 if suffix and _executable_path_exists(
                     Path(directory) / f"{command}{suffix}"
                 ):
@@ -215,6 +226,14 @@ def _executable_path_exists(path: Path) -> bool:
     if os.name == "nt":
         return path.is_file()
     return os.access(path, os.X_OK)
+
+
+def _runtime_env(transport: StdioTransportConfig) -> dict[str, str]:
+    env = os.environ.copy()
+    for item in transport.env:
+        if item.value is not None:
+            env[item.name] = item.value
+    return env
 
 
 def _build_command_args(*, transport: StdioTransportConfig) -> tuple[str, ...]:
@@ -537,10 +556,7 @@ class _StdioCliJsonRpcClient:
     async def start(self) -> None:
         if self._process is not None and self._process.returncode is None:
             return
-        env = os.environ.copy()
-        for item in self._transport.env:
-            if item.value is not None:
-                env[item.name] = item.value
+        env = _runtime_env(self._transport)
         self._process = await asyncio.create_subprocess_exec(
             self._command,
             *self._args,
