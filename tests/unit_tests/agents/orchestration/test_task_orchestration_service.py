@@ -602,6 +602,8 @@ async def test_dispatch_task_returns_result_only_inside_task_projection(
             title="Implement endpoint",
             objective="Implement the endpoint",
             verification=VerificationPlan(checklist=("non_empty_response",)),
+            orchestration_node_id="implement",
+            depends_on_task_ids=("task-design",),
         )
     )
 
@@ -1071,6 +1073,8 @@ async def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
             title="Implement endpoint",
             objective="Implement the endpoint",
             verification=VerificationPlan(checklist=("non_empty_response",)),
+            orchestration_node_id="implement",
+            depends_on_task_ids=("task-design",),
         )
     )
 
@@ -1079,3 +1083,6 @@ async def test_list_run_tasks_omits_inner_ok(tmp_path: Path) -> None:
     assert "ok" not in payload
     tasks = cast(list[JsonValue], payload["tasks"])
     assert len(tasks) == 1
+    task = cast(dict[str, JsonValue], tasks[0])
+    assert task["orchestration_node_id"] == "implement"
+    assert task["depends_on_task_ids"] == ["task-design"]

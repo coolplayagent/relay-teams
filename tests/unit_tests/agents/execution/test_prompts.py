@@ -12,6 +12,7 @@ from relay_teams.agents.execution.prompt_instructions import (
     _instruction_memory_type_for_path,
 )
 import relay_teams.agents.execution.system_prompts as system_prompts
+from relay_teams.agents.orchestration.graph_models import OrchestrationGraph
 from relay_teams.agents.execution.user_prompts import (
     UserPromptBuildInput,
     UserPromptSkillCandidate,
@@ -266,6 +267,17 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
                     orchestration_preset_id="default",
                     orchestration_prompt="Delegate by capability and finalize yourself.",
                     allowed_role_ids=("writer_agent",),
+                    orchestration_graph=OrchestrationGraph.model_validate(
+                        {
+                            "nodes": [
+                                {
+                                    "node_id": "write",
+                                    "role_id": "writer_agent",
+                                    "objective": "Draft release notes.",
+                                }
+                            ]
+                        }
+                    ),
                 ),
                 shared_state_snapshot=(("status", "ready"),),
             ),
@@ -278,6 +290,8 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "## Runtime Rules" in prompt
     assert "## Orchestration Rules" in prompt
     assert "## Orchestration Prompt" in prompt
+    assert "## Orchestration Graph" in prompt
+    assert "- write: role=writer_agent" in prompt
     assert "## Available Roles" in prompt
     assert "### writer_agent" in prompt
     assert (
