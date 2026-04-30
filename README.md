@@ -23,8 +23,6 @@ Highlights:
 
 ## Web Interface
 
-![Agent Teams Web Interface](docs/relay_teams.png)
-
 Start the server with `uv run relay-teams server start` and open http://127.0.0.1:8000 in your browser.
 Use `uv run relay-teams server restart` to restart the managed server, and `uv run relay-teams server stop --force` to force stop it.
 The web UI now includes a language toggle beside the settings button so you can switch between English and Simplified Chinese in-page.

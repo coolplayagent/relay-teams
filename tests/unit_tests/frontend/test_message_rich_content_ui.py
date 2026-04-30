@@ -236,7 +236,7 @@ globalThis.document = {
 const { renderRichContent } = await import('./content.mjs');
 const targetEl = new FakeElement('div');
 
-renderRichContent(targetEl, 'Attached image from docs/relay_teams.png', {
+renderRichContent(targetEl, 'Attached image from docs/example.png', {
     enableWorkspaceImagePreview: false,
 });
 
@@ -266,7 +266,7 @@ console.log(JSON.stringify({
         )
 
     payload = json.loads(completed.stdout)
-    assert "relay_teams.png" in payload["innerHTML"]
+    assert "example.png" in payload["innerHTML"]
     assert payload["childCount"] == 0
 
 
@@ -495,17 +495,17 @@ globalThis.document = {
 };
 
 const { buildToolBlock, applyToolReturn } = await import('./toolBlocks.mjs');
-const toolBlock = buildToolBlock('read', { path: 'docs/relay_teams.png' }, 'call-read-image');
+const toolBlock = buildToolBlock('read', { path: 'docs/example.png' }, 'call-read-image');
 applyToolReturn(toolBlock, {
     ok: true,
     data: {
         type: 'image',
-        path: 'docs/relay_teams.png',
+        path: 'docs/example.png',
         content: [{
             kind: 'media_ref',
             modality: 'image',
             mime_type: 'image/png',
-            name: 'relay_teams.png',
+            name: 'example.png',
             url: '/api/sessions/session-1/media/asset-1/file',
         }],
     },
