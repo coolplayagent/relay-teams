@@ -467,6 +467,36 @@ async def test_synthesize_tool_rejects_unsafe_generated_code(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_synthesize_tool_rejects_invalid_run_signature_without_tests(
+    tmp_path: Path,
+) -> None:
+    service, _role_registry, _tool_registry, role = _build_service(
+        tmp_path,
+        code="def run():\n    return {'ok': True}\n",
+    )
+
+    with pytest.raises(ValueError, match="tool_input argument"):
+        await service.synthesize_tool(
+            role=role,
+            session_id="session-1",
+            run_id="run-1",
+            task_id="task-1",
+            workspace_id="workspace-1",
+            conversation_id="conversation-1",
+            instance_id="instance-1",
+            tool_name="sum",
+            description="Add two integers",
+            input_schema=_schema(),
+            behavior="Return a + b as total.",
+            test_cases=(),
+            target_role_id=None,
+            thinking=RunThinkingConfig(),
+        )
+
+    assert not (tmp_path / "config" / "generated_tools").exists()
+
+
+@pytest.mark.asyncio
 async def test_synthesize_and_enable_generated_tool_updates_role_asset(
     tmp_path: Path,
 ) -> None:
@@ -1235,6 +1265,16 @@ def test_generated_code_safety_and_json_conversion_branches() -> None:
     with pytest.raises(ValueError, match="exactly one run"):
         generated_service_module._validate_generated_code(
             "def other(tool_input):\n    return 1\n"
+        )
+    with pytest.raises(ValueError, match="tool_input argument"):
+        generated_service_module._validate_generated_code("def run():\n    return 1\n")
+    with pytest.raises(ValueError, match="tool_input argument"):
+        generated_service_module._validate_generated_code(
+            "def run(value):\n    return value\n"
+        )
+    with pytest.raises(ValueError, match="tool_input argument"):
+        generated_service_module._validate_generated_code(
+            "def run(tool_input=None):\n    return tool_input\n"
         )
     with pytest.raises(ValueError, match="module docstring and run"):
         generated_service_module._validate_generated_code(

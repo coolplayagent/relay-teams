@@ -858,6 +858,7 @@ def _validate_generated_code(code: str) -> None:
     functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
     if len(functions) != 1 or functions[0].name != "run":
         raise ValueError("Generated tool code must define exactly one run function")
+    _validate_run_function_signature(functions[0])
     for node in tree.body:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             continue
@@ -867,6 +868,24 @@ def _validate_generated_code(code: str) -> None:
             "Generated tool code may only contain a module docstring and run"
         )
     _GeneratedCodeSafetyVisitor().visit(tree)
+
+
+def _validate_run_function_signature(function: ast.FunctionDef) -> None:
+    arguments = function.args
+    if (
+        arguments.posonlyargs
+        or len(arguments.args) != 1
+        or arguments.args[0].arg != "tool_input"
+        or arguments.vararg is not None
+        or arguments.kwonlyargs
+        or arguments.kwarg is not None
+        or arguments.defaults
+        or arguments.kw_defaults
+    ):
+        raise ValueError(
+            "Generated tool run function must accept exactly one required "
+            "tool_input argument"
+        )
 
 
 def _attribute_call_name(node: ast.Attribute) -> str | None:
