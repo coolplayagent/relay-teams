@@ -83,22 +83,70 @@ class TaskOrchestrationService:
             raise ValueError("tasks must contain at least one task")
 
         root = await self._get_root_task_async(run_id)
-        created_records: list[TaskRecord] = []
+        existing_records = await self._task_repo.list_by_trace_async(
+            root.envelope.trace_id
+        )
+        existing_task_ids = {record.envelope.task_id for record in existing_records}
+        existing_node_task_ids = _existing_node_task_ids(existing_records)
+        _validate_task_graph_drafts(
+            tasks=tuple(tasks),
+            existing_task_ids=existing_task_ids,
+            existing_node_task_ids=existing_node_task_ids,
+            root_task_id=root.envelope.task_id,
+        )
+
+        prepared_drafts: list[_PreparedTaskDraft] = []
+        task_ids_by_node_id = dict(existing_node_task_ids)
         for draft in tasks:
+            task_id = new_task_id().value
+            if draft.orchestration_node_id is not None:
+                task_ids_by_node_id[draft.orchestration_node_id] = task_id
+            prepared_drafts.append(_PreparedTaskDraft(task_id=task_id, draft=draft))
+
+        for prepared in prepared_drafts:
+            prepared.depends_on_task_ids = _resolved_dependency_task_ids(
+                draft=prepared.draft,
+                task_ids_by_node_id=task_ids_by_node_id,
+            )
+        for prepared in prepared_drafts:
+            if prepared.draft.role_id is not None:
+                await self._resolve_role_async(
+                    run_id=root.envelope.trace_id,
+                    role_id=prepared.draft.role_id,
+                )
+
+        prepared_envelopes: list[tuple[_PreparedTaskDraft, TaskEnvelope]] = []
+        for prepared in prepared_drafts:
+            draft = prepared.draft
             envelope = TaskEnvelope(
-                task_id=new_task_id().value,
+                task_id=prepared.task_id,
                 session_id=root.envelope.session_id,
                 parent_task_id=root.envelope.task_id,
                 trace_id=root.envelope.trace_id,
-                role_id=None,
+                role_id=draft.role_id,
                 title=_resolved_title(draft.title, draft.objective),
                 objective=draft.objective,
                 verification=_verification_for_task_draft(draft),
                 spec=draft.spec,
                 lifecycle=draft.lifecycle,
+                orchestration_node_id=draft.orchestration_node_id,
+                depends_on_task_ids=prepared.depends_on_task_ids,
             )
+            prepared_envelopes.append((prepared, envelope))
+
+        for _prepared, envelope in prepared_envelopes:
             await self._execute_task_created_hooks(envelope=envelope)
+
+        created_records: list[TaskRecord] = []
+        for prepared, envelope in prepared_envelopes:
+            draft = prepared.draft
             record = await self._task_repo.create_async(envelope)
+            if draft.role_id is not None:
+                record = await self._assign_created_task_async(
+                    record=record,
+                    role_id=draft.role_id,
+                    run_id=root.envelope.trace_id,
+                )
             created_records.append(record)
 
         response: dict[str, JsonValue] = {
@@ -218,13 +266,10 @@ class TaskOrchestrationService:
         normalized_role_id = str(role_id).strip()
         if not normalized_role_id:
             raise ValueError("role_id must not be empty")
-        if self._runtime_role_resolver is not None:
-            await self._runtime_role_resolver.get_effective_role_async(
-                run_id=resolved_run_id,
-                role_id=normalized_role_id,
-            )
-        else:
-            self._role_registry.get(normalized_role_id)
+        await self._resolve_role_async(
+            run_id=resolved_run_id,
+            role_id=normalized_role_id,
+        )
 
         normalized_prompt = prompt.strip()
         bound_role_id = str(record.envelope.role_id or "").strip()
@@ -529,6 +574,43 @@ class TaskOrchestrationService:
                 f"Wait for it to complete or use a different role."
             )
 
+    async def _resolve_role_async(self, *, run_id: str, role_id: str) -> None:
+        if self._runtime_role_resolver is not None:
+            await self._runtime_role_resolver.get_effective_role_async(
+                run_id=run_id,
+                role_id=role_id,
+            )
+            return
+        self._role_registry.get(role_id)
+
+    async def _assign_created_task_async(
+        self,
+        *,
+        record: TaskRecord,
+        role_id: str,
+        run_id: str,
+    ) -> TaskRecord:
+        async with self._role_assignment_lock_slot(
+            session_id=record.envelope.session_id,
+            role_id=role_id,
+        ) as assignment_lock:
+            async with assignment_lock:
+                refreshed = await self._task_repo.get_async(record.envelope.task_id)
+                if refreshed.status != TaskStatus.CREATED:
+                    return refreshed
+                instance_id = await self._ensure_execution_instance_async(
+                    session_id=refreshed.envelope.session_id,
+                    run_id=run_id,
+                    role_id=role_id,
+                    task_id=refreshed.envelope.task_id,
+                )
+                await self._task_repo.update_status_async(
+                    task_id=refreshed.envelope.task_id,
+                    status=TaskStatus.ASSIGNED,
+                    assigned_instance_id=instance_id,
+                )
+                return await self._task_repo.get_async(refreshed.envelope.task_id)
+
     async def _get_root_task_async(self, run_id: str) -> TaskRecord:
         for record in await self._task_repo.list_by_trace_async(run_id):
             if record.envelope.parent_task_id is None:
@@ -542,6 +624,13 @@ class TaskOrchestrationService:
         if run_id is not None and record.envelope.trace_id != run_id:
             raise KeyError(f"Task {task_id} does not belong to run {run_id}")
         return record
+
+
+class _PreparedTaskDraft:
+    def __init__(self, *, task_id: str, draft: TaskDraft) -> None:
+        self.task_id = task_id
+        self.draft = draft
+        self.depends_on_task_ids: tuple[str, ...] = ()
 
 
 def _resolved_title(title: str | None, objective: str) -> str:
@@ -592,6 +681,110 @@ def _task_projection(record: TaskRecord) -> dict[str, JsonValue]:
     if _has_non_default_lifecycle(lifecycle):
         row["lifecycle"] = cast(JsonValue, lifecycle.model_dump(mode="json"))
     return row
+
+
+def _existing_node_task_ids(records: tuple[TaskRecord, ...]) -> dict[str, str]:
+    node_task_ids: dict[str, str] = {}
+    for record in records:
+        node_id = record.envelope.orchestration_node_id
+        if node_id is None:
+            continue
+        node_task_ids[node_id] = record.envelope.task_id
+    return node_task_ids
+
+
+def _validate_task_graph_drafts(
+    *,
+    tasks: tuple[TaskDraft, ...],
+    existing_task_ids: set[str],
+    existing_node_task_ids: dict[str, str],
+    root_task_id: str,
+) -> None:
+    draft_node_ids = tuple(
+        draft.orchestration_node_id
+        for draft in tasks
+        if draft.orchestration_node_id is not None
+    )
+    if len(draft_node_ids) != len(set(draft_node_ids)):
+        raise ValueError("orchestration_node_id values must be unique")
+    for node_id in draft_node_ids:
+        if node_id in existing_node_task_ids:
+            raise ValueError(f"orchestration_node_id already exists: {node_id}")
+
+    known_node_ids = set(existing_node_task_ids) | set(draft_node_ids)
+    for draft in tasks:
+        for dependency_task_id in draft.depends_on_task_ids:
+            if dependency_task_id == root_task_id:
+                raise ValueError(
+                    "depends_on_task_ids cannot reference the root coordinator task"
+                )
+            if dependency_task_id not in existing_task_ids:
+                raise ValueError(
+                    f"depends_on_task_ids references unknown task: {dependency_task_id}"
+                )
+        for dependency_node_id in draft.depends_on_node_ids:
+            if dependency_node_id not in known_node_ids:
+                raise ValueError(
+                    "depends_on_node_ids references unknown orchestration node: "
+                    f"{dependency_node_id}"
+                )
+            if dependency_node_id == draft.orchestration_node_id:
+                raise ValueError("orchestration graph node cannot depend on itself")
+
+    _assert_draft_node_graph_acyclic(tasks=tasks)
+
+
+def _assert_draft_node_graph_acyclic(*, tasks: tuple[TaskDraft, ...]) -> None:
+    batch_node_ids = {
+        draft.orchestration_node_id
+        for draft in tasks
+        if draft.orchestration_node_id is not None
+    }
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in batch_node_ids}
+    indegree: dict[str, int] = {node_id: 0 for node_id in batch_node_ids}
+    for draft in tasks:
+        node_id = draft.orchestration_node_id
+        if node_id is None:
+            continue
+        for dependency_node_id in draft.depends_on_node_ids:
+            if dependency_node_id not in batch_node_ids:
+                continue
+            outgoing[dependency_node_id].append(node_id)
+            indegree[node_id] += 1
+
+    ready = [node_id for node_id in batch_node_ids if indegree[node_id] == 0]
+    visited_count = 0
+    while ready:
+        node_id = ready.pop(0)
+        visited_count += 1
+        for downstream_node_id in outgoing[node_id]:
+            indegree[downstream_node_id] -= 1
+            if indegree[downstream_node_id] == 0:
+                ready.append(downstream_node_id)
+    if visited_count != len(batch_node_ids):
+        raise ValueError("orchestration graph dependencies must be acyclic")
+
+
+def _resolved_dependency_task_ids(
+    *,
+    draft: TaskDraft,
+    task_ids_by_node_id: dict[str, str],
+) -> tuple[str, ...]:
+    dependency_task_ids = list(draft.depends_on_task_ids)
+    for dependency_node_id in draft.depends_on_node_ids:
+        dependency_task_ids.append(task_ids_by_node_id[dependency_node_id])
+    return _unique_identifiers(dependency_task_ids)
+
+
+def _unique_identifiers(values: list[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    unique_values: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return tuple(unique_values)
 
 
 def _verification_for_task_draft(draft: TaskDraft) -> VerificationPlan:

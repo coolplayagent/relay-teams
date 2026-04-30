@@ -3,7 +3,14 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
@@ -13,6 +20,7 @@ from relay_teams.agents.tasks.models import (
     VerificationPlan,
 )
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
+from relay_teams.validation import OptionalIdentifierStr, normalize_identifier_tuple
 
 
 class TaskDraft(BaseModel):
@@ -20,9 +28,18 @@ class TaskDraft(BaseModel):
 
     objective: str = Field(min_length=1)
     title: Optional[str] = None
+    role_id: OptionalIdentifierStr = None
+    orchestration_node_id: OptionalIdentifierStr = None
+    depends_on_task_ids: tuple[str, ...] = ()
+    depends_on_node_ids: tuple[str, ...] = ()
     spec: TaskSpec | None = None
     verification: VerificationPlan | None = None
     lifecycle: TaskLifecyclePolicy = Field(default_factory=TaskLifecyclePolicy)
+
+    @field_validator("depends_on_task_ids", "depends_on_node_ids", mode="before")
+    @classmethod
+    def _normalize_dependency_ids(cls, value: object) -> tuple[str, ...]:
+        return normalize_identifier_tuple(value, field_name="task dependencies") or ()
 
 
 class TaskUpdate(BaseModel):

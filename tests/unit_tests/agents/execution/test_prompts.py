@@ -316,7 +316,14 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
         "Prefer `template_role_id` when creating a temporary role so it inherits the closest existing capabilities."
         in prompt
     )
-    assert "Choose the executing role in `orch_dispatch_task`." in prompt
+    assert (
+        "For custom DAGs, include `role_id`, `orchestration_node_id`, and "
+        "`depends_on_node_ids` in `orch_create_tasks`" in prompt
+    )
+    assert (
+        "Use `orch_dispatch_task` when you need to execute or re-dispatch one task immediately."
+        in prompt
+    )
     assert (
         "Use the dispatch prompt to pass stage-specific instructions and upstream context."
         in prompt
