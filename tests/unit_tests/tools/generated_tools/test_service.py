@@ -362,6 +362,7 @@ def _build_service(
     resolve_role_instance_id: generated_service_module.RoleInstanceResolver
     | None = None,
     reload_observer: Callable[[ToolRegistry], None] | None = None,
+    post_reload_observer: Callable[[RoleRegistry], None] | None = None,
 ) -> tuple[_DraftAutoHarnessService, RoleRegistry, ToolRegistry, RoleDefinition]:
     config_dir = tmp_path / "config"
     roles_dir = tmp_path / "roles"
@@ -384,6 +385,8 @@ def _build_service(
         if reload_observer is not None:
             reload_observer(tool_registry)
         latest_registry = updated
+        if post_reload_observer is not None:
+            post_reload_observer(updated)
 
     service = _DraftAutoHarnessService(
         config_dir=config_dir,
@@ -816,7 +819,7 @@ async def test_enable_tool_rolls_back_role_file_when_reload_fails(
     def _fail_reload(_registry: ToolRegistry) -> None:
         raise RuntimeError("reload failed")
 
-    service, role_registry, tool_registry, role = _build_service(
+    service, _role_registry, tool_registry, role = _build_service(
         tmp_path,
         code=SAFE_CODE,
         reload_observer=_fail_reload,
@@ -853,7 +856,60 @@ async def test_enable_tool_rolls_back_role_file_when_reload_fails(
         service._load_record(synthesis.tool_name).status == GeneratedToolStatus.PENDING
     )
     assert tool_registry.list_names() == ()
-    assert role_registry.get("Worker").tools == role.tools
+    assert service._get_role_registry().get("Worker").tools == role.tools
+
+
+@pytest.mark.asyncio
+async def test_enable_tool_rolls_back_active_registry_when_late_reload_fails(
+    tmp_path: Path,
+) -> None:
+    reload_calls = 0
+
+    def _fail_after_active_rebind(_registry: RoleRegistry) -> None:
+        nonlocal reload_calls
+        reload_calls += 1
+        if reload_calls == 1:
+            raise RuntimeError("late reload failed")
+
+    service, _role_registry, tool_registry, role = _build_service(
+        tmp_path,
+        code=SAFE_CODE,
+        post_reload_observer=_fail_after_active_rebind,
+    )
+    role_path = tmp_path / "roles" / "worker.md"
+    original_role_content = role_path.read_text(encoding="utf-8")
+    synthesis = await service.synthesize_tool(
+        role=role,
+        session_id="session-1",
+        run_id="run-1",
+        task_id="task-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        instance_id="instance-1",
+        tool_name="sum",
+        description="Add two integers",
+        input_schema=_schema(),
+        behavior="Return a + b as total.",
+        test_cases=_test_cases(),
+        target_role_id=None,
+        thinking=RunThinkingConfig(),
+    )
+
+    with pytest.raises(RuntimeError, match="late reload failed"):
+        await service.enable_tool(
+            current_role_id=role.role_id,
+            tool_name=synthesis.tool_name,
+            code_hash=synthesis.code_hash,
+            target_role_id=None,
+        )
+
+    assert reload_calls == 2
+    assert role_path.read_text(encoding="utf-8") == original_role_content
+    assert (
+        service._load_record(synthesis.tool_name).status == GeneratedToolStatus.PENDING
+    )
+    assert tool_registry.list_names() == ()
+    assert service._get_role_registry().get("Worker").tools == role.tools
 
 
 def test_generated_tool_record_listing_and_startup_skip_invalid_records(

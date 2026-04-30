@@ -675,7 +675,6 @@ class AutoHarnessService:
             target_path.read_text(encoding="utf-8") if target_path.exists() else None
         )
         current_registry = self._get_role_registry()
-        previous_role = current_registry.get(role.role_id)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             target_path.write_text(
@@ -695,7 +694,13 @@ class AutoHarnessService:
                     target_path.unlink(missing_ok=True)
                 else:
                     target_path.write_text(previous_content, encoding="utf-8")
-                current_registry.register(previous_role)
+                rollback_registry = RoleLoader().load_builtin_and_app(
+                    builtin_roles_dir=self._builtin_roles_dir,
+                    app_roles_dir=self._roles_dir,
+                    allow_empty=True,
+                )
+                current_registry.register(rollback_registry.get(role.role_id))
+                self._on_roles_reloaded(rollback_registry)
             except Exception as rollback_exc:
                 log_event(
                     LOGGER,
