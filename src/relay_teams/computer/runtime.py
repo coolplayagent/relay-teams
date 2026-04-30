@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import platform
+import struct
+import zlib
 from pathlib import Path
 from typing import Protocol
 
@@ -20,6 +22,46 @@ from relay_teams.computer.models import (
     ComputerWindow,
     ExecutionSurface,
 )
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    checksum = zlib.crc32(kind + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
+
+
+def _build_scripted_screenshot_bytes() -> bytes:
+    width = 320
+    height = 180
+    rows: list[bytes] = []
+    for y in range(height):
+        pixels = bytearray()
+        for x in range(width):
+            if y < 24:
+                color = (38, 50, 56)
+            elif 36 <= x <= 300 and 42 <= y <= 156:
+                color = (246, 248, 250)
+                if y < 66:
+                    color = (208, 216, 224)
+                if 52 <= x <= 140 and 82 <= y <= 112:
+                    color = (120, 144, 156)
+                if 166 <= x <= 270 and 84 <= y <= 94:
+                    color = (76, 175, 120)
+                if 166 <= x <= 246 and 110 <= y <= 120:
+                    color = (93, 120, 140)
+            else:
+                color = (230, 235, 238)
+            pixels.extend((*color, 255))
+        rows.append(b"\x00" + bytes(pixels))
+    raw = b"".join(rows)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(raw, level=9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+_SCRIPTED_SCREENSHOT_BYTES = _build_scripted_screenshot_bytes()
 
 
 class ComputerRuntime(Protocol):
@@ -119,11 +161,7 @@ class ScriptedComputerRuntime:
         self, *, project_root: Path, screenshot_path: Path | None = None
     ) -> None:
         self._project_root = Path(project_root)
-        self._screenshot_path = (
-            screenshot_path
-            if screenshot_path is not None
-            else self._project_root / "docs" / "relay_teams.png"
-        )
+        self._screenshot_path = screenshot_path
         self._windows: list[ComputerWindow] = [
             ComputerWindow(
                 window_id="window-agent-teams",
@@ -330,8 +368,8 @@ class ScriptedComputerRuntime:
         )
 
     def _build_observation(self) -> ComputerObservation:
-        screenshot_bytes = None
-        if self._screenshot_path.exists():
+        screenshot_bytes = _SCRIPTED_SCREENSHOT_BYTES
+        if self._screenshot_path is not None and self._screenshot_path.exists():
             screenshot_bytes = self._screenshot_path.read_bytes()
         focused_window = next(
             (window.title for window in self._windows if window.focused),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import struct
 
 from relay_teams.computer import (
     DisabledComputerRuntime,
@@ -16,14 +17,29 @@ def test_build_default_computer_runtime_returns_scripted_runtime_in_fake_mode(
     tmp_path,
     monkeypatch,
 ) -> None:
-    docs_dir = tmp_path / "docs"
-    docs_dir.mkdir()
-    (docs_dir / "relay_teams.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
     monkeypatch.setenv("AGENT_TEAMS_COMPUTER_RUNTIME", "fake")
 
     runtime = build_default_computer_runtime(project_root=tmp_path)
 
     assert isinstance(runtime, ScriptedComputerRuntime)
+    result = asyncio.run(runtime.capture_screen())
+    assert result.observation is not None
+    assert result.observation.screenshot_bytes is not None
+    screenshot_bytes = result.observation.screenshot_bytes
+    assert screenshot_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    assert struct.unpack(">II", screenshot_bytes[16:24]) == (320, 180)
+    assert len(screenshot_bytes) > 500
+
+
+def test_scripted_computer_runtime_uses_explicit_screenshot_path(tmp_path) -> None:
+    screenshot_path = tmp_path / "example.png"
+    screenshot_path.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    runtime = ScriptedComputerRuntime(
+        project_root=tmp_path,
+        screenshot_path=screenshot_path,
+    )
+
     result = asyncio.run(runtime.capture_screen())
     assert result.observation is not None
     assert result.observation.screenshot_bytes == b"\x89PNG\r\n\x1a\nfake"

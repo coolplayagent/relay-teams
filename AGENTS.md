@@ -58,11 +58,10 @@
 - Keep transport semantics consistent for the same provider/model path. If the primary execution flow uses streaming, auxiliary LLM flows such as reflection, compaction, memory rewrite, or hooks must also use streaming APIs against that endpoint rather than mixing in non-streaming shortcuts.
 - For outbound network changes, evaluate proxy requirements first and reuse the existing proxy module when needed.
 - CLI modules should provide their own subcommands. List/query output must support default table output and `--format json`.
-- Database schema and API changes do not need backward compatibility, but matching `docs/` updates must be included in the same task.
+- Database schema and API changes do not need backward compatibility, but matching updates to `docs/core/api-design.md` and `docs/core/database-schema.md` must be included in the same task.
 - Persisted capability references may contain dirty data. Runtime paths that consume existing role state from the database or already-saved config must tolerate missing `tools`, `mcp_servers`, and `skills` by filtering unknown entries and logging a warning with enough context to diagnose the source.
 - Keep strict validation for explicit user mutations and validation endpoints. Creating or editing a role should still reject unknown `tools`, `mcp_servers`, and `skills` instead of silently accepting them.
 - Do not let startup, config reload, prompt building, provider construction, or task execution fail only because persisted capability references point at missing registry entries.
-- Apply the same validation split to hooks and similar runtime config: explicit user mutations must fail on unknown or invalid references, but persisted drift at runtime should degrade safely with warnings instead of crashing startup or execution.
 
 ## Development
 - Initial setup:
@@ -78,11 +77,6 @@
 - `tests/unit_tests/` should mirror `src/relay_teams/`. Add matching `__init__.py` files for new test directories.
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
 - New tools should follow the shared runtime middleware path via `execute_tool_call(..., raw_args=locals())`; do not reimplement hook-aware input parsing or approval plumbing inside each tool.
-- Hook-driven tool input rewrites and hook-provided runtime environment must be handled in the shared tool runtime plus shared HTTP and command execution layers, not with per-tool special cases.
-- Hook tool matchers must use Relay Teams tool names. Exact Claude Code aliases may be normalized at config load boundaries, but runtime matching and documentation should stay anchored to Relay Teams built-in tool identities.
-- When adding or changing hook events, update `docs/relay-teams-runtime-hooks-design.md`, API/UI runtime visibility, and focused tests in the same task.
-- The hooks settings UI must surface effective source scope/path and scoped filters for runtime-loaded hooks; do not show only handler names when project, role, or skill hooks are involved.
-- For built-in PPT skills, when a user reports遮挡、重叠、溢出等版式问题, fix the artifact, upstream the reusable rule into the built-in ppt skill docs/tests, and verify end-to-end conversion before opening a PR.
 
 ## Interface Boundaries
 - Public backend contract is `/api/*`.

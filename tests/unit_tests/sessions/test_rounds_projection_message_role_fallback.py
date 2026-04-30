@@ -1046,7 +1046,7 @@ def test_build_session_rounds_keeps_tool_return_from_mixed_media_replay_message(
         "session_id": session_id,
         "modality": "image",
         "mime_type": "image/png",
-        "name": "relay_teams.png",
+        "name": "example.png",
         "url": f"/api/sessions/{session_id}/media/asset-1/file",
     }
 
@@ -1058,12 +1058,12 @@ def test_build_session_rounds_keeps_tool_return_from_mixed_media_replay_message(
         trace_id=run_id,
         agent_role_id="MainAgent",
         messages=[
-            ModelRequest(parts=[UserPromptPart(content="read docs/relay_teams.png")]),
+            ModelRequest(parts=[UserPromptPart(content="read docs/example.png")]),
             ModelResponse(
                 parts=[
                     ToolCallPart(
                         tool_name="read",
-                        args={"path": "docs/relay_teams.png"},
+                        args={"path": "docs/example.png"},
                         tool_call_id="call-read-image",
                     )
                 ]
@@ -1077,7 +1077,7 @@ def test_build_session_rounds_keeps_tool_return_from_mixed_media_replay_message(
                             "ok": True,
                             "data": {
                                 "type": "image",
-                                "path": "docs/relay_teams.png",
+                                "path": "docs/example.png",
                                 "content": [media_part],
                             },
                             "error": None,

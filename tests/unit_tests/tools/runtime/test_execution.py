@@ -1484,7 +1484,7 @@ def test_execute_tool_returns_tool_return_for_tool_content_parts() -> None:
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=lambda: ToolResultProjection(
                 visible_data={"type": "image"},
                 tool_content_parts=(TextContentPart(text="attached image"),),
@@ -1530,12 +1530,12 @@ def test_execute_tool_call_allows_tool_return_passthrough() -> None:
         execute_tool_call(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=lambda path: ToolResultProjection(
                 visible_data={"path": path},
                 tool_content_parts=(TextContentPart(text="attached image"),),
             ),
-            raw_args={"ctx": ctx, "path": "docs/relay_teams.png"},
+            raw_args={"ctx": ctx, "path": "docs/example.png"},
             allow_tool_return=True,
         )
     )
@@ -1543,7 +1543,7 @@ def test_execute_tool_call_allows_tool_return_passthrough() -> None:
     assert isinstance(result, ToolReturn)
     assert result.content == "attached image"
     assert cast(dict[str, JsonValue], result.return_value)["data"] == {
-        "path": "docs/relay_teams.png"
+        "path": "docs/example.png"
     }
 
 
@@ -1569,7 +1569,7 @@ def test_execute_tool_reuses_duplicate_tool_return_content() -> None:
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=action,
             allow_tool_return=True,
         )
@@ -1578,7 +1578,7 @@ def test_execute_tool_reuses_duplicate_tool_return_content() -> None:
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=lambda: ToolResultProjection(
                 visible_data={"type": "image", "count": 999},
                 tool_content_parts=(TextContentPart(text="wrong image"),),
@@ -1620,7 +1620,7 @@ def test_execute_tool_returns_error_when_duplicate_hydration_fails() -> None:
         modality=MediaModality.IMAGE,
         mime_type="image/png",
         url="/api/sessions/session-1/media/asset-1/file",
-        name="relay_teams.png",
+        name="example.png",
     )
 
     def action() -> ToolResultProjection:
@@ -1635,7 +1635,7 @@ def test_execute_tool_returns_error_when_duplicate_hydration_fails() -> None:
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=action,
             allow_tool_return=True,
         )
@@ -1645,7 +1645,7 @@ def test_execute_tool_returns_error_when_duplicate_hydration_fails() -> None:
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=action,
             allow_tool_return=True,
         )
@@ -1699,7 +1699,7 @@ def test_execute_tool_hydrates_local_media_tool_return_content() -> None:
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=lambda: ToolResultProjection(
                 visible_data={"type": "image"},
                 tool_content_parts=(
@@ -1709,7 +1709,7 @@ def test_execute_tool_hydrates_local_media_tool_return_content() -> None:
                         modality=MediaModality.IMAGE,
                         mime_type="image/png",
                         url="/api/sessions/session-1/media/asset-1/file",
-                        name="relay_teams.png",
+                        name="example.png",
                     ),
                 ),
             ),
@@ -1736,7 +1736,7 @@ def test_execute_tool_rejects_model_content_without_tool_return_support() -> Non
         execute_tool(
             cast(ToolContext, cast(object, ctx)),
             tool_name="read",
-            args_summary={"path": "docs/relay_teams.png"},
+            args_summary={"path": "docs/example.png"},
             action=lambda: ToolResultProjection(
                 visible_data={"type": "image"},
                 tool_content_parts=(TextContentPart(text="attached image"),),
@@ -1792,7 +1792,7 @@ def test_tool_return_content_handles_empty_missing_media_and_hydrated_text() -> 
         modality=MediaModality.IMAGE,
         mime_type="image/png",
         url="/api/sessions/session-1/media/asset-1/file",
-        name="relay_teams.png",
+        name="example.png",
     )
 
     with pytest.raises(
