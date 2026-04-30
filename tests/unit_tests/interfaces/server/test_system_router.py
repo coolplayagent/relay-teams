@@ -16,6 +16,7 @@ from pydantic import JsonValue
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.external_agents import (
     ExternalAgentConfig,
+    ExternalAgentProtocol,
     ExternalAgentSummary,
     ExternalAgentTestResult,
     StdioTransportConfig,
@@ -75,6 +76,7 @@ from relay_teams.interfaces.server.deps import (
     get_ui_language_settings_service,
     get_web_config_service,
     get_web_connectivity_probe_service,
+    get_workspace_manager,
 )
 from relay_teams.interfaces.server.control_plane import (
     CONTROL_PLANE_HOST_ENV,
@@ -355,6 +357,7 @@ class _FakeSystemService:
                 agent_id=agent.agent_id,
                 name=agent.name,
                 description=agent.description,
+                protocol=agent.protocol,
                 transport=agent.transport.transport,
             )
             for agent in self.external_agents.values()
@@ -909,7 +912,47 @@ class _AsyncWebProbeAdapter:
         return result
 
 
-def _create_test_client(fake_service: object) -> TestClient:
+class _FakeWorkspaceHandle:
+    def __init__(self, workdir: Path) -> None:
+        self._workdir = workdir
+
+    def resolve_workdir(self) -> Path:
+        return self._workdir
+
+
+class _FakeWorkspaceManager:
+    def __init__(self, workdir: Path) -> None:
+        self.workdir = workdir
+        self.resolve_calls: list[dict[str, object]] = []
+
+    def resolve(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        instance_id: str | None,
+        workspace_id: str,
+        conversation_id: str | None = None,
+        profile: object | None = None,
+    ) -> _FakeWorkspaceHandle:
+        self.resolve_calls.append(
+            {
+                "session_id": session_id,
+                "role_id": role_id,
+                "instance_id": instance_id,
+                "workspace_id": workspace_id,
+                "conversation_id": conversation_id,
+                "profile": profile,
+            }
+        )
+        return _FakeWorkspaceHandle(self.workdir)
+
+
+def _create_test_client(
+    fake_service: object,
+    *,
+    workspace_manager: _FakeWorkspaceManager | None = None,
+) -> TestClient:
     app = FastAPI()
     app.include_router(system.router, prefix="/api")
     app.dependency_overrides[get_config_status_service] = lambda: fake_service
@@ -943,6 +986,9 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.dependency_overrides[get_github_trigger_service] = lambda: fake_service
     app.dependency_overrides[get_external_agent_config_service] = lambda: fake_service
     app.dependency_overrides[get_hook_service] = lambda: fake_service
+    app.dependency_overrides[get_workspace_manager] = lambda: (
+        workspace_manager or _FakeWorkspaceManager(Path.cwd())
+    )
     return TestClient(app)
 
 
@@ -1236,8 +1282,8 @@ def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) ->
         client.get("/api/system/configs/notifications"),
         client.get("/api/system/configs/proxy"),
         client.get("/api/system/configs/web"),
-        client.get("/api/system/configs/agents"),
-        client.get("/api/system/configs/agents/codex_local"),
+        client.get("/api/system/configs/agent-runtimes"),
+        client.get("/api/system/configs/agent-runtimes/codex_local"),
         client.get("/api/system/configs/github"),
         client.post("/api/system/configs/github:reveal"),
         client.get("/api/system/configs/clawhub"),
@@ -1287,17 +1333,23 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
         calls.append((func.__name__, args, kwargs))
         return func(*args, **kwargs)
 
-    async def fake_probe(_config: ExternalAgentConfig) -> ExternalAgentTestResult:
+    async def fake_probe(
+        _config: ExternalAgentConfig,
+        *,
+        runtime_cwd: Path | None = None,
+    ) -> ExternalAgentTestResult:
+        _ = runtime_cwd
         return ExternalAgentTestResult(
             ok=True,
             message="Connected",
+            protocol=ExternalAgentProtocol.ACP,
             agent_name="Codex",
             agent_version="1.0.0",
             protocol_version=1,
         )
 
     monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
-    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
+    monkeypatch.setattr(system, "probe_agent_runtime", fake_probe)
     client = _create_test_client(_FakeSystemService())
 
     responses = [
@@ -1384,7 +1436,7 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
             },
         ),
         client.put(
-            "/api/system/configs/agents/claude_http",
+            "/api/system/configs/agent-runtimes/claude_http",
             json={
                 "agent_id": "claude_http",
                 "name": "Claude HTTP",
@@ -1397,8 +1449,8 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
                 },
             },
         ),
-        client.delete("/api/system/configs/agents/claude_http"),
-        client.post("/api/system/configs/agents/codex_local:test"),
+        client.delete("/api/system/configs/agent-runtimes/claude_http"),
+        client.post("/api/system/configs/agent-runtimes/codex_local:test"),
         client.put("/api/system/configs/clawhub", json={"token": "ch_secret"}),
         client.put(
             "/api/system/configs/clawhub/skills/demo-skill",
@@ -2592,10 +2644,10 @@ def test_save_web_config_accepts_disabled_fallback_provider() -> None:
     }
 
 
-def test_list_external_agents() -> None:
+def test_list_agent_runtimes() -> None:
     client = _create_test_client(_FakeSystemService())
 
-    response = client.get("/api/system/configs/agents")
+    response = client.get("/api/system/configs/agent-runtimes")
 
     assert response.status_code == 200
     assert response.json() == [
@@ -2603,21 +2655,23 @@ def test_list_external_agents() -> None:
             "agent_id": "codex_local",
             "name": "Codex Local",
             "description": "Runs Codex via stdio",
+            "protocol": "acp",
             "transport": "stdio",
         }
     ]
 
 
-def test_get_external_agent_omits_stdio_working_directory() -> None:
+def test_get_agent_runtime_omits_stdio_working_directory() -> None:
     client = _create_test_client(_FakeSystemService())
 
-    response = client.get("/api/system/configs/agents/codex_local")
+    response = client.get("/api/system/configs/agent-runtimes/codex_local")
 
     assert response.status_code == 200
     assert response.json() == {
         "agent_id": "codex_local",
         "name": "Codex Local",
         "description": "Runs Codex via stdio",
+        "protocol": "acp",
         "transport": {
             "transport": "stdio",
             "command": "codex",
@@ -2627,12 +2681,12 @@ def test_get_external_agent_omits_stdio_working_directory() -> None:
     }
 
 
-def test_save_external_agent() -> None:
+def test_save_agent_runtime() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)
 
     response = client.put(
-        "/api/system/configs/agents/claude_http",
+        "/api/system/configs/agent-runtimes/claude_http",
         json={
             "agent_id": "claude_http",
             "name": "Claude HTTP",
@@ -2653,28 +2707,48 @@ def test_save_external_agent() -> None:
     )
 
 
-def test_test_external_agent(monkeypatch) -> None:
-    async def fake_probe(_config: ExternalAgentConfig) -> ExternalAgentTestResult:
+def test_test_agent_runtime(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_probe(
+        _config: ExternalAgentConfig,
+        *,
+        runtime_cwd: Path | None = None,
+    ) -> ExternalAgentTestResult:
+        captured["runtime_cwd"] = runtime_cwd
         return ExternalAgentTestResult(
             ok=True,
             message="Connected",
+            protocol=ExternalAgentProtocol.CLI,
             agent_name="Codex",
             agent_version="1.0.0",
             protocol_version=1,
         )
 
-    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
-    client = _create_test_client(_FakeSystemService())
+    monkeypatch.setattr(system, "probe_agent_runtime", fake_probe)
+    service = _FakeSystemService()
+    service.external_agents["codex_local"] = service.external_agents[
+        "codex_local"
+    ].model_copy(update={"protocol": ExternalAgentProtocol.CLI})
+    workspace_manager = _FakeWorkspaceManager(tmp_path)
+    client = _create_test_client(
+        service,
+        workspace_manager=workspace_manager,
+    )
 
-    response = client.post("/api/system/configs/agents/codex_local:test")
+    response = client.post("/api/system/configs/agent-runtimes/codex_local:test")
 
     assert response.status_code == 200
+    assert captured["runtime_cwd"] == tmp_path
+    assert workspace_manager.resolve_calls[-1]["workspace_id"] == "default"
     assert response.json() == {
         "ok": True,
         "message": "Connected",
+        "protocol": "cli",
         "agent_name": "Codex",
         "agent_version": "1.0.0",
         "protocol_version": 1,
+        "protocol_version_text": None,
     }
 
 

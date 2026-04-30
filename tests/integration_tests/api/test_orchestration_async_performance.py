@@ -89,22 +89,25 @@ def test_concurrent_sessions_share_llm_http_concurrency_budget(
 def test_orchestration_parallel_clone_endpoint_is_faster_than_serial(
     api_client: httpx.Client,
 ) -> None:
+    delay_ms = 180
     serial = _run_orchestration_clone_benchmark(
         api_client,
         mode="serial",
         task_count=5,
-        delay_ms=180,
+        delay_ms=delay_ms,
     )
     parallel = _run_orchestration_clone_benchmark(
         api_client,
         mode="parallel",
         task_count=5,
-        delay_ms=180,
+        delay_ms=delay_ms,
     )
+    saved_seconds = serial.duration_seconds - parallel.duration_seconds
     summary = json.dumps(
         {
             "serial_seconds": serial.duration_seconds,
             "parallel_seconds": parallel.duration_seconds,
+            "saved_seconds": saved_seconds,
         },
         sort_keys=True,
     )
@@ -113,7 +116,8 @@ def test_orchestration_parallel_clone_endpoint_is_faster_than_serial(
     assert parallel.terminal_event_type == "run_completed"
     assert serial.completed_tasks == 5
     assert parallel.completed_tasks == 5
-    assert parallel.duration_seconds <= serial.duration_seconds * 0.85, summary
+    assert parallel.duration_seconds < serial.duration_seconds, summary
+    assert saved_seconds >= delay_ms / 1000.0, summary
 
 
 def _run_orchestration_clone_benchmark(

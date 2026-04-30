@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from relay_teams.external_agents.models import (
     CustomTransportConfig,
     ExternalAgentConfig,
+    ExternalAgentProtocol,
     ExternalAgentTestResult,
     StdioTransportConfig,
     StreamableHttpTransportConfig,
@@ -130,6 +131,7 @@ async def probe_acp_agent(config: ExternalAgentConfig) -> ExternalAgentTestResul
         return ExternalAgentTestResult(
             ok=True,
             message="External ACP agent is reachable.",
+            protocol=ExternalAgentProtocol.ACP,
             protocol_version=protocol_version,
             agent_name=_as_str(agent_info.get("name")),
             agent_version=_as_str(agent_info.get("version")),
@@ -138,6 +140,7 @@ async def probe_acp_agent(config: ExternalAgentConfig) -> ExternalAgentTestResul
         return ExternalAgentTestResult(
             ok=False,
             message=str(exc) or exc.__class__.__name__,
+            protocol=ExternalAgentProtocol.ACP,
         )
     finally:
         await transport.close()

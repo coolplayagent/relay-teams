@@ -113,7 +113,7 @@ def test_system_config_roundtrips_and_prompt_preview(
     assert isinstance(preview_payload["user_prompt"], str)
 
 
-def test_external_agent_routes_support_stdio_probe(
+def test_agent_runtime_routes_support_stdio_probe(
     api_client: httpx.Client,
     tmp_path: Path,
 ) -> None:
@@ -121,7 +121,7 @@ def test_external_agent_routes_support_stdio_probe(
     probe_script_path = _write_acp_probe_script(tmp_path)
 
     save_response = api_client.put(
-        f"/api/system/configs/agents/{agent_id}",
+        f"/api/system/configs/agent-runtimes/{agent_id}",
         json={
             "agent_id": agent_id,
             "name": "Probe Agent",
@@ -140,14 +140,16 @@ def test_external_agent_routes_support_stdio_probe(
     assert saved_payload["transport"]["transport"] == "stdio"
     assert saved_payload["transport"]["command"] == sys.executable
 
-    get_response = api_client.get(f"/api/system/configs/agents/{agent_id}")
+    get_response = api_client.get(f"/api/system/configs/agent-runtimes/{agent_id}")
     get_response.raise_for_status()
     get_payload = get_response.json()
     assert get_payload["agent_id"] == agent_id
     assert get_payload["name"] == "Probe Agent"
     assert get_payload["transport"]["args"] == [str(probe_script_path)]
 
-    test_response = api_client.post(f"/api/system/configs/agents/{agent_id}:test")
+    test_response = api_client.post(
+        f"/api/system/configs/agent-runtimes/{agent_id}:test"
+    )
     test_response.raise_for_status()
     test_payload = test_response.json()
     assert test_payload["ok"] is True
@@ -155,11 +157,13 @@ def test_external_agent_routes_support_stdio_probe(
     assert test_payload["agent_name"] == "Integration ACP Probe"
     assert test_payload["agent_version"] == "1.0.0"
 
-    delete_response = api_client.delete(f"/api/system/configs/agents/{agent_id}")
+    delete_response = api_client.delete(
+        f"/api/system/configs/agent-runtimes/{agent_id}"
+    )
     delete_response.raise_for_status()
     assert delete_response.json() == {"status": "ok"}
 
-    missing_response = api_client.get(f"/api/system/configs/agents/{agent_id}")
+    missing_response = api_client.get(f"/api/system/configs/agent-runtimes/{agent_id}")
     assert missing_response.status_code == 404
 
 

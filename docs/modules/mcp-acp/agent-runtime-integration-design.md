@@ -1,13 +1,13 @@
-# External ACP Agents Design
+# Agent Runtime Integration Design
 
 ## 1. Goal
 
-Agent Teams needs an open external-agent integration point instead of a closed list of built-in runtimes.
+Agent Teams needs an open agent-runtime integration point instead of a closed list of built-in local runtimes.
 
 The target model is:
 
-- users configure any ACP-compatible external agent in Settings
-- roles may bind to one configured external agent
+- users configure ACP, A2A, or CLI agent runtimes in Settings
+- roles may bind to one configured agent runtime
 - a session may direct one turn to a specific role with a leading `@Role`
 - that direct-chat turn keeps the current session topology unchanged
 
@@ -15,14 +15,21 @@ This keeps the role system as the stable product surface while allowing the exec
 
 ## 2. Configuration Model
 
-External agents are stored in the resolved app config dir `agents.json`, by default `~/.relay-teams/agents.json`.
+Agent runtimes are stored in the resolved app config dir `agents.json`, by default `~/.relay-teams/agents.json`.
 
 Each agent record contains:
 
 - `agent_id`
 - `name`
 - `description`
+- `protocol`
 - `transport`
+
+`protocol` selects the runtime behavior:
+
+- `acp`: reusable Agent Client Protocol session over stdio, HTTP, or custom transport
+- `a2a`: Agent2Agent JSON-RPC over Streamable HTTP
+- `cli`: stdio JSON-RPC agent runtime execution for local coding CLIs
 
 `transport` is a discriminated union:
 
@@ -40,11 +47,15 @@ Each agent record contains:
 
 The `custom` transport is an adapter extension point. Config only stores structured data. It does not execute arbitrary user-provided code.
 
-For `stdio` transports, Agent Teams starts the external ACP process inside the active session workspace. The working directory is derived at runtime from the session's project context and is not saved in `agents.json`.
+For `stdio` transports, Agent Teams starts the runtime process inside a workspace. Prompt execution uses the active session workspace. The Settings/API runtime test endpoint uses the default workspace workdir so relative command paths are checked from the same kind of cwd used by real execution. The working directory is derived at runtime from workspace context and is not saved in `agents.json`.
+
+CLI runtimes use the Codex app-server style lifecycle over stdio JSON-RPC: `initialize`, `initialized`, `thread/start`, `turn/start`, streamed assistant-message notifications, and `turn/completed`. A bare `codex` command is treated as a local Codex app-server runtime and launched as `codex app-server --listen stdio://`.
+
+A2A direct endpoint probes send a non-mutating `tasks/get` JSON-RPC request. A JSON-RPC 2.0 response with a matching id and result is accepted, as is a structured A2A task error such as task-not-found. `-32601` method-not-found is rejected because it identifies a generic JSON-RPC endpoint that is not serving the A2A task API.
 
 ## 3. Secret Handling
 
-Secret values for external agents must not be written to `agents.json`.
+Secret values for agent runtimes must not be written to `agents.json`.
 
 Rules:
 
@@ -63,7 +74,7 @@ Role configuration adds `bound_agent_id`.
 Behavior:
 
 - `bound_agent_id = null`: role continues to use the local provider/runtime path
-- `bound_agent_id = "<agent>"`: provider selection switches that role to the external ACP backend
+- `bound_agent_id = "<agent>"`: provider selection switches that role to the configured agent runtime backend
 
 The binding lives on the role, not on the session, so the same product concept still works across:
 
@@ -97,9 +108,9 @@ Provider selection now branches on role binding:
 - unbound role -> existing local provider path
 - bound role -> `ExternalAcpProvider`
 
-The external provider is responsible for:
+The external runtime provider is responsible for:
 
-- resolving the saved external agent config, including secret bindings
+- resolving the saved agent runtime config, including secret bindings
 - creating or loading the remote ACP session
 - sending prompt turns to the remote agent
 - translating remote updates back into Agent Teams messages and run events
@@ -142,7 +153,7 @@ The exported names are fully namespaced so they do not collide with native tools
 
 ### 6.3 Runtime Model Profile Propagation
 
-Bound external agents still inherit the effective Agent Teams model selection for the current role and session.
+Bound agent runtimes still inherit the effective Agent Teams model selection for the current role and session.
 
 Rules:
 
@@ -180,15 +191,15 @@ The round and recovery projections expose `primary_role_id` so the frontend can 
 
 New backend surface:
 
-- `GET /api/system/configs/agents`
-- `GET /api/system/configs/agents/{agent_id}`
-- `PUT /api/system/configs/agents/{agent_id}`
-- `DELETE /api/system/configs/agents/{agent_id}`
-- `POST /api/system/configs/agents/{agent_id}:test`
+- `GET /api/system/configs/agent-runtimes`
+- `GET /api/system/configs/agent-runtimes/{agent_id}`
+- `PUT /api/system/configs/agent-runtimes/{agent_id}`
+- `DELETE /api/system/configs/agent-runtimes/{agent_id}`
+- `POST /api/system/configs/agent-runtimes/{agent_id}:test`
 
-Role settings now expose the available external agents in `/api/roles:options`, and role documents round-trip `bound_agent_id`.
+Role settings now expose the available agent runtimes in `/api/roles:options`, and role documents round-trip `bound_agent_id`.
 
-The Settings UI adds an `Agents` tab for CRUD and transport-specific editing.
+The Settings UI adds an `Agent Runtime` tab for CRUD and protocol-specific transport editing.
 
 ## 9. Non-Goals
 
@@ -197,4 +208,4 @@ This change does not:
 - replace the internal orchestration model
 - let users type raw arbitrary code for transport adapters in config
 - change session topology persistently when using `@Role`
-- store external-agent secrets in plaintext files
+- store agent-runtime secrets in plaintext files
