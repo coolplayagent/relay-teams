@@ -402,6 +402,11 @@ async def _wait_for_cli_turn_output(
             client.next_notification(),
             timeout=remaining,
         )
+        if notification.method == "runtime/closed":
+            raise CliAgentError(
+                _as_str(notification.params.get("message"))
+                or "CLI JSON-RPC runtime closed"
+            )
         if not _matches_turn(
             params=notification.params,
             thread_id=thread_id,
@@ -428,11 +433,11 @@ async def _wait_for_cli_turn_output(
         if notification.method != "turn/completed":
             continue
         status = _turn_status(notification.params)
-        if status == "failed":
+        if status != "completed":
             raise CliAgentError(
                 _turn_error_message(notification.params)
                 or turn_error
-                or "External CLI agent turn failed"
+                or f"External CLI agent turn {status or 'ended without status'}"
             )
         output = "".join(delta_parts).strip()
         if not output:
@@ -494,6 +499,7 @@ class _StdioCliJsonRpcClient:
         self._next_request_id = 0
         self._pending: dict[JsonRpcId, asyncio.Future[dict[str, JsonValue]]] = {}
         self._notifications: asyncio.Queue[_CliJsonRpcNotification] = asyncio.Queue()
+        self._runtime_closed_notified = False
 
     async def start(self) -> None:
         if self._process is not None and self._process.returncode is None:
@@ -511,6 +517,7 @@ class _StdioCliJsonRpcClient:
             cwd=self._runtime_cwd,
             env=env,
         )
+        self._runtime_closed_notified = False
         self._read_task = asyncio.create_task(self._read_stdout_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr_loop())
 
@@ -600,10 +607,10 @@ class _StdioCliJsonRpcClient:
                     {str(key): value for key, value in payload.items()}
                 )
         except Exception as exc:
-            self._fail_pending(exc)
+            self._fail_runtime(exc)
             return
-        self._fail_pending(
-            CliAgentError("CLI JSON-RPC runtime closed stdout before responding")
+        self._fail_runtime(
+            CliAgentError("CLI JSON-RPC runtime closed stdout before responding"),
         )
 
     async def _drain_stderr_loop(self) -> None:
@@ -672,6 +679,18 @@ class _StdioCliJsonRpcClient:
         for future in pending:
             if not future.done():
                 future.set_exception(exc)
+
+    def _fail_runtime(self, exc: BaseException) -> None:
+        self._fail_pending(exc)
+        if self._runtime_closed_notified:
+            return
+        self._runtime_closed_notified = True
+        self._notifications.put_nowait(
+            _CliJsonRpcNotification(
+                method="runtime/closed",
+                params={"message": str(exc) or exc.__class__.__name__},
+            )
+        )
 
 
 async def _read_next_stdio_message(stream: asyncio.StreamReader) -> bytes | None:

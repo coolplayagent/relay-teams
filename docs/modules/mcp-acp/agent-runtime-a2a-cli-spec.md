@@ -94,7 +94,9 @@ Protocol rules:
 - Agent Teams creates an ephemeral thread with `thread/start`.
 - Prompt execution uses `turn/start` with the composed runtime prompt as a text input item.
 - Assistant output is collected from `item/agentMessage/delta`; if no deltas are emitted, the completed `agentMessage` item is used as a fallback.
-- `turn/completed` closes the prompt. Failed turns raise a runtime error from the turn error payload.
+- `turn/completed` closes the prompt only when the turn status is `completed`.
+- Failed or interrupted turns raise a runtime error from the turn error payload when present.
+- If the CLI JSON-RPC process closes stdout during an active turn, the prompt fails immediately instead of waiting for the overall prompt timeout.
 - Empty completed output is considered a runtime error.
 
 Codex CLI handling:

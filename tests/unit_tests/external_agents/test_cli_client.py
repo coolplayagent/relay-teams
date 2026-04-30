@@ -196,6 +196,54 @@ for raw_line in sys.stdin:
         )
 """
 
+_JSON_RPC_CLOSE_DURING_TURN_SCRIPT = r"""
+import json
+import sys
+
+thread_id = "thread-1"
+turn_id = "turn-1"
+
+for raw_line in sys.stdin:
+    if not raw_line.strip():
+        continue
+    message = json.loads(raw_line)
+    method = message.get("method")
+    message_id = message.get("id")
+    if method == "initialize":
+        print(json.dumps({"id": message_id, "result": {"userAgent": "fake/1"}}), flush=True)
+    elif method == "initialized":
+        continue
+    elif method == "thread/start":
+        print(json.dumps({"id": message_id, "result": {"thread": {"id": thread_id}}}), flush=True)
+    elif method == "turn/start":
+        print(
+            json.dumps(
+                {
+                    "id": message_id,
+                    "result": {
+                        "turn": {"id": turn_id, "status": "inProgress", "items": []}
+                    },
+                }
+            ),
+            flush=True,
+        )
+        print(
+            json.dumps(
+                {
+                    "method": "item/agentMessage/delta",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "itemId": "item-1",
+                        "delta": "partial output",
+                    },
+                }
+            ),
+            flush=True,
+        )
+        raise SystemExit(0)
+"""
+
 
 def _build_cli_agent(command: str, args: tuple[str, ...]) -> ExternalAgentConfig:
     return ExternalAgentConfig(
@@ -278,6 +326,22 @@ async def test_run_cli_agent_prompt_uses_completed_item_fallback(
     )
 
     assert result == "completed item output"
+
+
+@pytest.mark.asyncio
+async def test_run_cli_agent_prompt_raises_when_runtime_closes_during_turn(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(CliAgentError, match="closed stdout"):
+        await run_cli_agent_prompt(
+            config=_build_cli_agent(
+                sys.executable,
+                ("-c", _JSON_RPC_CLOSE_DURING_TURN_SCRIPT),
+            ),
+            prompt="hello runtime",
+            runtime_cwd=tmp_path,
+            timeout_seconds=5,
+        )
 
 
 def test_stdio_transport_rejects_non_stdio_config() -> None:
@@ -539,6 +603,37 @@ async def test_wait_for_cli_turn_output_raises_failed_turn_error() -> None:
     )
 
     with pytest.raises(CliAgentError, match="runtime failed: bad"):
+        await _wait_for_cli_turn_output(
+            client=cast(_StdioCliJsonRpcClient, client),
+            thread_id="thread-1",
+            turn_id="turn-1",
+            timeout_seconds=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_cli_turn_output_raises_interrupted_turn_error() -> None:
+    client = _NotificationClient(
+        [
+            _CliJsonRpcNotification(
+                method="item/agentMessage/delta",
+                params={
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "delta": "partial",
+                },
+            ),
+            _CliJsonRpcNotification(
+                method="turn/completed",
+                params={
+                    "threadId": "thread-1",
+                    "turn": {"id": "turn-1", "status": "interrupted"},
+                },
+            ),
+        ]
+    )
+
+    with pytest.raises(CliAgentError, match="turn interrupted"):
         await _wait_for_cli_turn_output(
             client=cast(_StdioCliJsonRpcClient, client),
             thread_id="thread-1",
