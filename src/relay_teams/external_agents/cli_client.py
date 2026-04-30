@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -91,8 +90,7 @@ async def probe_cli_agent(config: ExternalAgentConfig) -> ExternalAgentTestResul
     try:
         transport = _stdio_transport(config)
         command: str = str(transport.command)
-        resolved = shutil.which(cmd=command)
-        if resolved is None and not Path(command).exists():
+        if not _cli_command_exists(command):
             raise CliAgentError(f"CLI command not found: {command}")
         client = _StdioCliJsonRpcClient(
             command=command,
@@ -171,6 +169,30 @@ def _stdio_transport(config: ExternalAgentConfig) -> StdioTransportConfig:
     return config.transport
 
 
+def _cli_command_exists(command: str) -> bool:
+    if "/" in command or "\\" in command:
+        return Path(command).exists()
+    for directory in os.get_exec_path():
+        candidate = Path(directory) / command
+        if _executable_path_exists(candidate):
+            return True
+        if os.name == "nt":
+            for suffix in os.environ.get("PATHEXT", "").split(os.pathsep):
+                if suffix and _executable_path_exists(
+                    Path(directory) / f"{command}{suffix}"
+                ):
+                    return True
+    return False
+
+
+def _executable_path_exists(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if os.name == "nt":
+        return path.is_file()
+    return os.access(path, os.X_OK)
+
+
 def _build_command_args(*, transport: StdioTransportConfig) -> tuple[str, ...]:
     if not _is_codex_command(transport.command):
         return transport.args
@@ -199,7 +221,12 @@ def _ensure_codex_stdio_listener(args: tuple[str, ...]) -> tuple[str, ...]:
 def _migrate_legacy_codex_args(args: tuple[str, ...]) -> tuple[str, ...]:
     migrated: list[str] = []
     skip_next = False
+    copy_next = False
     for arg in args:
+        if copy_next:
+            migrated.append(arg)
+            copy_next = False
+            continue
         if skip_next:
             skip_next = False
             continue
@@ -215,7 +242,7 @@ def _migrate_legacy_codex_args(args: tuple[str, ...]) -> tuple[str, ...]:
             continue
         if option_name in _CODEX_APP_SERVER_VALUE_OPTIONS:
             migrated.append(arg)
-            skip_next = "=" not in arg
+            copy_next = "=" not in arg
             continue
         if arg == "--analytics-default-enabled":
             migrated.append(arg)
