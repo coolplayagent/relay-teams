@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -158,11 +159,72 @@ class AutomationService:
         )
         return self._repository.create(record)
 
+    async def create_project_async(
+        self,
+        payload: AutomationProjectCreateInput,
+    ) -> AutomationProjectRecord:
+        timezone_name = _validate_timezone(payload.timezone)
+        await self._validate_workspace_async(payload.workspace_id)
+        run_config = self._validate_run_config_for_write(payload.run_config)
+        delivery_binding = await self._resolve_delivery_binding_async(
+            payload.delivery_binding,
+            existing_binding=None,
+        )
+        delivery_events = self._resolve_delivery_events(
+            binding=delivery_binding,
+            requested_events=payload.delivery_events,
+            existing_events=(),
+        )
+        now = datetime.now(tz=UTC)
+        automation_project_id = f"aut_{uuid.uuid4().hex[:12]}"
+        record = AutomationProjectRecord(
+            automation_project_id=automation_project_id,
+            name=payload.name,
+            display_name=payload.display_name or payload.name,
+            status=(
+                AutomationProjectStatus.ENABLED
+                if payload.enabled
+                else AutomationProjectStatus.DISABLED
+            ),
+            workspace_id=payload.workspace_id,
+            prompt=payload.prompt,
+            schedule_mode=payload.schedule_mode,
+            cron_expression=_normalize_optional_text(payload.cron_expression),
+            run_at=payload.run_at,
+            timezone=timezone_name,
+            run_config=run_config,
+            delivery_binding=delivery_binding,
+            delivery_events=delivery_events,
+            trigger_id=f"schedule-{automation_project_id}",
+            next_run_at=(
+                _next_run_at(
+                    schedule_mode=payload.schedule_mode,
+                    cron_expression=payload.cron_expression,
+                    run_at=payload.run_at,
+                    timezone_name=timezone_name,
+                    after=now,
+                )
+                if payload.enabled
+                else None
+            ),
+            created_at=now,
+            updated_at=now,
+        )
+        return await self._repository.create_async(record)
+
     def list_projects(self) -> Tuple[AutomationProjectRecord, ...]:
         return self._repository.list_all()
 
+    async def list_projects_async(self) -> Tuple[AutomationProjectRecord, ...]:
+        return await self._repository.list_all_async()
+
     def get_project(self, automation_project_id: str) -> AutomationProjectRecord:
         return self._repository.get(automation_project_id)
+
+    async def get_project_async(
+        self, automation_project_id: str
+    ) -> AutomationProjectRecord:
+        return await self._repository.get_async(automation_project_id)
 
     def list_feishu_bindings(
         self,
@@ -170,6 +232,11 @@ class AutomationService:
         if self._feishu_binding_service is None:
             return ()
         return self._feishu_binding_service.list_candidates()
+
+    async def list_feishu_bindings_async(
+        self,
+    ) -> Tuple[AutomationFeishuBindingCandidate, ...]:
+        return await asyncio.to_thread(self.list_feishu_bindings)
 
     def list_delivery_bindings(
         self,
@@ -180,6 +247,11 @@ class AutomationService:
         if self._xiaoluban_binding_service is not None:
             candidates.extend(self._xiaoluban_binding_service.list_candidates())
         return tuple(candidates)
+
+    async def list_delivery_bindings_async(
+        self,
+    ) -> Tuple[AutomationDeliveryBindingCandidate, ...]:
+        return await asyncio.to_thread(self.list_delivery_bindings)
 
     def update_project(
         self,
@@ -269,6 +341,94 @@ class AutomationService:
         )
         return self._repository.update(updated)
 
+    async def update_project_async(
+        self,
+        automation_project_id: str,
+        payload: AutomationProjectUpdateInput,
+    ) -> AutomationProjectRecord:
+        existing = await self._repository.get_async(automation_project_id)
+        timezone_name = _validate_timezone(payload.timezone or existing.timezone)
+        schedule_mode = payload.schedule_mode or existing.schedule_mode
+        cron_expression = _resolve_optional_text(
+            candidate=payload.cron_expression,
+            fallback=existing.cron_expression,
+        )
+        run_at = payload.run_at if payload.run_at is not None else existing.run_at
+        if payload.schedule_mode == AutomationScheduleMode.CRON:
+            run_at = None
+        if payload.schedule_mode == AutomationScheduleMode.ONE_SHOT:
+            cron_expression = None
+        run_config = (
+            self._validate_run_config_for_write(payload.run_config)
+            if payload.run_config is not None
+            else existing.run_config
+        )
+        if "delivery_binding" in payload.model_fields_set:
+            delivery_binding = await self._resolve_delivery_binding_async(
+                payload.delivery_binding,
+                existing_binding=None,
+            )
+        else:
+            delivery_binding = existing.delivery_binding
+        delivery_events = self._resolve_delivery_events(
+            binding=delivery_binding,
+            requested_events=payload.delivery_events,
+            existing_events=existing.delivery_events,
+        )
+        probe = AutomationProjectCreateInput(
+            name=payload.name or existing.name,
+            display_name=payload.display_name or existing.display_name,
+            workspace_id=payload.workspace_id or existing.workspace_id,
+            prompt=payload.prompt or existing.prompt,
+            schedule_mode=schedule_mode,
+            cron_expression=cron_expression,
+            run_at=run_at,
+            timezone=timezone_name,
+            run_config=run_config,
+            delivery_binding=delivery_binding,
+            delivery_events=delivery_events,
+            enabled=(
+                payload.enabled
+                if payload.enabled is not None
+                else existing.status == AutomationProjectStatus.ENABLED
+            ),
+        )
+        await self._validate_workspace_async(probe.workspace_id)
+        now = datetime.now(tz=UTC)
+        updated = existing.model_copy(
+            update={
+                "name": probe.name,
+                "display_name": probe.display_name or probe.name,
+                "status": (
+                    AutomationProjectStatus.ENABLED
+                    if probe.enabled
+                    else AutomationProjectStatus.DISABLED
+                ),
+                "workspace_id": probe.workspace_id,
+                "prompt": probe.prompt,
+                "schedule_mode": probe.schedule_mode,
+                "cron_expression": _normalize_optional_text(probe.cron_expression),
+                "run_at": probe.run_at,
+                "timezone": timezone_name,
+                "run_config": probe.run_config,
+                "delivery_binding": delivery_binding,
+                "delivery_events": delivery_events,
+                "next_run_at": (
+                    _next_run_at(
+                        schedule_mode=probe.schedule_mode,
+                        cron_expression=probe.cron_expression,
+                        run_at=probe.run_at,
+                        timezone_name=timezone_name,
+                        after=now,
+                    )
+                    if probe.enabled
+                    else None
+                ),
+                "updated_at": now,
+            }
+        )
+        return await self._repository.update_async(updated)
+
     def set_project_status(
         self,
         automation_project_id: str,
@@ -297,6 +457,34 @@ class AutomationService:
         )
         return self._repository.update(updated)
 
+    async def set_project_status_async(
+        self,
+        automation_project_id: str,
+        status: AutomationProjectStatus,
+    ) -> AutomationProjectRecord:
+        existing = await self._repository.get_async(automation_project_id)
+        if status == AutomationProjectStatus.ENABLED:
+            await self._validate_workspace_async(existing.workspace_id)
+        now = datetime.now(tz=UTC)
+        updated = existing.model_copy(
+            update={
+                "status": status,
+                "next_run_at": (
+                    _next_run_at(
+                        schedule_mode=existing.schedule_mode,
+                        cron_expression=existing.cron_expression,
+                        run_at=existing.run_at,
+                        timezone_name=existing.timezone,
+                        after=now,
+                    )
+                    if status == AutomationProjectStatus.ENABLED
+                    else None
+                ),
+                "updated_at": now,
+            }
+        )
+        return await self._repository.update_async(updated)
+
     def delete_project(
         self,
         automation_project_id: str,
@@ -323,6 +511,36 @@ class AutomationService:
             )
         self._repository.delete(automation_project_id)
 
+    async def delete_project_async(
+        self,
+        automation_project_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        project = await self._repository.get_async(automation_project_id)
+        if project.status == AutomationProjectStatus.ENABLED:
+            require_force_delete(
+                force,
+                message="Cannot delete enabled automation project without force",
+            )
+        if await self._has_dependent_project_data_async(automation_project_id):
+            require_cascade_delete(
+                cascade,
+                message="Cannot delete automation project without cascade while deliveries or queue records exist",
+            )
+        if self._delivery_service is not None:
+            await asyncio.to_thread(
+                self._delivery_service.delete_project_deliveries,
+                automation_project_id,
+            )
+        if self._bound_session_queue_service is not None:
+            await asyncio.to_thread(
+                self._bound_session_queue_service.delete_project_queue,
+                automation_project_id,
+            )
+        await self._repository.delete_async(automation_project_id)
+
     def _has_dependent_project_data(self, automation_project_id: str) -> bool:
         if (
             self._delivery_service is not None
@@ -338,9 +556,37 @@ class AutomationService:
             return True
         return False
 
+    async def _has_dependent_project_data_async(
+        self, automation_project_id: str
+    ) -> bool:
+        if self._delivery_service is not None and await asyncio.to_thread(
+            self._delivery_service.has_project_deliveries,
+            automation_project_id,
+        ):
+            return True
+        if self._bound_session_queue_service is not None and await asyncio.to_thread(
+            self._bound_session_queue_service.has_project_queue,
+            automation_project_id,
+        ):
+            return True
+        return False
+
     def run_now(self, automation_project_id: str) -> Dict[str, JsonValue]:
         project = self._repository.get(automation_project_id)
         execution_handle = self._materialize_execution(project, reason="manual")
+        return {
+            "automation_project_id": automation_project_id,
+            "session_id": execution_handle.session_id,
+            "run_id": execution_handle.run_id,
+            "queued": execution_handle.queued,
+            "reused_bound_session": execution_handle.reused_bound_session,
+        }
+
+    async def run_now_async(self, automation_project_id: str) -> Dict[str, JsonValue]:
+        project = await self._repository.get_async(automation_project_id)
+        execution_handle = await self._materialize_execution_async(
+            project, reason="manual"
+        )
         return {
             "automation_project_id": automation_project_id,
             "session_id": execution_handle.session_id,
@@ -354,10 +600,16 @@ class AutomationService:
         automation_project_id: str,
     ) -> Tuple[Dict[str, object], ...]:
         project = self._repository.get(automation_project_id)
+        return self._list_project_sessions_for_record(project)
+
+    def _list_project_sessions_for_record(
+        self,
+        project: AutomationProjectRecord,
+    ) -> Tuple[Dict[str, object], ...]:
         sessions = list(
             self._session_service.list_sessions_by_project(
                 project_kind=ProjectKind.AUTOMATION,
-                project_id=automation_project_id,
+                project_id=project.automation_project_id,
             )
         )
         last_session_id = str(project.last_session_id or "").strip()
@@ -376,6 +628,13 @@ class AutomationService:
         sessions.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
         return tuple(sessions)
 
+    async def list_project_sessions_async(
+        self,
+        automation_project_id: str,
+    ) -> Tuple[Dict[str, object], ...]:
+        project = await self._repository.get_async(automation_project_id)
+        return await asyncio.to_thread(self._list_project_sessions_for_record, project)
+
     def process_due_projects(
         self,
         now: Optional[datetime] = None,
@@ -384,6 +643,19 @@ class AutomationService:
         processed: List[str] = []
         for project in self._repository.list_due(effective_now):
             self._materialize_execution(project, reason="schedule", now=effective_now)
+            processed.append(project.automation_project_id)
+        return tuple(processed)
+
+    async def process_due_projects_async(
+        self,
+        now: Optional[datetime] = None,
+    ) -> Tuple[str, ...]:
+        effective_now = now or datetime.now(tz=UTC)
+        processed: List[str] = []
+        for project in await self._repository.list_due_async(effective_now):
+            await self._materialize_execution_async(
+                project, reason="schedule", now=effective_now
+            )
             processed.append(project.automation_project_id)
         return tuple(processed)
 
@@ -509,6 +781,133 @@ class AutomationService:
             )
             raise
 
+    async def _materialize_execution_async(
+        self,
+        project: AutomationProjectRecord,
+        *,
+        reason: str,
+        now: Optional[datetime] = None,
+    ) -> AutomationExecutionHandle:
+        effective_now = now or datetime.now(tz=UTC)
+        execution_event = await self._record_execution_event_async(
+            project, reason=reason
+        )
+        next_status = project.status
+        try:
+            bound_session_handle = (
+                await self._materialize_bound_session_execution_async(
+                    project=project,
+                    reason=reason,
+                )
+            )
+            if bound_session_handle is not None:
+                next_run_at = _next_run_at_after_fire(
+                    project=project, fired_at=effective_now
+                )
+                if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
+                    next_status = AutomationProjectStatus.DISABLED
+                await self._repository.update_async(
+                    project.model_copy(
+                        update={
+                            "status": next_status,
+                            "last_session_id": bound_session_handle.session_id,
+                            "last_run_started_at": (
+                                effective_now
+                                if bound_session_handle.run_id is not None
+                                else project.last_run_started_at
+                            ),
+                            "last_error": None,
+                            "next_run_at": next_run_at,
+                            "updated_at": effective_now,
+                        }
+                    )
+                )
+                return bound_session_handle.model_copy(
+                    update={"reused_bound_session": True}
+                )
+
+            title = (
+                f"{project.display_name} run "
+                f"{effective_now.astimezone(UTC).strftime('%Y-%m-%d %H:%M')}"
+            )
+            runtime_run_config = self._coerce_run_config_for_execution(project)
+            session = await self._session_service.create_session_async(
+                workspace_id=project.workspace_id,
+                metadata={
+                    "title": title,
+                    "automation_project_id": project.automation_project_id,
+                    "automation_trigger_event_id": execution_event.event_id,
+                    "automation_reason": reason,
+                },
+                project_kind=ProjectKind.AUTOMATION,
+                project_id=project.automation_project_id,
+                session_mode=runtime_run_config.session_mode,
+                normal_root_role_id=runtime_run_config.normal_root_role_id,
+                orchestration_preset_id=runtime_run_config.orchestration_preset_id,
+            )
+            intent = IntentInput(
+                session_id=session.session_id,
+                input=content_parts_from_text(
+                    build_automation_prompt(
+                        project_name=project.display_name,
+                        prompt=project.prompt,
+                    )
+                ),
+                execution_mode=runtime_run_config.execution_mode,
+                yolo=runtime_run_config.yolo,
+                thinking=runtime_run_config.thinking,
+                session_mode=runtime_run_config.session_mode,
+            )
+            run_id = await self._start_unbound_run_async(intent)
+            if self._delivery_service is not None:
+                _ = await asyncio.to_thread(
+                    self._delivery_service.register_run,
+                    project=project,
+                    session_id=session.session_id,
+                    run_id=run_id,
+                    reason=reason,
+                )
+            next_run_at = _next_run_at_after_fire(
+                project=project, fired_at=effective_now
+            )
+            if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
+                next_status = AutomationProjectStatus.DISABLED
+            await self._repository.update_async(
+                project.model_copy(
+                    update={
+                        "status": next_status,
+                        "last_session_id": session.session_id,
+                        "last_run_started_at": effective_now,
+                        "last_error": None,
+                        "next_run_at": next_run_at,
+                        "updated_at": effective_now,
+                    }
+                )
+            )
+            return AutomationExecutionHandle(
+                session_id=session.session_id,
+                run_id=run_id,
+                queued=False,
+                reused_bound_session=False,
+            )
+        except Exception as exc:
+            next_run_at = _next_run_at_after_fire(
+                project=project, fired_at=effective_now
+            )
+            if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
+                next_status = AutomationProjectStatus.DISABLED
+            await self._repository.update_async(
+                project.model_copy(
+                    update={
+                        "status": next_status,
+                        "last_error": str(exc),
+                        "next_run_at": next_run_at,
+                        "updated_at": effective_now,
+                    }
+                )
+            )
+            raise
+
     def _start_unbound_run(self, intent: IntentInput) -> str:
         if self._session_ingress_service is not None:
             result = self._session_ingress_service.require_started(
@@ -522,6 +921,21 @@ class AutomationService:
             return result.run_id
         run_id, _ = self._run_service.create_run(intent)
         self._run_service.ensure_run_started(run_id)
+        return run_id
+
+    async def _start_unbound_run_async(self, intent: IntentInput) -> str:
+        if self._session_ingress_service is not None:
+            result = await self._session_ingress_service.require_started_async(
+                GatewaySessionIngressRequest(
+                    intent=intent,
+                    busy_policy=GatewaySessionIngressBusyPolicy.START_IF_IDLE,
+                )
+            )
+            if result.run_id is None:
+                raise RuntimeError("automation_run_not_started")
+            return result.run_id
+        run_id, _ = await self._run_service.create_run_async(intent)
+        await self._run_service.ensure_run_started_async(run_id)
         return run_id
 
     def _resolve_delivery_binding(
@@ -542,6 +956,21 @@ class AutomationService:
                 raise ValueError("Xiaoluban delivery binding service is unavailable")
             return self._xiaoluban_binding_service.validate_binding(binding)
         raise ValueError(f"Unsupported delivery binding provider: {binding.provider}")
+
+    async def _resolve_delivery_binding_async(
+        self,
+        candidate: Optional[AutomationDeliveryBinding],
+        *,
+        existing_binding: Optional[AutomationDeliveryBinding],
+    ) -> Optional[AutomationDeliveryBinding]:
+        binding = candidate if candidate is not None else existing_binding
+        if binding is None:
+            return None
+        return await asyncio.to_thread(
+            self._resolve_delivery_binding,
+            candidate,
+            existing_binding=existing_binding,
+        )
 
     @staticmethod
     def _resolve_delivery_events(
@@ -698,11 +1127,35 @@ class AutomationService:
             reason=reason,
         )
 
+    async def _materialize_bound_session_execution_async(
+        self,
+        *,
+        project: AutomationProjectRecord,
+        reason: str,
+    ) -> Optional[AutomationExecutionHandle]:
+        if project.delivery_binding is None:
+            return None
+        if project.delivery_binding.provider != "feishu":
+            return None
+        return await asyncio.to_thread(
+            self._materialize_bound_session_execution,
+            project=project,
+            reason=reason,
+        )
+
     def _validate_workspace(self, workspace_id: str) -> None:
         if self._workspace_service is None:
             return
         try:
             _ = self._workspace_service.require_workspace(workspace_id)
+        except KeyError as exc:
+            raise ValueError(f"Unknown workspace: {workspace_id}") from exc
+
+    async def _validate_workspace_async(self, workspace_id: str) -> None:
+        if self._workspace_service is None:
+            return
+        try:
+            _ = await self._workspace_service.require_workspace_async(workspace_id)
         except KeyError as exc:
             raise ValueError(f"Unknown workspace: {workspace_id}") from exc
 
@@ -714,6 +1167,25 @@ class AutomationService:
     ) -> AutomationExecutionEventRecord:
         occurred_at = datetime.now(tz=UTC)
         return self._event_repository.create_event(
+            AutomationExecutionEventRecord(
+                event_id=f"aevt_{uuid.uuid4().hex[:16]}",
+                automation_project_id=project.automation_project_id,
+                reason=reason,
+                payload={"automation_project_id": project.automation_project_id},
+                metadata={"reason": reason},
+                occurred_at=occurred_at,
+                created_at=occurred_at,
+            )
+        )
+
+    async def _record_execution_event_async(
+        self,
+        project: AutomationProjectRecord,
+        *,
+        reason: str,
+    ) -> AutomationExecutionEventRecord:
+        occurred_at = datetime.now(tz=UTC)
+        return await self._event_repository.create_event_async(
             AutomationExecutionEventRecord(
                 event_id=f"aevt_{uuid.uuid4().hex[:16]}",
                 automation_project_id=project.automation_project_id,

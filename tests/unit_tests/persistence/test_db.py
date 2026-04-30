@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 import sqlite3
 from pathlib import Path
 from typing import cast
@@ -71,6 +72,45 @@ def test_is_retryable_sqlite_error_matches_lock_contention() -> None:
         sqlite3.OperationalError("database table is locked")
     )
     assert not is_retryable_sqlite_error(sqlite3.OperationalError("no such table"))
+
+
+def test_async_blocking_runner_waits_without_fixed_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    result_timeout = sentinel
+
+    class _FakeFuture:
+        def result(self, timeout: object = sentinel) -> str:
+            nonlocal result_timeout
+            result_timeout = timeout
+            return "done"
+
+    def fake_run_coroutine_threadsafe(
+        coro: Coroutine[object, object, str],
+        loop: asyncio.AbstractEventLoop,
+    ) -> _FakeFuture:
+        _ = loop
+        coro.close()
+        return _FakeFuture()
+
+    loop = asyncio.new_event_loop()
+    runner = db_module._AsyncBlockingRunner.__new__(db_module._AsyncBlockingRunner)
+    runner._loop = loop
+    monkeypatch.setattr(
+        db_module.asyncio,
+        "run_coroutine_threadsafe",
+        fake_run_coroutine_threadsafe,
+    )
+
+    async def operation() -> str:
+        return "unused"
+
+    try:
+        assert runner.run(operation()) == "done"
+        assert result_timeout is sentinel
+    finally:
+        loop.close()
 
 
 def test_resolved_db_path_key_caches_absolute_paths(tmp_path: Path) -> None:

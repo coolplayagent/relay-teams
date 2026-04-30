@@ -32,6 +32,13 @@ class GitHubSecretStore:
         )
         return _normalize_secret(value if value is not None else migrated)
 
+    def has_token_reference(self, config_dir: Path) -> bool:
+        return _FIELD_NAME in self._secret_store.list_owner_fields(
+            config_dir,
+            namespace=_NAMESPACE,
+            owner_id=_OWNER_ID,
+        )
+
     def set_token(self, config_dir: Path, token: str | None) -> None:
         self._secret_store.set_secret(
             config_dir,

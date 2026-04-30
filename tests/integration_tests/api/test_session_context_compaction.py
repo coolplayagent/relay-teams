@@ -45,24 +45,26 @@ def test_short_history_microcompact_preserves_exact_recall_without_marker(
         session_id=new_session_id("session-microcompact-short"),
     )
 
-    phase_run_id = create_run(
-        api_client,
-        session_id=session_id,
-        intent=_phase_prompt(phase=1, line_count=120, block_count=1),
-        execution_mode="ai",
-        yolo=True,
-    )
-    phase_events = stream_run_until_terminal(
-        api_client,
-        run_id=phase_run_id,
-        timeout_seconds=80.0,
-    )
-    assert str(phase_events[-1].get("event_type") or "") == "run_completed"
+    max_phase = 2
+    for phase in range(1, max_phase + 1):
+        phase_run_id = create_run(
+            api_client,
+            session_id=session_id,
+            intent=_phase_prompt(phase=phase, line_count=40, block_count=1),
+            execution_mode="ai",
+            yolo=True,
+        )
+        phase_events = stream_run_until_terminal(
+            api_client,
+            run_id=phase_run_id,
+            timeout_seconds=80.0,
+        )
+        assert str(phase_events[-1].get("event_type") or "") == "run_completed"
 
     recall_run_id = create_run(
         api_client,
         session_id=session_id,
-        intent=_recall_prompt(max_phase=1),
+        intent=_recall_prompt(max_phase=max_phase),
         execution_mode="ai",
         yolo=True,
     )
@@ -92,8 +94,9 @@ def test_short_history_microcompact_preserves_exact_recall_without_marker(
     assert markers == []
     for label, value in _GLOBAL_FACTS.items():
         assert f"{label}: {value}" in recall_text
-    assert f"phase-1 anchor: {_PHASE_ANCHORS[1]}" in recall_text
-    assert f"phase-1 checksum: {_PHASE_CHECKSUMS[1]}" in recall_text
+    for phase in range(1, max_phase + 1):
+        assert f"phase-{phase} anchor: {_PHASE_ANCHORS[phase]}" in recall_text
+        assert f"phase-{phase} checksum: {_PHASE_CHECKSUMS[phase]}" in recall_text
     assert int(recall_usage["total_tool_calls"]) == 0
     assert isinstance(rounds_items, list)
     recall_round = next(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -7,6 +8,10 @@ from pathlib import Path
 
 import pytest
 
+from relay_teams.automation.automation_event_repository import (
+    AutomationEventRepository,
+    AutomationExecutionEventRecord,
+)
 from relay_teams.automation import (
     AutomationFeishuBinding,
     AutomationProjectRecord,
@@ -15,6 +20,7 @@ from relay_teams.automation import (
     AutomationScheduleMode,
     AutomationXiaolubanBinding,
 )
+from relay_teams.automation.errors import AutomationProjectNameConflictError
 
 
 def test_automation_project_repo_normalizes_legacy_optional_identifiers(
@@ -180,6 +186,170 @@ def test_automation_project_repo_skips_invalid_required_identifier_rows(
     assert [record.automation_project_id for record in due_records] == ["aut-valid"]
     with pytest.raises(KeyError):
         repository.get(invalid.automation_project_id)
+
+
+def test_automation_project_repo_async_methods_use_async_sqlite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = AutomationProjectRepository(tmp_path / "automation_async.db")
+    record = _build_project_record(
+        automation_project_id="aut-async",
+        name="async-project",
+    )
+
+    async def fail_call_sync_async(
+        function: object,
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        raise AssertionError("async repository methods must not call sync wrappers")
+
+    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
+
+    async def exercise() -> None:
+        created = await repository.create_async(record)
+        loaded = await repository.get_async(record.automation_project_id)
+        assert created.automation_project_id == record.automation_project_id
+        assert loaded.name == "async-project"
+
+        updated = loaded.model_copy(update={"display_name": "Async Project"})
+        _ = await repository.update_async(updated)
+        records = await repository.list_all_async()
+        due_records = await repository.list_due_async(datetime(2026, 1, 1, tzinfo=UTC))
+
+        assert [item.display_name for item in records] == ["Async Project"]
+        assert due_records == ()
+
+        await repository.delete_async(record.automation_project_id)
+        with pytest.raises(KeyError):
+            await repository.get_async(record.automation_project_id)
+
+    asyncio.run(exercise())
+
+
+def test_automation_project_repo_async_create_reports_name_conflict(
+    tmp_path: Path,
+) -> None:
+    repository = AutomationProjectRepository(tmp_path / "automation_async_conflict.db")
+    first = _build_project_record(
+        automation_project_id="aut-first",
+        name="duplicate-project",
+    )
+    duplicate = _build_project_record(
+        automation_project_id="aut-duplicate",
+        name="duplicate-project",
+    )
+
+    async def exercise() -> None:
+        _ = await repository.create_async(first)
+        with pytest.raises(
+            AutomationProjectNameConflictError,
+            match="Automation project name already exists: duplicate-project",
+        ):
+            await repository.create_async(duplicate)
+
+    asyncio.run(exercise())
+
+
+def test_automation_project_repo_async_update_reports_name_conflict(
+    tmp_path: Path,
+) -> None:
+    repository = AutomationProjectRepository(
+        tmp_path / "automation_async_update_conflict.db"
+    )
+    first = _build_project_record(
+        automation_project_id="aut-first",
+        name="first-project",
+    )
+    second = _build_project_record(
+        automation_project_id="aut-second",
+        name="second-project",
+    )
+
+    async def exercise() -> None:
+        _ = await repository.create_async(first)
+        created_second = await repository.create_async(second)
+        with pytest.raises(
+            AutomationProjectNameConflictError,
+            match="Automation project name already exists: first-project",
+        ):
+            await repository.update_async(
+                created_second.model_copy(update={"name": "first-project"})
+            )
+
+    asyncio.run(exercise())
+
+
+def test_automation_project_repo_async_get_skips_invalid_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "automation_async_invalid_row.db"
+    repository = AutomationProjectRepository(db_path)
+    record = _build_project_record(
+        automation_project_id="aut-invalid",
+        name="invalid-project",
+    )
+    _ = repository.create(record)
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        UPDATE automation_projects
+        SET workspace_id=?
+        WHERE automation_project_id=?
+        """,
+        ("None", record.automation_project_id),
+    )
+    connection.commit()
+    connection.close()
+
+    async def exercise() -> None:
+        with pytest.raises(KeyError):
+            await repository.get_async(record.automation_project_id)
+
+    asyncio.run(exercise())
+
+
+def test_automation_event_repo_async_create_uses_async_sqlite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = AutomationEventRepository(tmp_path / "automation_event_async.db")
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    record = AutomationExecutionEventRecord(
+        event_id="aevt_async",
+        automation_project_id="aut-async",
+        reason="manual",
+        payload={"automation_project_id": "aut-async"},
+        metadata={"reason": "manual"},
+        occurred_at=now,
+        created_at=now,
+    )
+
+    async def fail_call_sync_async(
+        function: object,
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        raise AssertionError("async repository methods must not call sync wrappers")
+
+    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
+
+    async def exercise() -> None:
+        created = await repository.create_event_async(record)
+        assert created.event_id == "aevt_async"
+
+    asyncio.run(exercise())
+
+    connection = sqlite3.connect(tmp_path / "automation_event_async.db")
+    row = connection.execute(
+        "SELECT event_id FROM automation_execution_events WHERE event_id=?",
+        ("aevt_async",),
+    ).fetchone()
+    connection.close()
+    assert row == ("aevt_async",)
 
 
 def _build_project_record(

@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.automation.errors import AutomationProjectNameConflictError
@@ -21,7 +22,11 @@ from relay_teams.automation.automation_models import (
     validate_automation_delivery_binding,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -123,7 +128,34 @@ class AutomationProjectRepository(SharedSqliteRepository):
     async def create_async(
         self, record: AutomationProjectRecord
     ) -> AutomationProjectRecord:
-        return await self._call_sync_async(self.create, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO automation_projects(
+                    automation_project_id, name, display_name, status, workspace_id, prompt,
+                    schedule_mode, cron_expression, run_at, timezone,
+                    run_config_json, delivery_binding_json, delivery_events_json,
+                    trigger_id, last_session_id, last_run_started_at,
+                    last_error, next_run_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._to_row(record),
+            )
+            await cursor.close()
+
+        try:
+            await self._run_async_write(
+                operation_name="create_async",
+                operation=operation,
+            )
+        except sqlite3.IntegrityError as exc:
+            if "automation_projects.name" in str(exc).lower():
+                raise AutomationProjectNameConflictError(
+                    f"Automation project name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def update(self, record: AutomationProjectRecord) -> AutomationProjectRecord:
         try:
@@ -186,7 +218,66 @@ class AutomationProjectRepository(SharedSqliteRepository):
     async def update_async(
         self, record: AutomationProjectRecord
     ) -> AutomationProjectRecord:
-        return await self._call_sync_async(self.update, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_projects
+                SET name=?,
+                    display_name=?,
+                    status=?,
+                    workspace_id=?,
+                    prompt=?,
+                    schedule_mode=?,
+                    cron_expression=?,
+                    run_at=?,
+                    timezone=?,
+                    run_config_json=?,
+                    delivery_binding_json=?,
+                    delivery_events_json=?,
+                    trigger_id=?,
+                    last_session_id=?,
+                    last_run_started_at=?,
+                    last_error=?,
+                    next_run_at=?,
+                    updated_at=?
+                WHERE automation_project_id=?
+                """,
+                (
+                    record.name,
+                    record.display_name,
+                    record.status.value,
+                    record.workspace_id,
+                    record.prompt,
+                    record.schedule_mode.value,
+                    record.cron_expression,
+                    _to_iso(record.run_at),
+                    record.timezone,
+                    json.dumps(record.run_config.model_dump(mode="json")),
+                    _binding_to_json(record.delivery_binding),
+                    _events_to_json(record.delivery_events),
+                    record.trigger_id,
+                    record.last_session_id,
+                    _to_iso(record.last_run_started_at),
+                    record.last_error,
+                    _to_iso(record.next_run_at),
+                    record.updated_at.isoformat(),
+                    record.automation_project_id,
+                ),
+            )
+            await cursor.close()
+
+        try:
+            await self._run_async_write(
+                operation_name="update_async",
+                operation=operation,
+            )
+        except sqlite3.IntegrityError as exc:
+            if "automation_projects.name" in str(exc).lower():
+                raise AutomationProjectNameConflictError(
+                    f"Automation project name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def get(self, automation_project_id: str) -> AutomationProjectRecord:
         row = self._run_read(
@@ -209,7 +300,25 @@ class AutomationProjectRepository(SharedSqliteRepository):
             ) from exc
 
     async def get_async(self, automation_project_id: str) -> AutomationProjectRecord:
-        return await self._call_sync_async(self.get, automation_project_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT * FROM automation_projects
+                WHERE automation_project_id=?
+                """,
+                (automation_project_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown automation_project_id: {automation_project_id}")
+        try:
+            return self._to_record(row)
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            _log_invalid_automation_row(row=row, error=exc)
+            raise KeyError(
+                f"Unknown automation_project_id: {automation_project_id}"
+            ) from exc
 
     def list_all(self) -> Tuple[AutomationProjectRecord, ...]:
         rows = self._run_read(
@@ -225,7 +334,18 @@ class AutomationProjectRepository(SharedSqliteRepository):
         )
 
     async def list_all_async(self) -> Tuple[AutomationProjectRecord, ...]:
-        return await self._call_sync_async(self.list_all)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM automation_projects
+                ORDER BY created_at DESC
+                """,
+            )
+        )
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def list_due(self, now: datetime) -> Tuple[AutomationProjectRecord, ...]:
         rows = self._run_read(
@@ -248,7 +368,23 @@ class AutomationProjectRepository(SharedSqliteRepository):
     async def list_due_async(
         self, now: datetime
     ) -> Tuple[AutomationProjectRecord, ...]:
-        return await self._call_sync_async(self.list_due, now)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM automation_projects
+                WHERE status=? AND next_run_at IS NOT NULL AND next_run_at <= ?
+                ORDER BY next_run_at ASC
+                """,
+                (
+                    AutomationProjectStatus.ENABLED.value,
+                    now.isoformat(),
+                ),
+            )
+        )
+        return tuple(
+            record for row in rows if (record := self._record_or_none(row)) is not None
+        )
 
     def delete(self, automation_project_id: str) -> None:
         self._run_write(
@@ -263,7 +399,20 @@ class AutomationProjectRepository(SharedSqliteRepository):
         )
 
     async def delete_async(self, automation_project_id: str) -> None:
-        return await self._call_sync_async(self.delete, automation_project_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                DELETE FROM automation_projects
+                WHERE automation_project_id=?
+                """,
+                (automation_project_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_async",
+            operation=operation,
+        )
 
     def _to_row(self, record: AutomationProjectRecord) -> Tuple[object, ...]:
         return (

@@ -222,20 +222,30 @@ class SharedSqliteRepository:
         )
 
     async def close_async(self) -> None:
+        _LIVE_REPOSITORIES.discard(self)
         current_loop = asyncio.get_running_loop()
         with self._async_conn_guard:
             connections = tuple(self._async_conns.items())
             self._async_conns = WeakKeyDictionary()
             self._async_locks = WeakKeyDictionary()
+        close_tasks: list[asyncio.Future[None]] = []
         for loop, conn in connections:
             if loop is current_loop:
-                await conn.close()
+                close_tasks.append(asyncio.create_task(conn.close()))
             elif loop.is_running():
-                await asyncio.wrap_future(
-                    asyncio.run_coroutine_threadsafe(conn.close(), loop)
+                close_tasks.append(
+                    asyncio.wrap_future(
+                        asyncio.run_coroutine_threadsafe(conn.close(), loop)
+                    )
                 )
             else:
-                await conn.close()
+                close_tasks.append(asyncio.create_task(conn.close()))
+        if not close_tasks:
+            return
+        results = await asyncio.gather(*close_tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
 
     async def get_async_connection(self) -> aiosqlite.Connection:
         return await self._get_async_conn()
@@ -307,5 +317,14 @@ _LIVE_REPOSITORIES: WeakSet[SharedSqliteRepository] = WeakSet()
 
 
 async def close_live_sqlite_repositories_async() -> None:
-    for repository in tuple(_LIVE_REPOSITORIES):
-        await repository.close_async()
+    repositories = tuple(_LIVE_REPOSITORIES)
+    _LIVE_REPOSITORIES.clear()
+    if not repositories:
+        return
+    results = await asyncio.gather(
+        *(repository.close_async() for repository in repositories),
+        return_exceptions=True,
+    )
+    for result in results:
+        if isinstance(result, Exception):
+            raise result

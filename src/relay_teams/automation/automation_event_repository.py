@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue
 
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
@@ -98,7 +99,37 @@ class AutomationEventRepository(SharedSqliteRepository):
     async def create_event_async(
         self, record: AutomationExecutionEventRecord
     ) -> AutomationExecutionEventRecord:
-        return await self._call_sync_async(self.create_event, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO automation_execution_events(
+                    event_id,
+                    automation_project_id,
+                    reason,
+                    payload_json,
+                    metadata_json,
+                    occurred_at,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.event_id,
+                    record.automation_project_id,
+                    record.reason,
+                    json.dumps(record.payload),
+                    json.dumps(record.metadata),
+                    record.occurred_at.isoformat(),
+                    record.created_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_event_async",
+            operation=operation,
+        )
+        return record
 
 
 __all__ = ["AutomationEventRepository", "AutomationExecutionEventRecord"]

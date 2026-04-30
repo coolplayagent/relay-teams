@@ -7,9 +7,9 @@ from datetime import datetime, timedelta
 import logging
 import os
 import platform
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
-import shutil
 from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -201,11 +201,7 @@ def build_environment_info_prompt(*, working_directory: Path | None = None) -> s
         else os.getcwd()
     )
 
-    from relay_teams.tools.workspace_tools.shell_executor import describe_runtime_shell
-
-    runtime_shell = describe_runtime_shell()
-    shell_info = runtime_shell.shell_info
-    shell_path = runtime_shell.shell_path
+    shell_info, shell_path = _describe_prompt_runtime_shell()
     current_date, runtime_timezone = _get_runtime_date_context()
 
     lines = [
@@ -531,13 +527,23 @@ def _build_python_package_environment_lines() -> list[str]:
 @lru_cache(maxsize=None)
 def _resolve_package_tool_path(command_names: tuple[str, ...]) -> Path | None:
     for command_name in command_names:
-        resolved = shutil.which(command_name)
-        if not resolved:
-            continue
-        resolved_path = Path(resolved)
-        if resolved_path.is_file():
-            return resolved_path
+        resolved_path = shutil.which(command_name)
+        if resolved_path:
+            return Path(resolved_path)
     return None
+
+
+def _describe_prompt_runtime_shell() -> tuple[str, str]:
+    system = platform.system()
+    if system == "Windows":
+        shell_path = os.environ.get("COMSPEC")
+        if shell_path:
+            return "Windows shell", shell_path
+        return "Windows shell", "Unknown"
+    shell_path = os.environ.get("SHELL")
+    if shell_path:
+        return "POSIX shell", shell_path
+    return "Unknown", "Unknown"
 
 
 def _format_package_tool_status(tool_path: Path | None) -> str:
@@ -550,42 +556,36 @@ def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
     try:
         from relay_teams.env.github_config_service import GitHubConfigService
         from relay_teams.paths import get_app_config_dir
-        from relay_teams.net.github_cli import resolve_system_gh_path
     except Exception:
         return False, None
 
     try:
-        config = GitHubConfigService(
+        token_configured = GitHubConfigService(
             config_dir=get_app_config_dir()
-        ).get_github_config()
+        ).has_configured_token_reference()
     except Exception:
         return False, None
-    if config.token is None:
+    if not token_configured:
         return False, None
-    try:
-        system_gh_path = resolve_system_gh_path()
-    except Exception:
-        system_gh_path = None
-    return True, system_gh_path
+    return True, None
 
 
 def _get_clawhub_environment_status() -> tuple[bool, Path | None]:
     try:
         from relay_teams.env.clawhub_config_service import ClawHubConfigService
-        from relay_teams.env.clawhub_cli import resolve_existing_clawhub_path
         from relay_teams.paths import get_app_config_dir
     except Exception:
         return False, None
 
     try:
-        config = ClawHubConfigService(
+        token_configured = ClawHubConfigService(
             config_dir=get_app_config_dir()
-        ).get_clawhub_config()
+        ).has_configured_token_reference()
     except Exception:
         return False, None
-    if config.token is None:
+    if not token_configured:
         return False, None
-    return True, resolve_existing_clawhub_path()
+    return True, None
 
 
 async def build_runtime_system_prompt(

@@ -13,7 +13,7 @@ _GIT_TIMEOUT_SECONDS = 5.0
 
 
 def get_user_home_dir() -> Path:
-    return Path.home().resolve()
+    return Path.home()
 
 
 def get_app_config_dir(user_home_dir: Path | None = None) -> Path:
@@ -22,9 +22,7 @@ def get_app_config_dir(user_home_dir: Path | None = None) -> Path:
         return env_config_dir
 
     resolved_home_dir = (
-        get_user_home_dir()
-        if user_home_dir is None
-        else user_home_dir.expanduser().resolve()
+        get_user_home_dir() if user_home_dir is None else user_home_dir.expanduser()
     )
     return resolved_home_dir / _APP_CONFIG_DIR_NAME
 
@@ -46,11 +44,7 @@ def get_app_config_file_path(
     *,
     config_dir: Path | None = None,
 ) -> Path:
-    base_dir = (
-        get_app_config_dir()
-        if config_dir is None
-        else config_dir.expanduser().resolve()
-    )
+    base_dir = get_app_config_dir() if config_dir is None else config_dir.expanduser()
     return base_dir / Path(file_name)
 
 
@@ -118,7 +112,7 @@ def _resolve_optional_path_from_env(env_key: str) -> Path | None:
     if raw_value is None:
         return None
 
-    return Path(raw_value).expanduser().resolve()
+    return Path(raw_value).expanduser()
 
 
 def _get_non_empty_env_value(env_key: str) -> str | None:

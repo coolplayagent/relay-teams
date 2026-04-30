@@ -321,6 +321,9 @@ class WorkspaceService:
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self._repository.get(workspace_id)
 
+    async def get_workspace_async(self, workspace_id: str) -> WorkspaceRecord:
+        return await self._repository.get_async(workspace_id)
+
     def open_workspace_root(
         self,
         workspace_id: str,
@@ -1217,6 +1220,9 @@ class WorkspaceService:
 
     def require_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self.get_workspace(workspace_id)
+
+    async def require_workspace_async(self, workspace_id: str) -> WorkspaceRecord:
+        return await self.get_workspace_async(workspace_id)
 
     def _validate_root(self, root_path: Path) -> Path:
         resolved_root = root_path.resolve()

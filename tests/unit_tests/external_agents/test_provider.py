@@ -1404,7 +1404,7 @@ async def test_prompt_waits_for_tool_approval_timeout_before_failing_on_inactivi
         prompt_text="return the image",
         workdir=tmp_path,
         config_dir=tmp_path / "config",
-        tool_approval_policy=ToolApprovalPolicy(timeout_seconds=0.05),
+        tool_approval_policy=ToolApprovalPolicy(timeout_seconds=0.5),
     )
     transport = _SequencedPromptTransport()
     request = _build_request()
@@ -1440,7 +1440,7 @@ async def test_prompt_waits_for_tool_approval_timeout_before_failing_on_inactivi
 
     first_attempt = await transport.prompt_started.get()
     assert first_attempt == 1
-    await asyncio.sleep(0.02)
+    await asyncio.sleep(0.05)
     await manager._handle_transport_message(
         key=key,
         method="session/update",

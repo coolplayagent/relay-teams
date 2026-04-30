@@ -243,13 +243,128 @@ class SessionService:
         normal_root_role_id: str | None = None,
         orchestration_preset_id: str | None = None,
     ) -> SessionRecord:
-        if not session_id:
-            session_id = f"session-{uuid.uuid4().hex[:8]}"
-        if self._workspace_service is not None and not (
+        resolved_session_id = self._resolve_session_create_id(session_id)
+        self._require_workspace_for_session_create(
+            project_kind=project_kind,
+            workspace_id=workspace_id,
+        )
+        (
+            resolved_session_mode,
+            resolved_normal_root_role_id,
+            resolved_orchestration_preset_id,
+        ) = self._resolve_session_create_topology(
+            session_id=resolved_session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            project_kind=project_kind,
+            project_id=project_id,
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+        self._invalidate_list_sessions_cache()
+        return self._session_repo.create(
+            session_id=resolved_session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            project_kind=project_kind,
+            project_id=project_id,
+            session_mode=resolved_session_mode,
+            normal_root_role_id=resolved_normal_root_role_id,
+            orchestration_preset_id=resolved_orchestration_preset_id,
+        )
+
+    async def create_session_async(
+        self,
+        *,
+        session_id: str | None = None,
+        workspace_id: str,
+        metadata: dict[str, str] | None = None,
+        project_kind: ProjectKind = ProjectKind.WORKSPACE,
+        project_id: str | None = None,
+        session_mode: SessionMode | None = None,
+        normal_root_role_id: str | None = None,
+        orchestration_preset_id: str | None = None,
+    ) -> SessionRecord:
+        resolved_session_id = self._resolve_session_create_id(session_id)
+        await self._require_workspace_for_session_create_async(
+            project_kind=project_kind,
+            workspace_id=workspace_id,
+        )
+        (
+            resolved_session_mode,
+            resolved_normal_root_role_id,
+            resolved_orchestration_preset_id,
+        ) = self._resolve_session_create_topology(
+            session_id=resolved_session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            project_kind=project_kind,
+            project_id=project_id,
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+        self._invalidate_list_sessions_cache()
+        return await self._session_repo.create_async(
+            session_id=resolved_session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+            project_kind=project_kind,
+            project_id=project_id,
+            session_mode=resolved_session_mode,
+            normal_root_role_id=resolved_normal_root_role_id,
+            orchestration_preset_id=resolved_orchestration_preset_id,
+        )
+
+    @staticmethod
+    def _resolve_session_create_id(session_id: str | None) -> str:
+        if session_id:
+            return session_id
+        return f"session-{uuid.uuid4().hex[:8]}"
+
+    def _require_workspace_for_session_create(
+        self,
+        *,
+        project_kind: ProjectKind,
+        workspace_id: str,
+    ) -> None:
+        if self._workspace_service is None:
+            return
+        if (
             project_kind == ProjectKind.AUTOMATION
             and workspace_id == AUTOMATION_INTERNAL_WORKSPACE_ID
         ):
-            self._workspace_service.require_workspace(workspace_id)
+            return
+        self._workspace_service.require_workspace(workspace_id)
+
+    async def _require_workspace_for_session_create_async(
+        self,
+        *,
+        project_kind: ProjectKind,
+        workspace_id: str,
+    ) -> None:
+        if self._workspace_service is None:
+            return
+        if (
+            project_kind == ProjectKind.AUTOMATION
+            and workspace_id == AUTOMATION_INTERNAL_WORKSPACE_ID
+        ):
+            return
+        await self._workspace_service.require_workspace_async(workspace_id)
+
+    def _resolve_session_create_topology(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        metadata: dict[str, str] | None,
+        project_kind: ProjectKind,
+        project_id: str | None,
+        session_mode: SessionMode | None,
+        normal_root_role_id: str | None,
+        orchestration_preset_id: str | None,
+    ) -> tuple[SessionMode, str | None, str | None]:
         resolved_session_mode = session_mode or SessionMode.NORMAL
         resolved_normal_root_role_id = normal_root_role_id
         resolved_orchestration_preset_id = orchestration_preset_id
@@ -284,16 +399,10 @@ class SessionService:
                 orchestration_preset_id=resolved_orchestration_preset_id,
             )
             _ = self._orchestration_settings_service.resolve_run_topology(probe)
-        self._invalidate_list_sessions_cache()
-        return self._session_repo.create(
-            session_id=session_id,
-            workspace_id=workspace_id,
-            metadata=metadata,
-            project_kind=project_kind,
-            project_id=project_id,
-            session_mode=resolved_session_mode,
-            normal_root_role_id=resolved_normal_root_role_id,
-            orchestration_preset_id=resolved_orchestration_preset_id,
+        return (
+            resolved_session_mode,
+            resolved_normal_root_role_id,
+            resolved_orchestration_preset_id,
         )
 
     def update_session(self, session_id: str, patch: SessionMetadataPatch) -> None:

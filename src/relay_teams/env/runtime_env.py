@@ -28,12 +28,12 @@ def get_project_env_file_path(project_root: Path | None = None) -> Path:
 
 
 def load_env_file(env_file_path: Path) -> dict[str, str]:
-    resolved_path = env_file_path.expanduser().resolve()
-    if not resolved_path.exists() or not resolved_path.is_file():
+    expanded_path = env_file_path.expanduser()
+    if not expanded_path.exists() or not expanded_path.is_file():
         return {}
 
     values: dict[str, str] = {}
-    for raw_line in resolved_path.read_text(encoding="utf-8").splitlines():
+    for raw_line in expanded_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -71,13 +71,11 @@ def load_merged_env_vars(
 
 
 def sync_app_env_to_process_env(env_file_path: Path | None = None) -> dict[str, str]:
-    resolved_env_file = (
-        (get_app_env_file_path() if env_file_path is None else env_file_path)
-        .expanduser()
-        .resolve()
-    )
-    app_env = load_env_file(resolved_env_file)
-    app_env.update(load_secret_env_vars(resolved_env_file.parent))
+    expanded_env_file = (
+        get_app_env_file_path() if env_file_path is None else env_file_path
+    ).expanduser()
+    app_env = load_env_file(expanded_env_file)
+    app_env.update(load_secret_env_vars(expanded_env_file.parent))
     managed_keys = _SYNCED_APP_ENV_KEYS | set(app_env.keys())
     for key in managed_keys:
         if key in app_env:

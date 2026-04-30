@@ -40,6 +40,12 @@ class ClawHubConfigService:
                 self._write_env_file(token=None)
         return ClawHubConfig(token=token)
 
+    def has_configured_token_reference(self) -> bool:
+        env_values = load_env_file(self._config_dir / ".env")
+        if resolve_clawhub_token_from_env(env_values) is not None:
+            return True
+        return self._secret_store.has_token_reference(self._config_dir)
+
     def save_clawhub_config(self, config: ClawHubConfig) -> None:
         normalized_token = normalize_clawhub_token(config.token)
         self._write_env_file(token=None)

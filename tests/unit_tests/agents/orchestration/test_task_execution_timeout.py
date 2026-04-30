@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import gc
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskHandoff, TaskLifecyclePolicy
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence import close_live_sqlite_repositories_async
 from relay_teams.sessions.runs.recoverable_pause import RecoverableRunPauseError
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -34,13 +33,7 @@ from tests.unit_tests.agents.orchestration.test_task_execution_service import (
 @pytest_asyncio.fixture(autouse=True)
 async def _close_async_sqlite_repositories_after_test() -> AsyncIterator[None]:
     yield
-    repositories = tuple(
-        repository
-        for repository in gc.get_objects()
-        if isinstance(repository, SharedSqliteRepository)
-    )
-    for repository in repositories:
-        await repository.close_async()
+    await close_live_sqlite_repositories_async()
 
 
 class _SlowProvider:

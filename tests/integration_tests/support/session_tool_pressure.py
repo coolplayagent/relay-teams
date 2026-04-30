@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    Future,
+    ThreadPoolExecutor,
+    TimeoutError as FutureTimeoutError,
+    as_completed,
+)
 from threading import Event
 import json
 import time
@@ -43,6 +48,10 @@ class PressureScenarioResult(BaseModel):
     probes: tuple[BackendProbeResult, ...] = Field(default_factory=tuple)
 
 
+_BACKEND_PROBE_TIMEOUT_SECONDS = 5.0
+_BACKEND_PROBE_MAX_DURATION_MS = 5_000
+
+
 def run_pressure_scenario(
     *,
     integration_env: IntegrationEnvironment,
@@ -53,7 +62,10 @@ def run_pressure_scenario(
     stop_probes = Event()
     probe_results: list[BackendProbeResult] = []
     started_at = time.monotonic()
-    with ThreadPoolExecutor(max_workers=len(session_ids) + 2) as executor:
+    executor = ThreadPoolExecutor(max_workers=len(session_ids) + 2)
+    probe_future: Future[None] | None = None
+    futures: list[Future[RunPressureResult]] = []
+    try:
         probe_future = executor.submit(
             _probe_backend_until_stopped,
             integration_env.api_base_url,
@@ -79,9 +91,17 @@ def run_pressure_scenario(
             )
             for future in as_completed(futures, timeout=remaining_timeout):
                 run_results.append(future.result())
+        except FutureTimeoutError as exc:
+            _cancel_pending_futures(futures)
+            raise AssertionError(
+                f"Timed out waiting for pressure runs: "
+                f"{len(run_results)}/{len(session_ids)} completed"
+            ) from exc
         finally:
             stop_probes.set()
-            probe_future.result(timeout=10.0)
+            _wait_for_probe_shutdown(probe_future)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     if len(run_results) != len(session_ids):
         raise AssertionError(
@@ -91,6 +111,24 @@ def run_pressure_scenario(
         runs=tuple(run_results),
         probes=tuple(probe_results),
     )
+
+
+def _cancel_pending_futures(futures: list[Future[RunPressureResult]]) -> None:
+    for future in futures:
+        if not future.done():
+            future.cancel()
+
+
+def _wait_for_probe_shutdown(probe_future: Future[None] | None) -> None:
+    if probe_future is None:
+        return
+    try:
+        probe_future.result(timeout=10.0)
+    except FutureTimeoutError as exc:
+        probe_future.cancel()
+        raise AssertionError(
+            "Backend probe thread did not stop within timeout"
+        ) from exc
 
 
 def assert_backend_probes_stayed_responsive(
@@ -104,15 +142,15 @@ def assert_backend_probes_stayed_responsive(
         or probe.status_code >= 500
         or probe.status_code == 429
     ]
-    assert failures == []
+    assert failures == [], [probe.model_dump() for probe in failures[:5]]
     live_durations = sorted(
         probe.duration_ms for probe in probes if probe.path == "/api/system/live"
     )
     assert live_durations
-    assert live_durations[-1] < 1500
+    assert live_durations[-1] < _BACKEND_PROBE_MAX_DURATION_MS
     durations = sorted(probe.duration_ms for probe in probes)
     p95_index = max(0, int(len(durations) * 0.95) - 1)
-    assert durations[p95_index] < 1500
+    assert durations[p95_index] < _BACKEND_PROBE_MAX_DURATION_MS
 
 
 def _run_single_pressure_session(
@@ -155,7 +193,11 @@ def _probe_backend_until_stopped(
 ) -> None:
     paths = _probe_paths(session_ids)
     index = 0
-    with httpx.Client(base_url=base_url, timeout=1.5, trust_env=False) as client:
+    with httpx.Client(
+        base_url=base_url,
+        timeout=_BACKEND_PROBE_TIMEOUT_SECONDS,
+        trust_env=False,
+    ) as client:
         while not stop_event.is_set():
             path = paths[index % len(paths)]
             index += 1
