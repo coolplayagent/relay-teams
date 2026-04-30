@@ -317,7 +317,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     assert ">MCP</span>" in tabs_html
     assert ">Commands</span>" in tabs_html
     assert ">Hooks</span>" in tabs_html
-    assert ">Agents</span>" in tabs_html
+    assert ">Agent Runtime</span>" in tabs_html
     assert ">Web</span>" in tabs_html
     assert ">Remote Workspace</span>" in tabs_html
     assert ">Environment</span>" in tabs_html
@@ -884,8 +884,8 @@ export function t(key) {
         'settings.panel.commands.description': 'Review slash commands discovered for the active workspace.',
         'settings.panel.hooks.title': 'Hooks',
         'settings.panel.hooks.description': 'View currently loaded hooks and provide custom editing.',
-        'settings.panel.agents.title': 'Agents',
-        'settings.panel.agents.description': 'Configure ACP-compatible external agents and make them available for role bindings.',
+        'settings.panel.agents.title': 'Agent Runtime',
+        'settings.panel.agents.description': 'Configure ACP, A2A, and CLI agent runtimes for role bindings.',
         'settings.panel.roles.title': 'Roles',
         'settings.panel.roles.description': 'Edit role metadata, allowed tools, memory profile, and prompt text.',
         'settings.panel.orchestration.title': 'Orchestration',

@@ -1106,6 +1106,29 @@ class SessionService:
         )
         self._invalidate_list_sessions_cache()
 
+    async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
+        _ = await self._session_repo.get_async(session_id)
+        runtimes = await self._run_runtime_repo.list_by_session_async(session_id)
+        background_tasks = (
+            await self._background_task_repository.list_by_session_async(session_id)
+            if self._background_task_repository is not None
+            else ()
+        )
+        latest_terminal = self._latest_terminal_run_from_preloaded(
+            runtimes,
+            self._subagent_run_ids_from_records(
+                runtimes=runtimes,
+                background_tasks=background_tasks,
+            ),
+        )
+        if latest_terminal is None:
+            return
+        await self._session_repo.mark_terminal_run_viewed_async(
+            session_id,
+            latest_terminal.run_id,
+        )
+        self._invalidate_list_sessions_cache()
+
     def list_sessions_by_workspace(
         self, workspace_id: str
     ) -> tuple[SessionRecord, ...]:

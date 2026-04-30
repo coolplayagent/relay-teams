@@ -160,7 +160,7 @@ def create_provider_factory(
         if role.bound_agent_id:
             if external_agent_session_manager is None:
                 return MisconfiguredProvider(
-                    "External ACP agent runtime is not available. "
+                    "External agent runtime is not available. "
                     "Reload the server configuration and try again."
                 )
             return ExternalAcpProvider(

@@ -42,39 +42,39 @@ class AsyncAgentTeamsClient:
     async def get_proxy_config(self) -> dict[str, JsonValue]:
         return await self._request_json("GET", "/api/system/configs/proxy")
 
-    async def list_external_agents(self) -> list[dict[str, JsonValue]]:
-        data = await self._request_json("GET", "/api/system/configs/agents")
+    async def list_agent_runtimes(self) -> list[dict[str, JsonValue]]:
+        data = await self._request_json("GET", "/api/system/configs/agent-runtimes")
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         return []
 
-    async def get_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+    async def get_agent_runtime(self, agent_id: str) -> dict[str, JsonValue]:
         return await self._request_json(
             "GET",
-            f"/api/system/configs/agents/{quote(agent_id, safe='')}",
+            f"/api/system/configs/agent-runtimes/{quote(agent_id, safe='')}",
         )
 
-    async def save_external_agent(
+    async def save_agent_runtime(
         self,
         agent_id: str,
         payload: dict[str, JsonValue],
     ) -> dict[str, JsonValue]:
         return await self._request_json(
             "PUT",
-            f"/api/system/configs/agents/{quote(agent_id, safe='')}",
+            f"/api/system/configs/agent-runtimes/{quote(agent_id, safe='')}",
             payload,
         )
 
-    async def delete_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+    async def delete_agent_runtime(self, agent_id: str) -> dict[str, JsonValue]:
         return await self._request_json(
             "DELETE",
-            f"/api/system/configs/agents/{quote(agent_id, safe='')}",
+            f"/api/system/configs/agent-runtimes/{quote(agent_id, safe='')}",
         )
 
-    async def test_external_agent(self, agent_id: str) -> dict[str, JsonValue]:
+    async def test_agent_runtime(self, agent_id: str) -> dict[str, JsonValue]:
         return await self._request_json(
             "POST",
-            f"/api/system/configs/agents/{quote(agent_id, safe='')}:test",
+            f"/api/system/configs/agent-runtimes/{quote(agent_id, safe='')}:test",
             {},
         )
 

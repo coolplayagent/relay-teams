@@ -4,8 +4,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from relay_teams.validation import RequiredIdentifierStr
 
@@ -14,6 +15,12 @@ class ExternalAgentTransportType(str, Enum):
     STDIO = "stdio"
     STREAMABLE_HTTP = "streamable_http"
     CUSTOM = "custom"
+
+
+class ExternalAgentProtocol(str, Enum):
+    ACP = "acp"
+    A2A = "a2a"
+    CLI = "cli"
 
 
 class ExternalAgentSecretBinding(BaseModel):
@@ -68,7 +75,22 @@ class ExternalAgentConfig(BaseModel):
     agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = ""
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportConfig = Field(discriminator="transport")
+
+    @model_validator(mode="after")
+    def _validate_protocol_transport(self) -> Self:
+        if self.protocol == ExternalAgentProtocol.A2A and not isinstance(
+            self.transport,
+            StreamableHttpTransportConfig,
+        ):
+            raise ValueError("A2A agent runtimes require streamable_http transport")
+        if self.protocol == ExternalAgentProtocol.CLI and not isinstance(
+            self.transport,
+            StdioTransportConfig,
+        ):
+            raise ValueError("CLI agent runtimes require stdio transport")
+        return self
 
 
 class ExternalAgentCollection(BaseModel):
@@ -83,6 +105,7 @@ class ExternalAgentSummary(BaseModel):
     agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = ""
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportType
 
 
@@ -91,6 +114,7 @@ class ExternalAgentOption(BaseModel):
 
     agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportType
 
 
@@ -99,7 +123,9 @@ class ExternalAgentTestResult(BaseModel):
 
     ok: bool
     message: str = ""
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     protocol_version: int | None = None
+    protocol_version_text: str | None = None
     agent_name: str | None = None
     agent_version: str | None = None
 

@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import aiosqlite
+
 from relay_teams.automation.automation_models import (
     AutomationDeliveryBinding,
     AutomationCleanupStatus,
@@ -15,7 +17,11 @@ from relay_teams.automation.automation_models import (
     validate_automation_delivery_binding,
 )
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 
 
 class AutomationDeliveryRepository(SharedSqliteRepository):
@@ -170,7 +176,48 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def create_async(
         self, record: AutomationRunDeliveryRecord
     ) -> AutomationRunDeliveryRecord:
-        return await self._call_sync_async(self.create, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO automation_deliveries(
+                    automation_delivery_id,
+                    automation_project_id,
+                    automation_project_name,
+                    run_id,
+                    session_id,
+                    reason,
+                    binding_json,
+                    delivery_events_json,
+                    started_status,
+                    terminal_status,
+                    terminal_event,
+                    started_attempts,
+                    terminal_attempts,
+                    started_message,
+                    terminal_message,
+                    reply_to_message_id,
+                    started_message_id,
+                    terminal_message_id,
+                    started_sent_at,
+                    terminal_sent_at,
+                    started_cleanup_status,
+                    started_cleanup_attempts,
+                    started_cleaned_at,
+                    last_error,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._to_row(record),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_async",
+            operation=operation,
+        )
+        return await self.get_by_run_id_async(record.run_id)
 
     def update(
         self, record: AutomationRunDeliveryRecord
@@ -244,7 +291,71 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def update_async(
         self, record: AutomationRunDeliveryRecord
     ) -> AutomationRunDeliveryRecord:
-        return await self._call_sync_async(self.update, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_deliveries
+                SET automation_project_id=?,
+                    automation_project_name=?,
+                    session_id=?,
+                    reason=?,
+                    binding_json=?,
+                    delivery_events_json=?,
+                    started_status=?,
+                    terminal_status=?,
+                    terminal_event=?,
+                    started_attempts=?,
+                    terminal_attempts=?,
+                    started_message=?,
+                    terminal_message=?,
+                    reply_to_message_id=?,
+                    started_message_id=?,
+                    terminal_message_id=?,
+                    started_sent_at=?,
+                    terminal_sent_at=?,
+                    started_cleanup_status=?,
+                    started_cleanup_attempts=?,
+                    started_cleaned_at=?,
+                    last_error=?,
+                    updated_at=?
+                WHERE automation_delivery_id=?
+                """,
+                (
+                    record.automation_project_id,
+                    record.automation_project_name,
+                    record.session_id,
+                    record.reason,
+                    _binding_to_json(record.binding),
+                    _events_to_json(record.delivery_events),
+                    record.started_status.value,
+                    record.terminal_status.value,
+                    record.terminal_event.value
+                    if record.terminal_event is not None
+                    else None,
+                    record.started_attempts,
+                    record.terminal_attempts,
+                    record.started_message,
+                    record.terminal_message,
+                    record.reply_to_message_id,
+                    record.started_message_id,
+                    record.terminal_message_id,
+                    _to_iso(record.started_sent_at),
+                    _to_iso(record.terminal_sent_at),
+                    record.started_cleanup_status.value,
+                    record.started_cleanup_attempts,
+                    _to_iso(record.started_cleaned_at),
+                    record.last_error,
+                    record.updated_at.isoformat(),
+                    record.automation_delivery_id,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="update_async",
+            operation=operation,
+        )
+        return await self.get_by_run_id_async(record.run_id)
 
     def get_by_run_id(self, run_id: str) -> AutomationRunDeliveryRecord:
         row = self._conn.execute(
@@ -256,7 +367,16 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
         return self._to_record(row)
 
     async def get_by_run_id_async(self, run_id: str) -> AutomationRunDeliveryRecord:
-        return await self._call_sync_async(self.get_by_run_id, run_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM automation_deliveries WHERE run_id=?",
+                (run_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown automation delivery run_id: {run_id}")
+        return self._to_record(row)
 
     def list_pending_started(
         self,
@@ -297,9 +417,41 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def list_pending_started_async(
         self, *, limit: int = 20, stale_before: datetime | None = None
     ) -> tuple[AutomationRunDeliveryRecord, ...]:
-        return await self._call_sync_async(
-            self.list_pending_started, limit=limit, stale_before=stale_before
-        )
+        if stale_before is None:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_deliveries
+                    WHERE started_status=?
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (AutomationDeliveryStatus.PENDING.value, limit),
+                )
+            )
+        else:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_deliveries
+                    WHERE started_status=?
+                       OR (started_status=? AND updated_at<=?)
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (
+                        AutomationDeliveryStatus.PENDING.value,
+                        AutomationDeliveryStatus.SENDING.value,
+                        stale_before.isoformat(),
+                        limit,
+                    ),
+                )
+            )
+        return tuple(self._to_record(row) for row in rows)
 
     def list_pending_terminal(
         self,
@@ -340,9 +492,41 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def list_pending_terminal_async(
         self, *, limit: int = 20, stale_before: datetime | None = None
     ) -> tuple[AutomationRunDeliveryRecord, ...]:
-        return await self._call_sync_async(
-            self.list_pending_terminal, limit=limit, stale_before=stale_before
-        )
+        if stale_before is None:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_deliveries
+                    WHERE terminal_status=?
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (AutomationDeliveryStatus.PENDING.value, limit),
+                )
+            )
+        else:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_deliveries
+                    WHERE terminal_status=?
+                       OR (terminal_status=? AND updated_at<=?)
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (
+                        AutomationDeliveryStatus.PENDING.value,
+                        AutomationDeliveryStatus.SENDING.value,
+                        stale_before.isoformat(),
+                        limit,
+                    ),
+                )
+            )
+        return tuple(self._to_record(row) for row in rows)
 
     def claim_started(
         self,
@@ -394,10 +578,48 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def claim_started_async(
         self, *, automation_delivery_id: str, stale_before: datetime
     ) -> AutomationRunDeliveryRecord | None:
-        return await self._call_sync_async(
-            self.claim_started,
-            automation_delivery_id=automation_delivery_id,
-            stale_before=stale_before,
+        claimed_at = stale_before.isoformat()
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> AutomationRunDeliveryRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_deliveries
+                SET started_status=?,
+                    updated_at=?
+                WHERE automation_delivery_id=?
+                  AND (
+                    started_status=?
+                    OR (started_status=? AND updated_at<=?)
+                  )
+                """,
+                (
+                    AutomationDeliveryStatus.SENDING.value,
+                    updated_at,
+                    automation_delivery_id,
+                    AutomationDeliveryStatus.PENDING.value,
+                    AutomationDeliveryStatus.SENDING.value,
+                    claimed_at,
+                ),
+            )
+            updated = cursor.rowcount
+            await cursor.close()
+            if updated <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM automation_deliveries WHERE automation_delivery_id=?",
+                (automation_delivery_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_write(
+            operation_name="claim_started_async",
+            operation=operation,
         )
 
     def claim_terminal(
@@ -450,10 +672,48 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def claim_terminal_async(
         self, *, automation_delivery_id: str, stale_before: datetime
     ) -> AutomationRunDeliveryRecord | None:
-        return await self._call_sync_async(
-            self.claim_terminal,
-            automation_delivery_id=automation_delivery_id,
-            stale_before=stale_before,
+        claimed_at = stale_before.isoformat()
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> AutomationRunDeliveryRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_deliveries
+                SET terminal_status=?,
+                    updated_at=?
+                WHERE automation_delivery_id=?
+                  AND (
+                    terminal_status=?
+                    OR (terminal_status=? AND updated_at<=?)
+                  )
+                """,
+                (
+                    AutomationDeliveryStatus.SENDING.value,
+                    updated_at,
+                    automation_delivery_id,
+                    AutomationDeliveryStatus.PENDING.value,
+                    AutomationDeliveryStatus.SENDING.value,
+                    claimed_at,
+                ),
+            )
+            updated = cursor.rowcount
+            await cursor.close()
+            if updated <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM automation_deliveries WHERE automation_delivery_id=?",
+                (automation_delivery_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_write(
+            operation_name="claim_terminal_async",
+            operation=operation,
         )
 
     def list_pending_started_cleanup(
@@ -495,9 +755,41 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def list_pending_started_cleanup_async(
         self, *, limit: int = 20, stale_before: datetime | None = None
     ) -> tuple[AutomationRunDeliveryRecord, ...]:
-        return await self._call_sync_async(
-            self.list_pending_started_cleanup, limit=limit, stale_before=stale_before
-        )
+        if stale_before is None:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_deliveries
+                    WHERE started_cleanup_status=?
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (AutomationCleanupStatus.PENDING.value, limit),
+                )
+            )
+        else:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_deliveries
+                    WHERE started_cleanup_status=?
+                       OR (started_cleanup_status=? AND updated_at<=?)
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (
+                        AutomationCleanupStatus.PENDING.value,
+                        AutomationCleanupStatus.CLEANING.value,
+                        stale_before.isoformat(),
+                        limit,
+                    ),
+                )
+            )
+        return tuple(self._to_record(row) for row in rows)
 
     def claim_started_cleanup(
         self,
@@ -549,10 +841,48 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
     async def claim_started_cleanup_async(
         self, *, automation_delivery_id: str, stale_before: datetime
     ) -> AutomationRunDeliveryRecord | None:
-        return await self._call_sync_async(
-            self.claim_started_cleanup,
-            automation_delivery_id=automation_delivery_id,
-            stale_before=stale_before,
+        claimed_at = stale_before.isoformat()
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> AutomationRunDeliveryRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_deliveries
+                SET started_cleanup_status=?,
+                    updated_at=?
+                WHERE automation_delivery_id=?
+                  AND (
+                    started_cleanup_status=?
+                    OR (started_cleanup_status=? AND updated_at<=?)
+                  )
+                """,
+                (
+                    AutomationCleanupStatus.CLEANING.value,
+                    updated_at,
+                    automation_delivery_id,
+                    AutomationCleanupStatus.PENDING.value,
+                    AutomationCleanupStatus.CLEANING.value,
+                    claimed_at,
+                ),
+            )
+            updated = cursor.rowcount
+            await cursor.close()
+            if updated <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM automation_deliveries WHERE automation_delivery_id=?",
+                (automation_delivery_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_write(
+            operation_name="claim_started_cleanup_async",
+            operation=operation,
         )
 
     def has_project_records(self, automation_project_id: str) -> bool:
@@ -564,9 +894,14 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
         return row is not None
 
     async def has_project_records_async(self, automation_project_id: str) -> bool:
-        return await self._call_sync_async(
-            self.has_project_records, automation_project_id
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT 1 FROM automation_deliveries WHERE automation_project_id=? LIMIT 1",
+                (automation_project_id,),
+            )
         )
+        return row is not None
 
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -582,8 +917,16 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
         )
 
     async def delete_by_project_async(self, automation_project_id: str) -> None:
-        return await self._call_sync_async(
-            self.delete_by_project, automation_project_id
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM automation_deliveries WHERE automation_project_id=?",
+                (automation_project_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_project_async",
+            operation=operation,
         )
 
     def _to_row(self, record: AutomationRunDeliveryRecord) -> tuple[object, ...]:

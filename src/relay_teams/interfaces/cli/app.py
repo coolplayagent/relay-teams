@@ -15,7 +15,7 @@ import typer
 from relay_teams.commands.command_cli import build_commands_app
 from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from relay_teams.env.env_cli import env_app
-from relay_teams.external_agents.agent_cli import build_external_agents_app
+from relay_teams.external_agents.agent_cli import build_agent_runtimes_app
 from relay_teams.interfaces.cli.gateway_cli import build_gateway_app
 from relay_teams.interfaces.cli.approvals_cli import build_approvals_app
 from relay_teams.interfaces.cli.hooks_cli import build_hooks_app
@@ -254,7 +254,7 @@ roles_app = build_roles_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
-agents_app = build_external_agents_app(
+agent_runtimes_app = build_agent_runtimes_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
@@ -419,7 +419,7 @@ def _execute_prompt(
 
 app.add_typer(server_app, name="server")
 app.add_typer(roles_app, name="roles")
-app.add_typer(agents_app, name="agents")
+app.add_typer(agent_runtimes_app, name="agent-runtimes")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(questions_app, name="questions")
 app.add_typer(env_app, name="env")

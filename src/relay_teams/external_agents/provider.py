@@ -28,6 +28,8 @@ from relay_teams.external_agents.acp_client import (
     AcpTransportClient,
     build_acp_transport,
 )
+from relay_teams.external_agents.a2a_client import send_a2a_prompt
+from relay_teams.external_agents.cli_client import run_cli_agent_prompt
 from relay_teams.external_agents.config_service import ExternalAgentConfigService
 from relay_teams.external_agents.host_tool_bridge import (
     HOST_TOOL_SERVER_ID,
@@ -35,6 +37,7 @@ from relay_teams.external_agents.host_tool_bridge import (
 )
 from relay_teams.external_agents.models import (
     ExternalAgentConfig,
+    ExternalAgentProtocol,
     ExternalAgentSecretBinding,
     ExternalAgentSessionRecord,
     ExternalAgentSessionStatus,
@@ -247,24 +250,25 @@ class ExternalAcpSessionManager:
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
             agent = self._config_service.resolve_runtime_agent(agent_id)
+            if agent.protocol == ExternalAgentProtocol.A2A:
+                return await self._prompt_a2a(
+                    agent=agent,
+                    role=role,
+                    request=request,
+                )
+            if agent.protocol == ExternalAgentProtocol.CLI:
+                return await self._prompt_cli(
+                    agent=agent,
+                    role=role,
+                    request=request,
+                )
             handle = await self._ensure_conversation(
                 key=key,
                 agent=agent,
                 role=role,
                 request=request,
             )
-            prompt_text = _extract_latest_user_prompt(
-                self._message_repo.get_history_for_conversation_task(
-                    request.conversation_id,
-                    request.task_id,
-                )
-            )
-            if prompt_text is None:
-                prompt_text = str(request.user_prompt or "").strip()
-            if not prompt_text:
-                raise RuntimeError(
-                    "External ACP prompt could not resolve a user message for the task"
-                )
+            prompt_text = self._resolve_external_user_prompt(request)
             state = _ActivePromptState(request=request)
             handle.active_prompt = state
             handle.host_tool_bridge.bind_active_request(request)
@@ -348,6 +352,71 @@ class ExternalAcpSessionManager:
                     content=output,
                 )
             return output
+
+    async def _prompt_a2a(
+        self,
+        *,
+        agent: ExternalAgentConfig,
+        role: RoleDefinition,
+        request: LLMRequest,
+    ) -> str:
+        prompt_text = self._resolve_external_user_prompt(request)
+        workspace = self._resolve_workspace(request)
+        await self._publish_model_step_started(request)
+        try:
+            result = await send_a2a_prompt(
+                config=agent,
+                prompt=_compose_agent_runtime_prompt(
+                    protocol=ExternalAgentProtocol.A2A,
+                    role=role,
+                    request=request,
+                    workspace_path=workspace.resolve_workdir(),
+                    user_prompt=prompt_text,
+                ),
+                metadata=_build_external_runtime_metadata(
+                    protocol=ExternalAgentProtocol.A2A,
+                    request=request,
+                    workspace_path=workspace.resolve_workdir(),
+                ),
+                timeout_seconds=self._prompt_inactivity_timeout_seconds(),
+            )
+            output = result.text.strip()
+            if not output:
+                raise RuntimeError("External A2A prompt returned an empty response")
+            await self._publish_text_delta(request=request, text=output)
+            self._append_assistant_message(request=request, content=output)
+            return output
+        finally:
+            await self._publish_model_step_finished(request)
+
+    async def _prompt_cli(
+        self,
+        *,
+        agent: ExternalAgentConfig,
+        role: RoleDefinition,
+        request: LLMRequest,
+    ) -> str:
+        prompt_text = self._resolve_external_user_prompt(request)
+        workspace = self._resolve_workspace(request)
+        await self._publish_model_step_started(request)
+        try:
+            output = await run_cli_agent_prompt(
+                config=agent,
+                prompt=_compose_agent_runtime_prompt(
+                    protocol=ExternalAgentProtocol.CLI,
+                    role=role,
+                    request=request,
+                    workspace_path=workspace.resolve_workdir(),
+                    user_prompt=prompt_text,
+                ),
+                runtime_cwd=workspace.resolve_workdir(),
+                timeout_seconds=self._prompt_inactivity_timeout_seconds(),
+            )
+            await self._publish_text_delta(request=request, text=output)
+            self._append_assistant_message(request=request, content=output)
+            return output
+        finally:
+            await self._publish_model_step_finished(request)
 
     async def _prompt_until_output(
         self,
@@ -729,15 +798,12 @@ class ExternalAcpSessionManager:
             send_notification=handle.transport.send_notification,
         )
         workspace = self._resolve_workspace(request)
-        mcp_servers = cast(
-            JsonValue,
-            _build_mcp_servers_for_role(
-                role=role,
-                mcp_registry=self._get_mcp_registry(),
-                host_server=handle.host_tool_bridge.stdio_server_payload(
-                    config_dir=self._config_dir,
-                    request=request,
-                ),
+        mcp_servers = _build_mcp_servers_for_role(
+            role=role,
+            mcp_registry=self._get_mcp_registry(),
+            host_server=handle.host_tool_bridge.stdio_server_payload(
+                config_dir=self._config_dir,
+                request=request,
             ),
         )
         return {
@@ -1072,6 +1138,63 @@ class ExternalAcpSessionManager:
                 ),
             ),
         )
+
+    async def _publish_model_step_started(self, request: LLMRequest) -> None:
+        await publish_run_event_async(
+            self._run_event_hub,
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.MODEL_STEP_STARTED,
+                payload_json=json.dumps(
+                    {
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
+    async def _publish_model_step_finished(self, request: LLMRequest) -> None:
+        await publish_run_event_async(
+            self._run_event_hub,
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.MODEL_STEP_FINISHED,
+                payload_json=json.dumps(
+                    {
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
+    def _resolve_external_user_prompt(self, request: LLMRequest) -> str:
+        prompt_text = _extract_latest_user_prompt(
+            self._message_repo.get_history_for_conversation_task(
+                request.conversation_id,
+                request.task_id,
+            )
+        )
+        if prompt_text is None:
+            prompt_text = str(request.user_prompt or "").strip()
+        if not prompt_text:
+            raise RuntimeError(
+                "External agent prompt could not resolve a user message for the task"
+            )
+        return prompt_text
 
     def _append_assistant_message(
         self,
@@ -1497,8 +1620,8 @@ def _build_mcp_servers_for_role(
     role: RoleDefinition,
     mcp_registry: McpRegistry,
     host_server: dict[str, JsonValue] | None = None,
-) -> list[dict[str, JsonValue]]:
-    result: list[dict[str, JsonValue]] = []
+) -> list[JsonValue]:
+    result: list[JsonValue] = []
     resolved_server_names = mcp_registry.resolve_server_names(
         role.mcp_servers,
         strict=False,
@@ -1720,6 +1843,65 @@ def _compose_external_prompt(
         )
     sections.append(f"## User Prompt\n{user_prompt.strip()}")
     return "\n\n".join(section for section in sections if section.strip())
+
+
+def _compose_agent_runtime_prompt(
+    *,
+    protocol: ExternalAgentProtocol,
+    role: RoleDefinition,
+    request: LLMRequest,
+    workspace_path: Path,
+    user_prompt: str,
+) -> str:
+    return "\n\n".join(
+        (
+            f"## Role Prompt\n{request.system_prompt.strip()}",
+            "## Runtime Context\n"
+            f"Protocol: {protocol.value}\n"
+            f"Role: {role.role_id}\n"
+            f"Run: {request.run_id}\n"
+            f"Task: {request.task_id}\n"
+            f"Workspace: {workspace_path}",
+            "## A2A Handoff\n"
+            f"What:\n{user_prompt.strip()}\n\n"
+            "Why:\n"
+            "Complete the delegated Agent Teams runtime task while preserving the "
+            "role contract above.\n\n"
+            "Tradeoff:\n"
+            "Use the external agent runtime as the execution surface, but return a "
+            "concise result that Agent Teams can persist, review, and route.\n\n"
+            "Open Questions:\n"
+            "State blockers explicitly if the task cannot be completed.\n\n"
+            "Next Action:\n"
+            "Perform the task and return the result, changed files, and verification "
+            "evidence when applicable.",
+        )
+    )
+
+
+def _build_external_runtime_metadata(
+    *,
+    protocol: ExternalAgentProtocol,
+    request: LLMRequest,
+    workspace_path: Path,
+) -> dict[str, JsonValue]:
+    return {
+        "relay_teams": cast(
+            JsonValue,
+            {
+                "protocol": protocol.value,
+                "run_id": request.run_id,
+                "trace_id": request.trace_id,
+                "task_id": request.task_id,
+                "session_id": request.session_id,
+                "workspace_id": request.workspace_id,
+                "conversation_id": request.conversation_id,
+                "instance_id": request.instance_id,
+                "role_id": request.role_id,
+                "cwd": str(workspace_path),
+            },
+        )
+    }
 
 
 def _session_signature(payload: dict[str, JsonValue]) -> str:

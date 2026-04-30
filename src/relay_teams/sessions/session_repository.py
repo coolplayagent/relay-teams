@@ -6,6 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
@@ -366,11 +367,25 @@ class SessionRepository(SharedSqliteRepository):
     async def mark_terminal_run_viewed_async(
         self, session_id: str, run_id: str
     ) -> None:
-        return await self._call_sync_async(
-            self.mark_terminal_run_viewed,
-            session_id,
-            run_id,
+        async def operation(conn: aiosqlite.Connection) -> int:
+            cursor = await conn.execute(
+                """
+                UPDATE sessions
+                SET last_viewed_terminal_run_id=?
+                WHERE session_id=?
+                """,
+                (run_id, session_id),
+            )
+            affected_rows = cursor.rowcount
+            await cursor.close()
+            return affected_rows
+
+        updated_count = await self._run_async_write(
+            operation_name="mark_terminal_run_viewed_async",
+            operation=operation,
         )
+        if updated_count == 0:
+            raise KeyError(f"Unknown session_id: {session_id}")
 
     def update_workspace(
         self,

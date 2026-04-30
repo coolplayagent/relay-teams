@@ -147,19 +147,23 @@ async def mark_session_terminal_viewed(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
+    marker_task = asyncio.create_task(
+        _call_session_read(
+            "sessions.terminal_view",
+            service.mark_latest_terminal_run_viewed_async,
+            session_id,
+        )
+    )
     try:
         await asyncio.wait_for(
-            _call_session_read(
-                "sessions.terminal_view",
-                service.mark_latest_terminal_run_viewed,
-                session_id,
-            ),
+            asyncio.shield(marker_task),
             timeout=SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS,
         )
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
     except TimeoutError:
+        _observe_deferred_terminal_view_result(marker_task, session_id)
         log_event(
             logger,
             logging.WARNING,
@@ -171,6 +175,52 @@ async def mark_session_terminal_viewed(
             },
         )
         return {"status": "deferred"}
+    except asyncio.CancelledError:
+        _observe_deferred_terminal_view_result(marker_task, session_id)
+        raise
+
+
+def _observe_deferred_terminal_view_result(
+    marker_task: asyncio.Task[None],
+    session_id: str,
+) -> None:
+    marker_task.add_done_callback(
+        lambda task: _log_deferred_terminal_view_result(task, session_id)
+    )
+
+
+def _log_deferred_terminal_view_result(
+    marker_task: asyncio.Task[None],
+    session_id: str,
+) -> None:
+    try:
+        marker_task.result()
+    except asyncio.CancelledError:
+        log_event(
+            logger,
+            logging.INFO,
+            event="session.terminal_view.deferred_cancelled",
+            message="Deferred session terminal view marker was cancelled",
+            payload={"session_id": session_id},
+        )
+    except KeyError as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            event="session.terminal_view.deferred_missing",
+            message="Deferred session terminal view marker found no session",
+            payload={"session_id": session_id},
+            exc_info=exc,
+        )
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.ERROR,
+            event="session.terminal_view.deferred_failed",
+            message="Deferred session terminal view marker failed",
+            payload={"session_id": session_id},
+            exc_info=exc,
+        )
 
 
 @router.patch("/{session_id}/topology", response_model=SessionRecord)

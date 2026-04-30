@@ -13,11 +13,12 @@ This directory is organized by documentation purpose and runtime module.
 
 - [Agents](modules/agents/)
 - [Orchestration policy](modules/agents/orchestration-policy-design.md)
+- [Automation](modules/automation/ao4-async-path-unification.md)
 - [CLI commands](modules/cli/commands.md)
 - [Frontend](modules/frontend/README.md)
 - [Runtime hooks](modules/hooks/relay-teams-runtime-hooks-design.md)
 - [Logger](modules/logger/logger-desensitize-design.md)
-- [MCP, ACP, and external agents](modules/mcp-acp/)
+- [MCP, ACP, and agent runtimes](modules/mcp-acp/)
 - [Memory](modules/memory/)
 - [Metrics](modules/metrics/metrics-platform-design.md)
 - [Prompt behavior](modules/prompt/system-prompt-layering.md)

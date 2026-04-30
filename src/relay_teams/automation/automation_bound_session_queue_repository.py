@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import aiosqlite
+
 from relay_teams.automation.automation_models import (
     AutomationBoundSessionQueueRecord,
     AutomationBoundSessionQueueStatus,
@@ -15,7 +17,11 @@ from relay_teams.automation.automation_models import (
     AutomationRunConfig,
 )
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 
 _NON_TERMINAL_QUEUE_STATUSES = (
     AutomationBoundSessionQueueStatus.QUEUED.value,
@@ -179,7 +185,51 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def create_async(
         self, record: AutomationBoundSessionQueueRecord
     ) -> AutomationBoundSessionQueueRecord:
-        return await self._call_sync_async(self.create, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO automation_bound_session_queue(
+                    automation_queue_id,
+                    automation_project_id,
+                    automation_project_name,
+                    session_id,
+                    reason,
+                    binding_json,
+                    delivery_events_json,
+                    run_config_json,
+                    prompt,
+                    queue_message,
+                    run_id,
+                    status,
+                    start_attempts,
+                    next_attempt_at,
+                    resume_attempts,
+                    resume_next_attempt_at,
+                    queue_message_id,
+                    queue_cleanup_status,
+                    queue_cleanup_attempts,
+                    queue_cleaned_at,
+                    last_error,
+                    created_at,
+                    updated_at,
+                    completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                self._to_row(record),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_async",
+            operation=operation,
+        )
+        stored = await self.get_async(record.automation_queue_id)
+        if stored is None:
+            raise RuntimeError(
+                "Failed to persist automation bound session queue record"
+            )
+        return stored
 
     def update(
         self,
@@ -253,7 +303,70 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def update_async(
         self, record: AutomationBoundSessionQueueRecord
     ) -> AutomationBoundSessionQueueRecord:
-        return await self._call_sync_async(self.update, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_bound_session_queue
+                SET automation_project_id=?,
+                    automation_project_name=?,
+                    session_id=?,
+                    reason=?,
+                    binding_json=?,
+                    delivery_events_json=?,
+                    run_config_json=?,
+                    prompt=?,
+                    queue_message=?,
+                    run_id=?,
+                    status=?,
+                    start_attempts=?,
+                    next_attempt_at=?,
+                    resume_attempts=?,
+                    resume_next_attempt_at=?,
+                    queue_message_id=?,
+                    queue_cleanup_status=?,
+                    queue_cleanup_attempts=?,
+                    queue_cleaned_at=?,
+                    last_error=?,
+                    updated_at=?,
+                    completed_at=?
+                WHERE automation_queue_id=?
+                """,
+                (
+                    record.automation_project_id,
+                    record.automation_project_name,
+                    record.session_id,
+                    record.reason,
+                    _binding_to_json(record.binding),
+                    _events_to_json(record.delivery_events),
+                    record.run_config.model_dump_json(),
+                    record.prompt,
+                    record.queue_message,
+                    record.run_id,
+                    record.status.value,
+                    record.start_attempts,
+                    record.next_attempt_at.isoformat(),
+                    record.resume_attempts,
+                    record.resume_next_attempt_at.isoformat(),
+                    record.queue_message_id,
+                    record.queue_cleanup_status.value,
+                    record.queue_cleanup_attempts,
+                    _to_iso(record.queue_cleaned_at),
+                    record.last_error,
+                    record.updated_at.isoformat(),
+                    _to_iso(record.completed_at),
+                    record.automation_queue_id,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="update_async",
+            operation=operation,
+        )
+        stored = await self.get_async(record.automation_queue_id)
+        if stored is None:
+            raise RuntimeError("Failed to reload automation bound session queue record")
+        return stored
 
     def get(self, automation_queue_id: str) -> AutomationBoundSessionQueueRecord | None:
         with self._lock:
@@ -272,7 +385,20 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def get_async(
         self, automation_queue_id: str
     ) -> AutomationBoundSessionQueueRecord | None:
-        return await self._call_sync_async(self.get, automation_queue_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM automation_bound_session_queue
+                WHERE automation_queue_id=?
+                """,
+                (automation_queue_id,),
+            )
+        )
+        if row is None:
+            return None
+        return self._to_record(row)
 
     def has_non_terminal_item_for_run(self, run_id: str) -> bool:
         if not str(run_id).strip():
@@ -291,7 +417,22 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
         return row is not None
 
     async def has_non_terminal_item_for_run_async(self, run_id: str) -> bool:
-        return await self._call_sync_async(self.has_non_terminal_item_for_run, run_id)
+        if not str(run_id).strip():
+            return False
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                f"""
+                SELECT 1
+                FROM automation_bound_session_queue
+                WHERE run_id=?
+                  AND status IN ({",".join("?" for _ in _NON_TERMINAL_QUEUE_STATUSES)})
+                LIMIT 1
+                """,
+                (run_id, *_NON_TERMINAL_QUEUE_STATUSES),
+            )
+        )
+        return row is not None
 
     def count_non_terminal_by_session(self, session_id: str) -> int:
         with self._lock:
@@ -307,9 +448,19 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
         return int(row["total"]) if row is not None else 0
 
     async def count_non_terminal_by_session_async(self, session_id: str) -> int:
-        return await self._call_sync_async(
-            self.count_non_terminal_by_session, session_id
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                f"""
+                SELECT COUNT(*) AS total
+                FROM automation_bound_session_queue
+                WHERE session_id=?
+                  AND status IN ({",".join("?" for _ in _NON_TERMINAL_QUEUE_STATUSES)})
+                """,
+                (session_id, *_NON_TERMINAL_QUEUE_STATUSES),
+            )
         )
+        return int(row["total"]) if row is not None else 0
 
     def count_non_terminal_ahead(self, automation_queue_id: str) -> int:
         with self._lock:
@@ -328,9 +479,22 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
         return int(row["total"]) if row is not None else 0
 
     async def count_non_terminal_ahead_async(self, automation_queue_id: str) -> int:
-        return await self._call_sync_async(
-            self.count_non_terminal_ahead, automation_queue_id
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                f"""
+                SELECT COUNT(*) AS total
+                FROM automation_bound_session_queue AS queued
+                JOIN automation_bound_session_queue AS current
+                    ON current.automation_queue_id=?
+                WHERE queued.session_id=current.session_id
+                  AND queued.id < current.id
+                  AND queued.status IN ({",".join("?" for _ in _NON_TERMINAL_QUEUE_STATUSES)})
+                """,
+                (automation_queue_id, *_NON_TERMINAL_QUEUE_STATUSES),
+            )
         )
+        return int(row["total"]) if row is not None else 0
 
     def list_ready_to_start(
         self,
@@ -360,9 +524,26 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def list_ready_to_start_async(
         self, *, ready_at: datetime, limit: int = 20
     ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
-        return await self._call_sync_async(
-            self.list_ready_to_start, ready_at=ready_at, limit=limit
+        safe_limit = max(1, min(limit, 100))
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM automation_bound_session_queue
+                WHERE status=?
+                  AND next_attempt_at<=?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (
+                    AutomationBoundSessionQueueStatus.QUEUED.value,
+                    ready_at.isoformat(),
+                    safe_limit,
+                ),
+            )
         )
+        return tuple(self._to_record(row) for row in rows)
 
     def list_waiting_for_result(
         self,
@@ -389,7 +570,24 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def list_waiting_for_result_async(
         self, *, limit: int = 20
     ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
-        return await self._call_sync_async(self.list_waiting_for_result, limit=limit)
+        safe_limit = max(1, min(limit, 100))
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM automation_bound_session_queue
+                WHERE status=?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (
+                    AutomationBoundSessionQueueStatus.WAITING_RESULT.value,
+                    safe_limit,
+                ),
+            )
+        )
+        return tuple(self._to_record(row) for row in rows)
 
     def claim_starting(
         self,
@@ -434,10 +632,51 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def claim_starting_async(
         self, *, automation_queue_id: str, stale_before: datetime
     ) -> AutomationBoundSessionQueueRecord | None:
-        return await self._call_sync_async(
-            self.claim_starting,
-            automation_queue_id=automation_queue_id,
-            stale_before=stale_before,
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> AutomationBoundSessionQueueRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_bound_session_queue
+                SET status=?,
+                    updated_at=?
+                WHERE automation_queue_id=?
+                  AND (
+                    status=?
+                    OR (status=? AND updated_at<=?)
+                  )
+                """,
+                (
+                    AutomationBoundSessionQueueStatus.STARTING.value,
+                    updated_at,
+                    automation_queue_id,
+                    AutomationBoundSessionQueueStatus.QUEUED.value,
+                    AutomationBoundSessionQueueStatus.STARTING.value,
+                    stale_before.isoformat(),
+                ),
+            )
+            updated = cursor.rowcount
+            await cursor.close()
+            if updated <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM automation_bound_session_queue
+                WHERE automation_queue_id=?
+                """,
+                (automation_queue_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_write(
+            operation_name="claim_starting_async",
+            operation=operation,
         )
 
     def list_pending_queue_cleanup(
@@ -482,9 +721,42 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def list_pending_queue_cleanup_async(
         self, *, limit: int = 20, stale_before: datetime | None = None
     ) -> tuple[AutomationBoundSessionQueueRecord, ...]:
-        return await self._call_sync_async(
-            self.list_pending_queue_cleanup, limit=limit, stale_before=stale_before
-        )
+        safe_limit = max(1, min(limit, 100))
+        if stale_before is None:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_bound_session_queue
+                    WHERE queue_cleanup_status=?
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (AutomationCleanupStatus.PENDING.value, safe_limit),
+                )
+            )
+        else:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM automation_bound_session_queue
+                    WHERE queue_cleanup_status=?
+                       OR (queue_cleanup_status=? AND updated_at<=?)
+                    ORDER BY updated_at ASC
+                    LIMIT ?
+                    """,
+                    (
+                        AutomationCleanupStatus.PENDING.value,
+                        AutomationCleanupStatus.CLEANING.value,
+                        stale_before.isoformat(),
+                        safe_limit,
+                    ),
+                )
+            )
+        return tuple(self._to_record(row) for row in rows)
 
     def claim_queue_cleanup(
         self,
@@ -529,10 +801,51 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
     async def claim_queue_cleanup_async(
         self, *, automation_queue_id: str, stale_before: datetime
     ) -> AutomationBoundSessionQueueRecord | None:
-        return await self._call_sync_async(
-            self.claim_queue_cleanup,
-            automation_queue_id=automation_queue_id,
-            stale_before=stale_before,
+        updated_at = datetime.now(tz=stale_before.tzinfo).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> AutomationBoundSessionQueueRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE automation_bound_session_queue
+                SET queue_cleanup_status=?,
+                    updated_at=?
+                WHERE automation_queue_id=?
+                  AND (
+                    queue_cleanup_status=?
+                    OR (queue_cleanup_status=? AND updated_at<=?)
+                  )
+                """,
+                (
+                    AutomationCleanupStatus.CLEANING.value,
+                    updated_at,
+                    automation_queue_id,
+                    AutomationCleanupStatus.PENDING.value,
+                    AutomationCleanupStatus.CLEANING.value,
+                    stale_before.isoformat(),
+                ),
+            )
+            updated = cursor.rowcount
+            await cursor.close()
+            if updated <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM automation_bound_session_queue
+                WHERE automation_queue_id=?
+                """,
+                (automation_queue_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_write(
+            operation_name="claim_queue_cleanup_async",
+            operation=operation,
         )
 
     def has_project_records(self, automation_project_id: str) -> bool:
@@ -544,9 +857,14 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
         return row is not None
 
     async def has_project_records_async(self, automation_project_id: str) -> bool:
-        return await self._call_sync_async(
-            self.has_project_records, automation_project_id
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT 1 FROM automation_bound_session_queue WHERE automation_project_id=? LIMIT 1",
+                (automation_project_id,),
+            )
         )
+        return row is not None
 
     def delete_by_project(self, automation_project_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -565,8 +883,19 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
         )
 
     async def delete_by_project_async(self, automation_project_id: str) -> None:
-        return await self._call_sync_async(
-            self.delete_by_project, automation_project_id
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                DELETE FROM automation_bound_session_queue
+                WHERE automation_project_id=?
+                """,
+                (automation_project_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_project_async",
+            operation=operation,
         )
 
     def _to_row(self, record: AutomationBoundSessionQueueRecord) -> tuple[object, ...]:

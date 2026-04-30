@@ -26,8 +26,10 @@ from relay_teams.external_agents.host_tool_bridge import (
 )
 from relay_teams.external_agents.models import (
     ExternalAgentConfig,
+    ExternalAgentProtocol,
     ExternalAgentSessionRecord,
     StdioTransportConfig,
+    StreamableHttpTransportConfig,
 )
 from relay_teams.external_agents.provider import (
     _ActivePromptState,
@@ -37,6 +39,7 @@ from relay_teams.external_agents.provider import (
     _extract_tool_result,
     ExternalAcpSessionManager,
 )
+from relay_teams.external_agents.a2a_client import A2aPromptResult
 from relay_teams.external_agents.session_repository import (
     ExternalAgentSessionRepository,
 )
@@ -637,6 +640,105 @@ async def test_external_acp_prompt_includes_system_prompt_and_host_server(
     assert "## User Prompt" in prompt_text
     assert "Summarize the architecture." in prompt_text
     assert bridge.active_request is None
+
+
+@pytest.mark.asyncio
+async def test_external_a2a_runtime_uses_handoff_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_send_a2a_prompt(
+        *,
+        config: ExternalAgentConfig,
+        prompt: str,
+        metadata: dict[str, JsonValue],
+        timeout_seconds: float,
+    ) -> A2aPromptResult:
+        captured["config"] = config
+        captured["prompt"] = prompt
+        captured["metadata"] = metadata
+        captured["timeout_seconds"] = timeout_seconds
+        return A2aPromptResult(text="A2A output.", task_id="remote-task")
+
+    monkeypatch.setattr(provider_module, "send_a2a_prompt", fake_send_a2a_prompt)
+    manager = _build_manager(
+        prompt_text="Summarize the architecture.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=ExternalAgentConfig(
+            agent_id="agent-1",
+            name="A2A Agent",
+            protocol=ExternalAgentProtocol.A2A,
+            transport=StreamableHttpTransportConfig(url="http://agent.test/a2a"),
+        ),
+    )
+
+    output = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    assert output == "A2A output."
+    prompt = str(captured["prompt"])
+    assert "## A2A Handoff" in prompt
+    assert "Summarize the architecture." in prompt
+    metadata = cast(dict[str, JsonValue], captured["metadata"])
+    relay_metadata = cast(dict[str, JsonValue], metadata["relay_teams"])
+    assert relay_metadata["protocol"] == "a2a"
+    assert relay_metadata["cwd"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_external_cli_runtime_runs_prompt_in_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_run_cli_agent_prompt(
+        *,
+        config: ExternalAgentConfig,
+        prompt: str,
+        runtime_cwd: Path,
+        timeout_seconds: float,
+    ) -> str:
+        captured["config"] = config
+        captured["prompt"] = prompt
+        captured["runtime_cwd"] = runtime_cwd
+        captured["timeout_seconds"] = timeout_seconds
+        return "CLI output."
+
+    monkeypatch.setattr(
+        provider_module,
+        "run_cli_agent_prompt",
+        fake_run_cli_agent_prompt,
+    )
+    manager = _build_manager(
+        prompt_text="Run local Codex.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        agent=ExternalAgentConfig(
+            agent_id="agent-1",
+            name="Codex CLI",
+            protocol=ExternalAgentProtocol.CLI,
+            transport=StdioTransportConfig(command="codex", args=("--yolo",)),
+        ),
+    )
+
+    output = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=_build_request(),
+    )
+
+    assert output == "CLI output."
+    assert captured["runtime_cwd"] == tmp_path
+    prompt = str(captured["prompt"])
+    assert "Protocol: cli" in prompt
+    assert "Run local Codex." in prompt
 
 
 @pytest.mark.asyncio

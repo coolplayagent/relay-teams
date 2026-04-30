@@ -987,7 +987,7 @@ async def test_create_run_includes_target_role_id(monkeypatch) -> None:
     }
 
 
-async def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
+async def test_agent_runtime_sdk_calls_expected_endpoints(monkeypatch) -> None:
     client = AsyncAgentTeamsClient()
     calls: list[tuple[str, str, object | None]] = []
 
@@ -997,25 +997,29 @@ async def test_external_agent_sdk_calls_expected_endpoints(monkeypatch) -> None:
         payload: object | None = None,
     ) -> dict[str, object] | list[object]:
         calls.append((method, path, payload))
-        if method == "GET" and path == "/api/system/configs/agents":
+        if method == "GET" and path == "/api/system/configs/agent-runtimes":
             return [{"agent_id": "codex_local"}]
         return {"status": "ok"}
 
     monkeypatch.setattr(client, "_request_json", fake_request_json)
 
-    assert await client.list_external_agents() == [{"agent_id": "codex_local"}]
-    assert await client.get_external_agent("codex_local") == {"status": "ok"}
-    assert await client.save_external_agent(
+    assert await client.list_agent_runtimes() == [{"agent_id": "codex_local"}]
+    assert await client.get_agent_runtime("codex_local") == {"status": "ok"}
+    assert await client.save_agent_runtime(
         "codex_local", {"agent_id": "codex_local"}
     ) == {"status": "ok"}
-    assert await client.test_external_agent("codex_local") == {"status": "ok"}
-    assert await client.delete_external_agent("codex_local") == {"status": "ok"}
+    assert await client.test_agent_runtime("codex_local") == {"status": "ok"}
+    assert await client.delete_agent_runtime("codex_local") == {"status": "ok"}
     assert calls == [
-        ("GET", "/api/system/configs/agents", None),
-        ("GET", "/api/system/configs/agents/codex_local", None),
-        ("PUT", "/api/system/configs/agents/codex_local", {"agent_id": "codex_local"}),
-        ("POST", "/api/system/configs/agents/codex_local:test", {}),
-        ("DELETE", "/api/system/configs/agents/codex_local", None),
+        ("GET", "/api/system/configs/agent-runtimes", None),
+        ("GET", "/api/system/configs/agent-runtimes/codex_local", None),
+        (
+            "PUT",
+            "/api/system/configs/agent-runtimes/codex_local",
+            {"agent_id": "codex_local"},
+        ),
+        ("POST", "/api/system/configs/agent-runtimes/codex_local:test", {}),
+        ("DELETE", "/api/system/configs/agent-runtimes/codex_local", None),
     ]
 
 

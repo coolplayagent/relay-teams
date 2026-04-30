@@ -49,10 +49,11 @@ from relay_teams.env.localhost_run_tunnel_service import (
 from relay_teams.external_agents import (
     ExternalAgentConfig,
     ExternalAgentConfigService,
+    ExternalAgentProtocol,
     ExternalAgentSummary,
     ExternalAgentTestResult,
 )
-from relay_teams.external_agents.acp_client import probe_acp_agent
+from relay_teams.external_agents.runtime_probe import probe_agent_runtime
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.env.web_config_models import WebConfig
@@ -86,6 +87,7 @@ from relay_teams.interfaces.server.deps import (
     get_web_connectivity_probe_service,
     get_hook_service,
     get_plugin_registry,
+    get_workspace_manager,
 )
 from relay_teams.interfaces.server.control_plane import (
     ControlPlaneDiscoveryPayload,
@@ -158,9 +160,13 @@ from relay_teams.workspace import (
     SshProfilePasswordRevealView,
     SshProfileRecord,
     SshProfileService,
+    WorkspaceManager,
 )
 
 router = APIRouter(prefix="/system", tags=["System"])
+_AGENT_RUNTIME_PROBE_WORKSPACE_ID = "default"
+_AGENT_RUNTIME_PROBE_SESSION_ID = "agent-runtime-probe"
+_AGENT_RUNTIME_PROBE_ROLE_ID = "agent-runtime-probe"
 
 
 class NotificationConfigRequest(BaseModel):
@@ -818,15 +824,15 @@ async def save_web_config(
         )
 
 
-@router.get("/configs/agents", response_model=list[ExternalAgentSummary])
-async def list_external_agents(
+@router.get("/configs/agent-runtimes", response_model=list[ExternalAgentSummary])
+async def list_agent_runtimes(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> tuple[ExternalAgentSummary, ...]:
     return await call_maybe_async(service.list_agents)
 
 
-@router.get("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-async def get_external_agent(
+@router.get("/configs/agent-runtimes/{agent_id}", response_model=ExternalAgentConfig)
+async def get_agent_runtime(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
@@ -836,8 +842,8 @@ async def get_external_agent(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.put("/configs/agents/{agent_id}", response_model=ExternalAgentConfig)
-async def save_external_agent(
+@router.put("/configs/agent-runtimes/{agent_id}", response_model=ExternalAgentConfig)
+async def save_agent_runtime(
     agent_id: RequiredIdentifierStr,
     req: ExternalAgentConfig,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
@@ -848,8 +854,8 @@ async def save_external_agent(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.delete("/configs/agents/{agent_id}")
-async def delete_external_agent(
+@router.delete("/configs/agent-runtimes/{agent_id}")
+async def delete_agent_runtime(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> dict[str, str]:
@@ -860,16 +866,29 @@ async def delete_external_agent(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/configs/agents/{agent_id}:test", response_model=ExternalAgentTestResult)
-async def test_external_agent(
+@router.post(
+    "/configs/agent-runtimes/{agent_id}:test",
+    response_model=ExternalAgentTestResult,
+)
+async def test_agent_runtime(
     agent_id: RequiredIdentifierStr,
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
+    workspace_manager: WorkspaceManager = Depends(get_workspace_manager),
 ) -> ExternalAgentTestResult:
     try:
         config = await call_maybe_async(service.resolve_runtime_agent, agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    result = await probe_acp_agent(config)
+    runtime_cwd = None
+    if config.protocol == ExternalAgentProtocol.CLI:
+        runtime_cwd = workspace_manager.resolve(
+            session_id=_AGENT_RUNTIME_PROBE_SESSION_ID,
+            role_id=_AGENT_RUNTIME_PROBE_ROLE_ID,
+            instance_id=None,
+            workspace_id=_AGENT_RUNTIME_PROBE_WORKSPACE_ID,
+            conversation_id=_AGENT_RUNTIME_PROBE_SESSION_ID,
+        ).resolve_workdir()
+    result = await probe_agent_runtime(config, runtime_cwd=runtime_cwd)
     if result.ok:
         return result
     raise HTTPException(status_code=400, detail=result.message)

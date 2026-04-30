@@ -522,8 +522,8 @@ export function invalidateManagedRequests(prefix) {
                 "globalThis.__capturedRequests = []; "
                 "globalThis.__invalidatedPrefixes = []; "
                 f"const mod = await import({module_under_test_path.as_uri()!r}); "
-                "await mod.saveExternalAgent('local-agent', { name: 'Local Agent' }); "
-                "await mod.deleteExternalAgent('local-agent'); "
+                "await mod.saveAgentRuntime('local-agent', { name: 'Local Agent' }); "
+                "await mod.deleteAgentRuntime('local-agent'); "
                 "await mod.saveModelProfile('vision-profile', { model: 'vision-model' }); "
                 "await mod.deleteModelProfile('vision-profile'); "
                 "await mod.saveClawHubSkill('writer', { name: 'Writer' }); "
@@ -555,8 +555,8 @@ export function invalidateManagedRequests(prefix) {
 
     payload = json.loads(completed.stdout.strip())
     assert [request["url"] for request in payload["requests"]] == [
-        "/api/system/configs/agents/local-agent",
-        "/api/system/configs/agents/local-agent",
+        "/api/system/configs/agent-runtimes/local-agent",
+        "/api/system/configs/agent-runtimes/local-agent",
         "/api/system/configs/model/profiles/vision-profile",
         "/api/system/configs/model/profiles/vision-profile",
         "/api/system/configs/clawhub/skills/writer",

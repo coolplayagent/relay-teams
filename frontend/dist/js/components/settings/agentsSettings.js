@@ -1,14 +1,14 @@
 /**
  * components/settings/agentsSettings.js
- * External ACP agent settings panel bindings.
+ * External agent runtime settings panel bindings.
  */
 import {
-    deleteExternalAgent,
-    fetchExternalAgent,
-    fetchExternalAgents,
+    deleteAgentRuntime,
+    fetchAgentRuntime,
+    fetchAgentRuntimes,
     fetchEnvironmentVariables,
-    saveExternalAgent,
-    testExternalAgent,
+    saveAgentRuntime,
+    testAgentRuntime,
 } from '../../core/api.js';
 import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
@@ -30,6 +30,7 @@ const HIDDEN_APP_ENV_KEYS = new Set([
 let agentSummaries = [];
 let selectedAgentId = '';
 let selectedSourceAgentId = '';
+let currentProtocol = 'acp';
 let currentTransport = 'stdio';
 let currentStdioEnv = [];
 let currentHttpHeaders = [];
@@ -45,6 +46,12 @@ export function bindAgentSettingsHandlers() {
     bindActionButton('add-agent-stdio-env-btn', () => addBindingRow('stdio'));
     bindActionButton('add-agent-http-header-btn', () => addBindingRow('http'));
 
+    const protocolSelect = document.getElementById('agent-protocol-input');
+    if (protocolSelect) {
+        protocolSelect.onchange = () => {
+            currentProtocol = String(protocolSelect.value || 'acp').trim() || 'acp';
+        };
+    }
     const transportSelect = document.getElementById('agent-transport-input');
     if (transportSelect) {
         transportSelect.onchange = () => {
@@ -65,7 +72,7 @@ export function bindAgentSettingsHandlers() {
 export async function loadAgentSettingsPanel(preferredAgentId = '') {
     try {
         const [summaries, environmentBindings] = await Promise.all([
-            fetchExternalAgents(),
+            fetchAgentRuntimes(),
             loadEnvironmentBindings(),
         ]);
         agentSummaries = Array.isArray(summaries) ? summaries.map(normalizeAgentSummary) : [];
@@ -87,7 +94,7 @@ export async function loadAgentSettingsPanel(preferredAgentId = '') {
     } catch (error) {
         logError(
             'frontend.agents_settings.load_failed',
-            'Failed to load external agents',
+            'Failed to load agent runtimes',
             errorToPayload(error),
         );
         showAgentsList();
@@ -110,6 +117,7 @@ function normalizeAgentSummary(agent) {
         agent_id: String(agent?.agent_id || '').trim(),
         name: String(agent?.name || '').trim(),
         description: String(agent?.description || '').trim(),
+        protocol: String(agent?.protocol || 'acp').trim() || 'acp',
         transport: String(agent?.transport || 'stdio').trim() || 'stdio',
     };
 }
@@ -169,6 +177,7 @@ function createBlankAgentConfig() {
         agent_id: '',
         name: '',
         description: '',
+        protocol: 'acp',
         transport: {
             transport: 'stdio',
             command: '',
@@ -180,11 +189,13 @@ function createBlankAgentConfig() {
 
 function normalizeAgentConfig(config) {
     const safeTransport = String(config?.transport?.transport || 'stdio').trim() || 'stdio';
+    const safeProtocol = String(config?.protocol || 'acp').trim() || 'acp';
     if (safeTransport === 'streamable_http') {
         return {
             agent_id: String(config?.agent_id || '').trim(),
             name: String(config?.name || '').trim(),
             description: String(config?.description || '').trim(),
+            protocol: safeProtocol,
             transport: {
                 transport: 'streamable_http',
                 url: String(config?.transport?.url || '').trim(),
@@ -204,6 +215,7 @@ function normalizeAgentConfig(config) {
             agent_id: String(config?.agent_id || '').trim(),
             name: String(config?.name || '').trim(),
             description: String(config?.description || '').trim(),
+            protocol: safeProtocol,
             transport: {
                 transport: 'custom',
                 adapter_id: String(config?.transport?.adapter_id || '').trim(),
@@ -217,6 +229,7 @@ function normalizeAgentConfig(config) {
         agent_id: String(config?.agent_id || '').trim(),
         name: String(config?.name || '').trim(),
         description: String(config?.description || '').trim(),
+        protocol: safeProtocol,
         transport: {
             transport: 'stdio',
             command: String(config?.transport?.command || '').trim(),
@@ -248,6 +261,7 @@ function renderAgentsList() {
                             <div class="role-record-title">${escapeHtml(agent.name || agent.agent_id)}</div>
                             <div class="role-record-id">${escapeHtml(agent.agent_id)}</div>
                             <div class="profile-card-chips role-record-chips">
+                                <span class="profile-card-chip">${escapeHtml(formatProtocolLabel(agent.protocol))}</span>
                                 <span class="profile-card-chip">${escapeHtml(formatTransportLabel(agent.transport))}</span>
                             </div>
                         </div>
@@ -283,7 +297,7 @@ function renderAgentsList() {
 async function loadAgentDocument(agentId) {
     selectedAgentId = String(agentId || '').trim();
     renderAgentsList();
-    const record = normalizeAgentConfig(await fetchExternalAgent(agentId));
+    const record = normalizeAgentConfig(await fetchAgentRuntime(agentId));
     selectedAgentId = record.agent_id;
     selectedSourceAgentId = record.agent_id;
     applyAgentRecord(record);
@@ -299,6 +313,7 @@ function applyAgentRecord(record) {
     if (formEl) formEl.style.display = 'block';
     if (emptyEl) emptyEl.style.display = 'none';
 
+    currentProtocol = String(record?.protocol || 'acp').trim() || 'acp';
     currentTransport = String(record?.transport?.transport || 'stdio').trim() || 'stdio';
     currentStdioEnv = currentTransport === 'stdio'
         ? record.transport.env.map(normalizeBinding)
@@ -310,6 +325,7 @@ function applyAgentRecord(record) {
     setInputValue('agent-id-input', record.agent_id || '');
     setInputValue('agent-name-input', record.name || '');
     setInputValue('agent-description-input', record.description || '');
+    setInputValue('agent-protocol-input', currentProtocol);
     setInputValue('agent-transport-input', currentTransport);
     setInputValue('agent-stdio-command-input', currentTransport === 'stdio' ? record.transport.command || '' : '');
     setInputValue('agent-stdio-args-input', currentTransport === 'stdio' ? serializeLines(record.transport.args || []) : '');
@@ -495,7 +511,7 @@ async function handleSaveAgent() {
     try {
         const draft = buildDraftFromForm();
         const pathAgentId = selectedSourceAgentId || draft.agent_id;
-        const saved = normalizeAgentConfig(await saveExternalAgent(pathAgentId, draft));
+        const saved = normalizeAgentConfig(await saveAgentRuntime(pathAgentId, draft));
         selectedAgentId = saved.agent_id;
         selectedSourceAgentId = saved.agent_id;
         showToast({
@@ -519,8 +535,8 @@ async function handleTestAgent() {
     try {
         const draft = buildDraftFromForm();
         const pathAgentId = selectedSourceAgentId || draft.agent_id;
-        const saved = normalizeAgentConfig(await saveExternalAgent(pathAgentId, draft));
-        const result = await testExternalAgent(saved.agent_id);
+        const saved = normalizeAgentConfig(await saveAgentRuntime(pathAgentId, draft));
+        const result = await testAgentRuntime(saved.agent_id);
         selectedAgentId = saved.agent_id;
         selectedSourceAgentId = saved.agent_id;
         await loadAgentSettingsPanel(saved.agent_id);
@@ -547,7 +563,7 @@ async function handleDeleteAgent() {
         return;
     }
     try {
-        await deleteExternalAgent(agentId);
+        await deleteAgentRuntime(agentId);
         selectedAgentId = '';
         selectedSourceAgentId = '';
         showToast({
@@ -580,7 +596,9 @@ function buildDraftFromForm() {
         throw new Error(t('settings.agents.name_required'));
     }
     const description = String(getInputValue('agent-description-input')).trim();
+    const protocol = String(getInputValue('agent-protocol-input')).trim() || 'acp';
     const transport = String(getInputValue('agent-transport-input')).trim() || 'stdio';
+    validateProtocolTransport(protocol, transport);
     if (transport === 'streamable_http') {
         const url = String(getInputValue('agent-http-url-input')).trim();
         if (!url) {
@@ -590,6 +608,7 @@ function buildDraftFromForm() {
             agent_id: agentId,
             name,
             description,
+            protocol,
             transport: {
                 transport: 'streamable_http',
                 url,
@@ -607,6 +626,7 @@ function buildDraftFromForm() {
             agent_id: agentId,
             name,
             description,
+            protocol,
             transport: {
                 transport: 'custom',
                 adapter_id: adapterId,
@@ -625,6 +645,7 @@ function buildDraftFromForm() {
         agent_id: agentId,
         name,
         description,
+        protocol,
         transport: {
             transport: 'stdio',
             command,
@@ -643,6 +664,15 @@ function normalizeBindingsForSave(bindings) {
             configured: item?.configured === true,
         }))
         .filter(item => item.name);
+}
+
+function validateProtocolTransport(protocol, transport) {
+    if (protocol === 'a2a' && transport !== 'streamable_http') {
+        throw new Error(t('settings.agents.a2a_requires_http'));
+    }
+    if (protocol === 'cli' && transport !== 'stdio') {
+        throw new Error(t('settings.agents.cli_requires_stdio'));
+    }
 }
 
 function showAgentsList() {
@@ -758,6 +788,12 @@ function formatTransportLabel(transport) {
     if (transport === 'streamable_http') return t('settings.agents.transport_http_label');
     if (transport === 'custom') return t('settings.agents.transport_custom_label');
     return t('settings.agents.transport_stdio_label');
+}
+
+function formatProtocolLabel(protocol) {
+    if (protocol === 'a2a') return t('settings.agents.protocol_a2a_label');
+    if (protocol === 'cli') return t('settings.agents.protocol_cli_label');
+    return t('settings.agents.protocol_acp_label');
 }
 
 function renderEmptyBindingState(kind) {

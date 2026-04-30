@@ -7,9 +7,11 @@ from pathlib import Path
 from relay_teams.external_agents import (
     ExternalAgentConfig,
     ExternalAgentConfigService,
+    ExternalAgentProtocol,
     ExternalAgentSecretBinding,
     ExternalAgentSecretStore,
     StdioTransportConfig,
+    StreamableHttpTransportConfig,
 )
 
 
@@ -179,6 +181,7 @@ def test_get_agent_strips_legacy_stdio_workdir_from_saved_config(
         "agent_id": "codex_local",
         "name": "Codex Local",
         "description": "Legacy config",
+        "protocol": "acp",
         "transport": {
             "transport": "stdio",
             "command": "codex",
@@ -186,3 +189,47 @@ def test_get_agent_strips_legacy_stdio_workdir_from_saved_config(
             "env": [],
         },
     }
+
+
+def test_a2a_agent_requires_http_transport(tmp_path: Path) -> None:
+    service = ExternalAgentConfigService(
+        config_dir=tmp_path,
+        secret_store=_FakeSecretStore(),
+    )
+
+    try:
+        service.save_agent(
+            "a2a_local",
+            ExternalAgentConfig(
+                agent_id="a2a_local",
+                name="A2A Local",
+                protocol=ExternalAgentProtocol.A2A,
+                transport=StdioTransportConfig(command="agent"),
+            ),
+        )
+    except ValueError as exc:
+        assert "A2A agent runtimes require streamable_http transport" in str(exc)
+    else:
+        raise AssertionError("Expected A2A stdio config to be rejected")
+
+
+def test_list_agent_summaries_include_runtime_protocol(tmp_path: Path) -> None:
+    service = ExternalAgentConfigService(
+        config_dir=tmp_path,
+        secret_store=_FakeSecretStore(),
+    )
+    _ = service.save_agent(
+        "a2a_remote",
+        ExternalAgentConfig(
+            agent_id="a2a_remote",
+            name="A2A Remote",
+            protocol=ExternalAgentProtocol.A2A,
+            transport=StreamableHttpTransportConfig(
+                url="http://agent.test/.well-known/agent.json",
+            ),
+        ),
+    )
+
+    summaries = service.list_agents()
+
+    assert summaries[0].protocol == ExternalAgentProtocol.A2A
