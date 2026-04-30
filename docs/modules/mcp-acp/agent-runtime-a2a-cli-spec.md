@@ -83,7 +83,7 @@ Prompt execution:
 - Each outbound A2A request uses the remaining prompt budget as its per-request HTTP timeout.
 - Explicit `message` responses return immediately.
 - Task responses return successfully only when the task state is `completed`.
-- Task states `failed`, `rejected`, and `canceled` raise runtime errors using the status message when available.
+- Task states `failed`, `rejected`, `canceled`, `input-required`, and `auth-required` raise runtime errors using the status message when available.
 - If the response contains an active task id, the runtime polls `tasks/get` until the task completes or fails.
 
 ## 5. CLI Runtime Flow

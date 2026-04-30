@@ -22,7 +22,13 @@ JsonRpcId = str | int
 
 _A2A_AGENT_CARD_WELL_KNOWN_PATH = "/.well-known/agent.json"
 _A2A_SUCCESS_TASK_STATES = {"completed"}
-_A2A_FAILURE_TASK_STATES = {"canceled", "failed", "rejected"}
+_A2A_FAILURE_TASK_STATES = {
+    "auth-required",
+    "canceled",
+    "failed",
+    "input-required",
+    "rejected",
+}
 _A2A_POLL_INTERVAL_SECONDS = 1.0
 
 
@@ -417,7 +423,7 @@ def _extract_prompt_result(payload: dict[str, JsonValue]) -> A2aPromptResult:
         _extract_message_text(status_message),
         *(_extract_artifact_text(item) for item in artifacts),
     ]
-    state = _optional_str(status.get("state"))
+    state = _task_state(status.get("state"))
     return A2aPromptResult(
         text="\n\n".join(part for part in text_parts if part).strip(),
         task_id=_optional_str(payload.get("id")),
@@ -484,6 +490,13 @@ def _optional_id(payload: dict[str, JsonValue]) -> JsonRpcId | None:
     if isinstance(raw_id, str | int):
         return raw_id
     return None
+
+
+def _task_state(value: JsonValue | None) -> str | None:
+    raw_state = _optional_str(value)
+    if raw_state is None:
+        return None
+    return raw_state.lower().replace("_", "-")
 
 
 def _optional_str(value: JsonValue | None) -> str | None:

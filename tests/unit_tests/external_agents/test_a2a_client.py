@@ -358,6 +358,65 @@ async def test_send_a2a_prompt_raises_for_failed_task_state(
 
 
 @pytest.mark.asyncio
+async def test_send_a2a_prompt_raises_for_interrupted_task_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "protocolVersion": "0.2.6",
+                    "name": "Remote A2A",
+                    "description": "Remote agent",
+                    "url": "http://agent.test/a2a",
+                    "version": "1.0.0",
+                    "capabilities": {"streaming": False},
+                    "defaultInputModes": ["text/plain"],
+                    "defaultOutputModes": ["text/plain"],
+                    "skills": [],
+                },
+            )
+        payload = json.loads(request.content.decode("utf-8"))
+        assert isinstance(payload, dict)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "result": {
+                    "kind": "task",
+                    "id": "task-input",
+                    "contextId": "ctx-1",
+                    "status": {
+                        "state": "INPUT_REQUIRED",
+                        "message": {
+                            "kind": "message",
+                            "parts": [{"kind": "text", "text": "need input"}],
+                        },
+                    },
+                },
+            },
+        )
+
+    monkeypatch.setattr(
+        a2a_client,
+        "create_async_http_client",
+        lambda ssl_verify=None: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    with pytest.raises(a2a_client.A2aClientError, match="need input"):
+        await a2a_client.send_a2a_prompt(
+            config=_build_a2a_agent("http://agent.test/.well-known/agent.json"),
+            prompt="Please work.",
+            metadata={},
+            timeout_seconds=3,
+        )
+
+
+@pytest.mark.asyncio
 async def test_poll_task_uses_deadline_instead_of_fixed_attempt_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
