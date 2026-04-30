@@ -618,12 +618,17 @@ class _StdioCliJsonRpcClient:
             self._read_task.cancel()
         if self._stderr_task is not None:
             self._stderr_task.cancel()
-        if self._process is not None and self._process.returncode is None:
-            self._process.terminate()
+        process = self._process
+        if process is not None and process.returncode is None:
+            process.terminate()
             try:
-                await asyncio.wait_for(self._process.wait(), timeout=2.0)
+                await asyncio.wait_for(process.wait(), timeout=2.0)
             except (asyncio.TimeoutError, ProcessLookupError):
-                self._process.kill()
+                process.kill()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                except (asyncio.TimeoutError, ProcessLookupError):
+                    pass
         self._process = None
         self._read_task = None
         self._stderr_task = None

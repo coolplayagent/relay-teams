@@ -284,6 +284,27 @@ class _RequestClient:
         return self.response
 
 
+class _TerminateTimeoutProcess:
+    def __init__(self) -> None:
+        self.returncode: int | None = None
+        self.terminated = False
+        self.killed = False
+        self.wait_calls = 0
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        self.wait_calls += 1
+        if self.wait_calls == 1:
+            raise asyncio.TimeoutError
+        return self.returncode or 0
+
+
 @pytest.mark.asyncio
 async def test_probe_cli_agent_initializes_stdio_json_rpc_runtime() -> None:
     result = await probe_cli_agent(
@@ -478,6 +499,24 @@ async def test_run_cli_agent_prompt_uses_shared_timeout_budget(
     assert all(0 < timeout <= 2 for timeout in timeout_values)
     assert timeout_values == sorted(timeout_values, reverse=True)
     assert len(set(timeout_values)) == len(timeout_values)
+
+
+@pytest.mark.asyncio
+async def test_stdio_cli_client_close_waits_after_kill() -> None:
+    process = _TerminateTimeoutProcess()
+    client = _StdioCliJsonRpcClient(
+        command=sys.executable,
+        args=("-c", ""),
+        runtime_cwd=None,
+        transport=StdioTransportConfig(command=sys.executable),
+    )
+    client._process = cast(asyncio.subprocess.Process, process)
+
+    await client.close()
+
+    assert process.terminated is True
+    assert process.killed is True
+    assert process.wait_calls == 2
 
 
 def test_stdio_transport_rejects_non_stdio_config() -> None:
