@@ -30,6 +30,7 @@ _A2A_FAILURE_TASK_STATES = {
     "rejected",
 }
 _A2A_POLL_INTERVAL_SECONDS = 1.0
+_JSON_RPC_METHOD_NOT_FOUND = -32601
 
 
 class A2aClientError(RuntimeError):
@@ -226,6 +227,13 @@ class A2aHttpClient:
         error = _json_object(response_payload.get("error"))
         if not error:
             raise A2aClientError("A2A JSON-RPC probe response missing result or error")
+        error_code = _json_rpc_error_code(error)
+        if error_code is None:
+            raise A2aClientError(
+                "A2A JSON-RPC probe error response missing numeric code"
+            )
+        if error_code == _JSON_RPC_METHOD_NOT_FOUND:
+            raise A2aClientError("A2A JSON-RPC probe method tasks/get was not found")
 
     async def send_message(
         self,
@@ -498,6 +506,15 @@ def _optional_id(payload: dict[str, JsonValue]) -> JsonRpcId | None:
     raw_id = payload.get("id")
     if isinstance(raw_id, str | int):
         return raw_id
+    return None
+
+
+def _json_rpc_error_code(error: dict[str, JsonValue]) -> int | None:
+    code = error.get("code")
+    if isinstance(code, bool):
+        return None
+    if isinstance(code, int):
+        return code
     return None
 
 

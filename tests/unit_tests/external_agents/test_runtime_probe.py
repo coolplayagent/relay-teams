@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from relay_teams.external_agents import runtime_probe
@@ -42,8 +44,14 @@ async def test_probe_agent_runtime_dispatches_by_protocol(
 
     async def probe_cli_agent(
         config: ExternalAgentConfig,
+        *,
+        runtime_cwd: Path | None = None,
     ) -> ExternalAgentTestResult:
-        return ExternalAgentTestResult(ok=True, message=f"cli:{config.agent_id}")
+        cwd = "none" if runtime_cwd is None else runtime_cwd.name
+        return ExternalAgentTestResult(
+            ok=True,
+            message=f"cli:{config.agent_id}:{cwd}",
+        )
 
     async def probe_acp_agent(
         config: ExternalAgentConfig,
@@ -57,11 +65,14 @@ async def test_probe_agent_runtime_dispatches_by_protocol(
     a2a_result = await runtime_probe.probe_agent_runtime(
         _http_agent(ExternalAgentProtocol.A2A)
     )
-    cli_result = await runtime_probe.probe_agent_runtime(_cli_agent())
+    cli_result = await runtime_probe.probe_agent_runtime(
+        _cli_agent(),
+        runtime_cwd=Path("/tmp/runtime-workdir"),
+    )
     acp_result = await runtime_probe.probe_agent_runtime(
         _http_agent(ExternalAgentProtocol.ACP)
     )
 
     assert a2a_result.message == "a2a:a2a_agent"
-    assert cli_result.message == "cli:cli_agent"
+    assert cli_result.message == "cli:cli_agent:runtime-workdir"
     assert acp_result.message == "acp:acp_agent"

@@ -47,9 +47,11 @@ Each agent record contains:
 
 The `custom` transport is an adapter extension point. Config only stores structured data. It does not execute arbitrary user-provided code.
 
-For `stdio` transports, Agent Teams starts the runtime process inside the active session workspace. The working directory is derived at runtime from the session's project context and is not saved in `agents.json`.
+For `stdio` transports, Agent Teams starts the runtime process inside a workspace. Prompt execution uses the active session workspace. The Settings/API runtime test endpoint uses the default workspace workdir so relative command paths are checked from the same kind of cwd used by real execution. The working directory is derived at runtime from workspace context and is not saved in `agents.json`.
 
 CLI runtimes use the Codex app-server style lifecycle over stdio JSON-RPC: `initialize`, `initialized`, `thread/start`, `turn/start`, streamed assistant-message notifications, and `turn/completed`. A bare `codex` command is treated as a local Codex app-server runtime and launched as `codex app-server --listen stdio://`.
+
+A2A direct endpoint probes send a non-mutating `tasks/get` JSON-RPC request. A JSON-RPC 2.0 response with a matching id and result is accepted, as is a structured A2A task error such as task-not-found. `-32601` method-not-found is rejected because it identifies a generic JSON-RPC endpoint that is not serving the A2A task API.
 
 ## 3. Secret Handling
 

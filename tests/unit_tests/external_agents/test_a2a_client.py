@@ -179,6 +179,40 @@ async def test_probe_a2a_agent_falls_back_to_direct_json_rpc_endpoint(
 
 
 @pytest.mark.asyncio
+async def test_probe_a2a_agent_rejects_direct_method_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        payload = json.loads(request.content.decode("utf-8"))
+        assert isinstance(payload, dict)
+        return httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload["id"],
+                "error": {"code": -32601, "message": "Method not found"},
+            },
+        )
+
+    monkeypatch.setattr(
+        a2a_client,
+        "create_async_http_client",
+        lambda ssl_verify=None: httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ),
+    )
+
+    result = await a2a_client.probe_a2a_agent(
+        _build_a2a_agent("http://agent.test/rpc.json")
+    )
+
+    assert result.ok is False
+    assert "tasks/get was not found" in result.message
+
+
+@pytest.mark.asyncio
 async def test_probe_a2a_agent_rejects_non_json_rpc_direct_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

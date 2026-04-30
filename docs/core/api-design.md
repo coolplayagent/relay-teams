@@ -595,7 +595,7 @@ Notes:
 - A2A runtimes follow the public Agent2Agent Agent Card and `message/send` JSON-RPC flow.
 - CLI runtimes are process-based JSON-RPC servers over stdio. The backend performs `initialize`, sends `initialized`, creates an ephemeral `thread/start`, submits the composed runtime prompt through `turn/start`, collects assistant output from `item/agentMessage/delta` or completed `agentMessage` items, and waits for `turn/completed`.
 - Bare `codex` CLI configs are launched as `codex app-server --listen stdio://`. Legacy `codex exec` prompt flags are not forwarded to app-server; approval policy is set through JSON-RPC thread/turn params.
-- `stdio` runtimes always start inside the active session workspace. The working directory is runtime-derived from the session's project context and is not stored in the saved runtime config.
+- `stdio` runtimes always start inside a workspace. Prompt execution uses the active session workspace; `/system/configs/agent-runtimes/{agent_id}:test` uses the default workspace workdir so relative CLI command paths are validated from the same kind of runtime cwd.
 
 ### `PUT /system/configs/agent-runtimes/{agent_id}`
 
@@ -613,6 +613,8 @@ Deletes one saved agent runtime config and its stored secrets.
 ### `POST /system/configs/agent-runtimes/{agent_id}:test`
 
 Tests connectivity against the saved runtime-resolved agent runtime config.
+
+For CLI runtimes, the probe starts the process in the default workspace workdir and resolves relative command paths from that cwd. For A2A direct JSON-RPC runtimes, the probe requires a JSON-RPC 2.0 response with a matching id and rejects `-32601` method-not-found because that endpoint does not implement A2A `tasks/get`.
 
 Response fields:
 - `ok`
