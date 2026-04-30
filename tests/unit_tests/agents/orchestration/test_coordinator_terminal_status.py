@@ -695,7 +695,7 @@ async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
 async def test_ai_mode_respects_zero_cycle_orchestration_policy(
     tmp_path: Path,
 ) -> None:
-    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, task_execution_service = (
         _build_coordinator(tmp_path)
     )
     root_task = TaskEnvelope(
@@ -705,6 +705,56 @@ async def test_ai_mode_respects_zero_cycle_orchestration_policy(
         trace_id="run-1",
         role_id="Coordinator",
         objective="answer directly",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="simple",
+        orchestration_prompt="Answer simple requests directly.",
+        allowed_role_ids=("time",),
+        orchestration_policy=OrchestrationPolicy(
+            max_orchestration_cycles=0,
+            max_parallel_delegated_tasks=0,
+        ),
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        coordinator_first=False,
+        initial_result="direct answer",
+        topology=topology,
+    )
+
+    assert result.output == "direct answer"
+    assert task_execution_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ai_mode_reports_zero_cycle_policy_with_pending_tasks(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="delegate then stop",
         verification=VerificationPlan(checklist=("non_empty_response",)),
     )
     child_task = TaskEnvelope(
@@ -750,11 +800,11 @@ async def test_ai_mode_respects_zero_cycle_orchestration_policy(
         normal_root_role_id="time",
         coordinator_role_id="Coordinator",
         orchestration_preset_id="simple",
-        orchestration_prompt="Answer simple requests directly.",
+        orchestration_prompt="Do not run follow-up cycles.",
         allowed_role_ids=("time",),
         orchestration_policy=OrchestrationPolicy(
             max_orchestration_cycles=0,
-            max_parallel_delegated_tasks=0,
+            max_parallel_delegated_tasks=4,
         ),
     )
 
@@ -762,13 +812,13 @@ async def test_ai_mode_respects_zero_cycle_orchestration_policy(
         trace_id="run-1",
         root_task=root_task,
         coordinator_instance_id=coordinator_instance_id,
-        coordinator_first=False,
-        initial_result="direct answer",
         topology=topology,
     )
 
-    assert result.output == "direct answer"
-    assert task_execution_service.calls == []
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "orchestration_cycles_exhausted"
+    assert "zero orchestration cycles" in result.output
+    assert task_execution_service.calls == [root_task.task_id]
     assert task_repo.get(child_task.task_id).status == TaskStatus.ASSIGNED
 
 
@@ -1152,7 +1202,7 @@ async def test_graph_mode_reports_disabled_parallel_policy_with_pending_tasks(
         root_task=root_task,
         reuse_existing_instance=False,
     )
-    graph = OrchestrationGraph.model_construct(
+    graph = OrchestrationGraph(
         nodes=(
             OrchestrationGraphNode(
                 node_id="blocked",
@@ -1161,8 +1211,7 @@ async def test_graph_mode_reports_disabled_parallel_policy_with_pending_tasks(
             ),
         ),
         edges=(),
-        max_parallel_tasks=0,
-        final_response_node_id=None,
+        max_parallel_tasks=4,
     )
     topology = RunTopologySnapshot(
         session_mode=SessionMode.ORCHESTRATION,
@@ -1172,6 +1221,10 @@ async def test_graph_mode_reports_disabled_parallel_policy_with_pending_tasks(
         orchestration_preset_id="graph-disabled",
         orchestration_prompt="Run graph.",
         allowed_role_ids=("time",),
+        orchestration_policy=OrchestrationPolicy(
+            max_orchestration_cycles=8,
+            max_parallel_delegated_tasks=0,
+        ),
         orchestration_graph=graph,
     )
 
