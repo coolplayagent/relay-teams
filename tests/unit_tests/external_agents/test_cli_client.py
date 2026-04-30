@@ -485,7 +485,7 @@ async def test_run_cli_agent_prompt_uses_shared_timeout_budget(
         config=_build_cli_agent(sys.executable, ("-c", "")),
         prompt="hello runtime",
         runtime_cwd=tmp_path,
-        timeout_seconds=2,
+        timeout_seconds=30,
     )
 
     assert result == "done"
@@ -496,7 +496,8 @@ async def test_run_cli_agent_prompt_uses_shared_timeout_budget(
         "turn/wait",
     ]
     timeout_values = [timeout for _name, timeout in observed_timeouts]
-    assert all(0 < timeout <= 2 for timeout in timeout_values)
+    assert all(0 < timeout <= 30 for timeout in timeout_values)
+    assert timeout_values[0] > 10
     assert timeout_values == sorted(timeout_values, reverse=True)
     assert len(set(timeout_values)) == len(timeout_values)
 

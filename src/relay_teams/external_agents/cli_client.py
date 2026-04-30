@@ -150,12 +150,9 @@ async def run_cli_agent_prompt(
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         await _initialize_cli_runtime(
             client=client,
-            timeout_seconds=min(
-                _remaining_cli_timeout(
-                    deadline=deadline,
-                    timeout_seconds=timeout_seconds,
-                ),
-                _CLI_INITIALIZE_TIMEOUT_SECONDS,
+            timeout_seconds=_remaining_cli_timeout(
+                deadline=deadline,
+                timeout_seconds=timeout_seconds,
             ),
         )
         thread_id = await _start_cli_thread(

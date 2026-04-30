@@ -93,7 +93,7 @@ A CLI runtime uses stdio transport and starts in the active session workspace.
 Protocol rules:
 
 - stdin/stdout carry newline-delimited JSON-RPC messages.
-- Initialization, `thread/start`, `turn/start`, and turn output waiting share the configured prompt timeout as one global execution budget.
+- Initialization, `thread/start`, `turn/start`, and turn output waiting share the configured prompt timeout as one global execution budget. Prompt execution does not apply fixed per-phase caps to initialization; slow startup can use the remaining configured budget.
 - The runtime is initialized with `initialize`, followed by an `initialized` notification.
 - Runtime test/probe starts the CLI with an explicit cwd and resolves relative command paths from that same cwd. The Settings/API test endpoint uses the default workspace workdir; session execution uses the active session workspace.
 - Runtime test/probe uses the configured stdio transport env, including `PATH`, when validating whether the CLI command can be started.
