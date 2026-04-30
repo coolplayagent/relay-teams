@@ -29,6 +29,6 @@ def build_orchestration_policy_prompt(policy: OrchestrationPolicy) -> str:
         (
             "## Orchestration Policy",
             f"- Max orchestration cycles: {policy.max_orchestration_cycles}",
-            (f"- Max parallel delegated tasks: {policy.max_parallel_delegated_tasks}"),
+            f"- Max parallel delegated tasks: {policy.max_parallel_delegated_tasks}",
         )
     )
