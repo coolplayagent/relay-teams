@@ -110,13 +110,14 @@ CREATE TABLE IF NOT EXISTS external_agent_sessions (
 );
 ```
 
-Purpose: persistent mapping between one internal `session_id + role_id` pair and the reused remote ACP session created for the bound external agent.
+Purpose: persistent mapping between one internal `session_id + role_id` pair and the reused remote ACP session created for the bound external agent runtime.
 
 Notes:
 - `agent_id` references one configured entry in the resolved app config dir `agents.json`, by default `~/.relay-teams/agents.json`.
 - `transport` stores the outbound ACP transport type used by that saved agent config.
 - `external_session_id` is the remote ACP session identifier returned by the external agent and reused for later turns in the same internal session.
 - `status` stores the last-known remote session health, currently `ready` or `failed`.
+- A2A and CLI agent runtimes are configured in `agents.json` but do not write rows here because they do not expose reusable ACP session identifiers.
 
 ---
 

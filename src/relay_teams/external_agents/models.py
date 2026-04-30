@@ -16,6 +16,12 @@ class ExternalAgentTransportType(str, Enum):
     CUSTOM = "custom"
 
 
+class ExternalAgentProtocol(str, Enum):
+    ACP = "acp"
+    A2A = "a2a"
+    CLI = "cli"
+
+
 class ExternalAgentSecretBinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -68,6 +74,7 @@ class ExternalAgentConfig(BaseModel):
     agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = ""
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportConfig = Field(discriminator="transport")
 
 
@@ -83,6 +90,7 @@ class ExternalAgentSummary(BaseModel):
     agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
     description: str = ""
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportType
 
 
@@ -91,6 +99,7 @@ class ExternalAgentOption(BaseModel):
 
     agent_id: RequiredIdentifierStr
     name: str = Field(min_length=1)
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportType
 
 
@@ -99,7 +108,9 @@ class ExternalAgentTestResult(BaseModel):
 
     ok: bool
     message: str = ""
+    protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     protocol_version: int | None = None
+    protocol_version_text: str | None = None
     agent_name: str | None = None
     agent_version: str | None = None
 

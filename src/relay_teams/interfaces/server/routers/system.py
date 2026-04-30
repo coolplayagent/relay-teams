@@ -52,7 +52,7 @@ from relay_teams.external_agents import (
     ExternalAgentSummary,
     ExternalAgentTestResult,
 )
-from relay_teams.external_agents.acp_client import probe_acp_agent
+from relay_teams.external_agents.runtime_probe import probe_agent_runtime
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.env.web_config_models import WebConfig
@@ -869,7 +869,7 @@ async def test_external_agent(
         config = await call_maybe_async(service.resolve_runtime_agent, agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    result = await probe_acp_agent(config)
+    result = await probe_agent_runtime(config)
     if result.ok:
         return result
     raise HTTPException(status_code=400, detail=result.message)

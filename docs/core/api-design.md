@@ -560,12 +560,13 @@ Deletes one ClawHub-managed app skill directory and reloads the runtime skill re
 
 ### `GET /system/configs/agents`
 
-Returns configured external ACP agents.
+Returns configured external agent runtimes.
 
 Each item includes:
 - `agent_id`
 - `name`
 - `description`
+- `protocol`: `acp`, `a2a`, or `cli`
 - `transport`: `stdio`, `streamable_http`, or `custom`
 
 ### `GET /system/configs/agents/{agent_id}`
@@ -577,6 +578,11 @@ The `transport` field is a discriminated union:
 - `streamable_http`: `url`, optional `headers[]`, optional `ssl_verify`
 - `custom`: `adapter_id`, `config`
 
+The `protocol` field selects the runtime protocol:
+- `acp`: existing Agent Client Protocol session lifecycle over stdio, HTTP, or custom transport
+- `a2a`: Agent2Agent JSON-RPC over HTTP; `streamable_http.url` may point at an Agent Card or direct JSON-RPC endpoint
+- `cli`: non-interactive CLI execution for open coding agents such as local Codex; requires `stdio` transport
+
 Binding items under `env[]` or `headers[]` include:
 - `name`
 - `value`
@@ -585,7 +591,9 @@ Binding items under `env[]` or `headers[]` include:
 
 Notes:
 - Secret binding values are not returned on read. Instead, `configured=true` tells the UI that a secret exists in the unified secret store.
-- Any ACP-compatible external agent may be configured here, including tools such as Claude Code, Codex, or OpenCode, as long as it speaks the expected transport.
+- Any ACP-compatible external agent may be configured here, including tools such as Claude Code or OpenCode, as long as it speaks the expected transport.
+- A2A runtimes follow the public Agent2Agent Agent Card and `message/send` JSON-RPC flow.
+- CLI runtimes are process-based and receive the composed runtime prompt on stdin. Codex CLI configs may use `--yolo`; the runtime normalizes it to Codex's current non-interactive bypass flag when invoking `codex exec`.
 - `stdio` external agents always start inside the active session workspace. The working directory is runtime-derived from the session's project context and is not stored in agent config.
 
 ### `PUT /system/configs/agents/{agent_id}`
@@ -603,12 +611,14 @@ Deletes one saved external ACP agent config and its stored secrets.
 
 ### `POST /system/configs/agents/{agent_id}:test`
 
-Tests connectivity against the saved runtime-resolved external ACP agent config.
+Tests connectivity against the saved runtime-resolved external agent config.
 
 Response fields:
 - `ok`
 - `message`
+- `protocol`
 - optional `protocol_version`
+- optional `protocol_version_text`
 - optional `agent_name`
 - optional `agent_version`
 

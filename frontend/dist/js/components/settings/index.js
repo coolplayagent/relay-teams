@@ -192,7 +192,7 @@ function createModal() {
                         <span class="settings-tab-label" data-i18n="settings.tab.hooks">Hooks</span>
                     </button>
                     <button class="settings-tab" data-tab="agents">
-                        <span class="settings-tab-label" data-i18n="settings.tab.agents">Agents</span>
+                        <span class="settings-tab-label" data-i18n="settings.tab.agents">Agent Runtime</span>
                     </button>
                     <button class="settings-tab" data-tab="roles">
                         <span class="settings-tab-label" data-i18n="settings.tab.roles">Roles</span>
@@ -327,14 +327,14 @@ function createModal() {
                                 <div class="roles-list" id="agents-list"></div>
                                 <div class="role-editor-panel" id="agent-editor-panel" style="display:none;">
                                     <div class="roles-editor-empty settings-empty-state settings-empty-state-compact" id="agents-editor-empty" style="display:none;">
-                                        <h4 data-i18n="settings.agents.empty">No agent selected</h4>
-                                        <p data-i18n="settings.agents.empty_copy">Select an external ACP agent to edit its transport settings.</p>
+                                        <h4 data-i18n="settings.agents.empty">No runtime selected</h4>
+                                        <p data-i18n="settings.agents.empty_copy">Select an agent runtime to edit its protocol and transport settings.</p>
                                     </div>
                                     <div class="role-editor-form" id="agent-editor-form" style="display:none;">
                                         <div class="role-editor-header">
                                             <div>
-                                                <h4 data-i18n="settings.agents.editor">Agent Editor</h4>
-                                                <p data-i18n="settings.agents.editor_copy">Configure an ACP-compatible external agent and bind it to roles.</p>
+                                                <h4 data-i18n="settings.agents.editor">Runtime Editor</h4>
+                                                <p data-i18n="settings.agents.editor_copy">Configure an external agent runtime and bind it to roles.</p>
                                             </div>
                                         </div>
                                         <div class="role-editor-sections">
@@ -351,6 +351,14 @@ function createModal() {
                                                     <div class="form-group form-group-span-2">
                                                         <label for="agent-description-input" data-i18n="settings.agents.description">Description</label>
                                                         <input type="text" id="agent-description-input" placeholder="Short summary shown in role binding pickers" data-i18n-placeholder="settings.agents.description_placeholder">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label for="agent-protocol-input" data-i18n="settings.agents.protocol">Protocol</label>
+                                                        <select id="agent-protocol-input">
+                                                            <option value="acp" data-i18n="settings.agents.protocol_acp">ACP</option>
+                                                            <option value="a2a" data-i18n="settings.agents.protocol_a2a">A2A</option>
+                                                            <option value="cli" data-i18n="settings.agents.protocol_cli">CLI</option>
+                                                        </select>
                                                     </div>
                                                     <div class="form-group">
                                                         <label for="agent-transport-input" data-i18n="settings.agents.transport">Transport</label>

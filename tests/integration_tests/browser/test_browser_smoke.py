@@ -1157,6 +1157,7 @@ def test_browser_settings_save_role_and_agent_configs(
         "agent_id": agent_id,
         "name": "Browser Agent",
         "description": "Browser integration agent.",
+        "protocol": "acp",
         "transport": {
             "transport": "stdio",
             "command": "python",

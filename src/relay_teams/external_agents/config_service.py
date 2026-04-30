@@ -9,6 +9,7 @@ from relay_teams.external_agents.models import (
     ExternalAgentCollection,
     ExternalAgentConfig,
     ExternalAgentOption,
+    ExternalAgentProtocol,
     ExternalAgentSecretBinding,
     ExternalAgentSummary,
     StdioTransportConfig,
@@ -41,6 +42,7 @@ class ExternalAgentConfigService:
                 agent_id=agent.agent_id,
                 name=agent.name,
                 description=agent.description,
+                protocol=agent.protocol,
                 transport=agent.transport.transport,
             )
             for agent in self._load_collection().agents
@@ -51,6 +53,7 @@ class ExternalAgentConfigService:
             ExternalAgentOption(
                 agent_id=agent.agent_id,
                 name=agent.name,
+                protocol=agent.protocol,
                 transport=agent.transport.transport,
             )
             for agent in self._load_collection().agents
@@ -376,6 +379,7 @@ class ExternalAgentConfigService:
         agent_id = _normalize_required_text(config.agent_id, "agent_id")
         name = _normalize_required_text(config.name, "name")
         description = str(config.description or "").strip()
+        protocol = config.protocol
         if isinstance(config.transport, StdioTransportConfig):
             transport = config.transport.model_copy(
                 update={
@@ -416,11 +420,13 @@ class ExternalAgentConfigService:
             raise ValueError(
                 f"Unsupported external agent transport: {config.transport.transport.value}"
             )
+        _validate_protocol_transport(protocol=protocol, transport=transport)
         return config.model_copy(
             update={
                 "agent_id": agent_id,
                 "name": name,
                 "description": description,
+                "protocol": protocol,
                 "transport": transport,
             }
         )
@@ -452,6 +458,23 @@ def _normalize_optional_text(value: str | None) -> str | None:
     if not normalized:
         return None
     return normalized
+
+
+def _validate_protocol_transport(
+    *,
+    protocol: ExternalAgentProtocol,
+    transport: StdioTransportConfig
+    | StreamableHttpTransportConfig
+    | CustomTransportConfig,
+) -> None:
+    if protocol == ExternalAgentProtocol.A2A and not isinstance(
+        transport, StreamableHttpTransportConfig
+    ):
+        raise ValueError("A2A agent runtimes require streamable_http transport")
+    if protocol == ExternalAgentProtocol.CLI and not isinstance(
+        transport, StdioTransportConfig
+    ):
+        raise ValueError("CLI agent runtimes require stdio transport")
 
 
 def _strip_legacy_stdio_workdir(payload: object) -> object:

@@ -50,6 +50,7 @@ console.log(JSON.stringify({
         "agent_id": "codex_local",
         "name": "Codex Local Updated",
         "description": "Runs Codex locally.",
+        "protocol": "acp",
         "transport": {
             "transport": "stdio",
             "command": "codex --serve",
@@ -117,6 +118,7 @@ console.log(JSON.stringify({
         "agent_id": "codex_local",
         "name": "Codex Local",
         "description": "Runs Codex locally.",
+        "protocol": "acp",
         "transport": {
             "transport": "stdio",
             "command": "codex",
@@ -147,6 +149,7 @@ def test_agents_settings_panel_markup_uses_i18n_keys() -> None:
 
     assert 'data-i18n="settings.agents.empty"' in panel_html
     assert 'data-i18n="settings.agents.editor"' in panel_html
+    assert 'data-i18n="settings.agents.protocol"' in panel_html
     assert 'data-i18n="settings.agents.env_bindings"' in panel_html
     assert 'data-i18n="settings.agents.header_bindings"' in panel_html
     assert 'data-i18n-placeholder="settings.agents.id_placeholder"' in panel_html
@@ -184,6 +187,7 @@ const agentRecords = {
         agent_id: "codex_local",
         name: "Codex Local",
         description: "Runs Codex locally.",
+        protocol: "acp",
         transport: {
             transport: "stdio",
             command: "codex",
@@ -199,6 +203,7 @@ export async function fetchExternalAgents() {
             agent_id: "codex_local",
             name: "Codex Local",
             description: "Runs Codex locally.",
+            protocol: "acp",
             transport: "stdio",
         },
     ];
@@ -276,7 +281,7 @@ const TRANSLATIONS = {
     "settings.agents.save_failed_message": "Failed to save external agent config.",
     "settings.agents.test_passed": "Agent Test Passed",
     "settings.agents.test_passed_message": "Connection succeeded.",
-    "settings.agents.test_passed_detail": "responded to ACP initialize.",
+    "settings.agents.test_passed_detail": "responded to the selected protocol probe.",
     "settings.agents.test_failed": "Agent Test Failed",
     "settings.agents.test_failed_message": "Failed to test external agent config.",
     "settings.agents.deleted": "Agent Deleted",
@@ -289,15 +294,20 @@ const TRANSLATIONS = {
     "settings.agents.http_url_required": "HTTP transport URL is required.",
     "settings.agents.custom_adapter_required": "Custom transport adapter ID is required.",
     "settings.agents.stdio_command_required": "Stdio command is required.",
+    "settings.agents.a2a_requires_http": "A2A runtimes require Streamable HTTP transport.",
+    "settings.agents.cli_requires_stdio": "CLI runtimes require Stdio transport.",
     "settings.agents.custom_config": "Config JSON",
     "settings.agents.json_object_required": "must be a JSON object.",
     "settings.agents.json_invalid": "must be valid JSON.",
     "settings.agents.transport_stdio_label": "Stdio",
     "settings.agents.transport_http_label": "HTTP",
     "settings.agents.transport_custom_label": "Custom",
+    "settings.agents.protocol_acp_label": "ACP",
+    "settings.agents.protocol_a2a_label": "A2A",
+    "settings.agents.protocol_cli_label": "CLI",
     "settings.agents.no_description": "No description",
-    "settings.agents.none": "No external agents found",
-    "settings.agents.none_copy": "Add an ACP-compatible external agent to make it available for role bindings.",
+    "settings.agents.none": "No agent runtimes found",
+    "settings.agents.none_copy": "Add an ACP, A2A, or CLI agent runtime to make it available for role bindings.",
     "settings.agents.load_failed": "Load Failed",
     "settings.agents.load_failed_message": "Unable to load agent settings.",
     "settings.agents.no_env_options": "No environment variables available",
@@ -426,6 +436,7 @@ function createElements() {{
         ["agent-id-input", createElement("block")],
         ["agent-name-input", createElement("block")],
         ["agent-description-input", createElement("block")],
+        ["agent-protocol-input", createElement("block")],
         ["agent-transport-input", createElement("block")],
         ["agent-transport-stdio", createElement("block")],
         ["agent-transport-http", createElement("none")],

@@ -16,6 +16,7 @@ from pydantic import JsonValue
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.external_agents import (
     ExternalAgentConfig,
+    ExternalAgentProtocol,
     ExternalAgentSummary,
     ExternalAgentTestResult,
     StdioTransportConfig,
@@ -355,6 +356,7 @@ class _FakeSystemService:
                 agent_id=agent.agent_id,
                 name=agent.name,
                 description=agent.description,
+                protocol=agent.protocol,
                 transport=agent.transport.transport,
             )
             for agent in self.external_agents.values()
@@ -1291,13 +1293,14 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
         return ExternalAgentTestResult(
             ok=True,
             message="Connected",
+            protocol=ExternalAgentProtocol.ACP,
             agent_name="Codex",
             agent_version="1.0.0",
             protocol_version=1,
         )
 
     monkeypatch.setattr(system, "call_maybe_async", fake_to_thread)
-    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
+    monkeypatch.setattr(system, "probe_agent_runtime", fake_probe)
     client = _create_test_client(_FakeSystemService())
 
     responses = [
@@ -2603,6 +2606,7 @@ def test_list_external_agents() -> None:
             "agent_id": "codex_local",
             "name": "Codex Local",
             "description": "Runs Codex via stdio",
+            "protocol": "acp",
             "transport": "stdio",
         }
     ]
@@ -2618,6 +2622,7 @@ def test_get_external_agent_omits_stdio_working_directory() -> None:
         "agent_id": "codex_local",
         "name": "Codex Local",
         "description": "Runs Codex via stdio",
+        "protocol": "acp",
         "transport": {
             "transport": "stdio",
             "command": "codex",
@@ -2658,12 +2663,13 @@ def test_test_external_agent(monkeypatch) -> None:
         return ExternalAgentTestResult(
             ok=True,
             message="Connected",
+            protocol=ExternalAgentProtocol.ACP,
             agent_name="Codex",
             agent_version="1.0.0",
             protocol_version=1,
         )
 
-    monkeypatch.setattr(system, "probe_acp_agent", fake_probe)
+    monkeypatch.setattr(system, "probe_agent_runtime", fake_probe)
     client = _create_test_client(_FakeSystemService())
 
     response = client.post("/api/system/configs/agents/codex_local:test")
@@ -2672,9 +2678,11 @@ def test_test_external_agent(monkeypatch) -> None:
     assert response.json() == {
         "ok": True,
         "message": "Connected",
+        "protocol": "acp",
         "agent_name": "Codex",
         "agent_version": "1.0.0",
         "protocol_version": 1,
+        "protocol_version_text": None,
     }
 
 

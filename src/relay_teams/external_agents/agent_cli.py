@@ -180,20 +180,30 @@ def _render_agent_summary_table(items: list[dict[str, object]]) -> None:
         len("Agent ID"), *(len(str(item.get("agent_id") or "")) for item in items)
     )
     name_width = max(len("Name"), *(len(str(item.get("name") or "")) for item in items))
+    protocol_width = max(
+        len("Protocol"),
+        *(len(str(item.get("protocol") or "")) for item in items),
+    )
     transport_width = max(
         len("Transport"),
         *(len(str(item.get("transport") or "")) for item in items),
     )
-    border = f"+-{'-' * id_width}-+-{'-' * name_width}-+-{'-' * transport_width}-+"
+    border = (
+        f"+-{'-' * id_width}-+-{'-' * name_width}-+-{'-' * protocol_width}-+-"
+        f"{'-' * transport_width}-+"
+    )
     typer.echo(border)
     typer.echo(
-        f"| {'Agent ID'.ljust(id_width)} | {'Name'.ljust(name_width)} | {'Transport'.ljust(transport_width)} |"
+        f"| {'Agent ID'.ljust(id_width)} | {'Name'.ljust(name_width)} | "
+        f"{'Protocol'.ljust(protocol_width)} | "
+        f"{'Transport'.ljust(transport_width)} |"
     )
     typer.echo(border)
     for item in items:
         typer.echo(
             f"| {str(item.get('agent_id') or '').ljust(id_width)} | "
             f"{str(item.get('name') or '').ljust(name_width)} | "
+            f"{str(item.get('protocol') or '').ljust(protocol_width)} | "
             f"{str(item.get('transport') or '').ljust(transport_width)} |"
         )
     typer.echo(border)
@@ -203,6 +213,7 @@ def _render_agent_detail(item: dict[str, object]) -> None:
     typer.echo(f"Agent ID: {item.get('agent_id', '')}")
     typer.echo(f"Name: {item.get('name', '')}")
     typer.echo(f"Description: {item.get('description', '')}")
+    typer.echo(f"Protocol: {item.get('protocol', 'acp')}")
     transport = item.get("transport")
     if isinstance(transport, dict):
         typer.echo(f"Transport: {transport.get('transport', '')}")
@@ -214,6 +225,7 @@ def _render_agent_detail(item: dict[str, object]) -> None:
 def _render_test_result(agent_id: str, item: dict[str, object]) -> None:
     typer.echo(f"Agent: {agent_id}")
     typer.echo(f"OK: {item.get('ok', False)}")
+    typer.echo(f"Protocol: {item.get('protocol', 'acp')}")
     message = str(item.get("message") or "").strip()
     if message:
         typer.echo(f"Message: {message}")
@@ -223,3 +235,5 @@ def _render_test_result(agent_id: str, item: dict[str, object]) -> None:
         typer.echo(f"Agent Version: {item.get('agent_version')}")
     if item.get("protocol_version") is not None:
         typer.echo(f"Protocol Version: {item.get('protocol_version')}")
+    if item.get("protocol_version_text"):
+        typer.echo(f"Protocol Version: {item.get('protocol_version_text')}")
