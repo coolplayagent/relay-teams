@@ -121,6 +121,12 @@ function renderOrchestrationList() {
             openOrchestrationEditor(button.dataset.orchestrationId);
         };
     });
+    host.querySelectorAll('.orchestration-set-default-btn').forEach(button => {
+        button.onclick = event => {
+            event.stopPropagation();
+            void handleSetDefaultOrchestration(button.dataset.orchestrationId);
+        };
+    });
     host.querySelectorAll('.role-record').forEach(button => {
         button.onclick = () => {
             openOrchestrationEditor(button.dataset.orchestrationId);
@@ -156,6 +162,7 @@ function renderOrchestrationRecord(orchestration) {
                 </div>
             </div>
             <div class="role-record-actions">
+                <button class="settings-inline-action settings-list-action profile-card-action-btn orchestration-set-default-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button" title="${escapeHtml(t('settings.orchestration.default_action'))}" ${isDefault ? 'disabled' : ''}>${escapeHtml(t('settings.orchestration.default_action_short'))}</button>
                 <button class="settings-inline-action settings-list-action orchestration-edit-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button">${escapeHtml(t('settings.orchestration.edit'))}</button>
             </div>
         </div>
@@ -252,10 +259,6 @@ function renderOrchestrationEditor() {
                         <label for="orchestration-description-input">${t('settings.orchestration.field.description')}</label>
                         <input type="text" id="orchestration-description-input" value="${escapeHtml(editingDraft.description)}" autocomplete="off">
                     </div>
-                </div>
-                <div class="profile-default-row orchestration-default-row">
-                    <input type="checkbox" id="orchestration-default-input"${editingDraft.is_default ? ' checked' : ''}>
-                    <label for="orchestration-default-input">${t('settings.orchestration.field.default')}</label>
                 </div>
                 <div class="profile-editor-grid role-editor-grid orchestration-policy-grid">
                     <div class="form-group">
@@ -384,6 +387,42 @@ async function handleDeleteOrchestration() {
     }
 }
 
+async function handleSetDefaultOrchestration(orchestrationId) {
+    const nextDefaultId = String(orchestrationId || '').trim();
+    const orchestration = orchestrationConfig.presets.find(
+        item => String(item?.preset_id || '').trim() === nextDefaultId,
+    );
+    if (
+        !orchestration
+        || nextDefaultId === String(orchestrationConfig.default_orchestration_preset_id || '').trim()
+    ) {
+        return;
+    }
+
+    try {
+        await saveOrchestrationConfig({
+            default_orchestration_preset_id: nextDefaultId,
+            presets: orchestrationConfig.presets.map(item => serializeOrchestration(item)),
+        });
+        showToast({
+            title: t('settings.orchestration.default_saved_title'),
+            message: formatMessage('settings.orchestration.default_saved_message', {
+                name: orchestration.name || nextDefaultId,
+            }),
+            tone: 'success',
+        });
+        document.dispatchEvent(new CustomEvent('orchestration-settings-updated'));
+        await loadOrchestrationSettingsPanel();
+    } catch (error) {
+        renderStatus(error.message || t('settings.orchestration.save_failed_detail'), 'danger');
+        showToast({
+            title: t('settings.orchestration.save_failed_title'),
+            message: error.message || t('settings.orchestration.save_failed_detail'),
+            tone: 'danger',
+        });
+    }
+}
+
 function handleCancelOrchestrationEdit() {
     editingDraft = null;
     editingSourceId = '';
@@ -430,7 +469,6 @@ function readDraftFromForm() {
                 roleIds.push(String(input.dataset.roleId || '').trim());
             }
         });
-    const isDefault = document.getElementById('orchestration-default-input')?.checked === true;
 
     if (!orchestrationId) {
         throw new Error(t('settings.orchestration.id_required'));
@@ -453,7 +491,7 @@ function readDraftFromForm() {
         orchestration_prompt: orchestrationPrompt,
         policy,
         graph,
-        is_default: isDefault,
+        is_default: false,
     };
     return { ...editingDraft };
 }
@@ -465,13 +503,11 @@ function buildSavedConfig(draft) {
     nextPresets.push(cloneOrchestration(draft));
 
     const normalizedPresets = nextPresets.map(item => serializeOrchestration(item));
-    const defaultOrchestrationId = draft.is_default
-        ? draft.preset_id
-        : resolveDefaultOrchestrationId({
-            presets: nextPresets,
-            editingSourceId,
-            fallbackId: draft.preset_id,
-        });
+    const defaultOrchestrationId = resolveDefaultOrchestrationId({
+        presets: nextPresets,
+        editingSourceId,
+        fallbackId: draft.preset_id,
+    });
 
     if (!defaultOrchestrationId) {
         throw new Error(t('settings.orchestration.default_required'));
