@@ -85,17 +85,22 @@ class _CliJsonRpcNotification(BaseModel):
     params: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-async def probe_cli_agent(config: ExternalAgentConfig) -> ExternalAgentTestResult:
+async def probe_cli_agent(
+    config: ExternalAgentConfig,
+    *,
+    runtime_cwd: Path | None = None,
+) -> ExternalAgentTestResult:
     client: _StdioCliJsonRpcClient | None = None
     try:
         transport = _stdio_transport(config)
         command: str = str(transport.command)
-        if not _cli_command_exists(command):
+        probe_cwd = runtime_cwd or Path.cwd()
+        if not _cli_command_exists(command, runtime_cwd=probe_cwd):
             raise CliAgentError(f"CLI command not found: {command}")
         client = _StdioCliJsonRpcClient(
             command=command,
             args=_build_command_args(transport=transport),
-            runtime_cwd=None,
+            runtime_cwd=probe_cwd,
             transport=transport,
         )
         result = await _initialize_cli_runtime(
@@ -185,9 +190,12 @@ def _stdio_transport(config: ExternalAgentConfig) -> StdioTransportConfig:
     return config.transport
 
 
-def _cli_command_exists(command: str) -> bool:
+def _cli_command_exists(command: str, *, runtime_cwd: Path | None = None) -> bool:
     if "/" in command or "\\" in command:
-        return Path(command).exists()
+        candidate = Path(command)
+        if not candidate.is_absolute() and runtime_cwd is not None:
+            candidate = runtime_cwd / candidate
+        return candidate.exists()
     for directory in os.get_exec_path():
         candidate = Path(directory) / command
         if _executable_path_exists(candidate):

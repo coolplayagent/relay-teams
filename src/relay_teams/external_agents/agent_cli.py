@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import Enum
 import json
+from urllib.parse import quote
 
 import typer
 
@@ -69,12 +70,10 @@ def build_agent_runtimes_app(
         payload = request_json(
             base_url,
             "GET",
-            f"/api/system/configs/agent-runtimes/{agent_id}",
+            _agent_runtime_path(agent_id),
             None,
         )
-        data = _require_object_response(
-            payload, f"/api/system/configs/agent-runtimes/{agent_id}"
-        )
+        data = _require_object_response(payload, _agent_runtime_path(agent_id))
         if output_format == AgentOutputFormat.JSON:
             typer.echo(json.dumps(data, ensure_ascii=False))
             return
@@ -96,7 +95,7 @@ def build_agent_runtimes_app(
         result = request_json(
             base_url,
             "PUT",
-            f"/api/system/configs/agent-runtimes/{agent_id}",
+            _agent_runtime_path(agent_id),
             payload,
         )
         typer.echo(
@@ -116,7 +115,7 @@ def build_agent_runtimes_app(
         result = request_json(
             base_url,
             "DELETE",
-            f"/api/system/configs/agent-runtimes/{agent_id}",
+            _agent_runtime_path(agent_id),
             None,
         )
         typer.echo(
@@ -142,11 +141,11 @@ def build_agent_runtimes_app(
         payload = request_json(
             base_url,
             "POST",
-            f"/api/system/configs/agent-runtimes/{agent_id}:test",
+            _agent_runtime_path(agent_id, suffix=":test"),
             None,
         )
         data = _require_object_response(
-            payload, f"/api/system/configs/agent-runtimes/{agent_id}:test"
+            payload, _agent_runtime_path(agent_id, suffix=":test")
         )
         if output_format == AgentOutputFormat.JSON:
             typer.echo(json.dumps(data, ensure_ascii=False))
@@ -154,6 +153,11 @@ def build_agent_runtimes_app(
         _render_test_result(agent_id, data)
 
     return agent_runtimes_app
+
+
+def _agent_runtime_path(agent_id: str, *, suffix: str = "") -> str:
+    encoded_agent_id = quote(agent_id, safe="")
+    return f"/api/system/configs/agent-runtimes/{encoded_agent_id}{suffix}"
 
 
 def _parse_config_json(raw: str) -> dict[str, object]:

@@ -43,6 +43,8 @@ CLI surface:
 - `relay-teams agent-runtimes delete <agent_id>`
 - `relay-teams agent-runtimes test <agent_id>`
 
+CLI commands percent-encode `agent_id` before placing it in `/api/*` paths so runtime ids with URI-reserved characters use the same route semantics as the SDK and Settings UI.
+
 Settings UI labels use `Agent Runtime` for the tab and editor surface.
 
 ## 3. Config Model
@@ -93,6 +95,7 @@ Protocol rules:
 - stdin/stdout carry newline-delimited JSON-RPC messages.
 - Initialization, `thread/start`, `turn/start`, and turn output waiting share the configured prompt timeout as one global execution budget.
 - The runtime is initialized with `initialize`, followed by an `initialized` notification.
+- Runtime test/probe starts the CLI with an explicit cwd and resolves relative command paths from that same cwd.
 - Agent Teams creates an ephemeral thread with `thread/start`.
 - Prompt execution uses `turn/start` with the composed runtime prompt as a text input item.
 - Assistant output is collected from `item/agentMessage/delta`; if no deltas are emitted, the completed `agentMessage` item is used as a fallback.

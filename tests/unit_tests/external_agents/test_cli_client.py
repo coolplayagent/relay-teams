@@ -300,6 +300,28 @@ async def test_probe_cli_agent_reports_missing_command(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_probe_cli_agent_resolves_relative_command_from_runtime_cwd(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    executable = bin_dir / "runtime-agent"
+    executable.write_text(
+        f"#!{sys.executable}\n{_JSON_RPC_RUNTIME_SCRIPT}",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+
+    result = await probe_cli_agent(
+        _build_cli_agent("./bin/runtime-agent", ()),
+        runtime_cwd=tmp_path,
+    )
+
+    assert result.ok is True
+    assert result.agent_name == "runtime-agent"
+
+
+@pytest.mark.asyncio
 async def test_run_cli_agent_prompt_uses_thread_turn_json_rpc(tmp_path: Path) -> None:
     result = await run_cli_agent_prompt(
         config=_build_cli_agent(sys.executable, ("-c", _JSON_RPC_RUNTIME_SCRIPT)),
@@ -457,6 +479,7 @@ def test_cli_command_exists_checks_direct_paths_and_path_entries(
     if os.name != "nt":
         assert _cli_command_exists("not-executable") is False
     assert _cli_command_exists("missing-agent") is False
+    assert _cli_command_exists("./runtime-agent", runtime_cwd=tmp_path) is True
 
 
 def test_codex_command_uses_app_server_stdio_runtime() -> None:
