@@ -108,8 +108,13 @@ class _BlockingTaskExecutionService:
 
 
 class _CapturingHookService:
-    def __init__(self, decision: HookDecisionType = HookDecisionType.ALLOW) -> None:
+    def __init__(
+        self,
+        decision: HookDecisionType = HookDecisionType.ALLOW,
+        decisions: tuple[HookDecisionType, ...] = (),
+    ) -> None:
         self.decision = decision
+        self._decisions = decisions
         self.calls: list[tuple[object, object | None]] = []
 
     async def execute(
@@ -119,6 +124,9 @@ class _CapturingHookService:
         run_event_hub: object | None,
     ) -> HookDecisionBundle:
         self.calls.append((event_input, run_event_hub))
+        decision_index = len(self.calls) - 1
+        if decision_index < len(self._decisions):
+            return HookDecisionBundle(decision=self._decisions[decision_index])
         return HookDecisionBundle(decision=self.decision)
 
 
@@ -262,6 +270,163 @@ async def test_create_tasks_creates_unassigned_task_contracts(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_create_tasks_can_queue_dynamic_graph_nodes(tmp_path: Path) -> None:
+    (
+        service,
+        task_repo,
+        agent_repo,
+        _message_repo,
+        execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_dynamic_graph.db")
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Implement the endpoint",
+                title="Implement",
+                role_id="spec_coder",
+                orchestration_node_id="implement",
+            ),
+            TaskDraft(
+                objective="Review the endpoint implementation",
+                title="Review",
+                role_id="reviewer",
+                orchestration_node_id="review",
+                depends_on_node_ids=("implement",),
+            ),
+        ],
+    )
+
+    tasks_payload = cast(list[JsonValue], payload["tasks"])
+    implement_task = cast(dict[str, JsonValue], tasks_payload[0])
+    review_task = cast(dict[str, JsonValue], tasks_payload[1])
+    implement_task_id = str(implement_task["task_id"])
+    review_task_id = str(review_task["task_id"])
+    implement_record = task_repo.get(implement_task_id)
+    review_record = task_repo.get(review_task_id)
+
+    assert implement_task["status"] == "assigned"
+    assert review_task["status"] == "assigned"
+    assert implement_task["assigned_role_id"] == "spec_coder"
+    assert review_task["assigned_role_id"] == "reviewer"
+    assert implement_record.envelope.orchestration_node_id == "implement"
+    assert review_record.envelope.orchestration_node_id == "review"
+    assert review_record.envelope.depends_on_task_ids == (implement_task_id,)
+    assert review_task["depends_on_task_ids"] == [implement_task_id]
+    implement_instance_id = implement_record.assigned_instance_id
+    review_instance_id = review_record.assigned_instance_id
+    assert implement_instance_id is not None
+    assert review_instance_id is not None
+    assert agent_repo.get_instance(implement_instance_id).role_id == "spec_coder"
+    assert agent_repo.get_instance(review_instance_id).role_id == "reviewer"
+    assert execution_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_rejects_unknown_node_dependency(tmp_path: Path) -> None:
+    service, _task_repo, _agent_repo, _message_repo, _execution_service = (
+        _build_service(tmp_path / "task_orchestration_unknown_node_dependency.db")
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="depends_on_node_ids references unknown orchestration node: missing",
+    ):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Review the endpoint implementation",
+                    role_id="reviewer",
+                    orchestration_node_id="review",
+                    depends_on_node_ids=("missing",),
+                )
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_rejects_cyclic_node_dependencies(tmp_path: Path) -> None:
+    service, _task_repo, _agent_repo, _message_repo, _execution_service = (
+        _build_service(tmp_path / "task_orchestration_cyclic_graph.db")
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="orchestration graph dependencies must be acyclic",
+    ):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Implement one",
+                    role_id="spec_coder",
+                    orchestration_node_id="one",
+                    depends_on_node_ids=("two",),
+                ),
+                TaskDraft(
+                    objective="Implement two",
+                    role_id="spec_coder",
+                    orchestration_node_id="two",
+                    depends_on_node_ids=("one",),
+                ),
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_rejects_unknown_task_dependency(tmp_path: Path) -> None:
+    service, _task_repo, _agent_repo, _message_repo, _execution_service = (
+        _build_service(tmp_path / "task_orchestration_unknown_task_dependency.db")
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="depends_on_task_ids references unknown task: missing-task",
+    ):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Review the endpoint implementation",
+                    role_id="reviewer",
+                    depends_on_task_ids=("missing-task",),
+                )
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_rejects_unknown_role_before_persisting_batch(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_unknown_role.db"
+    )
+
+    with pytest.raises(KeyError):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Implement the endpoint",
+                    role_id="spec_coder",
+                    orchestration_node_id="implement",
+                ),
+                TaskDraft(
+                    objective="Audit the endpoint",
+                    role_id="missing_role",
+                    orchestration_node_id="audit",
+                    depends_on_node_ids=("implement",),
+                ),
+            ],
+        )
+
+    assert [record.envelope.task_id for record in task_repo.list_all()] == ["task-root"]
+
+
+@pytest.mark.asyncio
 async def test_create_tasks_persists_spec_verification_and_lifecycle(
     tmp_path: Path,
 ) -> None:
@@ -387,6 +552,53 @@ async def test_create_tasks_denied_by_hook_does_not_persist_task(
             tasks=[TaskDraft(objective="Implement the endpoint")],
         )
 
+    assert [record.envelope.task_id for record in task_repo.list_all()] == ["task-root"]
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_later_hook_denial_does_not_persist_partial_batch(
+    tmp_path: Path,
+) -> None:
+    task_repo = TaskRepository(tmp_path / "task_orchestration_hook_batch_deny.db")
+    agent_repo = AgentInstanceRepository(
+        tmp_path / "task_orchestration_hook_batch_deny.db"
+    )
+    message_repo = MessageRepository(tmp_path / "task_orchestration_hook_batch_deny.db")
+    session_repo = SessionRepository(tmp_path / "task_orchestration_hook_batch_deny.db")
+    execution_service = _FakeTaskExecutionService(task_repo)
+    hook_service = _CapturingHookService(
+        decisions=(HookDecisionType.ALLOW, HookDecisionType.DENY)
+    )
+    _seed_root_task(task_repo)
+    _ = session_repo.create(session_id="session-1", workspace_id="default")
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=agent_repo,
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=message_repo,
+        session_repo=session_repo,
+        hook_service=cast(HookService, hook_service),
+        run_event_hub=cast(RunEventHub, object()),
+    )
+
+    with pytest.raises(ValueError, match="Task creation denied"):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Implement the endpoint",
+                    orchestration_node_id="implement",
+                ),
+                TaskDraft(
+                    objective="Review the endpoint implementation",
+                    orchestration_node_id="review",
+                    depends_on_node_ids=("implement",),
+                ),
+            ],
+        )
+
+    assert len(hook_service.calls) == 2
     assert [record.envelope.task_id for record in task_repo.list_all()] == ["task-root"]
 
 
