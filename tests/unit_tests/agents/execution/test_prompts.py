@@ -292,6 +292,9 @@ def test_runtime_system_prompt_for_coordinator_has_contract_and_context() -> Non
     assert "## Runtime Rules" in prompt
     assert "## Orchestration Rules" in prompt
     assert "## Orchestration Prompt" in prompt
+    assert "## Orchestration Policy" in prompt
+    assert "Max orchestration cycles: 8" in prompt
+    assert "Max parallel delegated tasks: 4" in prompt
     assert "## Orchestration Graph" in prompt
     assert "- write: role=writer_agent" in prompt
     assert "## Available Roles" in prompt

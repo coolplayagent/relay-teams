@@ -15,6 +15,7 @@ from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraphEdge,
     OrchestrationGraphNode,
 )
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
@@ -688,6 +689,190 @@ async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
     assert followup_start >= first_end
     assert second_start < first_end
     assert first_start < second_end
+
+
+@pytest.mark.asyncio
+async def test_ai_mode_respects_zero_cycle_orchestration_policy(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="answer directly",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    child_task = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="query time",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    _ = task_repo.create(child_task)
+    child_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=child_instance.instance_id,
+        role_id="time",
+        workspace_id=child_instance.workspace_id,
+        conversation_id=child_instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    task_repo.update_status(
+        child_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=child_instance.instance_id,
+    )
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="simple",
+        orchestration_prompt="Answer simple requests directly.",
+        allowed_role_ids=("time",),
+        orchestration_policy=OrchestrationPolicy(
+            max_orchestration_cycles=0,
+            max_parallel_delegated_tasks=0,
+        ),
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        coordinator_first=False,
+        initial_result="direct answer",
+        topology=topology,
+    )
+
+    assert result.output == "direct answer"
+    assert task_execution_service.calls == []
+    assert task_repo.get(child_task.task_id).status == TaskStatus.ASSIGNED
+
+
+@pytest.mark.asyncio
+async def test_ai_mode_uses_policy_parallel_limit(tmp_path: Path) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, _ = _build_coordinator(
+        tmp_path
+    )
+    slow_execution_service = _SlowRecordingTaskExecutionService(task_repo)
+    coordinator.task_execution_service = cast(
+        TaskExecutionService, slow_execution_service
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="run limited delegated work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    first_child = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="first child",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    second_child = TaskEnvelope(
+        task_id="task-child-2",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="second child",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    for task in (root_task, first_child, second_child):
+        _ = task_repo.create(task)
+    first_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time-1",
+    )
+    second_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time-2",
+    )
+    for instance in (first_instance, second_instance):
+        agent_repo.upsert_instance(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id=instance.instance_id,
+            role_id="time",
+            workspace_id=instance.workspace_id,
+            conversation_id=instance.conversation_id,
+            status=InstanceStatus.IDLE,
+        )
+    task_repo.update_status(
+        first_child.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=first_instance.instance_id,
+    )
+    task_repo.update_status(
+        second_child.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=second_instance.instance_id,
+    )
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="limited",
+        orchestration_prompt="Run one delegated lane at a time.",
+        allowed_role_ids=("time",),
+        orchestration_policy=OrchestrationPolicy(
+            max_orchestration_cycles=1,
+            max_parallel_delegated_tasks=1,
+        ),
+    )
+
+    _ = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        coordinator_first=False,
+        topology=topology,
+    )
+
+    assert slow_execution_service.max_active_count == 1
+    assert first_child.task_id in slow_execution_service.calls
+    assert second_child.task_id in slow_execution_service.calls
+    assert root_task.task_id in slow_execution_service.calls
 
 
 @pytest.mark.asyncio

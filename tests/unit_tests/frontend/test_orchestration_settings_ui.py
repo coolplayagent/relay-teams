@@ -150,9 +150,12 @@ console.log(JSON.stringify({
     default_preset = next(
         preset for preset in saved_presets if preset["preset_id"] == "default"
     )
+    policy = cast(dict[str, JsonValue], default_preset["policy"])
     graph = cast(dict[str, JsonValue], default_preset["graph"])
     nodes = cast(list[dict[str, JsonValue]], graph["nodes"])
     edges = cast(list[dict[str, JsonValue]], graph["edges"])
+    assert policy["max_orchestration_cycles"] == 6
+    assert policy["max_parallel_delegated_tasks"] == 3
     assert nodes[0]["node_id"] == "write"
     assert edges[0]["from_node_id"] == "write"
 
@@ -189,6 +192,10 @@ let orchestrationConfig = {
             description: "General routing.",
             role_ids: ["Writer", "Reviewer"],
             orchestration_prompt: "Route by capability.",
+            policy: {
+                max_orchestration_cycles: 6,
+                max_parallel_delegated_tasks: 3,
+            },
             graph: {
                 nodes: [
                     {
@@ -301,6 +308,10 @@ const translations = {
     "settings.orchestration.field.name": "Orchestration Name",
     "settings.orchestration.field.description": "Description",
     "settings.orchestration.field.default": "Set as default orchestration",
+    "settings.orchestration.policy.max_cycles": "Max Cycles",
+    "settings.orchestration.policy.max_parallel": "Max Parallel Tasks",
+    "settings.orchestration.policy.max_cycles_required": "Max cycles must be an integer from 0 to 64.",
+    "settings.orchestration.policy.max_parallel_required": "Max parallel tasks must be an integer from 0 to 16.",
     "settings.orchestration.allowed_roles": "Allowed Roles",
     "settings.orchestration.prompt_title": "Orchestration Prompt",
     "settings.orchestration.prompt_placeholder": "Explain how Coordinator should split work, choose roles, and drive work to completion.",
@@ -482,6 +493,8 @@ function createElements() {{
         ["orchestration-name-input", createElement("block")],
         ["orchestration-description-input", createElement("block")],
         ["orchestration-default-input", createElement("block")],
+        ["orchestration-max-cycles-input", createElement("block")],
+        ["orchestration-max-parallel-input", createElement("block")],
         ["orchestration-role-picker", createElement("block")],
         ["orchestration-prompt-input", createElement("block")],
         ["orchestration-graph-input", createElement("block")],
@@ -529,12 +542,16 @@ function installGlobals(elements) {{
         const descMatch = html.match(/id="orchestration-description-input" value="([^"]*)"/);
         const promptMatch = html.match(/<textarea id="orchestration-prompt-input"[^>]*>([\\s\\S]*?)<\\/textarea>/);
         const graphMatch = html.match(/<textarea id="orchestration-graph-input"[^>]*>([\\s\\S]*?)<\\/textarea>/);
+        const maxCyclesMatch = html.match(/id="orchestration-max-cycles-input" value="([^"]*)"/);
+        const maxParallelMatch = html.match(/id="orchestration-max-parallel-input" value="([^"]*)"/);
         const defaultMatch = html.match(/id="orchestration-default-input"( checked)?/);
         elements.get("orchestration-id-input").value = idMatch ? idMatch[1] : "";
         elements.get("orchestration-name-input").value = nameMatch ? nameMatch[1] : "";
         elements.get("orchestration-description-input").value = descMatch ? descMatch[1] : "";
         elements.get("orchestration-prompt-input").value = promptMatch ? decodeHtml(promptMatch[1]) : "";
         elements.get("orchestration-graph-input").value = graphMatch ? decodeHtml(graphMatch[1]) : "";
+        elements.get("orchestration-max-cycles-input").value = maxCyclesMatch ? decodeHtml(maxCyclesMatch[1]) : "";
+        elements.get("orchestration-max-parallel-input").value = maxParallelMatch ? decodeHtml(maxParallelMatch[1]) : "";
         elements.get("orchestration-default-input").checked = Boolean(defaultMatch && defaultMatch[1]);
 
         const rolePicker = elements.get("orchestration-role-picker");

@@ -9,6 +9,7 @@ import time
 import pytest
 
 from relay_teams.agents.orchestration.graph_models import OrchestrationGraph
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.media import (
     InlineMediaContentPart,
     MediaModality,
@@ -530,6 +531,10 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
                 orchestration_preset_id="default",
                 orchestration_prompt="Delegate by capability.",
                 allowed_role_ids=("writer", "reviewer"),
+                orchestration_policy=OrchestrationPolicy(
+                    max_orchestration_cycles=10,
+                    max_parallel_delegated_tasks=5,
+                ),
                 orchestration_graph=OrchestrationGraph.model_validate(
                     {
                         "nodes": [
@@ -562,6 +567,8 @@ def test_run_intent_repo_round_trips_session_topology(tmp_path: Path) -> None:
     assert record.topology is not None
     assert record.topology.orchestration_preset_id == "default"
     assert record.topology.allowed_role_ids == ("writer", "reviewer")
+    assert record.topology.orchestration_policy.max_orchestration_cycles == 10
+    assert record.topology.orchestration_policy.max_parallel_delegated_tasks == 5
     assert record.topology.orchestration_graph is not None
     assert record.topology.orchestration_graph.topological_node_ids() == (
         "write",

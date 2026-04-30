@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.interfaces.server.deps import get_run_service, get_skill_registry
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
@@ -172,6 +173,7 @@ class CreateRunRequest(BaseModel):
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
     skills: Optional[tuple[str, ...]] = None
+    orchestration_policy: OrchestrationPolicy | None = None
 
     @field_validator("skills", mode="before")
     @classmethod
@@ -347,6 +349,7 @@ async def create_run(
             thinking=req.thinking,
             target_role_id=req.target_role_id,
             skills=resolved_skills,
+            orchestration_policy=req.orchestration_policy,
         )
 
         run_id, session_id = await _create_and_start_run(service, intent_input)

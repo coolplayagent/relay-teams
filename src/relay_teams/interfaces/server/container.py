@@ -1200,6 +1200,7 @@ class ServerContainer:
             runtime_role_resolver=self.runtime_role_resolver,
             hook_service=self.hook_service,
             run_event_hub=self.run_event_hub,
+            run_intent_repo=self.run_intent_repo,
         )
 
     def _build_hook_loader(self) -> HookLoader:

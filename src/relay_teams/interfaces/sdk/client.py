@@ -289,6 +289,7 @@ class AsyncAgentTeamsClient:
         execution_mode: str = "ai",
         yolo: bool = False,
         target_role_id: str | None = None,
+        orchestration_policy: dict[str, JsonValue] | None = None,
     ) -> RunHandle:
         normalized_input: JsonValue = (
             [part.model_dump(mode="json") for part in content_parts_from_text(input)]
@@ -302,6 +303,8 @@ class AsyncAgentTeamsClient:
             "yolo": yolo,
             "target_role_id": target_role_id,
         }
+        if orchestration_policy is not None:
+            payload["orchestration_policy"] = orchestration_policy
         data = await self._request_json("POST", "/api/runs", payload)
         return RunHandle(
             run_id=_expect_str(data.get("run_id"), "run_id"),

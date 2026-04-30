@@ -12,6 +12,7 @@ from relay_teams.agents.orchestration.settings_config_manager import (
 from relay_teams.agents.orchestration.settings_models import (
     OrchestrationSettings,
 )
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.roles.role_registry import (
     RoleRegistry,
     is_reserved_system_role_definition,
@@ -55,7 +56,12 @@ class OrchestrationSettingsService:
         settings = self._config_manager.get_orchestration_settings()
         return settings.default_orchestration_preset_id or None
 
-    def resolve_run_topology(self, session: SessionRecord) -> RunTopologySnapshot:
+    def resolve_run_topology(
+        self,
+        session: SessionRecord,
+        *,
+        policy_override: OrchestrationPolicy | None = None,
+    ) -> RunTopologySnapshot:
         settings = self._config_manager.get_orchestration_settings()
         role_registry = self._get_role_registry()
         main_agent_role_id = role_registry.get_main_agent_role_id()
@@ -70,6 +76,7 @@ class OrchestrationSettingsService:
                 normal_root_role_id=normal_root_role_id,
                 coordinator_role_id=coordinator_role_id,
                 orchestration_preset_id=session.orchestration_preset_id,
+                orchestration_policy=policy_override or OrchestrationPolicy(),
             )
 
         preset_id = (
@@ -95,6 +102,7 @@ class OrchestrationSettingsService:
             orchestration_preset_id=preset.preset_id,
             orchestration_prompt=preset.orchestration_prompt,
             allowed_role_ids=preset.role_ids,
+            orchestration_policy=policy_override or preset.policy,
             orchestration_graph=preset.graph,
         )
 

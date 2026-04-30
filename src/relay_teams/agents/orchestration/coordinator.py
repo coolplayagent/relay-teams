@@ -19,6 +19,7 @@ from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraph,
     OrchestrationGraphNode,
 )
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.orchestration.verification import verify_task
@@ -72,8 +73,6 @@ from relay_teams.hooks import (
 )
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
-MAX_ORCHESTRATION_CYCLES = 8
-MAX_PARALLEL_DELEGATED_TASKS = 4
 LOGGER = get_logger(__name__)
 
 
@@ -432,6 +431,7 @@ class CoordinatorGraph(BaseModel):
                 topology=topology,
                 initial_result=initial_result,
             )
+        policy = _orchestration_policy(topology)
         coordinator_result = TaskExecutionResult(output=initial_result)
         coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
@@ -445,10 +445,16 @@ class CoordinatorGraph(BaseModel):
                 logging.DEBUG,
                 event="coord.cycle.first_pass.completed",
                 message="Coordinator first pass completed",
+                payload={
+                    "max_orchestration_cycles": policy.max_orchestration_cycles,
+                    "max_parallel_delegated_tasks": (
+                        policy.max_parallel_delegated_tasks
+                    ),
+                },
             )
 
         cycle = 0
-        while cycle < MAX_ORCHESTRATION_CYCLES:
+        while cycle < policy.max_orchestration_cycles:
             cycle += 1
             log_event(
                 LOGGER,
@@ -460,6 +466,7 @@ class CoordinatorGraph(BaseModel):
             ran_any = await self._run_pending_delegated_tasks(
                 trace_id=trace_id,
                 root_task_id=root_task.task_id,
+                max_parallel_tasks=policy.max_parallel_delegated_tasks,
             )
             if not ran_any:
                 log_event(
@@ -989,7 +996,7 @@ class CoordinatorGraph(BaseModel):
         *,
         trace_id: str,
         root_task_id: str,
-        max_parallel_tasks: int = MAX_PARALLEL_DELEGATED_TASKS,
+        max_parallel_tasks: int | None = None,
     ) -> bool:
         records = await self.task_repo.list_by_trace_async(trace_id)
         records_by_task_id = {record.envelope.task_id: record for record in records}
@@ -1053,7 +1060,27 @@ class CoordinatorGraph(BaseModel):
         if not lanes:
             return False
 
-        semaphore = asyncio.Semaphore(max_parallel_tasks)
+        resolved_max_parallel_tasks = (
+            OrchestrationPolicy().max_parallel_delegated_tasks
+            if max_parallel_tasks is None
+            else max_parallel_tasks
+        )
+        if resolved_max_parallel_tasks < 1:
+            log_event(
+                LOGGER,
+                logging.INFO,
+                event="coord.delegated_tasks.skipped",
+                message="Delegated task execution skipped by orchestration policy",
+                payload={
+                    "trace_id": trace_id,
+                    "root_task_id": root_task_id,
+                    "pending_lane_count": len(lanes),
+                    "max_parallel_tasks": resolved_max_parallel_tasks,
+                },
+            )
+            return False
+
+        semaphore = asyncio.Semaphore(resolved_max_parallel_tasks)
 
         async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> bool:
             lane_instance = instances[instance_id]
@@ -1675,6 +1702,14 @@ def _format_task_results(records: tuple[TaskRecord, ...]) -> str:
         if record.error_message:
             lines.append(f"  error={record.error_message}")
     return "\n".join(lines)
+
+
+def _orchestration_policy(
+    topology: RunTopologySnapshot | None,
+) -> OrchestrationPolicy:
+    if topology is None:
+        return OrchestrationPolicy()
+    return topology.orchestration_policy
 
 
 def _dependencies_completed(

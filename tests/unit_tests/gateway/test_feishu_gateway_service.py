@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
@@ -25,7 +26,7 @@ from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
 from relay_teams.sessions.runs.run_models import RunTopologySnapshot
-from relay_teams.sessions.session_models import SessionMode
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.workspace import WorkspaceRepository, WorkspaceService
 
 
@@ -59,7 +60,12 @@ class _FakeOrchestrationSettingsService(OrchestrationSettingsService):
     def __init__(self) -> None:
         pass
 
-    def resolve_run_topology(self, session) -> RunTopologySnapshot:
+    def resolve_run_topology(
+        self,
+        session: SessionRecord,
+        *,
+        policy_override: OrchestrationPolicy | None = None,
+    ) -> RunTopologySnapshot:
         preset_id = str(getattr(session, "orchestration_preset_id", "") or "").strip()
         if preset_id != "preset-1":
             raise ValueError(f"Unknown orchestration preset: {preset_id or 'none'}")
@@ -69,6 +75,7 @@ class _FakeOrchestrationSettingsService(OrchestrationSettingsService):
             normal_root_role_id="MainAgent",
             coordinator_role_id="Coordinator",
             orchestration_preset_id="preset-1",
+            orchestration_policy=policy_override or OrchestrationPolicy(),
         )
 
 

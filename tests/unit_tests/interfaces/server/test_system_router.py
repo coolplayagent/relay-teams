@@ -1671,6 +1671,8 @@ def test_get_orchestration_config() -> None:
     payload = response.json()
     assert payload["default_orchestration_preset_id"] == "default"
     assert payload["presets"][0]["role_ids"] == ["writer", "reviewer"]
+    assert payload["presets"][0]["policy"]["max_orchestration_cycles"] == 8
+    assert payload["presets"][0]["policy"]["max_parallel_delegated_tasks"] == 4
     assert payload["presets"][0]["graph"]["nodes"][0]["node_id"] == "write"
 
 
@@ -2081,6 +2083,10 @@ def test_save_orchestration_config() -> None:
                     "description": "Release work.",
                     "role_ids": ["writer"],
                     "orchestration_prompt": "Use writer for outward-facing updates.",
+                    "policy": {
+                        "max_orchestration_cycles": 16,
+                        "max_parallel_delegated_tasks": 8,
+                    },
                     "graph": {
                         "nodes": [
                             {
@@ -2105,7 +2111,10 @@ def test_save_orchestration_config() -> None:
         list[dict[str, JsonValue]], service.saved_orchestration_config["presets"]
     )
     saved_graph = cast(dict[str, JsonValue], saved_presets[0]["graph"])
+    saved_policy = cast(dict[str, JsonValue], saved_presets[0]["policy"])
     saved_nodes = cast(list[dict[str, JsonValue]], saved_graph["nodes"])
+    assert saved_policy["max_orchestration_cycles"] == 16
+    assert saved_policy["max_parallel_delegated_tasks"] == 8
     assert saved_nodes[0]["node_id"] == "ship"
 
 

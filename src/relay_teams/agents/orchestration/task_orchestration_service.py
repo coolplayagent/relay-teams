@@ -17,6 +17,9 @@ from relay_teams.agents.orchestration.task_contracts import (
     TaskExecutionServiceLike,
     TaskUpdate,
 )
+from relay_teams.agents.orchestration.policy_models import (
+    DEFAULT_MAX_PARALLEL_DELEGATED_TASKS,
+)
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import (
@@ -38,9 +41,8 @@ from relay_teams.hooks import (
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.session_repository import SessionRepository
-
-MAX_PARALLEL_DELEGATED_TASKS = 4
 
 
 class TaskOrchestrationService:
@@ -56,6 +58,10 @@ class TaskOrchestrationService:
         runtime_role_resolver: RuntimeRoleResolver | None = None,
         hook_service: HookService | None = None,
         run_event_hub: RunEventHub | None = None,
+        run_intent_repo: RunIntentRepository | None = None,
+        default_max_parallel_delegated_tasks: int = (
+            DEFAULT_MAX_PARALLEL_DELEGATED_TASKS
+        ),
     ) -> None:
         self._task_repo = task_repo
         self._role_registry = role_registry
@@ -66,6 +72,10 @@ class TaskOrchestrationService:
         self._runtime_role_resolver = runtime_role_resolver
         self._hook_service = hook_service
         self._run_event_hub = run_event_hub
+        self._run_intent_repo = run_intent_repo
+        self._default_max_parallel_delegated_tasks = (
+            default_max_parallel_delegated_tasks
+        )
         self._execution_semaphores: dict[str, asyncio.Semaphore] = {}
         self._execution_semaphore_ref_counts: dict[str, int] = {}
         self._execution_semaphores_guard = asyncio.Lock()
@@ -376,16 +386,35 @@ class TaskOrchestrationService:
             await self._release_execution_semaphore_for_run(run_id=run_id)
 
     async def _execution_semaphore_for_run(self, *, run_id: str) -> asyncio.Semaphore:
+        max_parallel_tasks = await self._max_parallel_delegated_tasks_for_run(
+            run_id=run_id
+        )
+        if max_parallel_tasks < 1:
+            raise ValueError(
+                "delegated task execution is disabled by the orchestration policy"
+            )
         async with self._execution_semaphores_guard:
             semaphore = self._execution_semaphores.get(run_id)
             if semaphore is None:
-                semaphore = asyncio.Semaphore(MAX_PARALLEL_DELEGATED_TASKS)
+                semaphore = asyncio.Semaphore(max_parallel_tasks)
                 self._execution_semaphores[run_id] = semaphore
             self._execution_semaphore_ref_counts[run_id] = (
                 self._execution_semaphore_ref_counts.get(run_id, 0) + 1
             )
             resolved_semaphore = semaphore
         return resolved_semaphore
+
+    async def _max_parallel_delegated_tasks_for_run(self, *, run_id: str) -> int:
+        if self._run_intent_repo is None:
+            return self._default_max_parallel_delegated_tasks
+        try:
+            intent = await self._run_intent_repo.get_async(run_id)
+        except KeyError:
+            return self._default_max_parallel_delegated_tasks
+        topology = intent.topology
+        if topology is None:
+            return self._default_max_parallel_delegated_tasks
+        return topology.orchestration_policy.max_parallel_delegated_tasks
 
     async def _release_execution_semaphore_for_run(self, *, run_id: str) -> None:
         async with self._execution_semaphores_guard:

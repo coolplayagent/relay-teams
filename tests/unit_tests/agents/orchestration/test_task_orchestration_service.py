@@ -9,10 +9,10 @@ from typing import cast
 
 import pytest
 
-import relay_teams.agents.orchestration.task_orchestration_service as task_orchestration_service_module
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.roles.role_models import RoleDefinition
@@ -22,6 +22,9 @@ from relay_teams.agents.instances.enums import InstanceLifecycle
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.run_models import IntentInput, RunTopologySnapshot
+from relay_teams.sessions.session_models import SessionMode
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
@@ -971,13 +974,7 @@ async def test_dispatch_task_clones_same_role_while_reusable_instance_is_busy(
 @pytest.mark.asyncio
 async def test_dispatch_task_limits_execution_slots_per_run(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        task_orchestration_service_module,
-        "MAX_PARALLEL_DELEGATED_TASKS",
-        1,
-    )
     db_path = tmp_path / "task_orchestration_per_run_slots.db"
     task_repo = TaskRepository(db_path)
     execution_service = _BlockingTaskExecutionService(task_repo)
@@ -987,6 +984,7 @@ async def test_dispatch_task_limits_execution_slots_per_run(
         agent_repo=AgentInstanceRepository(db_path),
         task_execution_service=cast(TaskExecutionService, execution_service),
         message_repo=MessageRepository(db_path),
+        default_max_parallel_delegated_tasks=1,
     )
     _create_assigned_task(
         task_repo=task_repo,
@@ -1035,6 +1033,59 @@ async def test_dispatch_task_limits_execution_slots_per_run(
     assert execution_service.started_task_ids == ["task-run-1", "task-run-2"]
     assert service._execution_semaphores == {}
     assert service._execution_semaphore_ref_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_uses_run_policy_parallel_slots(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_orchestration_policy_slots.db"
+    task_repo = TaskRepository(db_path)
+    run_intent_repo = RunIntentRepository(db_path)
+    run_intent_repo.upsert(
+        run_id="run-1",
+        session_id="session-1",
+        intent=IntentInput(
+            session_id="session-1",
+            session_mode=SessionMode.ORCHESTRATION,
+            topology=RunTopologySnapshot(
+                session_mode=SessionMode.ORCHESTRATION,
+                main_agent_role_id="MainAgent",
+                normal_root_role_id="MainAgent",
+                coordinator_role_id="Coordinator",
+                orchestration_preset_id="limited",
+                orchestration_policy=OrchestrationPolicy(
+                    max_orchestration_cycles=1,
+                    max_parallel_delegated_tasks=0,
+                ),
+            ),
+        ),
+    )
+    execution_service = _FakeTaskExecutionService(task_repo)
+    service = TaskOrchestrationService(
+        task_repo=task_repo,
+        role_registry=_build_role_registry(),
+        agent_repo=AgentInstanceRepository(db_path),
+        task_execution_service=cast(TaskExecutionService, execution_service),
+        message_repo=MessageRepository(db_path),
+        run_intent_repo=run_intent_repo,
+    )
+    _create_assigned_task(
+        task_repo=task_repo,
+        task_id="task-run-1",
+        session_id="session-1",
+        run_id="run-1",
+        instance_id="inst-run-1",
+    )
+
+    with pytest.raises(ValueError, match="disabled by the orchestration policy"):
+        await service.dispatch_task(
+            run_id="run-1",
+            task_id="task-run-1",
+            role_id="spec_coder",
+        )
+
+    assert execution_service.calls == []
 
 
 @pytest.mark.asyncio
