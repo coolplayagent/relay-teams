@@ -386,11 +386,20 @@ def _agent_card_url_candidates(url: str) -> tuple[str, ...]:
             parsed.scheme,
             parsed.netloc,
             _A2A_AGENT_CARD_WELL_KNOWN_PATH,
-            "",
+            parsed.query,
             "",
         )
     )
-    path_candidate = normalized_url.rstrip("/") + _A2A_AGENT_CARD_WELL_KNOWN_PATH
+    path = parsed.path.rstrip("/") + _A2A_AGENT_CARD_WELL_KNOWN_PATH
+    path_candidate = urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            path,
+            parsed.query,
+            "",
+        )
+    )
     if root_candidate == path_candidate:
         return (root_candidate,)
     return root_candidate, path_candidate

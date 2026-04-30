@@ -35,6 +35,17 @@ def _request_read_timeout(request: httpx.Request) -> float | None:
     return float(read_timeout)
 
 
+def test_agent_card_url_candidates_preserve_query_structure() -> None:
+    candidates = a2a_client._agent_card_url_candidates(
+        "https://agent.test/a2a?token=abc"
+    )
+
+    assert candidates == (
+        "https://agent.test/.well-known/agent.json?token=abc",
+        "https://agent.test/a2a/.well-known/agent.json?token=abc",
+    )
+
+
 class _PollingA2aClient(a2a_client.A2aHttpClient):
     def __init__(self, *, complete_after_attempts: int) -> None:
         super().__init__(
