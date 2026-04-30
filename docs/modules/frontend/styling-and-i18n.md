@@ -112,16 +112,24 @@ composer 包含：
 - textarea 输入。
 - attachment 预览。
 - mention menu。
-- resume、send、stop 操作。
+- `.composer-actions` 操作 rail，统一排布 resume、stop、voice、send。
 - topology 控件：mode segmented、normal role、orchestration preset。
 - YOLO 和 thinking toggle。
 - context/token usage strip。
 
 运行中：
 
-- send、prompt、YOLO、thinking 控件禁用。
-- stop 按钮显示。
+- stop 或 resume 按钮显示在 action rail 左侧。
+- 已配置 STT 时，voice 按钮保持可见，不因 stop/resume 显示而隐藏；未配置 STT 时，voice 按钮隐藏且不占用 action rail 空间。
+- send 和 prompt 在 runtime inject 可用时继续用于插入消息。
+- YOLO、thinking 等运行参数控件禁用。
 - input wrapper 继续保持可读 busy 状态。
+
+布局约束：
+
+- 输入框内的浮动按钮只能通过 `.composer-actions` 统一定位；不要再给 `#send-btn`、`#stop-btn`、`#resume-run-btn`、`.composer-voice-btn` 分别设置互相竞争的 right/bottom 坐标。
+- `#prompt-input` 右侧 padding 要能容纳 action rail 的最大组合，包含异常情况下 stop 和 resume 同时可见。
+- 新会话草稿 composer 的 Start 宽按钮和普通 composer 的图标按钮都要通过同一个 rail 规则保证不遮挡文本、attachment chip、mention menu 或 slash/resource menu。
 
 错误或校验失败：
 

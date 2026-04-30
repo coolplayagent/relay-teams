@@ -38,6 +38,7 @@ from relay_teams.providers.model_config import (
     ModelRequestHeader,
     ProviderType,
     SamplingConfig,
+    SpeechRealtimeConfig,
     default_model_fallback_config,
 )
 from relay_teams.providers.model_capabilities import resolve_model_capabilities
@@ -301,6 +302,10 @@ def load_llm_profile_state(
         fallback_priority = _resolve_profile_fallback_priority(
             cfg.get("fallback_priority")
         )
+        speech_realtime = _resolve_profile_speech_realtime(
+            raw_value=cfg.get("speech_realtime"),
+            profile_name=name,
+        )
 
         profiles[name] = ModelEndpointConfig(
             provider=provider,
@@ -311,6 +316,7 @@ def load_llm_profile_state(
             maas_auth=maas_auth,
             codeagent_auth=codeagent_auth,
             ssl_verify=ssl_verify,
+            speech_realtime=speech_realtime,
             capabilities=resolve_model_capabilities(
                 provider=provider,
                 base_url=base_url,
@@ -374,6 +380,20 @@ def _resolve_profile_fallback_priority(raw_value: object) -> int:
     if isinstance(raw_value, int):
         return max(0, raw_value)
     return 0
+
+
+def _resolve_profile_speech_realtime(
+    *,
+    raw_value: object,
+    profile_name: str,
+) -> SpeechRealtimeConfig:
+    if raw_value is None:
+        return SpeechRealtimeConfig()
+    if not isinstance(raw_value, Mapping):
+        raise ValueError(
+            f"Invalid profile '{profile_name}': speech_realtime must be an object."
+        )
+    return SpeechRealtimeConfig.model_validate(raw_value)
 
 
 def _load_model_payload(model_file: Path) -> dict[str, object]:

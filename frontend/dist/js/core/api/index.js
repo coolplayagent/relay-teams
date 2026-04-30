@@ -74,6 +74,7 @@ export {
     fetchModelCatalog,
     fetchModelFallbackConfig,
     fetchModelProfiles,
+    fetchSpeechConfig,
     fetchNotificationConfig,
     fetchOrchestrationConfig,
     fetchProxyConfig,
@@ -109,6 +110,7 @@ export {
     saveEnvironmentVariable,
     saveModelConfig,
     saveModelProfile,
+    saveSpeechConfig,
     startCodeAgentOAuth,
     saveNotificationConfig,
     saveOrchestrationConfig,
@@ -127,6 +129,7 @@ export {
     deleteSshProfile,
     updateCommand,
     updateMcpServer,
+    createSpeechSttWebSocketUrl,
 } from './system.js';
 
 export {

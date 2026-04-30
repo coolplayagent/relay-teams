@@ -196,6 +196,7 @@
     transition: opacity 0.14s ease, transform 0.14s ease;
 }
 
+.chat-container.is-session-switch-pending .session-switch-loading,
 .chat-container.is-session-switching .session-switch-loading {
     opacity: 1;
     transform: translate(-50%, 0);
@@ -425,7 +426,7 @@
 }
 
 #prompt-input {
-    padding: 0.95rem 7.9rem 2.2rem 1rem;
+    padding: 0.95rem 10.35rem 2.2rem 1rem;
     font-size: 0.95rem;
 }
 
@@ -471,7 +472,6 @@
 #send-btn,
 #stop-btn,
 #resume-run-btn {
-    bottom: 0.6rem;
     height: 34px;
     border-radius: 8px;
     box-shadow: none;
@@ -480,16 +480,13 @@
 
 #send-btn {
     width: 34px;
-    right: 0.6rem;
 }
 
 #resume-run-btn {
-    right: 3.05rem;
     padding: 0 0.7rem;
 }
 
 #stop-btn {
-    right: 3.05rem;
     padding: 0 0.7rem;
     border: 1px solid rgba(194, 123, 114, 0.35);
     background: transparent;
@@ -1193,7 +1190,7 @@ body.light-theme .project-session-toggle-btn {
 
 #input-container #prompt-input {
     min-height: 72px;
-    padding: 18px 76px 16px 18px;
+    padding: 18px 312px 16px 18px;
     background: transparent;
     color: #1f2933;
     font-size: 16px;
@@ -1208,9 +1205,33 @@ body.light-theme .project-session-toggle-btn {
     display: none;
 }
 
-#input-container #send-btn {
+#input-container .composer-actions {
+    position: absolute;
     right: 14px;
     bottom: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    max-width: calc(100% - 28px);
+    pointer-events: none;
+}
+
+#input-container .composer-actions > button {
+    position: relative;
+    right: auto;
+    bottom: auto;
+    flex: 0 0 auto;
+    pointer-events: auto;
+}
+
+#input-container .composer-actions #send-btn,
+#input-container .composer-actions .composer-voice-btn {
+    width: 44px;
+    height: 44px;
+}
+
+#input-container #send-btn {
     width: 44px;
     height: 44px;
     border: 1px solid #2b6654;
@@ -1243,13 +1264,12 @@ body.light-theme .project-session-toggle-btn {
 
 #input-container #stop-btn,
 #input-container #resume-run-btn {
-    right: 66px;
-    bottom: 14px;
     min-height: 44px;
     padding: 0 14px;
     border-radius: 10px;
     box-shadow: none;
     transform: none;
+    white-space: nowrap;
 }
 
 #input-container #resume-run-btn {
@@ -1698,8 +1718,6 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
     }
 
     #input-container #send-btn {
-        right: 16px;
-        bottom: 16px;
         width: 38px;
         height: 38px;
     }
@@ -1711,10 +1729,19 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
 
 
 
+    #input-container .composer-actions {
+        right: 16px;
+        bottom: 16px;
+    }
+
+    #input-container .composer-actions #send-btn,
+    #input-container .composer-actions .composer-voice-btn {
+        width: 38px;
+        height: 38px;
+    }
+
     #input-container #stop-btn,
     #input-container #resume-run-btn {
-        right: 62px;
-        bottom: 16px;
         min-height: 38px;
     }
 }
@@ -1750,13 +1777,11 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
     }
 
     #input-container #prompt-input {
-        padding: 18px 66px 18px 16px;
+        padding: 18px 204px 18px 16px;
         font-size: 15px;
     }
 
     #input-container #send-btn {
-        right: 14px;
-        bottom: 16px;
         width: 36px;
         height: 36px;
     }
@@ -1772,11 +1797,29 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
 
 
 
+    #input-container .composer-actions {
+        right: 14px;
+        bottom: 16px;
+        gap: 6px;
+    }
+
+    #input-container .composer-actions #send-btn,
+    #input-container .composer-actions .composer-voice-btn {
+        width: 36px;
+        height: 36px;
+    }
+
     #input-container #stop-btn,
     #input-container #resume-run-btn {
-        right: 58px;
-        bottom: 16px;
+        width: 36px;
+        min-width: 36px;
         min-height: 36px;
+        padding: 0;
+    }
+
+    #input-container #stop-btn span,
+    #input-container #resume-run-btn span {
+        display: none;
     }
 
     #input-container .input-controls {
@@ -1852,8 +1895,6 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
     }
 
     #input-container #send-btn {
-        right: 16px;
-        bottom: 16px;
         width: 38px;
         height: 38px;
     }
@@ -1865,10 +1906,19 @@ body:not(.light-theme) #input-container .composer-segmented-btn:hover:not(:disab
 
 
 
+    #input-container .composer-actions {
+        right: 16px;
+        bottom: 16px;
+    }
+
+    #input-container .composer-actions #send-btn,
+    #input-container .composer-actions .composer-voice-btn {
+        width: 38px;
+        height: 38px;
+    }
+
     #input-container #stop-btn,
     #input-container #resume-run-btn {
-        right: 62px;
-        bottom: 16px;
         min-height: 38px;
     }
 }

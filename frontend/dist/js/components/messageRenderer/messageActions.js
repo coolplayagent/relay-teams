@@ -4,8 +4,13 @@
  */
 import { showToast } from '../../utils/feedback.js';
 import { t } from '../../utils/i18n.js';
+import {
+    bindReadAloudButton,
+    supportsMessageSpeech,
+} from '../messageSpeech.js';
 
 const COPY_BUTTON_CLASS = 'message-copy-btn';
+const READ_BUTTON_CLASS = 'message-read-btn';
 const ACTIONS_CLASS = 'message-copy-actions';
 const COPY_ICON = `
     <svg class="message-copy-icon" viewBox="0 0 24 24" focusable="false" aria-hidden="true">
@@ -139,6 +144,17 @@ function ensureCopyActions(message, copyText) {
         actions.appendChild(button);
     }
     bindCopyButton(button, copyText);
+    ensureReadButton(actions, copyText);
+}
+
+function ensureReadButton(actions, copyText) {
+    if (!supportsMessageSpeech()) return;
+    let button = actions.querySelector?.(`.${READ_BUTTON_CLASS}`) || null;
+    if (!button) {
+        button = document.createElement('button');
+        actions.appendChild(button);
+    }
+    bindReadAloudButton(button, copyText);
 }
 
 async function handleCopyClick(event) {

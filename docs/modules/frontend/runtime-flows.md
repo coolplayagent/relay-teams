@@ -121,6 +121,32 @@ flowchart TD
 - `pendingStopRequest` 支持 run 创建尚未完成时立即 stop。
 - `state.thinking` 和 `state.yolo` 来自 composer 控件和 localStorage。
 
+## 语音输入流程
+
+负责模块：
+
+- `components/voiceInput.js`
+- `components/voiceInputWorklet.js`
+- `components/settings/speechSettings.js`
+- `app/prompt.js`
+
+流程说明：
+
+1. Speech settings 选择一个支持 STT 的 model profile，并保存语言和提示词。
+2. composer 的 `#voice-input-btn` 根据 speech config 和浏览器能力显示或启用；未配置 STT profile 时按钮隐藏。
+3. 点击麦克风或长按空格启动语音输入；长按空格会聚焦 `#prompt-input`，且按住期间不触发静音自动停止。
+4. 前端通过 `getUserMedia()` 获取麦克风音频，优先使用 AudioWorklet，降级到 ScriptProcessor。
+5. 音频统一重采样为 16k PCM，通过 STT WebSocket 发送到后端。
+6. 后端返回 partial/final transcript 后，前端实时写入 prompt。
+7. 检测到长时间无语音、用户松开空格、点击停止、发送 prompt 或 backpressure 持续超限时，前端停止采集并等待最终转写。
+8. `app/prompt.js` 在发送前会等待语音输入停止并保留已转写文本，避免尾部语音丢失。
+
+交互约束：
+
+- 语音按钮、stop/resume 和 send 都在 `.composer-actions` 中排布；已配置 STT 时，运行中插入消息仍可使用语音输入向 prompt 写入。未配置 STT 时，长按空格不拦截普通文本输入。
+- 语音输入错误使用 dedupe toast，避免一次失败弹出重复错误。
+- TTS 朗读不走后端模型，消息朗读复用浏览器原生 `speechSynthesis`。
+
 ## SSE 流程
 
 负责模块：

@@ -349,6 +349,43 @@ def test_load_llm_configs_reads_connect_timeout_seconds(tmp_path: Path) -> None:
     assert profiles["default"].connect_timeout_seconds == 45.0
 
 
+def test_load_llm_configs_preserves_speech_realtime_config(tmp_path: Path) -> None:
+    model_file = tmp_path / "model.json"
+    model_file.write_text(
+        json.dumps(
+            {
+                "stt": {
+                    "model": "qwen3-plus",
+                    "base_url": "https://dashscope.example.test/v1",
+                    "api_key": "plain-text-key",
+                    "speech_realtime": {
+                        "model": "qwen3-omni-flash-realtime",
+                        "websocket_url_template": (
+                            "wss://dashscope.example.test/realtime?model={model}"
+                        ),
+                        "send_model_in_session_update": False,
+                        "stop_event_type": "session.finish",
+                        "send_openai_beta_header": False,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profiles = runtime_config.load_llm_configs(tmp_path, {})
+
+    speech_realtime = profiles["stt"].speech_realtime
+    assert speech_realtime.model == "qwen3-omni-flash-realtime"
+    assert (
+        speech_realtime.websocket_url_template
+        == "wss://dashscope.example.test/realtime?model={model}"
+    )
+    assert speech_realtime.send_model_in_session_update is False
+    assert speech_realtime.stop_event_type == "session.finish"
+    assert speech_realtime.send_openai_beta_header is False
+
+
 def test_load_llm_configs_reads_context_window(tmp_path: Path) -> None:
     model_file = tmp_path / "model.json"
     model_file.write_text(

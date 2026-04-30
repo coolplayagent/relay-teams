@@ -162,7 +162,9 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 - `#prompt-input`
 - `#prompt-attachments`
 - `#prompt-mention-menu`
+- `.composer-actions`
 - `#resume-run-btn`
+- `#voice-input-btn`
 - `#send-btn`
 - `#stop-btn`
 
@@ -191,7 +193,8 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 - Markdown、代码高亮、图片或富内容渲染。
 - 最后一条回答复制按钮。
 - composer 附近的上下文窗口、session token usage、debug badge。
-- stop 按钮在运行中显示。
+- composer 输入框内的操作按钮由 `.composer-actions` 统一承载，运行控制在左、语音输入居中、发送在右，避免 stop/resume/send/voice 在运行中插入消息时互相遮挡。
+- stop 或 resume 按钮在运行中或恢复态显示；已配置 STT 时，语音输入按钮不因为运行控制按钮显示而隐藏，运行中可继续向 prompt 写入待插入内容。未配置 STT 时，语音按钮默认隐藏。
 - 流式 caret、typing/loading、thinking/tool block 插入和 session switch loading 详见动效文档。
 
 空态、加载态、错误态：
@@ -204,7 +207,8 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 
 - Enter 发送，Shift+Enter 换行。
 - 粘贴图片或文件时生成 attachment。
-- 运行中禁用 prompt、send、YOLO、thinking 控件。
+- 运行中主 prompt 可根据 runtime inject 状态继续输入，send 走运行中插入消息；YOLO、thinking 等运行参数控件保持禁用。
+- 已配置 STT 时，点击麦克风或长按空格可启动语音输入；长按空格时自动聚焦 prompt，松开后停止语音输入。未配置 STT 时，空格保持普通文本输入行为。
 - stop 按钮调用 run stop。
 - approval resolved 后触发恢复尝试。
 

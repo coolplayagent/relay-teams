@@ -70,6 +70,7 @@ export {
     verifyCodeAgentAuth,
     fetchModelFallbackConfig,
     fetchModelProfiles,
+    fetchSpeechConfig,
     fetchNotificationConfig,
     fetchOrchestrationConfig,
     fetchProxyConfig,
@@ -116,6 +117,7 @@ export {
     enableWeChatGatewayAccount,
     enableXiaolubanGatewayAccount,
     saveModelConfig,
+    saveSpeechConfig,
     saveNotificationConfig,
     saveOrchestrationConfig,
     saveProxyConfig,
@@ -187,4 +189,5 @@ export {
     deleteWeChatGatewayAccount,
     deleteXiaolubanGatewayAccount,
     reloadWeChatGateway,
+    createSpeechSttWebSocketUrl,
 } from './api/index.js';

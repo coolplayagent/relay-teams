@@ -27,7 +27,7 @@
 
 #input-container.is-new-session-draft-composer #prompt-input {
     min-height: clamp(148px, 20vh, 230px);
-    padding: 22px 180px 64px 22px;
+    padding: 22px 420px 64px 22px;
     font-size: clamp(15px, 0.9vw, 18px);
     line-height: 1.55;
 }
@@ -37,8 +37,6 @@
 }
 
 #input-container.is-new-session-draft-composer #send-btn {
-    right: 18px;
-    bottom: 22px;
     width: auto;
     min-width: 126px;
     height: 46px;
@@ -57,6 +55,18 @@
     font-weight: 700;
     letter-spacing: 0;
     white-space: nowrap;
+}
+
+#input-container.is-new-session-draft-composer .composer-actions {
+    right: 18px;
+    bottom: 22px;
+    gap: 8px;
+}
+
+#input-container.is-new-session-draft-composer .composer-actions #send-btn {
+    width: auto;
+    min-width: 126px;
+    height: 46px;
 }
 
 #input-container.is-new-session-draft-composer .input-controls {
@@ -156,7 +166,7 @@
     }
 
     #input-container.is-new-session-draft-composer #prompt-input {
-        padding: 18px 76px 58px 18px;
+        padding: 18px 204px 58px 18px;
         font-size: 15px;
     }
 
@@ -165,6 +175,18 @@
         width: 40px;
         height: 40px;
         padding: 0;
+    }
+
+    #input-container.is-new-session-draft-composer .composer-actions {
+        right: 18px;
+        bottom: 22px;
+        gap: 8px;
+    }
+
+    #input-container.is-new-session-draft-composer .composer-actions #send-btn {
+        min-width: 40px;
+        width: 40px;
+        height: 40px;
     }
 
     #input-container.is-new-session-draft-composer #send-btn .send-btn-label {

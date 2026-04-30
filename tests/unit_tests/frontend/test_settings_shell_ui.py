@@ -612,6 +612,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
     mock_orchestration_settings_path = tmp_path / "mockOrchestrationSettings.mjs"
+    mock_speech_settings_path = tmp_path / "mockSpeechSettings.mjs"
     mock_proxy_settings_path = tmp_path / "mockProxySettings.mjs"
     mock_roles_settings_path = tmp_path / "mockRolesSettings.mjs"
     mock_trigger_settings_path = tmp_path / "mockTriggerSettings.mjs"
@@ -729,6 +730,22 @@ export function bindOrchestrationSettingsHandlers() {
 
 export async function loadOrchestrationSettingsPanel() {
     globalThis.__loadCalls.orchestration += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_speech_settings_path.write_text(
+        """
+export function bindSpeechSettingsHandlers() {
+    globalThis.__bindCalls.speech += 1;
+}
+
+export async function loadSpeechSettingsPanel() {
+    globalThis.__loadCalls.speech += 1;
+}
+
+export function renderSpeechSettingsPanelMarkup() {
+    return '<div class="settings-panel" id="speech-panel" style="display:none;"></div>';
 }
 """.strip(),
         encoding="utf-8",
@@ -943,6 +960,7 @@ export function logError(eventName, message, payload) {
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
         .replace("./notifications.js", "./mockNotifications.mjs")
         .replace("./orchestrationSettings.js", "./mockOrchestrationSettings.mjs")
+        .replace("./speechSettings.js", "./mockSpeechSettings.mjs")
         .replace("./triggerSettings.js", "./mockTriggerSettings.mjs")
         .replace("./webSettings.js", "./mockWebSettings.mjs")
         .replace("./workspaceSettings.js", "./mockWorkspaceSettings.mjs")
@@ -1118,9 +1136,10 @@ function createDocument() {{
     }};
 }}
 
-globalThis.__bindCalls = {{
-    model: 0,
-    commands: 0,
+    globalThis.__bindCalls = {{
+        model: 0,
+        speech: 0,
+        commands: 0,
     hooks: 0,
     agents: 0,
     roles: 0,
@@ -1135,9 +1154,10 @@ globalThis.__bindCalls = {{
     proxy: 0,
     system: 0,
 }};
-globalThis.__loadCalls = {{
-    model: 0,
-    commands: 0,
+    globalThis.__loadCalls = {{
+        model: 0,
+        speech: 0,
+        commands: 0,
     hooks: 0,
     agents: 0,
     roles: 0,

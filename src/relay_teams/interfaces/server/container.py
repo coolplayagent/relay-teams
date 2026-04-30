@@ -161,6 +161,7 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig, load_runtime_config
+from relay_teams.speech import RealtimeSttProxyService, SpeechConfigService
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
@@ -307,6 +308,13 @@ class ServerContainer:
         self.model_catalog_service = ModelCatalogService(
             config_dir=app_config_dir,
             get_proxy_config=self.proxy_config_service.get_proxy_config,
+        )
+        self.speech_config_service = SpeechConfigService(
+            config_dir=app_config_dir,
+            get_profiles=lambda: self.runtime.llm_profiles,
+        )
+        self.realtime_stt_proxy_service = RealtimeSttProxyService(
+            speech_config_service=self.speech_config_service,
         )
         self.hook_service = HookService(
             loader=self._build_hook_loader(),

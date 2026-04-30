@@ -65,6 +65,7 @@ export const els = {
   orchestrationPresetField: qs("#orchestration-preset-field"),
   orchestrationPresetSelect: qs("#orchestration-preset-select"),
   sessionTokenUsage: qs("#session-token-usage"),
+  voiceInputBtn: qs("#voice-input-btn"),
   resumeRunBtn: qs("#resume-run-btn"),
   sendBtn: qs("#send-btn"),
   stopBtn: qs("#stop-btn"),

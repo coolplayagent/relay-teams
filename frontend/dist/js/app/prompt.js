@@ -268,6 +268,7 @@ export async function refreshRoleConfigOptions({ refreshControls = true } = {}) 
 }
 
 export async function handleSend(options = {}) {
+  await stopActiveVoiceInputBeforeSend();
   const rawText = els.promptInput.value.trim();
   const hasAttachments = promptAttachments.length > 0;
   if (!rawText && !hasAttachments) return;
@@ -513,6 +514,15 @@ async function handleRuntimeInject(rawText, { hasAttachments }) {
   } finally {
     if (els.sendBtn) els.sendBtn.disabled = false;
     handlePromptComposerInput();
+  }
+}
+
+async function stopActiveVoiceInputBeforeSend() {
+  if (globalThis.__relayTeamsVoiceInputActive !== true) {
+    return;
+  }
+  if (typeof globalThis.__relayTeamsStopVoiceInput === "function") {
+    await globalThis.__relayTeamsStopVoiceInput({ keepText: true });
   }
 }
 

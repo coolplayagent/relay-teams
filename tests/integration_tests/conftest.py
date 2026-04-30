@@ -23,6 +23,9 @@ from integration_tests.support.process_control import (
 
 
 _HOME_ENV_KEYS: tuple[str, ...] = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+_INTEGRATION_TESTS_ROOT = Path(__file__).resolve().parent
+_DEFAULT_INTEGRATION_TEST_TIMEOUT_SECONDS = 240.0
+_INTEGRATION_TEST_TIMEOUT_ENV = "RELAY_TEAMS_INTEGRATION_TEST_TIMEOUT_SECONDS"
 _PROXY_ENV_KEYS: tuple[str, ...] = (
     "HTTP_PROXY",
     "http_proxy",
@@ -34,6 +37,41 @@ _PROXY_ENV_KEYS: tuple[str, ...] = (
     "no_proxy",
     "SSL_VERIFY",
 )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    if not config.pluginmanager.hasplugin("timeout"):
+        raise pytest.UsageError(
+            "pytest-timeout is required for integration-test timeout enforcement"
+        )
+    timeout_marker = pytest.mark.timeout(_integration_test_timeout_seconds())
+    for item in items:
+        item_path = Path(str(item.fspath)).resolve()
+        if _INTEGRATION_TESTS_ROOT not in item_path.parents:
+            continue
+        if item.get_closest_marker("timeout") is not None:
+            continue
+        item.add_marker(timeout_marker)
+
+
+def _integration_test_timeout_seconds() -> float:
+    raw_timeout = os.environ.get(_INTEGRATION_TEST_TIMEOUT_ENV)
+    if raw_timeout is None:
+        return _DEFAULT_INTEGRATION_TEST_TIMEOUT_SECONDS
+    try:
+        timeout_seconds = float(raw_timeout)
+    except ValueError as exc:
+        raise pytest.UsageError(
+            f"{_INTEGRATION_TEST_TIMEOUT_ENV} must be a positive number"
+        ) from exc
+    if timeout_seconds <= 0:
+        raise pytest.UsageError(
+            f"{_INTEGRATION_TEST_TIMEOUT_ENV} must be a positive number"
+        )
+    return timeout_seconds
 
 
 def _capture_home_env() -> dict[str, str | None]:

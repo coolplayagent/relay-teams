@@ -138,7 +138,8 @@
 主要动效：
 
 - session switch pending 时 chat container 添加 `is-session-switch-pending`。
-- 超过短延迟后添加 `is-session-switching`，显示 loading node。
+- pending 阶段会创建并显示 loading node；超过短延迟后添加 `is-session-switching`，让较慢请求进入持续 loading 状态。
+- 如果 session history 很快返回且还没等到延迟 timer，`finishSessionSwitchLoading()` 会先强制进入一帧 `is-session-switching`，再切到 `is-session-switch-ready`，避免快速切换时 loading/ready 动效完全丢失。
 - spinner 使用 `sessionSwitchSpinner`。
 - 内容 ready 后添加 `is-session-switch-ready`，使用 `sessionSwitchContentReady` 反馈完成。
 
@@ -151,6 +152,7 @@
 维护要点：
 
 - loading 延迟是为了避免快速切换闪烁；新增加载动效要保留这个思路。
+- 快速返回路径也必须能被看见，不能只依赖 80ms timer 成功触发；修改时要保留 pending、switching、ready 三段状态。
 - ready 动效只表示视图同步完成，不代表 run 完成。
 
 ## 聊天与流式输出

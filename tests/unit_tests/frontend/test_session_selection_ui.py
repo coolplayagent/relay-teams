@@ -446,9 +446,63 @@ def test_select_session_declares_nonblocking_content_switch_loading() -> None:
     assert "SESSION_SWITCH_LOADING_DELAY_MS = 80" in session_source
     assert "session-switch-loading" in session_source
     assert "session.loading" in session_source
+    assert (
+        "completeSessionSwitchLoading(selectionToken, sessionId, chatContainer)"
+        in session_source
+    )
+    assert "scheduleSessionSwitchFrame" in session_source
+    assert "clearSessionSwitchFinishFrame" in session_source
+    assert (
+        ".chat-container.is-session-switch-pending .session-switch-loading"
+        in interface_css
+    )
     assert ".chat-container.is-session-switching .chat-scroll" in interface_css
     assert ".session-switch-loading-spinner" in interface_css
     assert "@keyframes sessionSwitchContentReady" in interface_css
+
+
+def test_fast_session_switch_still_shows_loading_frame(tmp_path: Path) -> None:
+    payload = _run_session_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { selectSession } from "./session.mjs";
+import { els } from "./mockDom.mjs";
+
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+
+const selection = selectSession("session-a");
+await Promise.resolve();
+const beforeHydrationClassName = els.chatContainer.className;
+globalThis.__hydrateResolvers[0].resolve();
+await selection;
+const afterSelectionClassName = els.chatContainer.className;
+await new Promise(resolve => setTimeout(resolve, 25));
+const afterFrameClassName = els.chatContainer.className;
+
+console.log(JSON.stringify({
+    loadingCreated: els.chatContainer.children
+        .some(child => child.className === "session-switch-loading"),
+    beforeHydrationClassName,
+    afterSelectionClassName,
+    afterFrameClassName,
+}));
+""".strip(),
+    )
+
+    assert payload["loadingCreated"] is True
+    before_hydration_class_name = str(payload["beforeHydrationClassName"])
+    after_selection_class_name = str(payload["afterSelectionClassName"])
+    after_frame_class_name = str(payload["afterFrameClassName"])
+    assert "is-session-switch-pending" in before_hydration_class_name
+    assert "is-session-switching" not in before_hydration_class_name
+    assert "is-session-switching" in after_selection_class_name
+    assert "is-session-switch-ready" in after_frame_class_name
+    assert "is-session-switching" not in after_frame_class_name
 
 
 def test_select_session_prepares_foreground_streams_after_state_switch(

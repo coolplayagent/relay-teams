@@ -2915,6 +2915,36 @@ def test_save_model_profile_allows_clearing_max_tokens_with_null() -> None:
     assert saved_profile["max_tokens"] is None
 
 
+def test_save_model_profile_forwards_speech_realtime_config() -> None:
+    service = _FakeSystemService()
+    client = _create_test_client(service)
+
+    response = client.put(
+        "/api/system/configs/model/profiles/stt",
+        json={
+            "provider": ProviderType.OPENAI_COMPATIBLE.value,
+            "model": "qwen3-omni-flash",
+            "base_url": "https://api.example.test/v1",
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "speech_realtime": {
+                "model": "qwen3-asr-flash-realtime",
+                "send_model_in_session_update": False,
+                "stop_event_type": "session.finish",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.saved_model_profile is not None
+    _, saved_profile, _ = service.saved_model_profile
+    assert saved_profile["speech_realtime"] == {
+        "model": "qwen3-asr-flash-realtime",
+        "send_model_in_session_update": False,
+        "stop_event_type": "session.finish",
+    }
+
+
 def test_save_model_profile_accepts_bigmodel_provider() -> None:
     service = _FakeSystemService()
     client = _create_test_client(service)

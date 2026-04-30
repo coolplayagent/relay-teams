@@ -18,6 +18,7 @@ from relay_teams.providers.model_config import (
     ProviderModelInfo,
     ProviderType,
     SamplingConfig,
+    SpeechRealtimeConfig,
     default_model_fallback_config,
 )
 from relay_teams.providers.model_catalog import (
@@ -61,6 +62,7 @@ __all__ = [
     "RunTokenUsage",
     "SamplingConfig",
     "SessionTokenUsage",
+    "SpeechRealtimeConfig",
     "TokenUsageRecord",
     "TokenUsageRepository",
     "default_model_fallback_config",
