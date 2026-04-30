@@ -78,6 +78,16 @@ class TestAtomicWrite:
 
         assert test_file.read_text() == content
 
+    def test_atomic_write_preserves_crlf_sequences(self, tmp_path):
+        from relay_teams.tools.workspace_tools.write import atomic_write
+
+        test_file = tmp_path / "crlf.txt"
+        content = "line1\r\nline2\r\n"
+
+        atomic_write(test_file, content)
+
+        assert test_file.read_bytes() == content.encode("utf-8")
+
 
 class TestGenerateDiff:
     def test_generate_diff_no_change(self):

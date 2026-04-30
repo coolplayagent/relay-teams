@@ -50,6 +50,10 @@ _SIGKILL_GRACE_SECONDS = 5
 _SIGKILL_SIGNAL = getattr(signal, "SIGKILL", signal.SIGTERM)
 DEFAULT_TIMEOUT_MS = 120_000
 MAX_TIMEOUT_MS = 1_200_000
+_WINDOWS_PYTHON_UTF8_ENV = {
+    "PYTHONIOENCODING": "utf-8",
+    "PYTHONUTF8": "1",
+}
 _WINDOWS_POWERSHELL_CMDLET_PREFIXES = frozenset(
     {
         "Add",
@@ -513,14 +517,30 @@ def _sanitize_bash_env(env: dict[str, str]) -> dict[str, str]:
     return sanitized
 
 
+def _set_case_insensitive_env_default(
+    env: dict[str, str],
+    *,
+    key: str,
+    value: str,
+) -> None:
+    normalized_key = key.casefold()
+    if any(existing_key.casefold() == normalized_key for existing_key in env):
+        return
+    env[key] = value
+
+
 def _sanitize_command_env(
     env: dict[str, str],
     *,
     runtime: ResolvedCommandRuntime,
 ) -> dict[str, str]:
-    if runtime.kind == CommandRuntimeKind.BASH:
-        return _sanitize_bash_env(env)
-    return env
+    sanitized = (
+        _sanitize_bash_env(env) if runtime.kind == CommandRuntimeKind.BASH else env
+    )
+    if _is_windows():
+        for key, value in _WINDOWS_PYTHON_UTF8_ENV.items():
+            _set_case_insensitive_env_default(sanitized, key=key, value=value)
+    return sanitized
 
 
 def _prepend_powershell_utf8_prefix(command: str) -> str:

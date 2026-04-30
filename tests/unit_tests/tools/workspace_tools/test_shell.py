@@ -736,6 +736,86 @@ async def test_build_shell_env_ignores_gh_lookup_errors(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_build_shell_env_forces_utf8_python_io_on_windows(monkeypatch) -> None:
+    from relay_teams.tools.workspace_tools import shell_executor
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_clawhub_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {"PATH": r"C:\Windows\System32"},
+    )
+
+    env = await shell_executor.build_shell_env(
+        shell=shell,
+    )
+
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONUTF8"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_build_shell_env_respects_case_variant_python_env_on_windows(
+    monkeypatch,
+) -> None:
+    from relay_teams.tools.workspace_tools import shell_executor
+
+    shell = shell_executor.ResolvedShell(
+        kind=shell_executor.ShellKind.POWERSHELL,
+        executable="powershell.exe",
+        display_name="PowerShell",
+    )
+
+    monkeypatch.setattr(shell_executor, "_is_windows", lambda: True)
+    monkeypatch.setattr(shell_executor, "_load_github_cli_env", lambda: {})
+    monkeypatch.setattr(shell_executor, "_load_clawhub_cli_env", lambda: {})
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_gh_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor,
+        "_resolve_clawhub_path",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        shell_executor.os,
+        "environ",
+        {
+            "PATH": r"C:\Windows\System32",
+            "pythonioencoding": "cp1252",
+            "pythonutf8": "0",
+        },
+    )
+
+    env = await shell_executor.build_shell_env(shell=shell)
+
+    assert env["pythonioencoding"] == "cp1252"
+    assert env["pythonutf8"] == "0"
+    assert "PYTHONIOENCODING" not in env
+    assert "PYTHONUTF8" not in env
+
+
+@pytest.mark.asyncio
 async def test_create_shell_subprocess_uses_powershell_wrapper_and_keeps_env(
     monkeypatch,
 ) -> None:

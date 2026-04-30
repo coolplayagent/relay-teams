@@ -68,7 +68,7 @@ def atomic_write(
     file_path: Path,
     content: str,
     encoding: str = "utf-8",
-    newline: str | None = None,
+    newline: str | None = "",
 ) -> None:
     make_dirs(file_path.parent, exist_ok=True)
     with tempfile.NamedTemporaryFile(
