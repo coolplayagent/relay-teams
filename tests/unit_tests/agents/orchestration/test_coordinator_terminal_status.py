@@ -819,6 +819,7 @@ async def test_ai_mode_reports_zero_cycle_policy_with_pending_tasks(
     assert result.error_code == "orchestration_cycles_exhausted"
     assert "zero orchestration cycles" in result.output
     assert task_execution_service.calls == [root_task.task_id]
+    assert task_repo.get(root_task.task_id).status == TaskStatus.FAILED
     assert task_repo.get(child_task.task_id).status == TaskStatus.ASSIGNED
 
 
@@ -901,6 +902,7 @@ async def test_ai_mode_reports_disabled_parallel_policy_with_pending_tasks(
     assert result.error_code == "delegated_task_execution_disabled"
     assert "Delegated task execution is disabled" in result.output
     assert task_execution_service.calls == []
+    assert task_repo.get(root_task.task_id).status == TaskStatus.FAILED
     assert task_repo.get(child_task.task_id).status == TaskStatus.ASSIGNED
 
 

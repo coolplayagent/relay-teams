@@ -499,6 +499,13 @@ class CoordinatorGraph(BaseModel):
                         "max_orchestration_cycles": policy.max_orchestration_cycles,
                     },
                 )
+                await self._fail_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="orchestration_cycles_exhausted",
+                    error_message=error_message,
+                )
                 return TaskExecutionResult(
                     output=assistant_message,
                     completion_reason=RunCompletionReason.ASSISTANT_ERROR,
@@ -540,6 +547,13 @@ class CoordinatorGraph(BaseModel):
                         "pending_lane_count": exc.pending_lane_count,
                         "max_parallel_tasks": exc.max_parallel_tasks,
                     },
+                )
+                await self._fail_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
                 )
                 return TaskExecutionResult(
                     output=assistant_message,
@@ -626,7 +640,7 @@ class CoordinatorGraph(BaseModel):
             graph_status = await self._graph_status_async(
                 trace_id=trace_id, graph=graph
             )
-            await self._fail_graph_root_task_async(
+            await self._fail_root_task_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 coordinator_instance_id=coordinator_instance_id,
@@ -660,7 +674,7 @@ class CoordinatorGraph(BaseModel):
                     graph=graph,
                 )
                 error_message = str(exc)
-                await self._fail_graph_root_task_async(
+                await self._fail_root_task_async(
                     trace_id=trace_id,
                     root_task=root_task,
                     coordinator_instance_id=coordinator_instance_id,
@@ -686,7 +700,7 @@ class CoordinatorGraph(BaseModel):
                 break
             if not created_any and not ran_any:
                 error_message = "Graph execution made no progress."
-                await self._fail_graph_root_task_async(
+                await self._fail_root_task_async(
                     trace_id=trace_id,
                     root_task=root_task,
                     coordinator_instance_id=coordinator_instance_id,
@@ -703,7 +717,7 @@ class CoordinatorGraph(BaseModel):
         graph_status = await self._graph_status_async(trace_id=trace_id, graph=graph)
         if graph_status.failed:
             error_message = "One or more graph nodes failed."
-            await self._fail_graph_root_task_async(
+            await self._fail_root_task_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 coordinator_instance_id=coordinator_instance_id,
@@ -718,7 +732,7 @@ class CoordinatorGraph(BaseModel):
             )
         if not graph_status.completed:
             error_message = "Graph execution did not complete."
-            await self._fail_graph_root_task_async(
+            await self._fail_root_task_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 coordinator_instance_id=coordinator_instance_id,
@@ -811,7 +825,7 @@ class CoordinatorGraph(BaseModel):
                 },
             )
 
-    async def _fail_graph_root_task_async(
+    async def _fail_root_task_async(
         self,
         *,
         trace_id: str,
