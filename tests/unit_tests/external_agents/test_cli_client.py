@@ -10,7 +10,6 @@ from typing import cast
 import pytest
 from pydantic import JsonValue
 
-import relay_teams.external_agents.cli_client as cli_client
 from relay_teams.external_agents.cli_client import (
     CliAgentError,
     _CliJsonRpcNotification,
@@ -394,15 +393,19 @@ async def test_run_cli_agent_prompt_uses_shared_timeout_budget(
         return "done"
 
     monkeypatch.setattr(
-        cli_client,
-        "_initialize_cli_runtime",
+        "relay_teams.external_agents.cli_client._initialize_cli_runtime",
         fake_initialize_cli_runtime,
     )
-    monkeypatch.setattr(cli_client, "_start_cli_thread", fake_start_cli_thread)
-    monkeypatch.setattr(cli_client, "_start_cli_turn", fake_start_cli_turn)
     monkeypatch.setattr(
-        cli_client,
-        "_wait_for_cli_turn_output",
+        "relay_teams.external_agents.cli_client._start_cli_thread",
+        fake_start_cli_thread,
+    )
+    monkeypatch.setattr(
+        "relay_teams.external_agents.cli_client._start_cli_turn",
+        fake_start_cli_turn,
+    )
+    monkeypatch.setattr(
+        "relay_teams.external_agents.cli_client._wait_for_cli_turn_output",
         fake_wait_for_cli_turn_output,
     )
 
