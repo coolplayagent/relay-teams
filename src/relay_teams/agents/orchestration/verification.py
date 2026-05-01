@@ -969,6 +969,8 @@ def _evidence_can_support_text(
         return False
     if item.source == "verification_check_skipped":
         return False
+    if item.kind == VerificationEvidenceKind.TASK_RESULT:
+        return False
     if (
         target == VerificationEvidenceTarget.ACCEPTANCE_CRITERION
         and item.kind == VerificationEvidenceKind.TOOL_CALL
@@ -1095,11 +1097,11 @@ def _rule_semantic_evaluation(
     if self_report_ids:
         return SemanticEvaluationResult(
             criterion=criterion,
-            passed=True,
-            confidence=0.45,
+            passed=False,
+            confidence=0.25,
             reason=(
-                "The task result self-reports this criterion, but no independent "
-                "verification evidence was linked."
+                "The task result self-reports this criterion, but independent "
+                "verification evidence is required."
             ),
             evidence_ids=self_report_ids,
         )

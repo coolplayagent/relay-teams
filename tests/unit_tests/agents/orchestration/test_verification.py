@@ -95,7 +95,11 @@ def test_verify_task_builds_structured_report(tmp_path: Path) -> None:
             required_files=(Path("evidence.txt"),),
             command_checks=(
                 VerificationCommand(
-                    command=(sys.executable, "-c", "raise SystemExit(0)"),
+                    command=(
+                        sys.executable,
+                        "-c",
+                        "print('evidence complete coverage output')",
+                    ),
                     timeout_seconds=5,
                 ),
             ),
@@ -209,7 +213,11 @@ def test_verify_task_fails_acceptance_without_matching_evidence(
         ),
     )
     _ = task_repo.create(task)
-    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+    task_repo.update_status(
+        task.task_id,
+        TaskStatus.COMPLETED,
+        result="database migration runs",
+    )
 
     result = verify_task(task_repo, event_log, task.task_id)
 
@@ -1160,6 +1168,22 @@ def test_evidence_linking_and_semantic_helper_edges() -> None:
         is False
     )
 
+    task_result_item = failed_item.model_copy(
+        update={
+            "evidence_id": "task-result",
+            "kind": VerificationEvidenceKind.TASK_RESULT,
+            "passed": True,
+        }
+    )
+    assert (
+        verification_module._evidence_can_support_text(
+            text="target criterion",
+            target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+            item=task_result_item,
+        )
+        is False
+    )
+
     tool_call_item = VerificationEvidenceItem(
         evidence_id="tool-call",
         kind=VerificationEvidenceKind.TOOL_CALL,
@@ -1199,6 +1223,20 @@ def test_evidence_linking_and_semantic_helper_edges() -> None:
     )
     assert weak_result.passed is False
     assert weak_result.evidence_ids == ("tool-call",)
+
+    self_report_link = VerificationEvidenceLink(
+        target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+        text="target criterion",
+        evidence_ids=("task-result",),
+        satisfied=True,
+    )
+    self_report_result = verification_module._rule_semantic_evaluation(
+        criterion="target criterion",
+        link=self_report_link,
+        linked_evidence=(task_result_item,),
+    )
+    assert self_report_result.passed is False
+    assert self_report_result.confidence == 0.25
 
     def evaluator(
         _request: SemanticEvaluationRequest,
