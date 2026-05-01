@@ -48,6 +48,7 @@ import {
   finishForegroundSubmission,
   hasActiveForegroundSubmission,
   isForegroundSubmissionActive,
+  isForegroundSubmissionDetached,
 } from "../core/submission.js";
 import { els } from "../utils/dom.js";
 import { showToast } from "../utils/feedback.js";
@@ -309,6 +310,12 @@ export async function handleSend(options = {}) {
     sysLog(t("composer.error.empty_after_mention"), "log-error");
     return;
   }
+  const attachmentSnapshot = snapshotPromptAttachments();
+  const displayInputParts = buildPromptInputPartsFromAttachments(
+    text,
+    attachmentSnapshot,
+  );
+  const promptPreviewText = text || summarizePromptAttachments(attachmentSnapshot);
   const targetRoleId = mention.roleId || null;
   const effectiveTargetRoleId = targetRoleId || getPrimaryRoleId();
   const imageInputBlockedMessage = resolveImageInputBlockedMessage({
@@ -330,12 +337,22 @@ export async function handleSend(options = {}) {
   if (els.sendBtn) els.sendBtn.disabled = true;
   if (els.promptInput) els.promptInput.disabled = true;
   refreshSessionTopologyControls();
+  let runSessionId = String(state.currentSessionId || "").trim();
+  const draftPlaceholderShown = isNewSessionDraftActive();
+  if (draftPlaceholderShown) {
+    roundsTimeline.showDraftRunStartPlaceholder(promptPreviewText, displayInputParts);
+  }
   if (isNewSessionDraftActive()) {
     try {
       const sessionId = await ensureSessionForNewSessionDraft({
         shouldCommit: () => isForegroundSubmissionActive(submission),
+        allowDetachedRun: true,
       });
-      if (!isForegroundSubmissionActive(submission)) {
+      runSessionId = String(sessionId || "").trim();
+      if (
+        !isForegroundSubmissionActive(submission)
+        && !isForegroundSubmissionDetached(submission)
+      ) {
         finishForegroundSubmission(submission);
         return;
       }
@@ -355,6 +372,7 @@ export async function handleSend(options = {}) {
       }
       const message = error?.message || String(error);
       finishForegroundSubmission(submission);
+      roundsTimeline.clearPendingRunStartPlaceholder();
       state.isGenerating = false;
       if (els.sendBtn) els.sendBtn.disabled = false;
       if (els.promptInput) els.promptInput.disabled = false;
@@ -367,7 +385,7 @@ export async function handleSend(options = {}) {
       return;
     }
   }
-  if (!state.currentSessionId) {
+  if (!runSessionId) {
     finishForegroundSubmission(submission);
     state.isGenerating = false;
     if (els.sendBtn) els.sendBtn.disabled = false;
@@ -378,18 +396,40 @@ export async function handleSend(options = {}) {
   }
   clearPromptComposerStatus();
   const resolvedPrompt = await resolvePromptSlashText(text);
-  if (!isForegroundSubmissionActive(submission)) {
+  const detachedSubmission = isForegroundSubmissionDetached(submission);
+  if (!isForegroundSubmissionActive(submission) && !detachedSubmission) {
     finishForegroundSubmission(submission);
     return;
   }
   if (resolvedPrompt === null) {
     finishForegroundSubmission(submission);
+    if (draftPlaceholderShown) {
+      roundsTimeline.clearPendingRunStartPlaceholder();
+    }
     restorePromptComposerAfterSendAbort();
     return;
   }
-  const inputParts = buildPromptInputParts(resolvedPrompt.text);
-  const displayInputParts = buildPromptInputParts(text);
-  const promptPreviewText = text || summarizePromptAttachments(promptAttachments);
+  const inputParts = buildPromptInputPartsFromAttachments(
+    resolvedPrompt.text,
+    attachmentSnapshot,
+  );
+
+  if (detachedSubmission) {
+    try {
+      await startIntentStream(promptPreviewText, runSessionId, null, {
+        inputParts,
+        displayInputParts,
+        skills: resolvedPrompt.skills,
+        yolo: state.yolo,
+        thinking: state.thinking,
+        targetRoleId,
+        detached: true,
+      });
+    } finally {
+      finishForegroundSubmission(submission);
+    }
+    return;
+  }
 
   dismissPromptMentionAutocomplete();
   resetPromptComposer();
@@ -408,17 +448,17 @@ export async function handleSend(options = {}) {
   refreshVisibleContextIndicators({ immediate: true });
   clearAllStreamState({ preserveOverlay: true });
   roundsTimeline.showPendingRunStartPlaceholder(
-    state.currentSessionId,
+    runSessionId,
     promptPreviewText,
     displayInputParts,
   );
 
   sysLog(t("composer.log.sending_prompt"));
-  startSessionContinuity(state.currentSessionId);
+  startSessionContinuity(runSessionId);
   try {
     await startIntentStream(
       promptPreviewText,
-      state.currentSessionId,
+      runSessionId,
       async (sid) =>
         hydrateSessionView(sid, {
           includeRounds: true,
@@ -438,7 +478,7 @@ export async function handleSend(options = {}) {
           }
           state.currentSessionCanSwitchMode = false;
           refreshSessionTopologyControls();
-          emitSessionTitlePreview(state.currentSessionId, promptPreviewText);
+          emitSessionTitlePreview(runSessionId, promptPreviewText);
           roundsTimeline.createLiveRound(run.run_id, promptPreviewText, displayInputParts);
         },
       },
@@ -704,7 +744,15 @@ export function handlePromptComposerKeydown(event) {
   return false;
 }
 
+function snapshotPromptAttachments() {
+  return promptAttachments.map((attachment) => ({ ...attachment }));
+}
+
 function buildPromptInputParts(text) {
+  return buildPromptInputPartsFromAttachments(text, promptAttachments);
+}
+
+function buildPromptInputPartsFromAttachments(text, attachments) {
   const trimmedText = String(text || "").trim();
   const parts = [];
   if (trimmedText) {
@@ -713,7 +761,7 @@ function buildPromptInputParts(text) {
       text: trimmedText,
     });
   }
-  promptAttachments.forEach((attachment) => {
+  attachments.forEach((attachment) => {
     parts.push({
       kind: "inline_media",
       modality: "image",

@@ -30,6 +30,12 @@ from relay_teams.agents.tasks.models import (
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractPostcondition,
+    RoleContractPostconditionType,
+)
+from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_models import RunEvent
@@ -137,6 +143,64 @@ def test_verify_task_builds_structured_report(tmp_path: Path) -> None:
     assert result.report.evidence_bundle.expectation_links[0].satisfied is True
     assert result.report.semantic_results[0].passed is True
     assert result.report.unmet_items == ()
+
+
+def test_verify_task_enforces_role_contract_postconditions(tmp_path: Path) -> None:
+    db_path = tmp_path / "verification_role_contract.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        role_id="reviewer",
+        objective="Review evidence",
+        verification=VerificationPlan(
+            acceptance_criteria=("all tests pass",),
+            evidence_expectations=("pytest output",),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(
+        task.task_id,
+        TaskStatus.COMPLETED,
+        result="all tests pass",
+    )
+    role = RoleDefinition(
+        role_id="reviewer",
+        name="Reviewer",
+        description="Reviews evidence.",
+        version="1.0.0",
+        tools=(),
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_ACCEPTANCE_CRITERIA
+                    )
+                ),
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            )
+        ),
+        system_prompt="Review carefully.",
+    )
+
+    result = verify_task(task_repo, event_log, task.task_id, role=role)
+
+    assert result.passed is False
+    assert result.report is not None
+    assert any(
+        check.layer == VerificationLayer.CONTRACT and not check.passed
+        for check in result.report.checks
+    )
+    assert (
+        "contract_postcondition:result_mentions_evidence:pytest output"
+        in result.report.unmet_items
+    )
 
 
 def test_verify_task_links_command_output_to_spec_evidence(

@@ -28,6 +28,12 @@ from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.roles.memory_models import default_memory_profile
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractInvariant,
+    is_empty_role_contract,
+    role_contract_invariant_failures,
+)
 
 if TYPE_CHECKING:
     from relay_teams.external_agents import ExternalAgentConfigService
@@ -256,6 +262,7 @@ class RoleSettingsService:
             execution_surface=definition.execution_surface,
             mode=definition.mode,
             memory_profile=definition.memory_profile,
+            contract=definition.contract,
             system_prompt=definition.system_prompt,
             source=source,
             file_name=file_name,
@@ -305,6 +312,11 @@ class RoleSettingsService:
             front_matter["memory_profile"] = draft.memory_profile.model_dump(
                 mode="json"
             )
+        if not is_empty_role_contract(draft.contract):
+            front_matter["contract"] = draft.contract.model_dump(
+                mode="json",
+                exclude_defaults=True,
+            )
         serialized_front_matter = yaml.safe_dump(
             front_matter,
             sort_keys=False,
@@ -347,6 +359,11 @@ class RoleSettingsService:
             mcp_servers = definition.mcp_servers
             self._get_tool_registry().validate_known(tools)
             self._get_mcp_registry().validate_known(mcp_servers)
+            contract = self._validate_contract_capability_references(
+                definition.contract,
+                strict=True,
+                consumer=consumer,
+            )
             skills = self._resolve_strict_skills_with_recovery(
                 definition.skills,
                 consumer=consumer,
@@ -362,6 +379,7 @@ class RoleSettingsService:
                     "tools": tools,
                     "mcp_servers": mcp_servers,
                     "skills": skills,
+                    "contract": contract,
                 }
             )
         else:
@@ -382,13 +400,30 @@ class RoleSettingsService:
                 consumer=consumer,
                 expand_wildcards=False,
             )
+            contract = self._validate_contract_capability_references(
+                definition.contract,
+                strict=False,
+                consumer=consumer,
+            )
             definition = definition.model_copy(
                 update={
                     "tools": tools,
                     "mcp_servers": mcp_servers,
                     "skills": skills,
+                    "contract": contract,
                 }
             )
+        if strict_capability_validation:
+            invariant_failures = role_contract_invariant_failures(
+                contract=definition.contract,
+                tools=definition.tools,
+                mcp_servers=definition.mcp_servers,
+                skills=definition.skills,
+            )
+            if invariant_failures:
+                raise ValueError(
+                    "Role contract invariants failed: " + "; ".join(invariant_failures)
+                )
         if definition.bound_agent_id:
             if self._get_external_agent_service is None:
                 raise ValueError(
@@ -408,6 +443,65 @@ class RoleSettingsService:
                     f"Coordinator role must keep required tools: {missing}"
                 )
         return definition
+
+    def _validate_contract_capability_references(
+        self,
+        contract: RoleContract,
+        *,
+        strict: bool,
+        consumer: str,
+    ) -> RoleContract:
+        if is_empty_role_contract(contract):
+            return contract
+        updated_invariants: list[RoleContractInvariant] = []
+        changed = False
+        for invariant in contract.invariants:
+            tools = invariant.tools
+            if invariant.tools:
+                tools = self._get_tool_registry().resolve_known(
+                    invariant.tools,
+                    strict=strict,
+                    consumer=consumer,
+                )
+            mcp_servers = invariant.mcp_servers
+            if invariant.mcp_servers:
+                mcp_servers = self._get_mcp_registry().resolve_server_names(
+                    invariant.mcp_servers,
+                    strict=strict,
+                    consumer=consumer,
+                    expand_wildcards=False,
+                )
+            skills = invariant.skills
+            if invariant.skills:
+                if strict:
+                    skills = self._resolve_strict_skills_with_recovery(
+                        invariant.skills,
+                        consumer=consumer,
+                    )
+                else:
+                    skills = self._get_skill_registry().resolve_known(
+                        invariant.skills,
+                        strict=False,
+                        consumer=consumer,
+                        expand_wildcards=False,
+                    )
+            if (
+                tools != invariant.tools
+                or mcp_servers != invariant.mcp_servers
+                or skills != invariant.skills
+            ):
+                changed = True
+                invariant = invariant.model_copy(
+                    update={
+                        "tools": tools,
+                        "mcp_servers": mcp_servers,
+                        "skills": skills,
+                    }
+                )
+            updated_invariants.append(invariant)
+        if changed:
+            return contract.model_copy(update={"invariants": tuple(updated_invariants)})
+        return contract
 
     def _resolve_strict_skills_with_recovery(
         self,

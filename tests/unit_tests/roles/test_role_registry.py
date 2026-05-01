@@ -9,6 +9,11 @@ from relay_teams.hooks.hook_models import HookEventName
 from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.builtin import get_builtin_roles_dir
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
+from relay_teams.roles.role_contracts import (
+    RoleContractInvariantType,
+    RoleContractPostconditionType,
+    RoleContractPreconditionType,
+)
 from relay_teams.roles.role_registry import (
     RoleLoader,
     RoleRegistry,
@@ -40,6 +45,48 @@ def test_role_loader_rejects_depends_on_in_role_front_matter(tmp_path: Path) -> 
 
     with pytest.raises(ValueError, match="depends_on is not allowed"):
         RoleLoader().load_one(role_file)
+
+
+def test_role_loader_loads_role_contract_from_front_matter(tmp_path: Path) -> None:
+    role_file = tmp_path / "reviewer.md"
+    role_file.write_text(
+        "---\n"
+        "role_id: reviewer\n"
+        "name: Reviewer\n"
+        "description: Reviews work\n"
+        "version: 1.0.0\n"
+        "tools:\n"
+        "  - read\n"
+        "contract:\n"
+        "  version: '1'\n"
+        "  preconditions:\n"
+        "    - condition: dependency_role_completed\n"
+        "      role_ids:\n"
+        "        - Crafter\n"
+        "  postconditions:\n"
+        "    - guarantee: result_mentions_acceptance_criteria\n"
+        "  invariants:\n"
+        "    - invariant: must_not_have_tools\n"
+        "      tools:\n"
+        "        - edit\n"
+        "---\n"
+        "Review carefully.\n",
+        encoding="utf-8",
+    )
+
+    role = RoleLoader().load_one(role_file)
+
+    assert role.contract.preconditions[0].condition == (
+        RoleContractPreconditionType.DEPENDENCY_ROLE_COMPLETED
+    )
+    assert role.contract.preconditions[0].role_ids == ("Crafter",)
+    assert role.contract.postconditions[0].guarantee == (
+        RoleContractPostconditionType.RESULT_MENTIONS_ACCEPTANCE_CRITERIA
+    )
+    assert role.contract.invariants[0].invariant == (
+        RoleContractInvariantType.MUST_NOT_HAVE_TOOLS
+    )
+    assert role.contract.invariants[0].tools == ("edit",)
 
 
 def test_role_loader_adds_office_markdown_tool_to_non_coordinator_roles(

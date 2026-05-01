@@ -11,6 +11,15 @@ tools:
   - read
   - office_read_markdown
   - write_tmp
+contract:
+  invariants:
+    - invariant: must_not_have_tools
+      description: Explorer is read-only except temporary notes
+      tools:
+        - edit
+        - write
+        - notebook_edit
+        - shell
 ---
 
 ## 角色：Explorer (代码空间探测员) 

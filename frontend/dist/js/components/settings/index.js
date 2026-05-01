@@ -510,6 +510,10 @@ function createModal() {
                                                 </div>
                                             </section>
                                             <section class="role-editor-section">
+                                                <h5 data-i18n="settings.roles.contract">Role Contract</h5>
+                                                <textarea class="config-textarea role-contract-textarea" id="role-contract-input" placeholder='{"preconditions":[],"postconditions":[],"invariants":[]}' data-i18n-placeholder="settings.roles.contract_placeholder"></textarea>
+                                            </section>
+                                            <section class="role-editor-section">
                                                 <div class="role-prompt-header">
                                                     <h5 data-i18n="settings.roles.system_prompt">System Prompt</h5>
                                                     <div class="role-prompt-tabs">

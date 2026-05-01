@@ -24,6 +24,11 @@ from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInf
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.secrets import AppSecretStore
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractPostcondition,
+    RoleContractPostconditionType,
+)
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
@@ -532,6 +537,33 @@ def test_runtime_system_prompt_for_worker_skips_runtime_contract() -> None:
     assert (
         "Do not trust your internal knowledge for the current date or time." in prompt
     )
+
+
+def test_runtime_system_prompt_includes_role_contract() -> None:
+    prompt = asyncio.run(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
+                role=_role("writer_agent").model_copy(
+                    update={
+                        "contract": RoleContract(
+                            postconditions=(
+                                RoleContractPostcondition(
+                                    guarantee=(
+                                        RoleContractPostconditionType.RESULT_MENTIONS_ACCEPTANCE_CRITERIA
+                                    )
+                                ),
+                            )
+                        )
+                    }
+                ),
+                task=_task(),
+                shared_state_snapshot=(),
+            )
+        )
+    )
+
+    assert "## Role Contract" in prompt
+    assert "result_mentions_acceptance_criteria" in prompt
 
 
 def test_runtime_system_prompt_includes_workspace_environments(

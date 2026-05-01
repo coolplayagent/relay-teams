@@ -20,6 +20,11 @@ from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractPostcondition,
+    RoleContractPostconditionType,
+)
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -63,6 +68,7 @@ from relay_teams.hooks import (
     HookService,
     TaskCreatedInput,
 )
+from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 
 class _RecordingTaskExecutionService:
@@ -372,6 +378,81 @@ async def test_verification_tool_policy_falls_back_when_intent_lookup_fails(
     )
 
     assert policy.yolo is False
+
+
+@pytest.mark.asyncio
+async def test_verify_task_async_includes_delegated_role_contracts(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, _task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    coordinator.role_registry.register(
+        RoleDefinition(
+            role_id="reviewer",
+            name="Reviewer",
+            description="Reviews completed work.",
+            version="1",
+            tools=(),
+            contract=RoleContract(
+                postconditions=(
+                    RoleContractPostcondition(
+                        guarantee=(
+                            RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                        )
+                    ),
+                )
+            ),
+            system_prompt="Review evidence.",
+        )
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="coordinate work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    delegated_task = TaskEnvelope(
+        task_id="task-review-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="reviewer",
+        objective="review work",
+        verification=VerificationPlan(
+            checklist=("non_empty_response",),
+            evidence_expectations=("pytest output",),
+        ),
+    )
+    _ = task_repo.create(root_task)
+    _ = task_repo.create(delegated_task)
+    task_repo.update_status(
+        root_task.task_id,
+        TaskStatus.COMPLETED,
+        result="root task completed",
+    )
+    task_repo.update_status(
+        delegated_task.task_id,
+        TaskStatus.COMPLETED,
+        result="review completed without evidence details",
+    )
+
+    verification = await coordinator._verify_task_async(
+        root_task_id=root_task.task_id,
+        allowed_tools=(),
+        tool_approval_policy=ToolApprovalPolicy(),
+        workspace_root=None,
+    )
+
+    assert verification.passed is False
+    assert verification.report is not None
+    assert (
+        "task-review-1:contract_postcondition:result_mentions_evidence:pytest output"
+        in verification.report.unmet_items
+    )
 
 
 @pytest.mark.asyncio
@@ -689,6 +770,46 @@ async def test_pending_delegated_tasks_run_parallel_by_instance_lane(
     assert followup_start >= first_end
     assert second_start < first_end
     assert first_start < second_end
+
+
+@pytest.mark.asyncio
+async def test_pending_delegated_tasks_skip_unassigned_created_task(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, _agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="do work",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    child_task = TaskEnvelope(
+        task_id="task-child-1",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id=None,
+        objective="needs assignment",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    _ = task_repo.create(child_task)
+
+    ran_any = await coordinator._run_pending_delegated_tasks(
+        trace_id="run-1",
+        root_task_id=root_task.task_id,
+    )
+
+    child_record = task_repo.get(child_task.task_id)
+    assert ran_any is False
+    assert child_record.status == TaskStatus.CREATED
+    assert child_record.error_message is None
+    assert task_execution_service.calls == []
 
 
 @pytest.mark.asyncio

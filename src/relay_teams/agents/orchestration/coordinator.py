@@ -20,6 +20,10 @@ from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraphNode,
 )
 from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
+from relay_teams.agents.orchestration.role_contracts import (
+    role_contract_precondition_failures,
+    role_contract_verification_checks,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.orchestration.verification import verify_task
@@ -61,6 +65,7 @@ from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     TaskRecord,
+    VerificationCheckResult,
     VerificationPlan,
     VerificationResult,
 )
@@ -1146,6 +1151,11 @@ class CoordinatorGraph(BaseModel):
                 continue
             if record.assigned_instance_id is None:
                 continue
+            if await self._fail_task_if_role_contract_preconditions_async(
+                record=record,
+                records_by_task_id=records_by_task_id,
+            ):
+                continue
             if self.run_control_manager.is_subagent_paused(
                 session_id=task.session_id,
                 instance_id=record.assigned_instance_id,
@@ -1307,6 +1317,92 @@ class CoordinatorGraph(BaseModel):
             },
         )
         return True
+
+    async def _fail_task_if_role_contract_preconditions_async(
+        self,
+        *,
+        record: TaskRecord,
+        records_by_task_id: dict[str, TaskRecord],
+    ) -> bool:
+        try:
+            role = await self._resolve_task_role_definition_async(record.envelope)
+        except Exception as exc:
+            await self._fail_delegated_task_async(
+                record=record,
+                reason="role_resolution_failed",
+                error_message=f"Task role could not be resolved: {exc}",
+                payload={"error": str(exc)},
+            )
+            return True
+        failures = role_contract_precondition_failures(
+            role=role,
+            task=record.envelope,
+            records_by_id=records_by_task_id,
+        )
+        if not failures:
+            return False
+        await self._fail_delegated_task_async(
+            record=record,
+            reason="role_contract_preconditions_failed",
+            error_message="Role contract preconditions failed: " + "; ".join(failures),
+            payload={"failures": list(failures)},
+        )
+        return True
+
+    async def _fail_delegated_task_async(
+        self,
+        *,
+        record: TaskRecord,
+        reason: str,
+        error_message: str,
+        payload: dict[str, object],
+    ) -> None:
+        await self.task_repo.update_status_async(
+            record.envelope.task_id,
+            TaskStatus.FAILED,
+            assigned_instance_id=record.assigned_instance_id,
+            error_message=error_message,
+        )
+        await self.event_bus.emit_async(
+            EventEnvelope(
+                event_type=EventType.TASK_FAILED,
+                trace_id=record.envelope.trace_id,
+                session_id=record.envelope.session_id,
+                task_id=record.envelope.task_id,
+                instance_id=record.assigned_instance_id,
+                payload_json=dumps({"reason": reason, **payload}),
+            )
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="coord.task.role_contract_failed",
+            message="Delegated task failed role contract checks",
+            payload={
+                "trace_id": record.envelope.trace_id,
+                "task_id": record.envelope.task_id,
+                "role_id": record.envelope.role_id,
+                "reason": reason,
+                "error": error_message,
+            },
+        )
+
+    async def _resolve_task_role_definition_async(
+        self,
+        task: TaskEnvelope,
+    ) -> RoleDefinition:
+        role_id = _require_task_role_id(task)
+        runtime_role_resolver = getattr(
+            self.task_execution_service,
+            "runtime_role_resolver",
+            None,
+        )
+        if isinstance(runtime_role_resolver, RuntimeRoleResolver):
+            return await runtime_role_resolver.get_effective_role_async(
+                run_id=task.trace_id,
+                role_id=role_id,
+            )
+        return self.role_registry.get(role_id)
 
     async def _get_root_task_by_trace_async(self, trace_id: str) -> TaskRecord:
         for record in await self.task_repo.list_by_trace_async(trace_id):
@@ -1655,7 +1751,24 @@ class CoordinatorGraph(BaseModel):
         tool_approval_policy: ToolApprovalPolicy,
         workspace_root: Path | None,
     ) -> VerificationResult:
-        return await asyncio.to_thread(
+        role: RoleDefinition | None = None
+        root_record: TaskRecord | None = None
+        try:
+            root_record = await self.task_repo.get_async(root_task_id)
+            role = await self._resolve_task_role_definition_async(root_record.envelope)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.verification.role_contract_lookup_failed",
+                message="Role contract lookup failed; continuing verification without role contract checks",
+                payload={
+                    "task_id": root_task_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+        verification = await asyncio.to_thread(
             verify_task,
             self.task_repo,
             self.event_bus,
@@ -1663,7 +1776,61 @@ class CoordinatorGraph(BaseModel):
             allowed_tools=allowed_tools,
             tool_approval_policy=tool_approval_policy,
             workspace_root=workspace_root,
+            role=role,
         )
+        if root_record is None:
+            return verification
+        delegated_contract_checks = (
+            await self._delegated_role_contract_verification_checks_async(
+                root_record=root_record,
+            )
+        )
+        return _verification_with_additional_checks(
+            verification=verification,
+            checks=delegated_contract_checks,
+        )
+
+    async def _delegated_role_contract_verification_checks_async(
+        self,
+        *,
+        root_record: TaskRecord,
+    ) -> tuple[VerificationCheckResult, ...]:
+        checks: list[VerificationCheckResult] = []
+        records = await self.task_repo.list_by_trace_async(
+            root_record.envelope.trace_id
+        )
+        for record in records:
+            if record.envelope.task_id == root_record.envelope.task_id:
+                continue
+            if record.status != TaskStatus.COMPLETED or record.result is None:
+                continue
+            try:
+                role = await self._resolve_task_role_definition_async(record.envelope)
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="coord.verification.delegated_role_contract_lookup_failed",
+                    message="Delegated role contract lookup failed; continuing verification without role contract checks for task",
+                    payload={
+                        "task_id": record.envelope.task_id,
+                        "role_id": record.envelope.role_id,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                )
+                continue
+            checks.extend(
+                _delegated_contract_checks(
+                    record=record,
+                    checks=role_contract_verification_checks(
+                        role=role,
+                        task=record,
+                        result=record.result,
+                    ),
+                )
+            )
+        return tuple(checks)
 
     async def _verification_tool_policy_async(
         self,
@@ -1856,6 +2023,66 @@ def _orchestration_policy(
     if topology is None:
         return OrchestrationPolicy()
     return topology.orchestration_policy
+
+
+def _delegated_contract_checks(
+    *,
+    record: TaskRecord,
+    checks: tuple[VerificationCheckResult, ...],
+) -> tuple[VerificationCheckResult, ...]:
+    task_id = record.envelope.task_id
+    role_id = record.envelope.role_id or "unbound"
+    return tuple(
+        check.model_copy(
+            update={
+                "name": f"{task_id}:{check.name}",
+                "details": f"{task_id} role={role_id}: {check.details}",
+            }
+        )
+        for check in checks
+    )
+
+
+def _verification_with_additional_checks(
+    *,
+    verification: VerificationResult,
+    checks: tuple[VerificationCheckResult, ...],
+) -> VerificationResult:
+    if not checks:
+        return verification
+    report = verification.report
+    if report is None:
+        failed = tuple(
+            check.name for check in checks if not check.passed and check.name
+        )
+        passed = verification.passed and not failed
+        details = verification.details if passed else verification.details + failed
+        return verification.model_copy(
+            update={
+                "passed": passed,
+                "details": details,
+            }
+        )
+
+    all_checks = report.checks + checks
+    unmet_items = tuple(
+        check.name for check in all_checks if not check.passed and check.name
+    )
+    passed = len(unmet_items) == 0
+    details = ("Verification report passed",) if passed else unmet_items
+    return verification.model_copy(
+        update={
+            "passed": passed,
+            "details": details,
+            "report": report.model_copy(
+                update={
+                    "passed": passed,
+                    "checks": all_checks,
+                    "unmet_items": () if passed else details,
+                }
+            ),
+        }
+    )
 
 
 def _dependencies_completed(

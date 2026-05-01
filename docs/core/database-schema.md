@@ -213,6 +213,9 @@ Notes:
 - `role_id` is the execution target for the task.
 - `title` is a persisted task summary used by session projections and task APIs.
 - The system no longer stores workflow graphs. `tasks` is the only orchestration source of truth.
+- Role behavioral contracts are not copied into `tasks.envelope_json`. The task
+  stores only the selected `role_id`; dispatch and verification resolve the
+  current role definition and apply its `contract` at runtime.
 
 ---
 
@@ -692,6 +695,10 @@ Primary query keys used by repositories:
 - `relay_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
 - `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
 - `relay_teams.roles`: `role_memories`.
+- Role document files: role Markdown front matter stores `RoleDefinition`
+  metadata, including the optional `contract` object for behavioral
+  preconditions, postconditions, and capability invariants. These files are
+  configuration resources, not SQLite tables.
 
 ---
 

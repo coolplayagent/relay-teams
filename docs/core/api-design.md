@@ -1967,12 +1967,41 @@ Internal dispatch rules:
 - `running`: rejected as a conflict.
 - After the first dispatch, the delegated role is fixed for that task. To change roles, create a replacement task.
 - If another task already holds the reusable role instance in `assigned`, `running`, or `stopped`, a created task is assigned to an ephemeral clone with a private conversation.
+- If the target role defines a `contract`, dispatch fails before execution when
+  role preconditions or capability invariants are not satisfied. Automatic DAG
+  scheduling applies the same checks to ready delegated tasks and marks the task
+  failed with `role_contract_preconditions_failed` when the contract is violated.
 
 ## Role APIs
 
 ### `GET /roles`
 
 Lists loaded role definitions.
+
+Each role may include a `contract` object. The contract is a behavioral
+contract, not prompt text: dispatch and verification use it for deterministic
+checks.
+
+`contract` fields:
+- `version`
+- `preconditions[]`
+  - `condition`: `task_has_spec`, `task_has_acceptance_criteria`,
+    `dependencies_completed`, or `dependency_role_completed`
+  - `role_ids[]`: required dependency roles for `dependency_role_completed`
+  - `description`
+- `postconditions[]`
+  - `guarantee`: `verification_commands_configured`,
+    `result_mentions_acceptance_criteria`,
+    `result_mentions_evidence_expectations`, or `handoff_present`
+  - `description`
+- `invariants[]`
+  - `invariant`: `must_have_tools`, `must_not_have_tools`,
+    `must_have_mcp_servers`, `must_not_have_mcp_servers`,
+    `must_have_skills`, or `must_not_have_skills`
+  - `tools[]`
+  - `mcp_servers[]`
+  - `skills[]`
+  - `description`
 
 ### `GET /roles:options`
 
@@ -2086,6 +2115,7 @@ Response fields:
 - `skills`
 - `model_profile`
 - `memory_profile`
+- `contract`
 - `bound_agent_id`
 - `mode`
 - `source`
@@ -2120,6 +2150,17 @@ Request:
   "memory_profile": {
     "enabled": true
   },
+  "contract": {
+    "preconditions": [
+      {"condition": "dependencies_completed"}
+    ],
+    "postconditions": [
+      {"guarantee": "result_mentions_acceptance_criteria"}
+    ],
+    "invariants": [
+      {"invariant": "must_not_have_tools", "tools": ["edit", "write"]}
+    ]
+  },
   "system_prompt": "Implement the requested change."
 }
 ```
@@ -2127,6 +2168,9 @@ Request:
 Rules:
 - Path `role_id` must match body `role_id`.
 - Unknown tools, MCP servers, or skills are rejected.
+- Unknown tools, MCP servers, or skills referenced by `contract.invariants[]`
+  are also rejected. Invariant violations such as a role selecting a forbidden
+  tool are rejected during validate/save.
 - The exact value `"*"` is accepted in `mcp_servers` and `skills` to mean all
   current entries for that capability type. It is preserved in saved role
   documents instead of being expanded.
@@ -2139,6 +2183,9 @@ Rules:
 - When `bound_agent_id` is set, that role executes through the configured agent runtime provider instead of the local model provider chain.
 - `mode` controls where the role can be selected: `primary` for normal-mode root roles, `subagent` for background/delegated subagent roles, `all` for both.
 - Reserved system roles keep fixed identity fields (`role_id`, `name`, `description`, `version`), fixed `mode`, and fixed `system_prompt` through this API.
+- `contract` is serialized into role YAML front matter and is included in the
+  runtime system prompt as `## Role Contract` when non-empty; enforcement does
+  not rely on model compliance with that prompt section.
 
 ### `POST /roles:validate`
 

@@ -41,6 +41,19 @@ class _AsyncSessionService:
         workspace_id: str,
         metadata: dict[str, str] | None = None,
     ) -> SessionRecord:
+        return await self.create_session_async(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+        )
+
+    async def create_session_async(
+        self,
+        *,
+        session_id: str | None = None,
+        workspace_id: str,
+        metadata: dict[str, str] | None = None,
+    ) -> SessionRecord:
         await asyncio.sleep(0.001)
         async with self._lock:
             resolved_session_id = session_id or f"session-{len(self._records) + 1}"

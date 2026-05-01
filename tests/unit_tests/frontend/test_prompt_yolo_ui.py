@@ -3226,6 +3226,10 @@ export function hasActiveForegroundSubmission() {
 export function isForegroundSubmissionActive(submission) {
     return submission?.detached !== true;
 }
+
+export function isForegroundSubmissionDetached(submission) {
+    return submission?.detached === true;
+}
 """.strip(),
         encoding="utf-8",
     )

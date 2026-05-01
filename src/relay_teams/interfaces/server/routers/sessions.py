@@ -87,17 +87,11 @@ async def create_session(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-
-        def _create_session() -> SessionRecord:
-            return service.create_session(
-                session_id=req.session_id,
-                workspace_id=req.workspace_id,
-                metadata=(
-                    None if req.metadata is None else req.metadata.to_metadata_dict()
-                ),
-            )
-
-        return await call_maybe_async(_create_session)
+        return await service.create_session_async(
+            session_id=req.session_id,
+            workspace_id=req.workspace_id,
+            metadata=None if req.metadata is None else req.metadata.to_metadata_dict(),
+        )
     except (SystemRolesUnavailableError, ValueError) as exc:
         raise http_exception_for(
             exc,

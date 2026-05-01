@@ -644,6 +644,18 @@ export function showPendingRunStartPlaceholder(sessionId, intentText, intentPart
     if (!container) {
         return;
     }
+    renderRunStartPlaceholder(container, intentText, intentParts);
+}
+
+export function showDraftRunStartPlaceholder(intentText, intentParts = null) {
+    const container = els.chatMessages;
+    if (!container) {
+        return;
+    }
+    renderRunStartPlaceholder(container, intentText, intentParts);
+}
+
+function renderRunStartPlaceholder(container, intentText, intentParts = null) {
     const normalizedIntent = normalizeRoundIntentText(intentText)
         || buildRoundIntentPreviewText(intentParts)
         || '';

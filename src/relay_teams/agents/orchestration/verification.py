@@ -26,6 +26,9 @@ from relay_teams.agents.tasks.models import (
     VerificationReport,
     VerificationResult,
 )
+from relay_teams.agents.orchestration.role_contracts import (
+    role_contract_verification_checks,
+)
 from relay_teams.agents.tasks.enums import (
     VerificationEvidenceKind,
     VerificationEvidenceTarget,
@@ -35,6 +38,7 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.tools.runtime.models import ToolRuntimeDecision
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
@@ -111,6 +115,7 @@ def verify_task(
     tool_approval_policy: ToolApprovalPolicy | None = None,
     workspace_root: Path | None = None,
     semantic_evaluator: SemanticVerificationEvaluator | None = None,
+    role: RoleDefinition | None = None,
 ) -> VerificationResult:
     task = task_repo.get(task_id)
     evidence_bundle: VerificationEvidenceBundle | None = None
@@ -118,14 +123,14 @@ def verify_task(
     if task.status != TaskStatus.COMPLETED or task.result is None:
         passed = False
         details = ("Task not completed yet",)
-        checks = (
+        checks = [
             VerificationCheckResult(
                 layer=VerificationLayer.STRUCTURE,
                 name="completed_status",
                 passed=False,
                 details="Task is not completed or has no result.",
             ),
-        )
+        ]
         event_type = EventType.VERIFICATION_FAILED
     else:
         plan_run = _run_verification_plan(
@@ -140,9 +145,17 @@ def verify_task(
             workspace_root=workspace_root,
             semantic_evaluator=semantic_evaluator,
         )
-        checks = plan_run.checks
+        checks = list(plan_run.checks)
         evidence_bundle = plan_run.evidence_bundle
         semantic_results = plan_run.semantic_results
+        if role is not None:
+            checks.extend(
+                role_contract_verification_checks(
+                    role=role,
+                    task=task,
+                    result=task.result,
+                )
+            )
         missing = tuple(
             check.name for check in checks if not check.passed and check.name
         )
@@ -155,7 +168,7 @@ def verify_task(
     report = VerificationReport(
         task_id=task.envelope.task_id,
         passed=passed,
-        checks=checks,
+        checks=tuple(checks),
         unmet_items=() if passed else details,
         evidence_bundle=evidence_bundle,
         semantic_results=semantic_results,

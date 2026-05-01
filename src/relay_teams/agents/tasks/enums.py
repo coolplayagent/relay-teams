@@ -31,6 +31,7 @@ class VerificationLayer(str, Enum):
     EVIDENCE = "evidence"
     SEMANTIC = "semantic"
     SPEC = "spec"
+    CONTRACT = "contract"
 
 
 class VerificationEvidenceKind(str, Enum):

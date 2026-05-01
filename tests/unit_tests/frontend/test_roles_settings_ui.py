@@ -134,6 +134,9 @@ document.getElementById("role-bound-agent-input").value = "codex_local";
 document.getElementById("role-description-input").value = "Drafts user-facing content with structure.";
 document.getElementById("role-memory-enabled-input").value = "false";
 document.getElementById("role-system-prompt-input").value = "Write the first draft with structure.";
+document.getElementById("role-contract-input").value = JSON.stringify({
+    postconditions: [{ type: "result_mentions_acceptance_criteria" }],
+});
 
 await document.getElementById("validate-role-btn").onclick();
 await document.getElementById("save-role-btn").onclick();
@@ -185,6 +188,9 @@ console.log(JSON.stringify({
         "enabled": False,
     }
     assert validate_payload["model_profile"] == "editor"
+    assert validate_payload["contract"] == {
+        "postconditions": [{"type": "result_mentions_acceptance_criteria"}],
+    }
     assert payload["firstSavedRoleId"] == "writer"
     assert first_saved_payload == validate_payload
     assert payload["secondSavedRoleId"] == "new_role"
@@ -200,6 +206,7 @@ console.log(JSON.stringify({
     assert second_saved_payload["memory_profile"] == {
         "enabled": True,
     }
+    assert second_saved_payload["contract"] == {}
     assert payload["statusText"] == "Saved and validated."
     assert payload["fileMeta"] == "File: new_role.md"
     assert payload["roleSummaryCalls"] == 3
@@ -2139,6 +2146,8 @@ const translations = {
     "settings.roles.all_skills": "All skills",
     "settings.roles.all_skills_hint": "All skills are selected. Clear this checkbox to choose individual skills.",
     "settings.roles.skills_shell_advisory": "Roles that use skills usually work better with the exec command tool enabled.",
+    "settings.roles.contract_invalid_json": "Role contract must be valid JSON.",
+    "settings.roles.contract_invalid_object": "Role contract must be a JSON object.",
     "settings.system.unavailable_state": "Unavailable",
 };
 
@@ -2439,6 +2448,7 @@ function createElements() {{
         ["role-skills-picker", createElement("block")],
         ["role-memory-enabled-input", createElement("block")],
         ["role-system-prompt-input", createElement("block")],
+        ["role-contract-input", createElement("block")],
         ["role-system-prompt-preview", createElement("none")],
         ["role-file-meta", createElement("block")],
         ["role-editor-status", createElement("none")],
