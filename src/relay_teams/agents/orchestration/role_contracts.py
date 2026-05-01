@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import re
+
 from relay_teams.agents.tasks.enums import TaskStatus, VerificationLayer
 from relay_teams.agents.tasks.models import TaskEnvelope, TaskRecord
 from relay_teams.agents.tasks.models import VerificationCheckResult
@@ -11,6 +13,23 @@ from relay_teams.roles.role_contracts import (
     role_contract_invariant_failures,
 )
 from relay_teams.roles.role_models import RoleDefinition
+
+_EVIDENCE_SEMANTIC_PATTERNS: tuple[tuple[re.Pattern[str], re.Pattern[str]], ...] = (
+    # expectation contains "issue" -> match GitHub issue URL or #<number>
+    (re.compile(r"\bissue\b", re.IGNORECASE), re.compile(r"(issues/\d+)|#\d+")),
+    # expectation contains "pr" or "pull" -> match GitHub PR URL or #<number> or "PR"
+    (
+        re.compile(r"\b(?:pr|pull)\b", re.IGNORECASE),
+        re.compile(r"(pull/\d+)|#\d+|\bPR\b"),
+    ),
+    # expectation contains "url" or "link" -> match any HTTP URL
+    (re.compile(r"\b(?:url|link)\b", re.IGNORECASE), re.compile(r"https?://\S+")),
+    # expectation contains "file" or "path" -> match a path with extension or slash
+    (
+        re.compile(r"\b(?:file|path)\b", re.IGNORECASE),
+        re.compile(r"(/\S+\.\w+)|(\w+/\w+)"),
+    ),
+)
 
 
 def role_contract_precondition_failures(
@@ -233,18 +252,48 @@ def _result_mentions_checks(
                 details=f"No {label} items are configured.",
             ),
         )
-    return tuple(
-        _contract_check(
-            name=f"contract_postcondition:result_mentions_{label}:{item}",
-            passed=item.lower() in normalized_result,
-            details=(
-                f"{label.title()} item was cited in the result."
-                if item.lower() in normalized_result
-                else f"{label.title()} item was not cited in the result."
-            ),
+    allow_semantic = label == "evidence"
+    results: list[VerificationCheckResult] = []
+    for item in items:
+        literal_match = item.lower() in normalized_result
+        if literal_match:
+            results.append(
+                _contract_check(
+                    name=f"contract_postcondition:result_mentions_{label}:{item}",
+                    passed=True,
+                    details=f"{label.title()} item was cited in the result.",
+                )
+            )
+            continue
+        # Try semantic pattern matching only for evidence expectations
+        if allow_semantic:
+            semantic_match = _semantic_evidence_match(item, normalized_result)
+            if semantic_match:
+                results.append(
+                    _contract_check(
+                        name=f"contract_postcondition:result_mentions_{label}:{item}",
+                        passed=True,
+                        details=f"{label.title()} item was cited in the result.",
+                    )
+                )
+                continue
+        results.append(
+            _contract_check(
+                name=f"contract_postcondition:result_mentions_{label}:{item}",
+                passed=False,
+                details=f"{label.title()} item was not cited in the result.",
+            )
         )
-        for item in items
-    )
+    return tuple(results)
+
+
+def _semantic_evidence_match(expectation: str, normalized_result: str) -> bool:
+    """Check whether *normalized_result* satisfies *expectation* via semantic patterns."""
+    for keyword_re, value_re in _EVIDENCE_SEMANTIC_PATTERNS:
+        if keyword_re.search(expectation):
+            if value_re.search(normalized_result):
+                return True
+    return False
 
 
 def _contract_check(

@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.sessions.runs.todo_models import TodoItem, TodoSnapshot, TodoStatus
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.orchestration.task_execution_service import (
@@ -724,22 +725,159 @@ def test_completion_guard_wrappers_default_to_no_issue() -> None:
     assert thinking.enabled is False
 
 
+class _FakeTodoService:
+    """Minimal TodoService mock for sub-task todo finalization tests."""
+
+    def __init__(
+        self,
+        snapshot: TodoSnapshot | None = None,
+    ) -> None:
+        self._snapshot = snapshot
+        self.replaced_items: tuple[TodoItem, ...] | None = None
+        self.replaced_async_items: tuple[TodoItem, ...] | None = None
+
+    def get_for_run(self, *, run_id: str, session_id: str) -> TodoSnapshot:
+        assert self._snapshot is not None
+        return self._snapshot
+
+    async def get_for_run_async(self, *, run_id: str, session_id: str) -> TodoSnapshot:
+        assert self._snapshot is not None
+        return self._snapshot
+
+    def replace_for_run(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        items: tuple[TodoItem, ...],
+        updated_by_instance_id: str,
+    ) -> None:
+        self.replaced_items = items
+
+    async def replace_for_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        items: tuple[TodoItem, ...],
+        updated_by_instance_id: str,
+    ) -> None:
+        self.replaced_async_items = items
+
+
+def test_finalize_subtask_todos_marks_in_progress_as_completed() -> None:
+    snapshot = TodoSnapshot(
+        run_id="run-1",
+        session_id="session-1",
+        items=(
+            TodoItem(content="step 1", status=TodoStatus.COMPLETED),
+            TodoItem(content="step 2", status=TodoStatus.IN_PROGRESS),
+            TodoItem(content="step 3", status=TodoStatus.PENDING),
+        ),
+    )
+    todo_svc = _FakeTodoService(snapshot=snapshot)
+    from relay_teams.agents.orchestration.harnesses.llm_harness import TaskLlmHarness
+
+    harness = TaskLlmHarness.model_construct(
+        todo_service=todo_svc,
+        persistence_harness=None,
+    )
+    task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
+
+    harness._finalize_subtask_todos(task, instance_id="inst-1")
+
+    assert todo_svc.replaced_items is not None
+    # Only IN_PROGRESS items are finalized; PENDING items are left untouched
+    statuses = [item.status for item in todo_svc.replaced_items]
+    assert statuses == [TodoStatus.COMPLETED, TodoStatus.COMPLETED, TodoStatus.PENDING]
+
+
+def test_finalize_subtask_todos_skips_when_all_completed() -> None:
+    snapshot = TodoSnapshot(
+        run_id="run-1",
+        session_id="session-1",
+        items=(
+            TodoItem(content="step 1", status=TodoStatus.COMPLETED),
+            TodoItem(content="step 2", status=TodoStatus.COMPLETED),
+        ),
+    )
+    todo_svc = _FakeTodoService(snapshot=snapshot)
+    from relay_teams.agents.orchestration.harnesses.llm_harness import TaskLlmHarness
+
+    harness = TaskLlmHarness.model_construct(
+        todo_service=todo_svc,
+        persistence_harness=None,
+    )
+    task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
+
+    harness._finalize_subtask_todos(task, instance_id="inst-1")
+
+    assert todo_svc.replaced_items is None
+
+
+def test_finalize_subtask_todos_skips_when_only_pending() -> None:
+    snapshot = TodoSnapshot(
+        run_id="run-1",
+        session_id="session-1",
+        items=(
+            TodoItem(content="step 1", status=TodoStatus.COMPLETED),
+            TodoItem(content="step 2", status=TodoStatus.PENDING),
+        ),
+    )
+    todo_svc = _FakeTodoService(snapshot=snapshot)
+    from relay_teams.agents.orchestration.harnesses.llm_harness import TaskLlmHarness
+
+    harness = TaskLlmHarness.model_construct(
+        todo_service=todo_svc,
+        persistence_harness=None,
+    )
+    task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
+
+    harness._finalize_subtask_todos(task, instance_id="inst-1")
+
+    assert todo_svc.replaced_items is None
+
+
 @pytest.mark.asyncio
-async def test_completion_guard_async_wrapper_defaults_to_no_issue() -> None:
-    service = TaskExecutionService.model_construct(
-        run_intent_repo=None,
-        todo_service=None,
-        reminder_service=None,
+async def test_finalize_subtask_todos_async_marks_incomplete_as_completed() -> None:
+    snapshot = TodoSnapshot(
+        run_id="run-1",
+        session_id="session-1",
+        items=(TodoItem(content="step 1", status=TodoStatus.IN_PROGRESS),),
     )
-    task = _task_envelope(task_id="task-1", parent_task_id=None)
+    todo_svc = _FakeTodoService(snapshot=snapshot)
+    from relay_teams.agents.orchestration.harnesses.llm_harness import TaskLlmHarness
 
-    decision = await service._evaluate_completion_guard_async(
-        task=task,
-        instance_id="inst-1",
-        role_id="writer",
-        workspace=cast(WorkspaceHandle, object()),
-        conversation_id="conversation-1",
-        output_text="done",
+    harness = TaskLlmHarness.model_construct(
+        todo_service=todo_svc,
+        persistence_harness=None,
+    )
+    task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
+
+    await harness._finalize_subtask_todos_async(task, instance_id="inst-1")
+
+    assert todo_svc.replaced_async_items is not None
+    assert all(
+        item.status == TodoStatus.COMPLETED for item in todo_svc.replaced_async_items
     )
 
-    assert decision.issue is False
+
+@pytest.mark.asyncio
+async def test_finalize_subtask_todos_async_skips_when_all_completed() -> None:
+    snapshot = TodoSnapshot(
+        run_id="run-1",
+        session_id="session-1",
+        items=(TodoItem(content="step 1", status=TodoStatus.COMPLETED),),
+    )
+    todo_svc = _FakeTodoService(snapshot=snapshot)
+    from relay_teams.agents.orchestration.harnesses.llm_harness import TaskLlmHarness
+
+    harness = TaskLlmHarness.model_construct(
+        todo_service=todo_svc,
+        persistence_harness=None,
+    )
+    task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
+
+    await harness._finalize_subtask_todos_async(task, instance_id="inst-1")
+
+    assert todo_svc.replaced_async_items is None

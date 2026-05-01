@@ -368,6 +368,15 @@ class TaskExecutionService(BaseModel):
             except KeyError:
                 # Some direct task-execution tests and legacy flows have no run intent.
                 pass
+        # Sub-agent tasks must always run in normal mode, not the
+        # orchestrator's session mode.  When ``task.parent_task_id`` is set,
+        # the intent lookup above returns the *orchestrator's* mode because
+        # sub-tasks share the same ``trace_id`` (run id).  Forcing ``normal``
+        # here isolates the sub-agent from orchestration-specific prompt
+        # topology and session content that belongs to the orchestrator.
+        if task.parent_task_id is not None:
+            session_mode = "normal"
+            run_kind = RunKind.CONVERSATION
         runner = SubAgentRunner(
             role=role_for_run,
             prompt_builder=self.prompt_builder,
