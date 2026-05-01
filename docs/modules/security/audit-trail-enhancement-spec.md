@@ -39,6 +39,17 @@ Audit recording is centralized in `relay_teams.tools.runtime.execution` after ho
 
 The audit service is carried on `ToolDeps` as an optional backend dependency. Agent tools do not expose any audit mutation function, and the repository has no update/delete API.
 
+## Implementation Design
+
+`relay_teams.audit` owns the event models, SQLite repository, and service wrapper. The repository stores audit rows as immutable append-only records and normalizes all persisted timestamps to UTC ISO-8601 text before SQL comparison. Dirty persisted JSON and integer values are converted through typed helpers so the read path remains explicit without exposing loose dictionaries.
+
+The tool runtime builds audit events from the effective tool input and the persisted result envelope:
+- file write events derive logical paths from the file-oriented tool input or result metadata, then calculate a final `sha256:<hex>` digest and byte size when the target exists;
+- shell command events capture the command and selected execution metadata without storing stdout/stderr bodies;
+- Coordinator dispatch events capture the selected task/role target and a bounded dispatch reason.
+
+Successful audit rows are written only after tool result persistence succeeds. If result persistence fails, the failure path records one failed audit row for the same action. If audit persistence itself fails, the runtime logs `security.audit.record_failed` and preserves the user-visible tool outcome.
+
 ## API
 
 `GET /api/audit` accepts exact filters for event type and trace/session/run/task/role identifiers, cursor pagination with `after_id`, time filtering with `since`/`until`, and `limit` up to 500. Persisted timestamps and query timestamp offsets are normalized to UTC before range comparison.
@@ -57,6 +68,7 @@ The response is:
 Unit coverage includes:
 - repository append/filter/pagination
 - API route filtering and validation
-- tool runtime audit creation for file write, shell command, and Coordinator dispatch decision
+- UTC time filtering, dirty persisted value conversion, and missing-row behavior
+- tool runtime audit creation for file write variants, shell command, Coordinator dispatch decision, persistence-failure ordering, and audit-write failure isolation
 
 End-to-end acceptance should start the FastAPI app, call `/api/audit` through a browser context, and confirm the endpoint returns the immutable audit page shape.

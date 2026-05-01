@@ -130,23 +130,25 @@ class ToolDeps(BaseModel):
         arbitrary_types_allowed=True,
     )
 
-    task_repo: SkipValidation[TaskRepository]
-    shared_store: SkipValidation[SharedStateRepository]
-    event_bus: SkipValidation[EventLog]
-    message_repo: SkipValidation[MessageRepository]
-    approval_ticket_repo: SkipValidation[ApprovalTicketRepository]
-    user_question_repo: SkipValidation[UserQuestionRepository | None] = None
-    run_runtime_repo: SkipValidation[RunRuntimeRepository]
-    injection_manager: SkipValidation[RunInjectionManager]
+    task_repo: Annotated[TaskRepository, SkipValidation]
+    shared_store: Annotated[SharedStateRepository, SkipValidation]
+    event_bus: Annotated[EventLog, SkipValidation]
+    message_repo: Annotated[MessageRepository, SkipValidation]
+    approval_ticket_repo: Annotated[ApprovalTicketRepository, SkipValidation]
+    user_question_repo: Annotated[UserQuestionRepository | None, SkipValidation] = None
+    run_runtime_repo: Annotated[RunRuntimeRepository, SkipValidation]
+    injection_manager: Annotated[RunInjectionManager, SkipValidation]
     run_event_hub: Annotated[RunEventHub, SkipValidation]
-    agent_repo: SkipValidation[AgentInstanceRepository]
-    workspace: SkipValidation[WorkspaceHandle]
-    role_memory: SkipValidation[RoleMemoryService | None] = None
-    media_asset_service: SkipValidation[MediaAssetService | None] = None
-    computer_runtime: SkipValidation[ComputerRuntime | None] = None
-    background_task_service: SkipValidation[BackgroundTaskService | None] = None
-    monitor_service: SkipValidation[MonitorService | None] = None
-    todo_service: SkipValidation[TodoService | None] = None
+    agent_repo: Annotated[AgentInstanceRepository, SkipValidation]
+    workspace: Annotated[WorkspaceHandle, SkipValidation]
+    role_memory: Annotated[RoleMemoryService | None, SkipValidation] = None
+    media_asset_service: Annotated[MediaAssetService | None, SkipValidation] = None
+    computer_runtime: Annotated[ComputerRuntime | None, SkipValidation] = None
+    background_task_service: Annotated[BackgroundTaskService | None, SkipValidation] = (
+        None
+    )
+    monitor_service: Annotated[MonitorService | None, SkipValidation] = None
+    todo_service: Annotated[TodoService | None, SkipValidation] = None
     run_id: str
     trace_id: str
     task_id: str
@@ -157,27 +159,29 @@ class ToolDeps(BaseModel):
     conversation_id: str
     instance_id: str
     role_id: str
-    role_registry: SkipValidation[RoleRegistry]
-    runtime_role_resolver: SkipValidation[RuntimeRoleResolver | None] = None
-    skill_registry: SkipValidation[SkillRegistryLike | None] = None
-    mcp_registry: SkipValidation[McpRegistry]
-    task_service: SkipValidation[TaskOrchestrationServiceLike]
-    task_execution_service: SkipValidation[TaskExecutionServiceLike]
-    run_control_manager: SkipValidation[RunControlManager]
-    tool_approval_manager: SkipValidation[ToolApprovalManager]
-    user_question_manager: SkipValidation[UserQuestionManager | None] = None
-    tool_approval_policy: SkipValidation[ToolApprovalPolicy]
-    shell_approval_repo: SkipValidation[ShellApprovalRepository | None] = None
-    metric_recorder: SkipValidation[MetricRecorder | None] = None
-    notification_service: SkipValidation[NotificationService | None] = None
-    im_tool_service: SkipValidation[ImToolServiceLike | None] = None
+    role_registry: Annotated[RoleRegistry, SkipValidation]
+    runtime_role_resolver: Annotated[RuntimeRoleResolver | None, SkipValidation] = None
+    skill_registry: Annotated[SkillRegistryLike | None, SkipValidation] = None
+    mcp_registry: Annotated[McpRegistry, SkipValidation]
+    task_service: Annotated[TaskOrchestrationServiceLike, SkipValidation]
+    task_execution_service: Annotated[TaskExecutionServiceLike, SkipValidation]
+    run_control_manager: Annotated[RunControlManager, SkipValidation]
+    tool_approval_manager: Annotated[ToolApprovalManager, SkipValidation]
+    user_question_manager: Annotated[UserQuestionManager | None, SkipValidation] = None
+    tool_approval_policy: Annotated[ToolApprovalPolicy, SkipValidation]
+    shell_approval_repo: Annotated[ShellApprovalRepository | None, SkipValidation] = (
+        None
+    )
+    metric_recorder: Annotated[MetricRecorder | None, SkipValidation] = None
+    notification_service: Annotated[NotificationService | None, SkipValidation] = None
+    im_tool_service: Annotated[ImToolServiceLike | None, SkipValidation] = None
     xiaoluban_notify_service: XiaolubanNotifyServiceLike | None = None
     gateway_session_lookup: GatewaySessionLookupLike | None = None
-    hook_service: SkipValidation[HookService | None] = None
-    reminder_service: SkipValidation[SystemReminderService | None] = None
-    auto_harness_service: SkipValidation[object | None] = None
-    audit_service: SkipValidation[AuditService | None] = None
-    model_capabilities: SkipValidation[ModelCapabilities] = Field(
+    hook_service: Annotated[HookService | None, SkipValidation] = None
+    reminder_service: Annotated[SystemReminderService | None, SkipValidation] = None
+    auto_harness_service: Annotated[object | None, SkipValidation] = None
+    audit_service: Annotated[AuditService | None, SkipValidation] = None
+    model_capabilities: Annotated[ModelCapabilities, SkipValidation] = Field(
         default_factory=ModelCapabilities
     )
     hook_runtime_env: dict[str, str] = Field(default_factory=dict)

@@ -73,6 +73,99 @@ def test_execute_tool_records_file_write_audit_event(tmp_path: Path) -> None:
     assert event.metadata["created"] is True
 
 
+def test_execute_tool_records_file_write_variant_audit_events(tmp_path: Path) -> None:
+    audit_repository = AuditEventRepository(tmp_path / "audit.db")
+    deps = _deps_with_audit(tmp_path, audit_repository)
+    ctx = cast(ToolContext, cast(object, _FakeCtx(deps)))
+
+    def write_file(relative_path: str, content: str) -> None:
+        target_path = tmp_path / relative_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(content, encoding="utf-8")
+
+    asyncio.run(
+        execute_tool(
+            ctx,
+            tool_name="write_tmp",
+            args_summary={"path": "scratch.txt"},
+            tool_input={"path": "scratch.txt", "content": "tmp body"},
+            action=lambda: (
+                write_file("tmp/scratch.txt", "tmp body")
+                or ToolResultProjection(
+                    visible_data={"output": "Wrote tmp file."},
+                    internal_data={},
+                )
+            ),
+        )
+    )
+    asyncio.run(
+        execute_tool(
+            ctx,
+            tool_name="edit",
+            args_summary={"path": "src/edit.txt"},
+            tool_input={"path": "src/edit.txt", "new_string": "edit body"},
+            action=lambda: (
+                write_file("src/edit.txt", "edit body")
+                or ToolResultProjection(
+                    visible_data={"output": "Edited file."},
+                    internal_data={"created": False},
+                )
+            ),
+        )
+    )
+    asyncio.run(
+        execute_tool(
+            ctx,
+            tool_name="notebook_edit",
+            args_summary={"path": "notebook.ipynb"},
+            tool_input={"path": "notebook.ipynb", "new_source": "print(1)"},
+            action=lambda: (
+                write_file("notebook.ipynb", "print(1)")
+                or ToolResultProjection(
+                    visible_data={"output": "Edited notebook."},
+                    internal_data={},
+                )
+            ),
+        )
+    )
+
+    page = audit_repository.list_events(
+        AuditEventFilter(event_type=AuditEventType.FILE_WRITE)
+    )
+    events = {event.target: event for event in page.items}
+    assert events["tmp/scratch.txt"].action == "write_tmp_file"
+    assert events["src/edit.txt"].action == "edit_file"
+    assert events["notebook.ipynb"].action == "edit_notebook"
+    assert events["tmp/scratch.txt"].metadata["input_content_length"] == 8
+    assert events["src/edit.txt"].metadata["created"] is False
+
+
+def test_execute_tool_records_file_digest_error_when_target_missing(
+    tmp_path: Path,
+) -> None:
+    audit_repository = AuditEventRepository(tmp_path / "audit.db")
+    deps = _deps_with_audit(tmp_path, audit_repository)
+
+    asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, _FakeCtx(deps))),
+            tool_name="write",
+            args_summary={"path": "missing.txt"},
+            tool_input={"path": "missing.txt", "content": "not written"},
+            action=lambda: ToolResultProjection(
+                visible_data={"output": "Skipped write."},
+                internal_data={},
+            ),
+        )
+    )
+
+    page = audit_repository.list_events(
+        AuditEventFilter(event_type=AuditEventType.FILE_WRITE)
+    )
+    assert page.items[0].content_digest is None
+    assert page.items[0].metadata["content_digest_error"] == "target is not a file"
+
+
 def test_execute_tool_records_shell_and_coordinator_audit_events(
     tmp_path: Path,
 ) -> None:
@@ -120,6 +213,38 @@ def test_execute_tool_records_shell_and_coordinator_audit_events(
     assert decision_page.items[0].target == "task:task-child->role:Reviewer"
     assert decision_page.items[0].decision_reason is not None
     assert "audit coverage" in decision_page.items[0].decision_reason
+
+
+def test_execute_tool_logs_audit_recording_failure_without_failing_tool(
+    tmp_path: Path,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+
+    class FailingAuditService:
+        async def record_event_async(self, event: object) -> object:
+            _ = event
+            raise RuntimeError("audit store unavailable")
+
+    deps.audit_service = FailingAuditService()
+    deps.workspace = _FakeWorkspace(tmp_path)
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, _FakeCtx(deps))),
+            tool_name="shell",
+            args_summary={"command": "uv run pytest"},
+            tool_input={"command": "uv run pytest"},
+            action=lambda: ToolResultProjection(
+                visible_data={"status": "completed", "exit_code": 0},
+                internal_data={"status": "completed", "exit_code": 0},
+            ),
+        )
+    )
+
+    assert cast(dict[str, JsonValue], result)["ok"] is True
 
 
 def test_execute_tool_records_failed_audit_when_success_persistence_fails(
