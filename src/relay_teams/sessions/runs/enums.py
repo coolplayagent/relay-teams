@@ -52,6 +52,8 @@ class RunEventType(str, Enum):
     INJECTION_APPLIED = "injection_applied"
     TOOL_APPROVAL_REQUESTED = "tool_approval_requested"
     TOOL_APPROVAL_RESOLVED = "tool_approval_resolved"
+    RUNTIME_GUARDRAIL_ALERT = "runtime_guardrail_alert"
+    RUNTIME_GUARDRAIL_REPORT = "runtime_guardrail_report"
     USER_QUESTION_REQUESTED = "user_question_requested"
     USER_QUESTION_ANSWERED = "user_question_answered"
     NOTIFICATION_REQUESTED = "notification_requested"

@@ -64,6 +64,14 @@ from relay_teams.tools.runtime.models import (
     ToolExecutionError,
     ToolResultProjection,
 )
+from relay_teams.tools.runtime.guardrails import (
+    RuntimeGuardrailAction,
+    RuntimeGuardrailLayer,
+    RuntimeGuardrailPolicy,
+    RuntimeGuardrailRule,
+    RuntimeGuardrailRuleType,
+    RuntimeGuardrailStatus,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.persisted_state import (
     ToolApprovalMode,
@@ -1889,6 +1897,144 @@ def test_execute_tool_marks_sqlite_lock_error_as_retryable() -> None:
     assert result["ok"] is False
     assert error["type"] == "internal_error"
     assert error["retryable"] is True
+
+
+def test_execute_tool_blocks_destructive_shell_with_runtime_guardrail() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(yolo=True),
+    )
+    deps.role_registry.register(
+        RoleDefinition(
+            role_id="spec_coder",
+            name="Spec Coder",
+            description="Implements requested changes.",
+            version="1",
+            tools=("shell",),
+            system_prompt="Implement tasks.",
+        )
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-shell-destructive-1"
+    action_calls = 0
+
+    def action() -> str:
+        nonlocal action_calls
+        action_calls += 1
+        return "should not run"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "rm -rf build"},
+            action=action,
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert action_calls == 0
+    assert result["ok"] is False
+    assert error["type"] == "runtime_guardrail_denied"
+    assert meta["runtime_guardrail_status"] == RuntimeGuardrailStatus.BLOCKED.value
+    assert meta["approval_status"] == "denied_by_guardrail"
+    assert meta["runtime_policy_decision"] == "deny"
+
+
+def test_execute_tool_keeps_result_when_in_execution_guardrail_warns() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            guardrails=RuntimeGuardrailPolicy(
+                rules=(
+                    RuntimeGuardrailRule(
+                        rule_id="tiny-output-warning",
+                        layer=RuntimeGuardrailLayer.IN_EXECUTION,
+                        rule_type=RuntimeGuardrailRuleType.OUTPUT_SIZE,
+                        action=RuntimeGuardrailAction.WARN,
+                        max_bytes=1,
+                    ),
+                )
+            ),
+        ),
+    )
+    deps.role_registry.register(
+        RoleDefinition(
+            role_id="spec_coder",
+            name="Spec Coder",
+            description="Implements requested changes.",
+            version="1",
+            tools=("read",),
+            system_prompt="Implement tasks.",
+        )
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-output-warning-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: {"content": "x" * 32},
+        )
+    )
+
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert result["ok"] is True
+    assert result["data"] == {"content": "x" * 32}
+    assert meta["runtime_guardrail_status"] == RuntimeGuardrailStatus.WARNING.value
+    assert meta["runtime_guardrail_warning_count"] == 1
+
+
+def test_execute_tool_replaces_result_when_in_execution_guardrail_denies() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            guardrails=RuntimeGuardrailPolicy(
+                rules=(
+                    RuntimeGuardrailRule(
+                        rule_id="tiny-output-deny",
+                        layer=RuntimeGuardrailLayer.IN_EXECUTION,
+                        rule_type=RuntimeGuardrailRuleType.OUTPUT_SIZE,
+                        action=RuntimeGuardrailAction.DENY,
+                        max_bytes=1,
+                    ),
+                )
+            ),
+        ),
+    )
+    deps.role_registry.register(
+        RoleDefinition(
+            role_id="spec_coder",
+            name="Spec Coder",
+            description="Implements requested changes.",
+            version="1",
+            tools=("read",),
+            system_prompt="Implement tasks.",
+        )
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-read-output-deny-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: {"content": "x" * 32},
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert result["ok"] is False
+    assert error["type"] == "runtime_guardrail_denied"
+    assert meta["runtime_guardrail_status"] == RuntimeGuardrailStatus.BLOCKED.value
+    assert meta["runtime_guardrail_blocked_count"] == 1
 
 
 class _FakeHookService:

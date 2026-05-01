@@ -32,6 +32,7 @@ class VerificationLayer(str, Enum):
     SEMANTIC = "semantic"
     SPEC = "spec"
     CONTRACT = "contract"
+    SECURITY = "security"
 
 
 class VerificationEvidenceKind(str, Enum):
@@ -45,6 +46,7 @@ class VerificationEvidenceKind(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     GATE_FINDING = "gate_finding"
+    RUNTIME_GUARDRAIL_REPORT = "runtime_guardrail_report"
 
 
 class VerificationEvidenceTarget(str, Enum):

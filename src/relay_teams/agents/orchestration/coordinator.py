@@ -76,6 +76,10 @@ from relay_teams.hooks import (
     HookService,
     TaskCreatedInput,
 )
+from relay_teams.tools.runtime.guardrails import (
+    generate_runtime_guardrail_report_async,
+    runtime_guardrail_report_from_event_payload,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 LOGGER = get_logger(__name__)
@@ -1768,6 +1772,8 @@ class CoordinatorGraph(BaseModel):
                     "error": str(exc),
                 },
             )
+        if root_record is not None:
+            await self._ensure_runtime_guardrail_report_async(root_record=root_record)
         verification = await asyncio.to_thread(
             verify_task,
             self.task_repo,
@@ -1777,6 +1783,7 @@ class CoordinatorGraph(BaseModel):
             tool_approval_policy=tool_approval_policy,
             workspace_root=workspace_root,
             role=role,
+            require_guardrail_report=True,
         )
         if root_record is None:
             return verification
@@ -1789,6 +1796,73 @@ class CoordinatorGraph(BaseModel):
             verification=verification,
             checks=delegated_contract_checks,
         )
+
+    async def _ensure_runtime_guardrail_report_async(
+        self,
+        *,
+        root_record: TaskRecord,
+    ) -> None:
+        task = root_record.envelope
+        report_events = [
+            event
+            for event in await self.event_bus.list_by_trace_async(task.trace_id)
+            if str(event.get("task_id") or "") == task.task_id
+            and str(event.get("event_type") or "")
+            == RunEventType.RUNTIME_GUARDRAIL_REPORT.value
+        ]
+        for event in report_events:
+            if (
+                runtime_guardrail_report_from_event_payload(event.get("payload_json"))
+                is not None
+            ):
+                return
+        if report_events:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.verification.guardrail_report_corrupted",
+                message="Existing runtime guardrail report event has unparseable payload; regenerating",
+                payload={
+                    "task_id": task.task_id,
+                    "trace_id": task.trace_id,
+                },
+            )
+        role_id = task.role_id or ""
+        try:
+            report = await generate_runtime_guardrail_report_async(
+                shared_store=self.shared_store,
+                task_id=task.task_id,
+                run_id=task.trace_id,
+                session_id=task.session_id,
+                role_id=role_id,
+            )
+            event = RunEvent(
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=root_record.assigned_instance_id,
+                role_id=task.role_id,
+                event_type=RunEventType.RUNTIME_GUARDRAIL_REPORT,
+                payload_json=report.model_dump_json(),
+            )
+            if self.run_event_hub is not None:
+                _ = await self.run_event_hub.publish_async(event)
+            else:
+                _ = await self.event_bus.emit_run_event_async(event)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.verification.guardrail_report_failed",
+                message="Runtime guardrail report could not be generated before verification",
+                payload={
+                    "task_id": task.task_id,
+                    "trace_id": task.trace_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
 
     async def _delegated_role_contract_verification_checks_async(
         self,

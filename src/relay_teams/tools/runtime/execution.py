@@ -67,6 +67,21 @@ from relay_teams.tools.runtime.approval_ticket_repo import (
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimePhase, RunRuntimeStatus
 from relay_teams.trace import trace_span
 from relay_teams.tools.runtime.context import ToolContext
+from relay_teams.tools.runtime.guardrails import (
+    RuntimeGuardrailAction,
+    RuntimeGuardrailContext,
+    RuntimeGuardrailEvaluation,
+    RuntimeGuardrailFinding,
+    RuntimeGuardrailPolicy,
+    RuntimeGuardrailRuleType,
+    RuntimeGuardrailStatus,
+    evaluate_in_execution_guardrails,
+    evaluate_pre_execution_guardrails,
+    guardrail_findings_payload,
+    guardrail_meta_status,
+    record_runtime_guardrail_findings_async,
+    record_runtime_guardrail_tool_call_async,
+)
 from relay_teams.tools.runtime.models import (
     ToolApprovalDecision,
     ToolApprovalRequest,
@@ -315,6 +330,15 @@ async def execute_tool(
             tool_input=effective_tool_input,
         )
         args_summary = dict(effective_tool_input)
+        pre_guardrail_error = await _apply_pre_execution_guardrails(
+            ctx=ctx,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            tool_input=effective_tool_input,
+            meta=meta,
+        )
+        if pre_tool_error is None and pre_guardrail_error is not None:
+            pre_tool_error = pre_guardrail_error
         reusable_result = await _reusable_tool_result_async(
             ctx=ctx,
             args_preview=_safe_json(args_summary),
@@ -497,6 +521,19 @@ async def execute_tool(
                 args_summary=args_summary,
                 envelope=envelope,
             )
+            envelope = await _apply_in_execution_guardrails(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_input=effective_tool_input,
+                envelope=envelope,
+            )
+            final_success = not _visible_tool_result_is_error(envelope)
+            execution_status = (
+                ToolExecutionStatus.COMPLETED
+                if final_success
+                else ToolExecutionStatus.FAILED
+            )
             await _observe_tool_result_reminders_async(
                 ctx=ctx,
                 tool_name=tool_name,
@@ -509,16 +546,16 @@ async def execute_tool(
                 tool_name=tool_name,
                 args_summary=args_summary,
                 visible_envelope=envelope,
-                internal_data=internal_data,
+                internal_data=internal_data if final_success else None,
                 runtime_meta=meta,
-                execution_status=ToolExecutionStatus.COMPLETED,
-                tool_content_parts=tool_content_parts,
+                execution_status=execution_status,
+                tool_content_parts=tool_content_parts if final_success else (),
             )
             await _record_tool_metrics_async(
                 ctx=ctx,
                 tool_name=tool_name,
                 duration_ms=elapsed_ms,
-                success=True,
+                success=final_success,
             )
             if approval_ticket_id and not keep_approval_ticket_reusable:
                 await ctx.deps.approval_ticket_repo.mark_completed_async(
@@ -531,9 +568,9 @@ async def execute_tool(
                 tool_input=effective_tool_input,
                 visible_envelope=envelope,
                 internal_data=internal_data,
-                execution_status=ToolExecutionStatus.COMPLETED,
+                execution_status=execution_status,
             )
-            if tool_return_content is not None:
+            if final_success and tool_return_content is not None:
                 return ToolReturn(
                     return_value=envelope,
                     content=tool_return_content,
@@ -579,6 +616,13 @@ async def execute_tool(
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 args_summary=args_summary,
+                envelope=envelope,
+            )
+            envelope = await _apply_in_execution_guardrails(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_input=effective_tool_input,
                 envelope=envelope,
             )
             await _observe_tool_result_reminders_async(
@@ -1991,6 +2035,313 @@ async def _apply_pre_tool_hooks(
     if isinstance(bundle.updated_input, dict):
         next_args = _normalize_json_object(bundle.updated_input)
     return next_args, None, bundle.decision == HookDecisionType.ASK
+
+
+async def _apply_pre_execution_guardrails(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    tool_input: dict[str, JsonValue],
+    meta: dict[str, JsonValue],
+) -> ToolError | None:
+    policy = ctx.deps.tool_approval_policy
+    guardrail_policy = _guardrail_policy_from_runtime_policy(policy)
+    if not guardrail_policy.enabled:
+        return None
+    context = _runtime_guardrail_context(
+        ctx=ctx,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+    )
+    call_count = await _record_guardrail_tool_call_count(
+        ctx=ctx,
+        context=context,
+    )
+    allowed_tools: tuple[str, ...] | None = None
+    denied_tools: tuple[str, ...] = ()
+    if isinstance(policy, ToolApprovalPolicy):
+        allowed_tools = await _allowed_tools_for_runtime_policy(ctx=ctx)
+        denied_tools = tuple(sorted(policy.denied_tools))
+    evaluation = evaluate_pre_execution_guardrails(
+        policy=guardrail_policy,
+        context=context,
+        tool_input=tool_input,
+        allowed_tools=allowed_tools,
+        denied_tools=denied_tools,
+        call_count=call_count,
+    )
+    if not evaluation.findings:
+        return None
+    _apply_guardrail_findings_to_meta(meta=meta, evaluation=evaluation)
+    await _record_and_publish_guardrail_findings_async(
+        ctx=ctx,
+        context=context,
+        findings=evaluation.findings,
+    )
+    if not evaluation.blocked:
+        return None
+    denial = _first_guardrail_block(evaluation.findings)
+    meta["approval_required"] = False
+    meta["approval_mode"] = ToolApprovalMode.POLICY_EXEMPT.value
+    meta["approval_status"] = (
+        "denied_by_policy"
+        if _guardrail_block_is_policy_boundary(denial)
+        else "denied_by_guardrail"
+    )
+    meta["runtime_policy_decision"] = ToolRuntimeDecision.DENY.value
+    meta["runtime_policy_reason"] = denial.message
+    return ToolError(
+        type=_guardrail_denial_error_type(denial),
+        message=denial.message,
+        retryable=False,
+        details=denial.details,
+    )
+
+
+async def _apply_in_execution_guardrails(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+    tool_input: dict[str, JsonValue],
+    envelope: dict[str, JsonValue],
+) -> dict[str, JsonValue]:
+    policy = ctx.deps.tool_approval_policy
+    guardrail_policy = _guardrail_policy_from_runtime_policy(policy)
+    if not guardrail_policy.enabled:
+        return envelope
+    context = _runtime_guardrail_context(
+        ctx=ctx,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+    )
+    evaluation = evaluate_in_execution_guardrails(
+        policy=guardrail_policy,
+        context=context,
+        tool_input=tool_input,
+        result_envelope=envelope,
+    )
+    if not evaluation.findings:
+        return envelope
+    meta = _envelope_meta(envelope)
+    _apply_guardrail_findings_to_meta(meta=meta, evaluation=evaluation)
+    envelope["meta"] = meta
+    await _record_and_publish_guardrail_findings_async(
+        ctx=ctx,
+        context=context,
+        findings=evaluation.findings,
+    )
+    if not evaluation.blocked:
+        return envelope
+    denial = _first_guardrail_block(evaluation.findings)
+    return _visible_envelope(
+        ok=False,
+        error=ToolError(
+            type=_guardrail_denial_error_type(denial),
+            message=denial.message,
+            retryable=False,
+            details=denial.details,
+        ),
+        meta=meta,
+    )
+
+
+async def _record_guardrail_tool_call_count(
+    *,
+    ctx: ToolContext,
+    context: RuntimeGuardrailContext,
+) -> int:
+    try:
+        return await record_runtime_guardrail_tool_call_async(
+            shared_store=ctx.deps.shared_store,
+            context=context,
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="runtime_guardrail.state_update_failed",
+            message="Runtime guardrail could not record tool call count",
+            payload={
+                "run_id": ctx.deps.run_id,
+                "task_id": ctx.deps.task_id,
+                "tool_name": context.tool_name,
+                "tool_call_id": context.tool_call_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        return 1
+
+
+async def _record_and_publish_guardrail_findings_async(
+    *,
+    ctx: ToolContext,
+    context: RuntimeGuardrailContext,
+    findings: tuple[RuntimeGuardrailFinding, ...],
+) -> None:
+    try:
+        _ = await record_runtime_guardrail_findings_async(
+            shared_store=ctx.deps.shared_store,
+            context=context,
+            findings=findings,
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="runtime_guardrail.finding_persist_failed",
+            message="Runtime guardrail finding could not be persisted",
+            payload={
+                "run_id": ctx.deps.run_id,
+                "task_id": ctx.deps.task_id,
+                "tool_name": context.tool_name,
+                "tool_call_id": context.tool_call_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+    try:
+        await publish_run_event_async(
+            ctx.deps.run_event_hub,
+            RunEvent(
+                session_id=ctx.deps.session_id,
+                run_id=ctx.deps.run_id,
+                trace_id=ctx.deps.trace_id,
+                task_id=ctx.deps.task_id,
+                instance_id=ctx.deps.instance_id,
+                role_id=ctx.deps.role_id,
+                event_type=RunEventType.RUNTIME_GUARDRAIL_ALERT,
+                payload_json=dumps(
+                    {
+                        "tool_name": context.tool_name,
+                        "tool_call_id": context.tool_call_id,
+                        "findings": guardrail_findings_payload(findings),
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="runtime_guardrail.alert_publish_failed",
+            message="Runtime guardrail alert event could not be published",
+            payload={
+                "run_id": ctx.deps.run_id,
+                "task_id": ctx.deps.task_id,
+                "tool_name": context.tool_name,
+                "tool_call_id": context.tool_call_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+
+def _runtime_guardrail_context(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+    tool_call_id: str,
+) -> RuntimeGuardrailContext:
+    return RuntimeGuardrailContext(
+        run_id=ctx.deps.run_id,
+        session_id=ctx.deps.session_id,
+        task_id=ctx.deps.task_id,
+        instance_id=ctx.deps.instance_id,
+        role_id=ctx.deps.role_id,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        session_mode=ctx.deps.session_mode,
+        run_kind=ctx.deps.run_kind,
+    )
+
+
+def _guardrail_policy_from_runtime_policy(
+    policy: object,
+) -> RuntimeGuardrailPolicy:
+    if isinstance(policy, ToolApprovalPolicy):
+        return policy.guardrails
+    return RuntimeGuardrailPolicy(enabled=False)
+
+
+def _apply_guardrail_findings_to_meta(
+    *,
+    meta: dict[str, JsonValue],
+    evaluation: RuntimeGuardrailEvaluation,
+) -> None:
+    findings = tuple(
+        finding
+        for finding in evaluation.findings
+        if finding.action != RuntimeGuardrailAction.ALLOW
+    )
+    if not findings:
+        return
+    new_blocked = evaluation.blocked_count
+    new_warnings = evaluation.warning_count
+    new_status = guardrail_meta_status(findings).value
+    new_payload = guardrail_findings_payload(findings)
+    existing_blocked = meta.get("runtime_guardrail_blocked_count")
+    existing_warnings = meta.get("runtime_guardrail_warning_count")
+    existing_findings = meta.get("runtime_guardrail_findings")
+    existing_status = meta.get("runtime_guardrail_status")
+    if isinstance(existing_blocked, int):
+        meta["runtime_guardrail_blocked_count"] = existing_blocked + new_blocked
+    else:
+        meta["runtime_guardrail_blocked_count"] = new_blocked
+    if isinstance(existing_warnings, int):
+        meta["runtime_guardrail_warning_count"] = existing_warnings + new_warnings
+    else:
+        meta["runtime_guardrail_warning_count"] = new_warnings
+    if isinstance(existing_findings, list):
+        existing_list: list[JsonValue] = existing_findings
+        meta["runtime_guardrail_findings"] = existing_list + new_payload
+    else:
+        meta["runtime_guardrail_findings"] = new_payload
+    if isinstance(existing_status, str) and existing_status != new_status:
+        _status_severity: dict[str, int] = {
+            RuntimeGuardrailStatus.BLOCKED.value: 3,
+            RuntimeGuardrailStatus.WARNING.value: 2,
+            RuntimeGuardrailStatus.PASSED.value: 1,
+        }
+        existing_rank = _status_severity.get(existing_status, 0)
+        new_rank = _status_severity.get(new_status, 0)
+        meta["runtime_guardrail_status"] = (
+            new_status if new_rank > existing_rank else existing_status
+        )
+    else:
+        meta["runtime_guardrail_status"] = new_status
+
+
+def _first_guardrail_block(
+    findings: tuple[RuntimeGuardrailFinding, ...],
+) -> RuntimeGuardrailFinding:
+    for finding in findings:
+        if finding.action == RuntimeGuardrailAction.DENY:
+            return finding
+    raise RuntimeError("Expected a runtime guardrail denial finding")
+
+
+def _guardrail_block_is_policy_boundary(finding: RuntimeGuardrailFinding) -> bool:
+    return finding.rule_type in {
+        RuntimeGuardrailRuleType.TOOL_ALLOWLIST,
+        RuntimeGuardrailRuleType.TOOL_DENYLIST,
+    }
+
+
+def _guardrail_denial_error_type(finding: RuntimeGuardrailFinding) -> str:
+    if _guardrail_block_is_policy_boundary(finding):
+        return "tool_policy_denied"
+    return "runtime_guardrail_denied"
+
+
+def _envelope_meta(envelope: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    raw_meta = envelope.get("meta")
+    if not isinstance(raw_meta, dict):
+        return {}
+    return _normalize_json_object(raw_meta)
 
 
 async def _apply_permission_request_hooks(

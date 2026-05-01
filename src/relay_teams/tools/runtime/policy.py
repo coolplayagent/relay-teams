@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from relay_teams.computer import ComputerActionRisk
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.tools.runtime.guardrails import RuntimeGuardrailPolicy
 from relay_teams.tools.runtime.models import (
     ToolApprovalDecision,
     ToolApprovalRequest,
@@ -32,6 +33,7 @@ class ToolRuntimePolicy(BaseModel):
     yolo: bool = False
     approval_required_tools: frozenset[str] = DEFAULT_APPROVAL_REQUIRED_TOOLS
     denied_tools: frozenset[str] = frozenset()
+    guardrails: RuntimeGuardrailPolicy = Field(default_factory=RuntimeGuardrailPolicy)
     timeout_seconds: float = 300.0
 
     def requires_approval(self, tool_name: str) -> bool:
@@ -104,6 +106,7 @@ class ToolApprovalPolicy(ToolRuntimePolicy):
             yolo=yolo,
             approval_required_tools=self.approval_required_tools,
             denied_tools=self.denied_tools,
+            guardrails=self.guardrails,
             timeout_seconds=self.timeout_seconds,
         )
 

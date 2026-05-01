@@ -39,6 +39,10 @@ from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.tools.runtime.guardrails import (
+    RuntimeGuardrailReport,
+    RuntimeGuardrailStatus,
+)
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 YOLO_TOOL_APPROVAL_POLICY = ToolApprovalPolicy(yolo=True)
@@ -143,6 +147,99 @@ def test_verify_task_builds_structured_report(tmp_path: Path) -> None:
     assert result.report.evidence_bundle.expectation_links[0].satisfied is True
     assert result.report.semantic_results[0].passed is True
     assert result.report.unmet_items == ()
+
+
+def test_verify_task_requires_runtime_guardrail_report_when_requested(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_guardrail_missing.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return evidence",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(
+        task.task_id,
+        TaskStatus.COMPLETED,
+        result="done",
+    )
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        require_guardrail_report=True,
+    )
+
+    assert result.passed is False
+    assert result.report is not None
+    assert "runtime_guardrail_report" in result.report.unmet_items
+
+
+def test_verify_task_accepts_runtime_guardrail_report_as_security_evidence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_guardrail_present.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return evidence",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(
+        task.task_id,
+        TaskStatus.COMPLETED,
+        result="done",
+    )
+    report = RuntimeGuardrailReport(
+        task_id=task.task_id,
+        run_id=task.trace_id,
+        session_id=task.session_id,
+        role_id="gater",
+        status=RuntimeGuardrailStatus.PASSED,
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id=task.session_id,
+            run_id=task.trace_id,
+            trace_id=task.trace_id,
+            task_id=task.task_id,
+            instance_id="inst-1",
+            role_id="gater",
+            event_type=RunEventType.RUNTIME_GUARDRAIL_REPORT,
+            payload_json=report.model_dump_json(),
+        )
+    )
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        require_guardrail_report=True,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert any(
+        check.layer == VerificationLayer.SECURITY
+        and check.name == "runtime_guardrail_status"
+        and check.passed
+        for check in result.report.checks
+    )
+    assert result.report.evidence_bundle is not None
+    assert any(
+        item.kind == VerificationEvidenceKind.RUNTIME_GUARDRAIL_REPORT
+        for item in result.report.evidence_bundle.items
+    )
 
 
 def test_verify_task_enforces_role_contract_postconditions(tmp_path: Path) -> None:

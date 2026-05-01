@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -80,6 +81,56 @@ class SharedStateRepository(SharedSqliteRepository):
 
         await self._run_async_write(
             operation_name="manage_state",
+            operation=lambda _conn: operation(),
+        )
+
+    async def update_state_async(
+        self,
+        *,
+        scope: ScopeRef,
+        key: str,
+        update: Callable[[str | None], str],
+        ttl_seconds: int | None = None,
+    ) -> str:
+        expires_at: str | None = None
+        if ttl_seconds is not None:
+            expires_at = (
+                datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)
+            ).isoformat()
+
+        async def operation() -> str:
+            conn = await self._get_async_conn()
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT value_json FROM shared_state
+                WHERE scope_type=? AND scope_id=? AND state_key=?
+                  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                """,
+                (scope.scope_type.value, scope.scope_id, key),
+            )
+            current_value = None if row is None else str(row["value_json"])
+            next_value = update(current_value)
+            await conn.execute(
+                """
+                INSERT INTO shared_state(scope_type, scope_id, state_key, value_json, updated_at, expires_at)
+                VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(scope_type, scope_id, state_key)
+                DO UPDATE SET value_json=excluded.value_json, updated_at=CURRENT_TIMESTAMP,
+                              expires_at=COALESCE(excluded.expires_at, expires_at)
+                """,
+                (
+                    scope.scope_type.value,
+                    scope.scope_id,
+                    key,
+                    next_value,
+                    expires_at,
+                ),
+            )
+            return next_value
+
+        return await self._run_async_write(
+            operation_name="update_state",
             operation=lambda _conn: operation(),
         )
 
