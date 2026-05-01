@@ -7,11 +7,16 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountStatus,
@@ -78,7 +83,22 @@ class WeChatAccountRepository(SharedSqliteRepository):
         return tuple(records)
 
     async def list_accounts_async(self) -> tuple[WeChatAccountRecord, ...]:
-        return await self._call_sync_async(self.list_accounts)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[WeChatAccountRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                "SELECT * FROM wechat_accounts ORDER BY created_at DESC",
+            )
+            records: list[WeChatAccountRecord] = []
+            for row in rows:
+                try:
+                    records.append(self._to_record(row))
+                except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                    _log_invalid_wechat_account_row(row=row, error=exc)
+            return tuple(records)
+
+        return await self._run_async_read(operation)
 
     def get_account(self, account_id: str) -> WeChatAccountRecord:
         row = self._conn.execute(
@@ -94,7 +114,21 @@ class WeChatAccountRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown account_id: {account_id}") from exc
 
     async def get_account_async(self, account_id: str) -> WeChatAccountRecord:
-        return await self._call_sync_async(self.get_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> WeChatAccountRecord:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM wechat_accounts WHERE account_id=?",
+                (account_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown account_id: {account_id}")
+            try:
+                return self._to_record(row, fallback_invalid_timestamps=True)
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_wechat_account_row(row=row, error=exc)
+                raise KeyError(f"Unknown account_id: {account_id}") from exc
+
+        return await self._run_async_read(operation)
 
     def upsert_account(self, record: WeChatAccountRecord) -> WeChatAccountRecord:
         run_sqlite_write_with_retry(
@@ -172,7 +206,77 @@ class WeChatAccountRepository(SharedSqliteRepository):
     async def upsert_account_async(
         self, record: WeChatAccountRecord
     ) -> WeChatAccountRecord:
-        return await self._call_sync_async(self.upsert_account, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO wechat_accounts(
+                    account_id,
+                    display_name,
+                    base_url,
+                    cdn_base_url,
+                    route_tag,
+                    status,
+                    remote_user_id,
+                    sync_cursor,
+                    workspace_id,
+                    session_mode,
+                    normal_root_role_id,
+                    orchestration_preset_id,
+                    yolo,
+                    thinking_json,
+                    last_login_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    base_url=excluded.base_url,
+                    cdn_base_url=excluded.cdn_base_url,
+                    route_tag=excluded.route_tag,
+                    status=excluded.status,
+                    remote_user_id=excluded.remote_user_id,
+                    sync_cursor=excluded.sync_cursor,
+                    workspace_id=excluded.workspace_id,
+                    session_mode=excluded.session_mode,
+                    normal_root_role_id=excluded.normal_root_role_id,
+                    orchestration_preset_id=excluded.orchestration_preset_id,
+                    yolo=excluded.yolo,
+                    thinking_json=excluded.thinking_json,
+                    last_login_at=excluded.last_login_at,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    record.account_id,
+                    record.display_name,
+                    record.base_url,
+                    record.cdn_base_url,
+                    record.route_tag,
+                    record.status.value,
+                    record.remote_user_id,
+                    record.sync_cursor,
+                    record.workspace_id,
+                    record.session_mode.value,
+                    record.normal_root_role_id,
+                    record.orchestration_preset_id,
+                    1 if record.yolo else 0,
+                    json.dumps(
+                        record.thinking.model_dump(mode="json"), ensure_ascii=False
+                    ),
+                    record.last_login_at.isoformat()
+                    if record.last_login_at is not None
+                    else None,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_account_async",
+            operation=operation,
+        )
+        return await self.get_account_async(record.account_id)
 
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -188,7 +292,17 @@ class WeChatAccountRepository(SharedSqliteRepository):
         )
 
     async def delete_account_async(self, account_id: str) -> None:
-        return await self._call_sync_async(self.delete_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM wechat_accounts WHERE account_id=?",
+                (account_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_account_async",
+            operation=operation,
+        )
 
     def _to_record(
         self,

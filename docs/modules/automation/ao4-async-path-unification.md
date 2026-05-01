@@ -2,62 +2,77 @@
 
 ## Status
 
-Implemented for the 2026-04-30 PR scope. This spec records the design and
-implementation contract for the third AO-4 migration slice.
+Implemented through the final 2026-05-01 AO-4 repository slice. The async
+runtime and server persistence paths no longer call synchronous SQLite methods
+through `_call_sync_async`. The bridge remains only on
+`SharedSqliteRepository` as a compatibility primitive for intentionally
+synchronous callers.
 
 ## Context
 
 AO-4 moves runtime and persistence paths away from async wrappers around
-synchronous SQLite methods. The earlier slices moved core orchestration and the
-automation management plane. This slice covers the automation delivery queue,
-bound-session queue, and session terminal-view marker path.
+synchronous SQLite methods. Earlier slices migrated the orchestration hot path,
+automation management plane, automation delivery queue, bound-session queue, and
+session terminal-view marker flow. The final slice completes the remaining
+runtime-facing repository families:
 
-The issue this slice addresses is not only blocking I/O. A wrapper-based async
-method can inherit synchronous locking behavior, hide queue pressure, and make
-route timeout semantics depend on whether work happened to be routed through a
-thread bridge. The new contract is explicit: async runtime paths use native
-async repository operations unless the boundary is intentionally synchronous.
+- message history and prompt persistence
+- task, run, event, background task, approval, and user-question batch lookups
+- external agent sessions and external session bindings
+- gateway account, inbound queue, session, and message-pool stores
+- workspace, SSH profile, media asset, trigger, monitor, role memory, token
+  usage, and retrieval FTS stores
+
+The issue addressed is not only blocking I/O. A wrapper-based async method can
+inherit synchronous locking behavior, hide queue pressure, and make route timeout
+semantics depend on whether work happened to be routed through a thread bridge.
+The contract after AO-4 is explicit: async runtime paths use native async
+repository operations unless the boundary is intentionally synchronous.
 
 ## Goals
 
-- Keep automation delivery and bound-session queue workers on native
-  `aiosqlite` reads and writes.
-- Preserve existing state-machine semantics for create, update, claim, list,
-  cleanup, and project deletion operations.
-- Keep session terminal-view marking on the session-read route-work queue while
-  preventing request timeout from cancelling the persisted marker update.
-- Add regression coverage that fails if migrated async methods fall back to
-  `_call_sync_async`.
-- Leave public API payloads and database schemas unchanged.
+- Remove runtime `_call_sync_async` callers from `src/relay_teams` outside the
+  base bridge implementation.
+- Keep async repository methods on `aiosqlite`, `async_fetchone()`,
+  `async_fetchall()`, `_run_async_read()`, and `_run_async_write()`.
+- Preserve existing public API payloads, database schemas, state-machine
+  semantics, timestamp ordering, and cache invalidation behavior.
+- Preserve atomic claim behavior for automation delivery, bound-session queue,
+  gateway inbound queue, Feishu message pool, approvals, questions, and runtime
+  work queues.
+- Add regression coverage that fails when a runtime source file reintroduces a
+  sync bridge caller.
 
 ## Non-Goals
 
-- Migrating every remaining repository that still has `_call_sync_async`
-  methods.
-- Changing automation delivery, queue, or session API response models.
+- Removing every synchronous public API method. CLI, scripts, and legacy sync
+  callers may continue to call synchronous methods at deliberate boundaries.
+- Changing `/api/*` contracts or database schema.
 - Introducing a new database transaction abstraction.
-- Changing CLI or other deliberately synchronous entry points.
+- Replacing the session-read route-work queue or other request admission
+  controls.
 
 ## Design Contract
 
-Async repository methods in the migrated scope must call
-`SharedSqliteRepository._run_async_read()` or `_run_async_write()` directly.
-Read methods should use `async_fetchone()` and `async_fetchall()` so cursors are
-closed consistently. Write methods should close cursors before returning and
-reload records when callers expect stored database state.
+Async repository methods must execute database work directly on async
+connections. Read methods should use `async_fetchone()` and `async_fetchall()`
+so cursors are closed consistently. Write methods should close cursors before
+returning and reload records when callers expect stored database state.
 
-Claim operations must remain atomic. Each claim updates a row only from its
-eligible pending state, or from a stale in-progress state, and then reloads the
-same row in the write operation. A zero-row update means another worker already
-owns the item and the method returns `None`.
+`_call_sync_async` is owned by `SharedSqliteRepository` only. It must not be used
+by runtime repositories, services, routers, or gateway paths as a shortcut for
+async compatibility. If a sync API still exists for a deliberate boundary, its
+async equivalent must contain its own async SQL implementation rather than
+wrapping the sync method.
 
-Bound-session queue list operations clamp worker limits to the existing safe
-range. Delivery list operations preserve their existing caller-provided limit
-semantics.
+Claim and queue operations must remain atomic. Each claim updates a row only
+from its eligible pending state, or from a stale in-progress state, and then
+reloads the same row inside the write operation. A zero-row update means another
+worker already owns the item and the method returns `None`.
 
-The terminal-view route must still use
-`_call_session_read("sessions.terminal_view", ...)` so it remains governed by
-`RouteWorkClass.SESSION_READ` admission and load-shedding. The route may return
+The terminal-view route still uses `_call_session_read("sessions.terminal_view",
+...)` so it remains governed by `RouteWorkClass.SESSION_READ` admission and
+load-shedding. The queued callable is async, and the route may return
 `{"status": "deferred"}` when the request times out, but the marker task must
 continue in the background and its result must be observed.
 
@@ -65,7 +80,7 @@ continue in the background and its result must be observed.
 
 ### Automation Delivery Repository
 
-`AutomationDeliveryRepository` now implements these async methods with native
+`AutomationDeliveryRepository` implements these async methods with native
 `aiosqlite` access:
 
 - `create_async`
@@ -80,12 +95,12 @@ continue in the background and its result must be observed.
 - `has_project_records_async`
 - `delete_by_project_async`
 
-Create and update write the same fields as the synchronous methods and reload
-by `run_id`. Missing `run_id` lookups still raise `KeyError`.
+Create and update write the same fields as the synchronous methods and reload by
+`run_id`. Missing `run_id` lookups still raise `KeyError`.
 
 ### Bound Session Queue Repository
 
-`AutomationBoundSessionQueueRepository` now implements these async methods with
+`AutomationBoundSessionQueueRepository` implements these async methods with
 native `aiosqlite` access:
 
 - `create_async`
@@ -104,6 +119,29 @@ native `aiosqlite` access:
 
 Create and update reload by `automation_queue_id`. Count and readiness queries
 reuse the same non-terminal status set as the synchronous path.
+
+### Final Repository Slice
+
+The final slice converts the remaining async methods that previously delegated
+to sync methods:
+
+- `MessageRepository` now performs append, projection, history replay, prompt
+  persistence, pruning, compaction, system prompt hiding, and delete operations
+  with async SQL and async timestamp sequencing.
+- Runtime projection repositories perform batch reads natively:
+  `TaskRepository`, `RunRuntimeRepository`, `BackgroundTaskRepository`,
+  `RunIntentRepository`, `EventLog`, `UserQuestionRepository`, and
+  `ApprovalTicketRepository`.
+- External and gateway repositories use native async CRUD and queue operations:
+  external sessions, external session bindings, Feishu and WeChat accounts,
+  XiaoLuBan accounts, gateway sessions, WeChat inbound queue, and Feishu message
+  pool.
+- Operational stores use native async reads and writes: workspace records, SSH
+  profiles, media assets, monitors, triggers, role memory, shell approvals, and
+  token usage.
+- Retrieval FTS paths use async scope configuration, document indexing,
+  deletion, rebuild, search, and stats operations while preserving existing FTS5
+  schema and ranking behavior.
 
 ### Session Terminal View
 
@@ -127,25 +165,29 @@ unexpected failures.
 
 | Area | Coverage |
 | --- | --- |
-| Wrapper-free contract | `tests/unit_tests/test_async_wrapper_coverage.py` checks migrated async methods do not call `_call_sync_async`. |
+| Repository-wide bridge guard | `tests/unit_tests/test_async_wrapper_coverage.py` scans `src/relay_teams` and fails if any source file outside `persistence/sqlite_repository.py` references `_call_sync_async`. |
+| Wrapper-free method guard | `tests/unit_tests/test_async_wrapper_coverage.py` checks migrated async methods do not call `_call_sync_async`. |
 | Automation delivery repository | `tests/unit_tests/automation/test_automation_repository.py` monkeypatches `_call_sync_async` to fail and exercises CRUD, listing, claims, cleanup, project lookup, and deletion. |
 | Bound-session queue repository | `tests/unit_tests/automation/test_automation_repository.py` covers create, update, get, non-terminal counts, readiness, waiting-result listing, claim, cleanup, project lookup, and deletion without sync wrappers. |
 | Session terminal view | `tests/unit_tests/interfaces/server/test_sessions_router.py` covers timeout deferral, request cancellation, deferred result logging, load-shedding via the session-read helper, and success/missing-session behavior. |
 | Service latest-terminal selection | `tests/unit_tests/sessions/test_session_auto_title.py` covers async terminal marker behavior through the service layer. |
+| Type contract | `uv run --extra dev basedpyright` validates async helper and row conversion signatures. |
 
 ## Operational Invariants
 
-- Async runtime paths in this scope must not call sync repository methods through
+- Runtime async paths must not call sync repository methods through
   `_call_sync_async`.
 - Route timeout must not cancel terminal-view persistence.
 - Request cancellation must not leave a background marker failure unobserved.
 - Session-read queue admission must still apply to terminal-view marker work.
 - Claim methods must be race-safe under concurrent workers.
+- Retrieval FTS updates must preserve existing scope isolation and ranking
+  behavior.
 - The branch does not require schema or `/api/*` contract changes.
 
 ## Follow-Up Scope
 
-Remaining `_call_sync_async` users are outside this PR scope and should be
-migrated by repository ownership area. The next candidates are external gateway,
-workspace, trigger, media, role memory, and broader session history persistence
-paths.
+AO-4's sync-bridge migration is complete for runtime source paths. Future work
+should focus on reducing redundant synchronous public APIs where they no longer
+serve a CLI or script boundary, and on replacing remaining management-plane
+`call_maybe_async` compatibility seams with direct async service calls.

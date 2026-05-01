@@ -7,6 +7,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
@@ -17,7 +18,11 @@ from relay_teams.gateway.feishu.models import (
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -167,7 +172,48 @@ class FeishuAccountRepository(SharedSqliteRepository):
     async def create_account_async(
         self, record: FeishuGatewayAccountRecord
     ) -> FeishuGatewayAccountRecord:
-        return await self._call_sync_async(self.create_account, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO feishu_gateway_accounts(
+                    account_id,
+                    name,
+                    display_name,
+                    status,
+                    source_config_json,
+                    target_config_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.account_id,
+                    record.name,
+                    record.display_name,
+                    record.status.value,
+                    json.dumps(record.source_config),
+                    json.dumps(record.target_config)
+                    if record.target_config is not None
+                    else None,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        try:
+            await self._run_async_write(
+                operation_name="create_account_async",
+                operation=operation,
+            )
+        except sqlite3.IntegrityError as exc:
+            if "name" in str(exc).lower():
+                raise FeishuAccountNameConflictError(
+                    f"Feishu account name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def update_account(
         self,
@@ -215,7 +261,44 @@ class FeishuAccountRepository(SharedSqliteRepository):
     async def update_account_async(
         self, record: FeishuGatewayAccountRecord
     ) -> FeishuGatewayAccountRecord:
-        return await self._call_sync_async(self.update_account, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                UPDATE feishu_gateway_accounts
+                SET name=?,
+                    display_name=?,
+                    status=?,
+                    source_config_json=?,
+                    target_config_json=?,
+                    updated_at=?
+                WHERE account_id=?
+                """,
+                (
+                    record.name,
+                    record.display_name,
+                    record.status.value,
+                    json.dumps(record.source_config),
+                    json.dumps(record.target_config)
+                    if record.target_config is not None
+                    else None,
+                    record.updated_at.isoformat(),
+                    record.account_id,
+                ),
+            )
+            await cursor.close()
+
+        try:
+            await self._run_async_write(
+                operation_name="update_account_async",
+                operation=operation,
+            )
+        except sqlite3.IntegrityError as exc:
+            if "name" in str(exc).lower():
+                raise FeishuAccountNameConflictError(
+                    f"Feishu account name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def get_account(self, account_id: str) -> FeishuGatewayAccountRecord:
         row = self._conn.execute(
@@ -235,7 +318,25 @@ class FeishuAccountRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown Feishu account: {account_id}") from exc
 
     async def get_account_async(self, account_id: str) -> FeishuGatewayAccountRecord:
-        return await self._call_sync_async(self.get_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> FeishuGatewayAccountRecord:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM feishu_gateway_accounts
+                WHERE account_id=?
+                """,
+                (account_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown Feishu account: {account_id}")
+            try:
+                return self._row_to_record(row)
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_feishu_account_row(row=row, error=exc)
+                raise KeyError(f"Unknown Feishu account: {account_id}") from exc
+
+        return await self._run_async_read(operation)
 
     def list_accounts(self) -> tuple[FeishuGatewayAccountRecord, ...]:
         rows = self._conn.execute(
@@ -254,7 +355,26 @@ class FeishuAccountRepository(SharedSqliteRepository):
         return tuple(records)
 
     async def list_accounts_async(self) -> tuple[FeishuGatewayAccountRecord, ...]:
-        return await self._call_sync_async(self.list_accounts)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[FeishuGatewayAccountRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM feishu_gateway_accounts
+                ORDER BY created_at DESC
+                """,
+            )
+            records: list[FeishuGatewayAccountRecord] = []
+            for row in rows:
+                try:
+                    records.append(self._row_to_record(row))
+                except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                    _log_invalid_feishu_account_row(row=row, error=exc)
+            return tuple(records)
+
+        return await self._run_async_read(operation)
 
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -270,7 +390,17 @@ class FeishuAccountRepository(SharedSqliteRepository):
         )
 
     async def delete_account_async(self, account_id: str) -> None:
-        return await self._call_sync_async(self.delete_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM feishu_gateway_accounts WHERE account_id=?",
+                (account_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_account_async",
+            operation=operation,
+        )
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> FeishuGatewayAccountRecord:

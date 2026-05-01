@@ -436,7 +436,33 @@ class UserQuestionRepository(SharedSqliteRepository):
         self,
         run_ids: tuple[str, ...],
     ) -> dict[str, int]:
-        return await self._call_sync_async(self.count_open_by_run_ids, run_ids)
+        if not run_ids:
+            return {}
+        counts: dict[str, int] = {}
+
+        async def operation(conn: aiosqlite.Connection) -> dict[str, int]:
+            for index in range(0, len(run_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                run_id_chunk = run_ids[index : index + _SQLITE_SAFE_VARIABLE_LIMIT]
+                placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
+                    SELECT *
+                    FROM user_questions
+                    WHERE run_id IN ({placeholders})
+                      AND status=?
+                    ORDER BY run_id ASC, created_at ASC
+                    """,
+                    (*run_id_chunk, UserQuestionRequestStatus.REQUESTED.value),
+                )
+                for row in rows:
+                    record = self._record_or_none(row)
+                    if record is None:
+                        continue
+                    counts[record.run_id] = counts.get(record.run_id, 0) + 1
+            return counts
+
+        return await self._run_async_read(operation)
 
     async def list_by_run_async(
         self,

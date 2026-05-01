@@ -3,9 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
+
 from relay_teams.external_agents.models import ExternalAgentSessionRecord
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchone,
+)
 
 
 class ExternalAgentSessionRepository(SharedSqliteRepository):
@@ -63,9 +68,23 @@ class ExternalAgentSessionRepository(SharedSqliteRepository):
     async def get_async(
         self, *, session_id: str, role_id: str, agent_id: str
     ) -> ExternalAgentSessionRecord | None:
-        return await self._call_sync_async(
-            self.get, session_id=session_id, role_id=role_id, agent_id=agent_id
-        )
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> ExternalAgentSessionRecord | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM external_agent_sessions
+                WHERE session_id=? AND role_id=? AND agent_id=?
+                """,
+                (session_id, role_id, agent_id),
+            )
+            if row is None:
+                return None
+            return ExternalAgentSessionRecord.model_validate(dict(row))
+
+        return await self._run_async_read(operation)
 
     def upsert(self, record: ExternalAgentSessionRecord) -> ExternalAgentSessionRecord:
         next_record = record.model_copy(
@@ -125,7 +144,56 @@ class ExternalAgentSessionRepository(SharedSqliteRepository):
     async def upsert_async(
         self, record: ExternalAgentSessionRecord
     ) -> ExternalAgentSessionRecord:
-        return await self._call_sync_async(self.upsert, record)
+        next_record = record.model_copy(
+            update={"updated_at": datetime.now(tz=timezone.utc)}
+        )
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO external_agent_sessions(
+                    session_id,
+                    role_id,
+                    agent_id,
+                    transport,
+                    external_session_id,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, role_id, agent_id)
+                DO UPDATE SET
+                    transport=excluded.transport,
+                    external_session_id=excluded.external_session_id,
+                    status=excluded.status,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    next_record.session_id,
+                    next_record.role_id,
+                    next_record.agent_id,
+                    next_record.transport.value,
+                    next_record.external_session_id,
+                    next_record.status.value,
+                    next_record.created_at.isoformat(),
+                    next_record.updated_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_async",
+            operation=operation,
+        )
+        persisted = await self.get_async(
+            session_id=next_record.session_id,
+            role_id=next_record.role_id,
+            agent_id=next_record.agent_id,
+        )
+        if persisted is None:
+            raise RuntimeError("Failed to persist external agent session")
+        return persisted
 
     def delete(self, *, session_id: str, role_id: str, agent_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -146,6 +214,17 @@ class ExternalAgentSessionRepository(SharedSqliteRepository):
     async def delete_async(
         self, *, session_id: str, role_id: str, agent_id: str
     ) -> None:
-        return await self._call_sync_async(
-            self.delete, session_id=session_id, role_id=role_id, agent_id=agent_id
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                DELETE FROM external_agent_sessions
+                WHERE session_id=? AND role_id=? AND agent_id=?
+                """,
+                (session_id, role_id, agent_id),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_async",
+            operation=operation,
         )

@@ -6,9 +6,13 @@ from pathlib import Path
 import re
 import sqlite3
 
+import aiosqlite
+
 from relay_teams.logger import get_logger
 from relay_teams.persistence import (
     SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
     sqlite_supports_fts5,
 )
 from relay_teams.retrieval.retrieval_models import (
@@ -69,8 +73,29 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
     async def replace_scope_async(
         self, *, config: RetrievalScopeConfig, documents: tuple[RetrievalDocument, ...]
     ) -> RetrievalStats:
-        return await self._call_sync_async(
-            self.replace_scope, config=config, documents=documents
+        normalized_documents = _normalize_documents(documents)
+        with trace_span(
+            LOGGER,
+            component="retrieval.sqlite",
+            operation="replace_scope_async",
+            attributes={
+                "scope_kind": config.scope_kind.value,
+                "scope_id": config.scope_id,
+                "document_count": len(normalized_documents),
+                "tokenizer": config.tokenizer.value,
+            },
+        ):
+            await self._run_async_write(
+                operation_name="replace_scope_async",
+                operation=lambda conn: self._replace_scope_locked_async(
+                    conn=conn,
+                    config=config,
+                    documents=normalized_documents,
+                ),
+            )
+        return await self.stats_async(
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
         )
 
     def upsert_documents(
@@ -103,8 +128,29 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
     async def upsert_documents_async(
         self, *, config: RetrievalScopeConfig, documents: tuple[RetrievalDocument, ...]
     ) -> RetrievalStats:
-        return await self._call_sync_async(
-            self.upsert_documents, config=config, documents=documents
+        normalized_documents = _normalize_documents(documents)
+        with trace_span(
+            LOGGER,
+            component="retrieval.sqlite",
+            operation="upsert_documents_async",
+            attributes={
+                "scope_kind": config.scope_kind.value,
+                "scope_id": config.scope_id,
+                "document_count": len(normalized_documents),
+                "tokenizer": config.tokenizer.value,
+            },
+        ):
+            await self._run_async_write(
+                operation_name="upsert_documents_async",
+                operation=lambda conn: self._upsert_documents_locked_async(
+                    conn=conn,
+                    config=config,
+                    documents=normalized_documents,
+                ),
+            )
+        return await self.stats_async(
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
         )
 
     def delete_documents(
@@ -142,12 +188,27 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
         scope_id: str,
         document_ids: tuple[str, ...],
     ) -> RetrievalStats:
-        return await self._call_sync_async(
-            self.delete_documents,
-            scope_kind=scope_kind,
-            scope_id=scope_id,
-            document_ids=document_ids,
-        )
+        normalized_ids = _normalize_document_ids(document_ids)
+        with trace_span(
+            LOGGER,
+            component="retrieval.sqlite",
+            operation="delete_documents_async",
+            attributes={
+                "scope_kind": scope_kind.value,
+                "scope_id": scope_id,
+                "document_count": len(normalized_ids),
+            },
+        ):
+            await self._run_async_write(
+                operation_name="delete_documents_async",
+                operation=lambda conn: self._delete_documents_locked_async(
+                    conn=conn,
+                    scope_kind=scope_kind,
+                    scope_id=scope_id,
+                    document_ids=normalized_ids,
+                ),
+            )
+        return await self.stats_async(scope_kind=scope_kind, scope_id=scope_id)
 
     def search(
         self,
@@ -221,7 +282,73 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             )
 
     async def search_async(self, *, query: RetrievalQuery) -> tuple[RetrievalHit, ...]:
-        return await self._call_sync_async(self.search, query=query)
+        with trace_span(
+            LOGGER,
+            component="retrieval.sqlite",
+            operation="search_async",
+            attributes={
+                "scope_kind": query.scope_kind.value,
+                "scope_id": query.scope_id,
+                "limit": query.limit,
+            },
+        ):
+            config = await self._run_async_read(
+                lambda conn: self._get_scope_config_async(
+                    conn=conn,
+                    scope_kind=query.scope_kind,
+                    scope_id=query.scope_id,
+                )
+            )
+            if config is None:
+                return ()
+            match_expression = _build_match_expression(
+                raw_query=query.text,
+                tokenizer=config.tokenizer,
+            )
+            if not match_expression:
+                return ()
+            table_name = _fts_table_name(config.tokenizer)
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    f"""
+                    SELECT
+                        document_id,
+                        title,
+                        COALESCE(
+                            NULLIF(snippet({table_name}, 4, '[', ']', '...', 12), ''),
+                            NULLIF(snippet({table_name}, 3, '[', ']', '...', 12), ''),
+                            body,
+                            title,
+                            ''
+                        ) AS snippet,
+                        bm25({table_name}, 0.0, 0.0, 0.0, ?, ?, ?) AS rank_score
+                    FROM {table_name}
+                    WHERE scope_kind = ? AND scope_id = ? AND {table_name} MATCH ?
+                    ORDER BY rank_score ASC, document_id ASC
+                    LIMIT ?
+                    """,
+                    (
+                        config.title_weight,
+                        config.body_weight,
+                        config.keyword_weight,
+                        query.scope_kind.value,
+                        query.scope_id,
+                        match_expression,
+                        query.limit,
+                    ),
+                )
+            )
+            return tuple(
+                RetrievalHit(
+                    document_id=str(row["document_id"]),
+                    score=float(-float(row["rank_score"])),
+                    rank=index,
+                    title=str(row["title"]),
+                    snippet=str(row["snippet"]),
+                )
+                for index, row in enumerate(rows, start=1)
+            )
 
     def rebuild_scope(
         self,
@@ -250,9 +377,24 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
     async def rebuild_scope_async(
         self, *, scope_kind: RetrievalScopeKind, scope_id: str
     ) -> RetrievalStats:
-        return await self._call_sync_async(
-            self.rebuild_scope, scope_kind=scope_kind, scope_id=scope_id
-        )
+        with trace_span(
+            LOGGER,
+            component="retrieval.sqlite",
+            operation="rebuild_scope_async",
+            attributes={
+                "scope_kind": scope_kind.value,
+                "scope_id": scope_id,
+            },
+        ):
+            await self._run_async_write(
+                operation_name="rebuild_scope_async",
+                operation=lambda conn: self._rebuild_scope_locked_async(
+                    conn=conn,
+                    scope_kind=scope_kind,
+                    scope_id=scope_id,
+                ),
+            )
+        return await self.stats_async(scope_kind=scope_kind, scope_id=scope_id)
 
     def stats(
         self,
@@ -309,9 +451,53 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
     async def stats_async(
         self, *, scope_kind: RetrievalScopeKind, scope_id: str
     ) -> RetrievalStats:
-        return await self._call_sync_async(
-            self.stats, scope_kind=scope_kind, scope_id=scope_id
-        )
+        with trace_span(
+            LOGGER,
+            component="retrieval.sqlite",
+            operation="stats_async",
+            attributes={
+                "scope_kind": scope_kind.value,
+                "scope_id": scope_id,
+            },
+        ):
+
+            async def operation(conn: aiosqlite.Connection) -> RetrievalStats:
+                row = await async_fetchone(
+                    conn,
+                    """
+                    SELECT backend, tokenizer, updated_at
+                    FROM retrieval_scopes
+                    WHERE scope_kind = ? AND scope_id = ?
+                    """,
+                    (scope_kind.value, scope_id),
+                )
+                count_row = await async_fetchone(
+                    conn,
+                    """
+                    SELECT COUNT(*) AS document_count
+                    FROM retrieval_documents
+                    WHERE scope_kind = ? AND scope_id = ?
+                    """,
+                    (scope_kind.value, scope_id),
+                )
+                tokenizer = None
+                updated_at = None
+                if row is not None:
+                    tokenizer_value = str(row["tokenizer"])
+                    tokenizer = RetrievalTokenizer(tokenizer_value)
+                    updated_at = datetime.fromisoformat(str(row["updated_at"]))
+                return RetrievalStats(
+                    scope_kind=scope_kind,
+                    scope_id=scope_id,
+                    backend=self.backend_kind,
+                    tokenizer=tokenizer,
+                    document_count=(
+                        int(count_row["document_count"]) if count_row is not None else 0
+                    ),
+                    updated_at=updated_at,
+                )
+
+            return await self._run_async_read(operation)
 
     def _require_fts5(self) -> None:
         if self._run_read(lambda: sqlite_supports_fts5(self._conn)):
@@ -553,6 +739,206 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             scope_id=scope_id,
         )
 
+    async def _replace_scope_locked_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        config: RetrievalScopeConfig,
+        documents: tuple[RetrievalDocument, ...],
+    ) -> None:
+        existing_config = await self._get_scope_config_async(
+            conn=conn,
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
+        )
+        existing_rows = await self._fetch_scope_rows_async(
+            conn=conn,
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
+        )
+        await self._upsert_scope_config_async(conn=conn, config=config)
+        if existing_rows and existing_config is not None:
+            await self._delete_rows_from_index_async(
+                conn=conn,
+                table_name=_fts_table_name(existing_config.tokenizer),
+                rows=existing_rows,
+            )
+        cursor = await conn.execute(
+            """
+            DELETE FROM retrieval_documents
+            WHERE scope_kind = ? AND scope_id = ?
+            """,
+            (config.scope_kind.value, config.scope_id),
+        )
+        await cursor.close()
+        if documents:
+            await self._insert_documents_async(
+                conn=conn,
+                config=config,
+                documents=documents,
+            )
+            inserted_rows = await self._fetch_scope_rows_async(
+                conn=conn,
+                scope_kind=config.scope_kind,
+                scope_id=config.scope_id,
+            )
+            await self._index_rows_async(
+                conn=conn,
+                tokenizer=config.tokenizer,
+                rows=inserted_rows,
+            )
+
+    async def _upsert_documents_locked_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        config: RetrievalScopeConfig,
+        documents: tuple[RetrievalDocument, ...],
+    ) -> None:
+        existing_config = await self._get_scope_config_async(
+            conn=conn,
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
+        )
+        previous_scope_rows = (
+            await self._fetch_scope_rows_async(
+                conn=conn,
+                scope_kind=config.scope_kind,
+                scope_id=config.scope_id,
+            )
+            if existing_config is not None
+            and existing_config.tokenizer != config.tokenizer
+            else ()
+        )
+        previous_document_rows = (
+            await self._fetch_scope_rows_async(
+                conn=conn,
+                scope_kind=config.scope_kind,
+                scope_id=config.scope_id,
+                document_ids=tuple(document.document_id for document in documents),
+            )
+            if existing_config is not None
+            and existing_config.tokenizer == config.tokenizer
+            else ()
+        )
+        await self._upsert_scope_config_async(conn=conn, config=config)
+        await self._insert_documents_async(
+            conn=conn, config=config, documents=documents
+        )
+        if (
+            existing_config is not None
+            and existing_config.tokenizer != config.tokenizer
+        ):
+            if previous_scope_rows:
+                await self._delete_rows_from_index_async(
+                    conn=conn,
+                    table_name=_fts_table_name(existing_config.tokenizer),
+                    rows=previous_scope_rows,
+                )
+            current_scope_rows = await self._fetch_scope_rows_async(
+                conn=conn,
+                scope_kind=config.scope_kind,
+                scope_id=config.scope_id,
+            )
+            await self._index_rows_async(
+                conn=conn,
+                tokenizer=config.tokenizer,
+                rows=current_scope_rows,
+            )
+            return
+        if previous_document_rows:
+            await self._delete_rows_from_index_async(
+                conn=conn,
+                table_name=_fts_table_name(config.tokenizer),
+                rows=previous_document_rows,
+            )
+        current_rows = await self._fetch_scope_rows_async(
+            conn=conn,
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
+            document_ids=tuple(document.document_id for document in documents),
+        )
+        await self._index_rows_async(
+            conn=conn,
+            tokenizer=config.tokenizer,
+            rows=current_rows,
+        )
+
+    async def _delete_documents_locked_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        scope_kind: RetrievalScopeKind,
+        scope_id: str,
+        document_ids: tuple[str, ...],
+    ) -> None:
+        if not document_ids:
+            return
+        existing_rows = await self._fetch_scope_rows_async(
+            conn=conn,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            document_ids=document_ids,
+        )
+        if not existing_rows:
+            return
+        config = await self._get_scope_config_async(
+            conn=conn,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+        if config is not None:
+            await self._delete_rows_from_index_async(
+                conn=conn,
+                table_name=_fts_table_name(config.tokenizer),
+                rows=existing_rows,
+            )
+        cursor = await conn.executemany(
+            """
+            DELETE FROM retrieval_documents
+            WHERE scope_kind = ? AND scope_id = ? AND document_id = ?
+            """,
+            [(scope_kind.value, scope_id, document_id) for document_id in document_ids],
+        )
+        await cursor.close()
+
+    async def _rebuild_scope_locked_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        scope_kind: RetrievalScopeKind,
+        scope_id: str,
+        config: RetrievalScopeConfig | None = None,
+    ) -> None:
+        resolved_config = config or await self._get_scope_config_async(
+            conn=conn,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+        if resolved_config is None:
+            return
+        current_rows = await self._fetch_scope_rows_async(
+            conn=conn,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+        if current_rows:
+            await self._delete_rows_from_index_async(
+                conn=conn,
+                table_name=_fts_table_name(resolved_config.tokenizer),
+                rows=current_rows,
+            )
+        await self._index_rows_async(
+            conn=conn,
+            tokenizer=resolved_config.tokenizer,
+            rows=current_rows,
+        )
+        await self._touch_scope_async(
+            conn=conn,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        )
+
     def _upsert_scope_config(self, *, config: RetrievalScopeConfig) -> None:
         now = _utc_now()
         self._conn.execute(
@@ -588,6 +974,46 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 now,
             ),
         )
+
+    @staticmethod
+    async def _upsert_scope_config_async(
+        *, conn: aiosqlite.Connection, config: RetrievalScopeConfig
+    ) -> None:
+        now = _utc_now()
+        cursor = await conn.execute(
+            """
+            INSERT INTO retrieval_scopes(
+                scope_kind,
+                scope_id,
+                backend,
+                tokenizer,
+                title_weight,
+                body_weight,
+                keyword_weight,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope_kind, scope_id)
+            DO UPDATE SET
+                backend = excluded.backend,
+                tokenizer = excluded.tokenizer,
+                title_weight = excluded.title_weight,
+                body_weight = excluded.body_weight,
+                keyword_weight = excluded.keyword_weight,
+                updated_at = excluded.updated_at
+            """,
+            (
+                config.scope_kind.value,
+                config.scope_id,
+                config.backend.value,
+                config.tokenizer.value,
+                config.title_weight,
+                config.body_weight,
+                config.keyword_weight,
+                now,
+            ),
+        )
+        await cursor.close()
 
     def _insert_documents(
         self,
@@ -632,6 +1058,55 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
         )
         self._touch_scope(scope_kind=config.scope_kind, scope_id=config.scope_id)
 
+    async def _insert_documents_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        config: RetrievalScopeConfig,
+        documents: tuple[RetrievalDocument, ...],
+    ) -> None:
+        if not documents:
+            return
+        now = _utc_now()
+        cursor = await conn.executemany(
+            """
+            INSERT INTO retrieval_documents(
+                scope_kind,
+                scope_id,
+                document_id,
+                title,
+                body,
+                keywords,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(scope_kind, scope_id, document_id)
+            DO UPDATE SET
+                title = excluded.title,
+                body = excluded.body,
+                keywords = excluded.keywords,
+                updated_at = excluded.updated_at
+            """,
+            [
+                (
+                    config.scope_kind.value,
+                    config.scope_id,
+                    document.document_id,
+                    document.title,
+                    document.body,
+                    " ".join(document.keywords),
+                    now,
+                )
+                for document in documents
+            ],
+        )
+        await cursor.close()
+        await self._touch_scope_async(
+            conn=conn,
+            scope_kind=config.scope_kind,
+            scope_id=config.scope_id,
+        )
+
     def _touch_scope(
         self,
         *,
@@ -646,6 +1121,23 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             """,
             (_utc_now(), scope_kind.value, scope_id),
         )
+
+    @staticmethod
+    async def _touch_scope_async(
+        *,
+        conn: aiosqlite.Connection,
+        scope_kind: RetrievalScopeKind,
+        scope_id: str,
+    ) -> None:
+        cursor = await conn.execute(
+            """
+            UPDATE retrieval_scopes
+            SET updated_at = ?
+            WHERE scope_kind = ? AND scope_id = ?
+            """,
+            (_utc_now(), scope_kind.value, scope_id),
+        )
+        await cursor.close()
 
     def _fetch_scope_rows(
         self,
@@ -677,6 +1169,41 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             """,
             (scope_kind.value, scope_id, *document_ids),
         ).fetchall()
+        return tuple(rows)
+
+    @staticmethod
+    async def _fetch_scope_rows_async(
+        *,
+        conn: aiosqlite.Connection,
+        scope_kind: RetrievalScopeKind,
+        scope_id: str,
+        document_ids: tuple[str, ...] | None = None,
+    ) -> tuple[sqlite3.Row, ...]:
+        if document_ids is None:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT rowid, scope_kind, scope_id, document_id, title, body, keywords
+                FROM retrieval_documents
+                WHERE scope_kind = ? AND scope_id = ?
+                ORDER BY document_id ASC
+                """,
+                (scope_kind.value, scope_id),
+            )
+            return tuple(rows)
+        if not document_ids:
+            return ()
+        placeholders = ",".join("?" for _ in document_ids)
+        rows = await async_fetchall(
+            conn,
+            f"""
+            SELECT rowid, scope_kind, scope_id, document_id, title, body, keywords
+            FROM retrieval_documents
+            WHERE scope_kind = ? AND scope_id = ? AND document_id IN ({placeholders})
+            ORDER BY document_id ASC
+            """,
+            (scope_kind.value, scope_id, *document_ids),
+        )
         return tuple(rows)
 
     def _delete_rows_from_index(
@@ -712,6 +1239,42 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 for row in rows
             ],
         )
+
+    @staticmethod
+    async def _delete_rows_from_index_async(
+        *,
+        conn: aiosqlite.Connection,
+        table_name: str,
+        rows: tuple[sqlite3.Row, ...],
+    ) -> None:
+        cursor = await conn.executemany(
+            f"""
+            INSERT INTO {table_name}(
+                {table_name},
+                rowid,
+                scope_kind,
+                scope_id,
+                document_id,
+                title,
+                body,
+                keywords
+            )
+            VALUES ('delete', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    int(row["rowid"]),
+                    str(row["scope_kind"]),
+                    str(row["scope_id"]),
+                    str(row["document_id"]),
+                    str(row["title"]),
+                    str(row["body"]),
+                    str(row["keywords"]),
+                )
+                for row in rows
+            ],
+        )
+        await cursor.close()
 
     def _index_rows(
         self,
@@ -749,6 +1312,44 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             ],
         )
 
+    @staticmethod
+    async def _index_rows_async(
+        *,
+        conn: aiosqlite.Connection,
+        tokenizer: RetrievalTokenizer,
+        rows: tuple[sqlite3.Row, ...],
+    ) -> None:
+        if not rows:
+            return
+        table_name = _fts_table_name(tokenizer)
+        cursor = await conn.executemany(
+            f"""
+            INSERT INTO {table_name}(
+                rowid,
+                scope_kind,
+                scope_id,
+                document_id,
+                title,
+                body,
+                keywords
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    int(row["rowid"]),
+                    str(row["scope_kind"]),
+                    str(row["scope_id"]),
+                    str(row["document_id"]),
+                    str(row["title"]),
+                    str(row["body"]),
+                    str(row["keywords"]),
+                )
+                for row in rows
+            ],
+        )
+        await cursor.close()
+
     def _get_scope_config(
         self,
         *,
@@ -770,6 +1371,41 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
             """,
             (scope_kind.value, scope_id),
         ).fetchone()
+        if row is None:
+            return None
+        return RetrievalScopeConfig(
+            scope_kind=RetrievalScopeKind(str(row["scope_kind"])),
+            scope_id=str(row["scope_id"]),
+            backend=RetrievalBackendKind(str(row["backend"])),
+            tokenizer=RetrievalTokenizer(str(row["tokenizer"])),
+            title_weight=float(row["title_weight"]),
+            body_weight=float(row["body_weight"]),
+            keyword_weight=float(row["keyword_weight"]),
+        )
+
+    @staticmethod
+    async def _get_scope_config_async(
+        *,
+        conn: aiosqlite.Connection,
+        scope_kind: RetrievalScopeKind,
+        scope_id: str,
+    ) -> RetrievalScopeConfig | None:
+        row = await async_fetchone(
+            conn,
+            """
+            SELECT
+                scope_kind,
+                scope_id,
+                backend,
+                tokenizer,
+                title_weight,
+                body_weight,
+                keyword_weight
+            FROM retrieval_scopes
+            WHERE scope_kind = ? AND scope_id = ?
+            """,
+            (scope_kind.value, scope_id),
+        )
         if row is None:
             return None
         return RetrievalScopeConfig(

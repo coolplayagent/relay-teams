@@ -11,19 +11,25 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    SystemPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
 
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.agents.execution.tool_args_repair import repair_tool_args
 from relay_teams.agents.execution.tool_call_history import (
     collect_safe_row_ids,
@@ -197,16 +203,26 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> None:
-        return await self._call_sync_async(
-            self.append,
-            session_id=session_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            messages=messages,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
+        if not messages:
+            return
+        resolved_conversation_id = conversation_id or instance_id
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await self._append_rows_async(
+                conn=conn,
+                session_id=session_id,
+                workspace_id=workspace_id,
+                resolved_conversation_id=resolved_conversation_id,
+                agent_role_id=agent_role_id or "",
+                instance_id=instance_id,
+                task_id=task_id,
+                trace_id=trace_id,
+                messages=messages,
+            )
+
+        await self._run_async_write(
+            operation_name="append_async",
+            operation=operation,
         )
 
     def get_history(self, instance_id: str) -> list[ModelMessage]:
@@ -216,7 +232,10 @@ class MessageRepository(SharedSqliteRepository):
         )
 
     async def get_history_async(self, instance_id: str) -> list[ModelMessage]:
-        return await self._call_sync_async(self.get_history, instance_id)
+        return await self._read_history_async(
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
+            (instance_id,),
+        )
 
     def get_history_for_conversation(self, conversation_id: str) -> list[ModelMessage]:
         return self._read_history(
@@ -227,8 +246,9 @@ class MessageRepository(SharedSqliteRepository):
     async def get_history_for_conversation_async(
         self, conversation_id: str
     ) -> list[ModelMessage]:
-        return await self._call_sync_async(
-            self.get_history_for_conversation, conversation_id
+        return await self._read_history_async(
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            (conversation_id,),
         )
 
     def get_messages_by_session(
@@ -317,10 +337,32 @@ class MessageRepository(SharedSqliteRepository):
         include_cleared: bool = False,
         include_hidden_from_context: bool = False,
     ) -> list[dict[str, JsonValue]]:
-        return await self._call_sync_async(
-            self.get_messages_by_session_run_ids,
-            session_id,
-            run_ids,
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
+        )
+        if not normalized_run_ids:
+            return []
+        rows: list[sqlite3.Row] = []
+        chunk_size = _SQLITE_SAFE_VARIABLE_LIMIT - 1
+
+        async def operation(conn: aiosqlite.Connection) -> list[sqlite3.Row]:
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows.extend(
+                    await async_fetchall(
+                        conn,
+                        "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
+                        f"FROM messages WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY id ASC",
+                        (session_id, *run_id_chunk),
+                    )
+                )
+            return rows
+
+        rows = await self._run_async_read(operation)
+        rows.sort(key=lambda row: int(row["id"]) if isinstance(row["id"], int) else 0)
+        return await self._project_message_rows_async(
+            rows,
             include_cleared=include_cleared,
             include_hidden_from_context=include_hidden_from_context,
         )
@@ -398,10 +440,61 @@ class MessageRepository(SharedSqliteRepository):
         self,
         session_ids: tuple[str, ...],
     ) -> dict[str, dict[str, JsonValue]]:
-        return await self._call_sync_async(
-            self.first_user_messages_by_session_ids,
-            session_ids,
-        )
+        if not session_ids:
+            return {}
+        results: dict[str, dict[str, JsonValue]] = {}
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> dict[str, dict[str, JsonValue]]:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
+                    SELECT
+                        id,
+                        session_id,
+                        conversation_id,
+                        agent_role_id,
+                        instance_id,
+                        task_id,
+                        trace_id,
+                        role,
+                        message_json,
+                        created_at,
+                        hidden_from_context,
+                        hidden_reason,
+                        hidden_at,
+                        hidden_marker_id
+                    FROM messages
+                    WHERE session_id IN ({placeholders})
+                      AND role='user'
+                    ORDER BY session_id ASC, id ASC
+                    """,
+                    session_id_chunk,
+                )
+                for row in rows:
+                    session_id = str(row["session_id"] or "").strip()
+                    if not session_id or session_id in results:
+                        continue
+                    msg_list = _load_message_list(str(row["message_json"]))
+                    msg = (
+                        msg_list[0]
+                        if msg_list and isinstance(msg_list[0], dict)
+                        else {}
+                    )
+                    if _is_system_reminder_projection_message(msg):
+                        continue
+                    if not _message_has_user_prompt_text(msg):
+                        continue
+                    results[session_id] = _project_single_message_row(row, msg)
+            return results
+
+        return await self._run_async_read(operation)
 
     def get_user_messages_by_session(
         self,
@@ -487,6 +580,30 @@ class MessageRepository(SharedSqliteRepository):
             )
         return _dedupe_duplicate_objective_messages(results)
 
+    async def _project_message_rows_async(
+        self,
+        rows: Sequence[sqlite3.Row],
+        *,
+        include_cleared: bool,
+        include_hidden_from_context: bool,
+    ) -> list[dict[str, JsonValue]]:
+        filtered_rows = await self._filter_rows_for_read_async(
+            rows,
+            include_cleared=include_cleared,
+            include_hidden_from_context=include_hidden_from_context,
+        )
+        if not include_hidden_from_context:
+            filtered_rows = _truncate_message_rows_to_safe_boundary(filtered_rows)
+
+        results: list[dict[str, JsonValue]] = []
+        for row in filtered_rows:
+            msg_list = _load_message_list(str(row["message_json"]))
+            msg = msg_list[0] if msg_list and isinstance(msg_list[0], dict) else {}
+            if _is_system_reminder_projection_message(msg):
+                continue
+            results.append(_project_single_message_row(row, msg))
+        return _dedupe_duplicate_objective_messages(results)
+
     async def get_user_messages_by_session_async(
         self,
         session_id: str,
@@ -494,9 +611,16 @@ class MessageRepository(SharedSqliteRepository):
         include_cleared: bool = False,
         include_hidden_from_context: bool = False,
     ) -> list[dict[str, JsonValue]]:
-        return await self._call_sync_async(
-            self.get_user_messages_by_session,
-            session_id,
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
+                "FROM messages WHERE session_id=? AND role='user' ORDER BY id ASC",
+                (session_id,),
+            )
+        )
+        return await self._project_message_rows_async(
+            rows,
             include_cleared=include_cleared,
             include_hidden_from_context=include_hidden_from_context,
         )
@@ -508,9 +632,16 @@ class MessageRepository(SharedSqliteRepository):
         include_cleared: bool = False,
         include_hidden_from_context: bool = False,
     ) -> list[dict[str, JsonValue]]:
-        return await self._call_sync_async(
-            self.get_messages_by_session,
-            session_id,
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
+                "FROM messages WHERE session_id=? ORDER BY id ASC",
+                (session_id,),
+            )
+        )
+        return await self._project_message_rows_async(
+            rows,
             include_cleared=include_cleared,
             include_hidden_from_context=include_hidden_from_context,
         )
@@ -569,10 +700,16 @@ class MessageRepository(SharedSqliteRepository):
         include_cleared: bool = False,
         include_hidden_from_context: bool = False,
     ) -> list[dict[str, JsonValue]]:
-        return await self._call_sync_async(
-            self.get_messages_for_instance,
-            session_id,
-            instance_id,
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT id, session_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at, hidden_from_context, hidden_reason, hidden_at, hidden_marker_id "
+                "FROM messages WHERE session_id=? AND instance_id=? ORDER BY id ASC",
+                (session_id, instance_id),
+            )
+        )
+        return await self._project_message_rows_async(
+            rows,
             include_cleared=include_cleared,
             include_hidden_from_context=include_hidden_from_context,
         )
@@ -606,11 +743,26 @@ class MessageRepository(SharedSqliteRepository):
         task_id: str,
         instance_id: str | None = None,
     ) -> int:
-        return await self._call_sync_async(
-            self.get_latest_task_message_id,
-            task_id=task_id,
-            instance_id=instance_id,
-        )
+        async def operation(conn: aiosqlite.Connection) -> int:
+            if instance_id is None:
+                row = await async_fetchone(
+                    conn,
+                    "SELECT COALESCE(MAX(id), 0) AS latest_id "
+                    "FROM messages WHERE task_id=?",
+                    (task_id,),
+                )
+            else:
+                row = await async_fetchone(
+                    conn,
+                    "SELECT COALESCE(MAX(id), 0) AS latest_id "
+                    "FROM messages WHERE task_id=? AND instance_id=?",
+                    (task_id, instance_id),
+                )
+            if row is None:
+                return 0
+            return int(row["latest_id"] or 0)
+
+        return await self._run_async_read(operation)
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -625,7 +777,17 @@ class MessageRepository(SharedSqliteRepository):
         )
 
     async def delete_by_session_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_session, session_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM messages WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=operation,
+        )
 
     def delete_by_instance(self, instance_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -641,7 +803,17 @@ class MessageRepository(SharedSqliteRepository):
         )
 
     async def delete_by_instance_async(self, instance_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_instance, instance_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM messages WHERE instance_id=?",
+                (instance_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_instance_async",
+            operation=operation,
+        )
 
     def prune_history_to_safe_boundary(self, instance_id: str) -> None:
         self._prune_to_safe_boundary(
@@ -650,8 +822,9 @@ class MessageRepository(SharedSqliteRepository):
         )
 
     async def prune_history_to_safe_boundary_async(self, instance_id: str) -> None:
-        return await self._call_sync_async(
-            self.prune_history_to_safe_boundary, instance_id
+        await self._prune_to_safe_boundary_async(
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? ORDER BY id ASC",
+            (instance_id,),
         )
 
     def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
@@ -663,8 +836,9 @@ class MessageRepository(SharedSqliteRepository):
     async def prune_conversation_history_to_safe_boundary_async(
         self, conversation_id: str
     ) -> None:
-        return await self._call_sync_async(
-            self.prune_conversation_history_to_safe_boundary, conversation_id
+        await self._prune_to_safe_boundary_async(
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+            (conversation_id,),
         )
 
     def compact_conversation_history(
@@ -720,12 +894,39 @@ class MessageRepository(SharedSqliteRepository):
         hidden_reason: str = "compaction",
         hidden_marker_id: str = "",
     ) -> None:
-        return await self._call_sync_async(
-            self.compact_conversation_history,
-            conversation_id,
-            keep_message_count=keep_message_count,
-            hidden_reason=hidden_reason,
-            hidden_marker_id=hidden_marker_id,
+        now = datetime.now(tz=timezone.utc).isoformat()
+        safe_keep_count = max(1, int(keep_message_count))
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            rows = await async_fetchall(
+                conn,
+                "SELECT id, session_id, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                (conversation_id,),
+            )
+            active_rows = await self._filter_rows_for_read_async(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            if len(active_rows) <= safe_keep_count:
+                return
+            stale_ids = [
+                int(row["id"])
+                for row in active_rows[:-safe_keep_count]
+                if isinstance(row["id"], int)
+            ]
+            if not stale_ids:
+                return
+            placeholders = ",".join("?" for _ in stale_ids)
+            cursor = await conn.execute(
+                f"UPDATE messages SET hidden_from_context=1, hidden_reason=?, hidden_at=?, hidden_marker_id=? WHERE id IN ({placeholders})",
+                [hidden_reason, now, hidden_marker_id, *stale_ids],
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="compact_conversation_history_async",
+            operation=operation,
         )
 
     def replace_pending_user_prompt(
@@ -742,6 +943,7 @@ class MessageRepository(SharedSqliteRepository):
     ) -> bool:
         from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+        _ = (session_id, trace_id, workspace_id, agent_role_id)
         target_key = user_prompt_content_key(content)
         target_text = user_prompt_content_to_text(content)
         if not target_key or not target_text:
@@ -815,16 +1017,66 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
-        return await self._call_sync_async(
-            self.replace_pending_user_prompt,
-            session_id=session_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            content=content,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
+        _ = (session_id, trace_id, workspace_id, agent_role_id)
+        target_key = user_prompt_content_key(content)
+        target_text = user_prompt_content_to_text(content)
+        if not target_key or not target_text:
+            return False
+        resolved_conversation_id = conversation_id or instance_id
+        message_json = _sanitize_message_json(
+            ModelMessagesTypeAdapter.dump_json(
+                [ModelRequest(parts=[UserPromptPart(content=content)])]
+            ).decode()
+        )
+
+        async def operation(conn: aiosqlite.Connection) -> bool:
+            rows = await async_fetchall(
+                conn,
+                "SELECT id, session_id, role, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+                (resolved_conversation_id, task_id),
+            )
+            active_rows = await self._filter_rows_for_read_async(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            if _task_history_has_response(active_rows):
+                return False
+            replacement_ids = [
+                int(row["id"])
+                for row in active_rows
+                if isinstance(row["id"], int)
+                and str(row["role"] or "") == "user"
+                and _row_is_user_prompt_only(row)
+            ]
+            if replacement_ids:
+                primary_id = replacement_ids[0]
+                cursor = await conn.execute(
+                    "UPDATE messages SET message_json=? WHERE id=?",
+                    (message_json, primary_id),
+                )
+                await cursor.close()
+                stale_ids = replacement_ids[1:]
+                if stale_ids:
+                    placeholders = ",".join("?" for _ in stale_ids)
+                    cursor = await conn.execute(
+                        f"DELETE FROM messages WHERE id IN ({placeholders})",
+                        stale_ids,
+                    )
+                    await cursor.close()
+                return True
+            history = await self._read_history_from_conn_async(
+                conn,
+                "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+                (resolved_conversation_id, task_id),
+            )
+            if _history_ends_with_user_prompt(history, target_key):
+                return False
+            return False
+
+        return await self._run_async_write(
+            operation_name="replace_pending_user_prompt_async",
+            operation=operation,
         )
 
     def append_user_prompt_if_missing(
@@ -920,16 +1172,74 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
-        return await self._call_sync_async(
-            self.append_user_prompt_if_missing,
-            session_id=session_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            content=content,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
+        target_key = user_prompt_content_key(content)
+        target_text = user_prompt_content_to_text(content)
+        if not target_key or not target_text:
+            return False
+        resolved_conversation_id = conversation_id or instance_id
+        message_json = _sanitize_message_json(
+            ModelMessagesTypeAdapter.dump_json(
+                [ModelRequest(parts=[UserPromptPart(content=content)])]
+            ).decode()
+        )
+
+        async def operation(conn: aiosqlite.Connection) -> bool:
+            rows = await async_fetchall(
+                conn,
+                "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                (resolved_conversation_id,),
+            )
+            active_rows = await self._filter_rows_for_read_async(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            allowed_ids = _safe_row_ids(active_rows)
+            stale_ids = [
+                int(row["id"])
+                for row in active_rows
+                if isinstance(row["id"], int) and int(row["id"]) not in allowed_ids
+            ]
+            if stale_ids:
+                placeholders = ",".join("?" for _ in stale_ids)
+                cursor = await conn.execute(
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    stale_ids,
+                )
+                await cursor.close()
+            history = await self._read_history_from_conn_async(
+                conn,
+                "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+                (resolved_conversation_id, task_id),
+            )
+            if _history_ends_with_user_prompt(history, target_key):
+                return False
+            now = await self._next_created_at_async(
+                conn=conn,
+                session_id=session_id,
+            )
+            cursor = await conn.execute(
+                "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    workspace_id,
+                    resolved_conversation_id,
+                    agent_role_id or "",
+                    instance_id,
+                    task_id,
+                    trace_id,
+                    "user",
+                    message_json,
+                    now,
+                ),
+            )
+            await cursor.close()
+            return True
+
+        return await self._run_async_write(
+            operation_name="append_user_prompt_if_missing_async",
+            operation=operation,
         )
 
     def append_system_prompt_if_missing(
@@ -1003,16 +1313,50 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
-        return await self._call_sync_async(
-            self.append_system_prompt_if_missing,
-            session_id=session_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            content=content,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
+        target = str(content or "").strip()
+        if not target:
+            return False
+        resolved_conversation_id = conversation_id or instance_id
+        message_json = _sanitize_message_json(
+            ModelMessagesTypeAdapter.dump_json(
+                [ModelRequest(parts=[SystemPromptPart(content=target)])]
+            ).decode()
+        )
+
+        async def operation(conn: aiosqlite.Connection) -> bool:
+            history = await self._read_history_from_conn_async(
+                conn,
+                "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+                (resolved_conversation_id, task_id),
+            )
+            if _history_ends_with_system_prompt(history, target):
+                return False
+            now = await self._next_created_at_async(
+                conn=conn,
+                session_id=session_id,
+            )
+            cursor = await conn.execute(
+                "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    workspace_id,
+                    resolved_conversation_id,
+                    agent_role_id or "",
+                    instance_id,
+                    task_id,
+                    trace_id,
+                    "system",
+                    message_json,
+                    now,
+                ),
+            )
+            await cursor.close()
+            return True
+
+        return await self._run_async_write(
+            operation_name="append_system_prompt_if_missing_async",
+            operation=operation,
         )
 
     def get_history_for_task(
@@ -1026,8 +1370,9 @@ class MessageRepository(SharedSqliteRepository):
     async def get_history_for_task_async(
         self, instance_id: str, task_id: str
     ) -> list[ModelMessage]:
-        return await self._call_sync_async(
-            self.get_history_for_task, instance_id, task_id
+        return await self._read_history_async(
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE instance_id=? AND task_id=? ORDER BY id ASC",
+            (instance_id, task_id),
         )
 
     def get_history_for_conversation_task(
@@ -1041,8 +1386,9 @@ class MessageRepository(SharedSqliteRepository):
     async def get_history_for_conversation_task_async(
         self, conversation_id: str, task_id: str
     ) -> list[ModelMessage]:
-        return await self._call_sync_async(
-            self.get_history_for_conversation_task, conversation_id, task_id
+        return await self._read_history_async(
+            "SELECT id, session_id, message_json, created_at, hidden_from_context FROM messages WHERE conversation_id=? AND task_id=? ORDER BY id ASC",
+            (conversation_id, task_id),
         )
 
     def _read_history(
@@ -1060,6 +1406,44 @@ class MessageRepository(SharedSqliteRepository):
         allowed_ids = _safe_row_ids(rows)
         result: list[ModelMessage] = []
         for row in rows:
+            row_id = row["id"]
+            if not isinstance(row_id, int) or row_id not in allowed_ids:
+                continue
+            msgs = _validate_message_row(row)
+            result.extend(msgs)
+        return _truncate_model_history_to_safe_boundary(result)
+
+    async def _read_history_async(
+        self,
+        query: str,
+        params: tuple[str, ...],
+    ) -> list[ModelMessage]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(conn, query, params)
+        )
+        return await self._rows_to_history_async(rows)
+
+    async def _read_history_from_conn_async(
+        self,
+        conn: aiosqlite.Connection,
+        query: str,
+        params: tuple[str, ...],
+    ) -> list[ModelMessage]:
+        rows = await async_fetchall(conn, query, params)
+        return await self._rows_to_history_async(rows)
+
+    async def _rows_to_history_async(
+        self,
+        rows: Sequence[sqlite3.Row],
+    ) -> list[ModelMessage]:
+        filtered_rows = await self._filter_rows_for_read_async(
+            rows,
+            include_cleared=False,
+            include_hidden_from_context=False,
+        )
+        allowed_ids = _safe_row_ids(filtered_rows)
+        result: list[ModelMessage] = []
+        for row in filtered_rows:
             row_id = row["id"]
             if not isinstance(row_id, int) or row_id not in allowed_ids:
                 continue
@@ -1102,6 +1486,40 @@ class MessageRepository(SharedSqliteRepository):
             lock=self._lock,
             repository_name="MessageRepository",
             operation_name="prune_to_safe_boundary",
+        )
+
+    async def _prune_to_safe_boundary_async(
+        self,
+        query: str,
+        params: tuple[str, ...],
+    ) -> None:
+        async def operation(conn: aiosqlite.Connection) -> None:
+            rows = await async_fetchall(conn, query, params)
+            active_rows = await self._filter_rows_for_read_async(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            if not active_rows:
+                return
+            allowed_ids = _safe_row_ids(active_rows)
+            stale_ids = [
+                int(row["id"])
+                for row in active_rows
+                if isinstance(row["id"], int) and int(row["id"]) not in allowed_ids
+            ]
+            if not stale_ids:
+                return
+            placeholders = ",".join("?" for _ in stale_ids)
+            cursor = await conn.execute(
+                f"DELETE FROM messages WHERE id IN ({placeholders})",
+                stale_ids,
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="prune_to_safe_boundary_async",
+            operation=operation,
         )
 
     def hide_conversation_messages_for_compaction(
@@ -1154,11 +1572,42 @@ class MessageRepository(SharedSqliteRepository):
     async def hide_conversation_messages_for_compaction_async(
         self, *, conversation_id: str, hide_message_count: int, hidden_marker_id: str
     ) -> int:
-        return await self._call_sync_async(
-            self.hide_conversation_messages_for_compaction,
-            conversation_id=conversation_id,
-            hide_message_count=hide_message_count,
-            hidden_marker_id=hidden_marker_id,
+        safe_hide_count = max(0, int(hide_message_count))
+        if safe_hide_count <= 0:
+            return 0
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> int:
+            rows = await async_fetchall(
+                conn,
+                "SELECT id, session_id, created_at, hidden_from_context FROM messages WHERE conversation_id=? ORDER BY id ASC",
+                (conversation_id,),
+            )
+            active_rows = await self._filter_rows_for_read_async(
+                rows,
+                include_cleared=False,
+                include_hidden_from_context=False,
+            )
+            if not active_rows:
+                return 0
+            row_ids = [
+                int(row["id"])
+                for row in active_rows[:safe_hide_count]
+                if isinstance(row["id"], int)
+            ]
+            if not row_ids:
+                return 0
+            placeholders = ",".join("?" for _ in row_ids)
+            cursor = await conn.execute(
+                f"UPDATE messages SET hidden_from_context=1, hidden_reason='compaction', hidden_at=?, hidden_marker_id=? WHERE id IN ({placeholders})",
+                [now, hidden_marker_id, *row_ids],
+            )
+            await cursor.close()
+            return len(row_ids)
+
+        return await self._run_async_write(
+            operation_name="hide_conversation_messages_for_compaction_async",
+            operation=operation,
         )
 
     def _append_rows(
@@ -1198,6 +1647,45 @@ class MessageRepository(SharedSqliteRepository):
             rows,
         )
 
+    async def _append_rows_async(
+        self,
+        *,
+        conn: aiosqlite.Connection,
+        session_id: str,
+        workspace_id: str,
+        resolved_conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: Sequence[ModelMessage],
+    ) -> None:
+        now = await self._next_created_at_async(conn=conn, session_id=session_id)
+        rows = [
+            (
+                session_id,
+                workspace_id,
+                resolved_conversation_id,
+                agent_role_id,
+                instance_id,
+                task_id,
+                trace_id,
+                _role(normalized_message),
+                _sanitize_message_json(
+                    ModelMessagesTypeAdapter.dump_json([normalized_message]).decode()
+                ),
+                now,
+            )
+            for msg in messages
+            for normalized_message in [_normalize_message_for_persistence(msg)]
+        ]
+        cursor = await conn.executemany(
+            "INSERT INTO messages(session_id, workspace_id, conversation_id, agent_role_id, instance_id, task_id, trace_id, role, message_json, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        await cursor.close()
+
     def _next_created_at(self, *, session_id: str) -> str:
         candidate = datetime.now(tz=timezone.utc)
         latest_created_at = self._latest_created_at_by_session.get(session_id)
@@ -1224,6 +1712,35 @@ class MessageRepository(SharedSqliteRepository):
         self._latest_created_at_by_session[session_id] = candidate
         return candidate.isoformat()
 
+    async def _next_created_at_async(
+        self, *, conn: aiosqlite.Connection, session_id: str
+    ) -> str:
+        candidate = datetime.now(tz=timezone.utc)
+        latest_created_at = self._latest_created_at_by_session.get(session_id)
+        if latest_created_at is not None:
+            candidate = _ensure_after_datetime(candidate, latest_created_at)
+        else:
+            latest_message_row = await async_fetchone(
+                conn,
+                "SELECT created_at FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            )
+            candidate = _ensure_after_iso_value(
+                candidate,
+                None
+                if latest_message_row is None
+                else str(latest_message_row["created_at"]),
+            )
+        if self._session_history_marker_repo is not None:
+            latest_clear = await self._session_history_marker_repo.get_latest_async(
+                session_id,
+                marker_type=SessionHistoryMarkerType.CLEAR,
+            )
+            if latest_clear is not None:
+                candidate = _ensure_after_datetime(candidate, latest_clear.created_at)
+        self._latest_created_at_by_session[session_id] = candidate
+        return candidate.isoformat()
+
     def _filter_rows_for_read(
         self,
         rows: Sequence[sqlite3.Row],
@@ -1239,6 +1756,23 @@ class MessageRepository(SharedSqliteRepository):
             return filtered_rows
         return self._filter_rows_for_visible_context(filtered_rows)
 
+    async def _filter_rows_for_read_async(
+        self,
+        rows: Sequence[sqlite3.Row],
+        *,
+        include_cleared: bool,
+        include_hidden_from_context: bool,
+    ) -> list[sqlite3.Row]:
+        filtered_rows = list(rows)
+        if not include_cleared:
+            filtered_rows = await self._filter_rows_for_active_segments_async(
+                filtered_rows
+            )
+        filtered_rows = _drop_duplicate_tool_outcome_rows(filtered_rows)
+        if include_hidden_from_context:
+            return filtered_rows
+        return self._filter_rows_for_visible_context(filtered_rows)
+
     def _filter_rows_for_active_segments(
         self,
         rows: Sequence[sqlite3.Row],
@@ -1247,6 +1781,32 @@ class MessageRepository(SharedSqliteRepository):
             return list(rows)
 
         cutoff_by_session = self._latest_clear_cutoff_by_session(rows)
+        if not cutoff_by_session:
+            return list(rows)
+
+        filtered: list[sqlite3.Row] = []
+        for row in rows:
+            session_id = str(row["session_id"] or "")
+            if not session_id:
+                filtered.append(row)
+                continue
+            cutoff = cutoff_by_session.get(session_id)
+            if cutoff is None:
+                filtered.append(row)
+                continue
+            created_at = str(row["created_at"] or "")
+            if created_at > cutoff:
+                filtered.append(row)
+        return filtered
+
+    async def _filter_rows_for_active_segments_async(
+        self,
+        rows: Sequence[sqlite3.Row],
+    ) -> list[sqlite3.Row]:
+        if self._session_history_marker_repo is None or not rows:
+            return list(rows)
+
+        cutoff_by_session = await self._latest_clear_cutoff_by_session_async(rows)
         if not cutoff_by_session:
             return list(rows)
 
@@ -1292,6 +1852,48 @@ class MessageRepository(SharedSqliteRepository):
                 continue
             cutoffs[session_id] = latest_clear.created_at.isoformat()
         return cutoffs
+
+    async def _latest_clear_cutoff_by_session_async(
+        self,
+        rows: Sequence[sqlite3.Row],
+    ) -> dict[str, str]:
+        if self._session_history_marker_repo is None:
+            return {}
+        session_ids = {
+            str(row["session_id"] or "") for row in rows if str(row["session_id"] or "")
+        }
+        if not session_ids:
+            return {}
+        cutoffs: dict[str, str] = {}
+        for session_id in session_ids:
+            latest_clear = await self._session_history_marker_repo.get_latest_async(
+                session_id,
+                marker_type=SessionHistoryMarkerType.CLEAR,
+            )
+            if latest_clear is None:
+                continue
+            cutoffs[session_id] = latest_clear.created_at.isoformat()
+        return cutoffs
+
+
+def _project_single_message_row(
+    row: sqlite3.Row,
+    msg: JsonValue,
+) -> dict[str, JsonValue]:
+    return {
+        "conversation_id": str(row["conversation_id"] or ""),
+        "agent_role_id": str(row["agent_role_id"] or ""),
+        "instance_id": str(row["instance_id"]),
+        "task_id": str(row["task_id"]),
+        "trace_id": str(row["trace_id"]),
+        "role": str(row["role"]),
+        "created_at": str(row["created_at"]),
+        "hidden_from_context": bool(int(row["hidden_from_context"] or 0)),
+        "hidden_reason": str(row["hidden_reason"] or ""),
+        "hidden_at": str(row["hidden_at"] or ""),
+        "hidden_marker_id": str(row["hidden_marker_id"] or ""),
+        "message": msg,
+    }
 
 
 def _role(msg: ModelMessage) -> str:

@@ -6,12 +6,15 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, TypeAdapter
 
 from relay_teams.logger import get_logger
 from relay_teams.persistence.sqlite_repository import (
     BlockingAsyncSqliteConnection,
     SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
 )
 from relay_teams.triggers.models import (
     GitHubActionSpec,
@@ -298,7 +301,39 @@ class TriggerRepository(SharedSqliteRepository):
     async def create_account_async(
         self, record: GitHubTriggerAccountRecord
     ) -> GitHubTriggerAccountRecord:
-        return await self._call_sync_async(self.create_account, record)
+        try:
+            await self._run_async_write(
+                operation_name="create_account_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    INSERT INTO github_trigger_accounts(
+                        account_id, name, display_name, status,
+                        token_configured, webhook_secret_configured, last_error,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.account_id,
+                        record.name,
+                        record.display_name,
+                        record.status.value,
+                        1 if record.token_configured else 0,
+                        1 if record.webhook_secret_configured else 0,
+                        record.last_error,
+                        record.created_at.isoformat(),
+                        record.updated_at.isoformat(),
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "github_trigger_accounts.name" in str(exc).lower():
+                raise GitHubTriggerAccountNameConflictError(
+                    f"GitHub trigger account name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def update_account(
         self,
@@ -342,7 +377,41 @@ class TriggerRepository(SharedSqliteRepository):
     async def update_account_async(
         self, record: GitHubTriggerAccountRecord
     ) -> GitHubTriggerAccountRecord:
-        return await self._call_sync_async(self.update_account, record)
+        try:
+            await self._run_async_write(
+                operation_name="update_account_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    UPDATE github_trigger_accounts
+                    SET name=?,
+                        display_name=?,
+                        status=?,
+                        token_configured=?,
+                        webhook_secret_configured=?,
+                        last_error=?,
+                        updated_at=?
+                    WHERE account_id=?
+                    """,
+                    (
+                        record.name,
+                        record.display_name,
+                        record.status.value,
+                        1 if record.token_configured else 0,
+                        1 if record.webhook_secret_configured else 0,
+                        record.last_error,
+                        record.updated_at.isoformat(),
+                        record.account_id,
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "github_trigger_accounts.name" in str(exc).lower():
+                raise GitHubTriggerAccountNameConflictError(
+                    f"GitHub trigger account name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def get_account(self, account_id: str) -> GitHubTriggerAccountRecord:
         row = self._run_read(
@@ -356,7 +425,16 @@ class TriggerRepository(SharedSqliteRepository):
         return self._to_account_record(row)
 
     async def get_account_async(self, account_id: str) -> GitHubTriggerAccountRecord:
-        return await self._call_sync_async(self.get_account, account_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM github_trigger_accounts WHERE account_id=?",
+                (account_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown GitHub trigger account: {account_id}")
+        return self._to_account_record(row)
 
     def list_accounts(self) -> tuple[GitHubTriggerAccountRecord, ...]:
         rows = self._run_read(
@@ -370,7 +448,16 @@ class TriggerRepository(SharedSqliteRepository):
         return tuple(self._to_account_record(row) for row in rows)
 
     async def list_accounts_async(self) -> tuple[GitHubTriggerAccountRecord, ...]:
-        return await self._call_sync_async(self.list_accounts)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM github_trigger_accounts
+                ORDER BY created_at DESC
+                """,
+            )
+        )
+        return tuple(self._to_account_record(row) for row in rows)
 
     def delete_account(self, account_id: str) -> None:
         self._run_write(
@@ -404,7 +491,42 @@ class TriggerRepository(SharedSqliteRepository):
         )
 
     async def delete_account_async(self, account_id: str) -> None:
-        return await self._call_sync_async(self.delete_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_action_attempts WHERE trigger_dispatch_id IN (SELECT trigger_dispatch_id FROM trigger_dispatches WHERE trigger_rule_id IN (SELECT trigger_rule_id FROM trigger_rules WHERE account_id=?))",
+                (account_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_dispatches WHERE trigger_rule_id IN (SELECT trigger_rule_id FROM trigger_rules WHERE account_id=?)",
+                (account_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_evaluations WHERE trigger_rule_id IN (SELECT trigger_rule_id FROM trigger_rules WHERE account_id=?)",
+                (account_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_rules WHERE account_id=?",
+                (account_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM github_repo_subscriptions WHERE account_id=?",
+                (account_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM github_trigger_accounts WHERE account_id=?",
+                (account_id,),
+            )
+
+        await self._run_async_write(
+            operation_name="delete_account_async",
+            operation=operation,
+        )
 
     def create_repo_subscription(
         self,
@@ -454,7 +576,47 @@ class TriggerRepository(SharedSqliteRepository):
     async def create_repo_subscription_async(
         self, record: GitHubRepoSubscriptionRecord
     ) -> GitHubRepoSubscriptionRecord:
-        return await self._call_sync_async(self.create_repo_subscription, record)
+        try:
+            await self._run_async_write(
+                operation_name="create_repo_subscription_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    INSERT INTO github_repo_subscriptions(
+                        repo_subscription_id, account_id, owner, repo_name, full_name,
+                        external_repo_id, default_branch, callback_url, provider_webhook_id,
+                        subscribed_events_json, webhook_status, enabled,
+                        last_webhook_sync_at, last_error, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.repo_subscription_id,
+                        record.account_id,
+                        record.owner,
+                        record.repo_name,
+                        record.full_name,
+                        record.external_repo_id,
+                        record.default_branch,
+                        record.callback_url,
+                        record.provider_webhook_id,
+                        _json_dumps(record.subscribed_events),
+                        record.webhook_status.value,
+                        1 if record.enabled else 0,
+                        _to_iso(record.last_webhook_sync_at),
+                        record.last_error,
+                        record.created_at.isoformat(),
+                        record.updated_at.isoformat(),
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "github_repo_subscriptions.account_id" in str(exc).lower():
+                raise GitHubRepoSubscriptionConflictError(
+                    f"Repository subscription already exists: {record.full_name}"
+                ) from exc
+            raise
+        return record
 
     def update_repo_subscription(
         self,
@@ -512,7 +674,55 @@ class TriggerRepository(SharedSqliteRepository):
     async def update_repo_subscription_async(
         self, record: GitHubRepoSubscriptionRecord
     ) -> GitHubRepoSubscriptionRecord:
-        return await self._call_sync_async(self.update_repo_subscription, record)
+        try:
+            await self._run_async_write(
+                operation_name="update_repo_subscription_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    UPDATE github_repo_subscriptions
+                    SET account_id=?,
+                        owner=?,
+                        repo_name=?,
+                        full_name=?,
+                        external_repo_id=?,
+                        default_branch=?,
+                        callback_url=?,
+                        provider_webhook_id=?,
+                        subscribed_events_json=?,
+                        webhook_status=?,
+                        enabled=?,
+                        last_webhook_sync_at=?,
+                        last_error=?,
+                        updated_at=?
+                    WHERE repo_subscription_id=?
+                    """,
+                    (
+                        record.account_id,
+                        record.owner,
+                        record.repo_name,
+                        record.full_name,
+                        record.external_repo_id,
+                        record.default_branch,
+                        record.callback_url,
+                        record.provider_webhook_id,
+                        _json_dumps(record.subscribed_events),
+                        record.webhook_status.value,
+                        1 if record.enabled else 0,
+                        _to_iso(record.last_webhook_sync_at),
+                        record.last_error,
+                        record.updated_at.isoformat(),
+                        record.repo_subscription_id,
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "github_repo_subscriptions.account_id" in str(exc).lower():
+                raise GitHubRepoSubscriptionConflictError(
+                    f"Repository subscription already exists: {record.full_name}"
+                ) from exc
+            raise
+        return record
 
     def get_repo_subscription(
         self, repo_subscription_id: str
@@ -533,9 +743,19 @@ class TriggerRepository(SharedSqliteRepository):
     async def get_repo_subscription_async(
         self, repo_subscription_id: str
     ) -> GitHubRepoSubscriptionRecord:
-        return await self._call_sync_async(
-            self.get_repo_subscription, repo_subscription_id
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT * FROM github_repo_subscriptions
+                WHERE repo_subscription_id=?
+                """,
+                (repo_subscription_id,),
+            )
         )
+        if row is None:
+            raise KeyError(f"Unknown GitHub repo subscription: {repo_subscription_id}")
+        return self._to_repo_subscription_record(row)
 
     def list_repo_subscriptions(self) -> tuple[GitHubRepoSubscriptionRecord, ...]:
         rows = self._run_read(
@@ -551,7 +771,16 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_repo_subscriptions_async(
         self,
     ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
-        return await self._call_sync_async(self.list_repo_subscriptions)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM github_repo_subscriptions
+                ORDER BY created_at DESC
+                """,
+            )
+        )
+        return tuple(self._to_repo_subscription_record(row) for row in rows)
 
     def list_repo_subscriptions_by_full_name(
         self,
@@ -577,11 +806,21 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_repo_subscriptions_by_full_name_async(
         self, full_name: str, *, enabled_only: bool = False
     ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
-        return await self._call_sync_async(
-            self.list_repo_subscriptions_by_full_name,
-            full_name,
-            enabled_only=enabled_only,
+        query = """
+                SELECT * FROM github_repo_subscriptions
+                WHERE full_name=?
+                """
+        if enabled_only:
+            query += "\n                AND enabled=1"
+        query += "\n                ORDER BY created_at DESC\n                "
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                query,
+                (full_name,),
+            )
         )
+        return tuple(self._to_repo_subscription_record(row) for row in rows)
 
     def list_repo_subscriptions_by_account(
         self,
@@ -602,9 +841,18 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_repo_subscriptions_by_account_async(
         self, account_id: str
     ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
-        return await self._call_sync_async(
-            self.list_repo_subscriptions_by_account, account_id
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM github_repo_subscriptions
+                WHERE account_id=?
+                ORDER BY created_at DESC
+                """,
+                (account_id,),
+            )
         )
+        return tuple(self._to_repo_subscription_record(row) for row in rows)
 
     def delete_repo_subscription(self, repo_subscription_id: str) -> None:
         self._run_write(
@@ -634,8 +882,36 @@ class TriggerRepository(SharedSqliteRepository):
         )
 
     async def delete_repo_subscription_async(self, repo_subscription_id: str) -> None:
-        return await self._call_sync_async(
-            self.delete_repo_subscription, repo_subscription_id
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_action_attempts WHERE trigger_dispatch_id IN (SELECT trigger_dispatch_id FROM trigger_dispatches WHERE trigger_rule_id IN (SELECT trigger_rule_id FROM trigger_rules WHERE repo_subscription_id=?))",
+                (repo_subscription_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_dispatches WHERE trigger_rule_id IN (SELECT trigger_rule_id FROM trigger_rules WHERE repo_subscription_id=?)",
+                (repo_subscription_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_evaluations WHERE trigger_rule_id IN (SELECT trigger_rule_id FROM trigger_rules WHERE repo_subscription_id=?)",
+                (repo_subscription_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_rules WHERE repo_subscription_id=?",
+                (repo_subscription_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM github_repo_subscriptions WHERE repo_subscription_id=?",
+                (repo_subscription_id,),
+            )
+
+        await self._run_async_write(
+            operation_name="delete_repo_subscription_async",
+            operation=operation,
         )
 
     def create_rule(self, record: TriggerRuleRecord) -> TriggerRuleRecord:
@@ -677,7 +953,43 @@ class TriggerRepository(SharedSqliteRepository):
         return record
 
     async def create_rule_async(self, record: TriggerRuleRecord) -> TriggerRuleRecord:
-        return await self._call_sync_async(self.create_rule, record)
+        try:
+            await self._run_async_write(
+                operation_name="create_rule_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    INSERT INTO trigger_rules(
+                        trigger_rule_id, provider, account_id, repo_subscription_id,
+                        name, enabled, match_config_json, dispatch_config_json,
+                        version, last_error, last_fired_at, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.trigger_rule_id,
+                        record.provider.value,
+                        record.account_id,
+                        record.repo_subscription_id,
+                        record.name,
+                        1 if record.enabled else 0,
+                        record.match_config.model_dump_json(),
+                        record.dispatch_config.model_dump_json(),
+                        record.version,
+                        record.last_error,
+                        _to_iso(record.last_fired_at),
+                        record.created_at.isoformat(),
+                        record.updated_at.isoformat(),
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "trigger_rules.repo_subscription_id" in str(exc).lower():
+                raise TriggerRuleNameConflictError(
+                    f"Trigger rule name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def update_rule(self, record: TriggerRuleRecord) -> TriggerRuleRecord:
         try:
@@ -724,7 +1036,49 @@ class TriggerRepository(SharedSqliteRepository):
         return record
 
     async def update_rule_async(self, record: TriggerRuleRecord) -> TriggerRuleRecord:
-        return await self._call_sync_async(self.update_rule, record)
+        try:
+            await self._run_async_write(
+                operation_name="update_rule_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    UPDATE trigger_rules
+                    SET provider=?,
+                        account_id=?,
+                        repo_subscription_id=?,
+                        name=?,
+                        enabled=?,
+                        match_config_json=?,
+                        dispatch_config_json=?,
+                        version=?,
+                        last_error=?,
+                        last_fired_at=?,
+                        updated_at=?
+                    WHERE trigger_rule_id=?
+                    """,
+                    (
+                        record.provider.value,
+                        record.account_id,
+                        record.repo_subscription_id,
+                        record.name,
+                        1 if record.enabled else 0,
+                        record.match_config.model_dump_json(),
+                        record.dispatch_config.model_dump_json(),
+                        record.version,
+                        record.last_error,
+                        _to_iso(record.last_fired_at),
+                        record.updated_at.isoformat(),
+                        record.trigger_rule_id,
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            if "trigger_rules.repo_subscription_id" in str(exc).lower():
+                raise TriggerRuleNameConflictError(
+                    f"Trigger rule name already exists: {record.name}"
+                ) from exc
+            raise
+        return record
 
     def get_rule(self, trigger_rule_id: str) -> TriggerRuleRecord:
         row = self._run_read(
@@ -738,7 +1092,16 @@ class TriggerRepository(SharedSqliteRepository):
         return self._to_rule_record(row)
 
     async def get_rule_async(self, trigger_rule_id: str) -> TriggerRuleRecord:
-        return await self._call_sync_async(self.get_rule, trigger_rule_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM trigger_rules WHERE trigger_rule_id=?",
+                (trigger_rule_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown trigger rule: {trigger_rule_id}")
+        return self._to_rule_record(row)
 
     def list_rules(self) -> tuple[TriggerRuleRecord, ...]:
         rows = self._run_read(
@@ -752,7 +1115,16 @@ class TriggerRepository(SharedSqliteRepository):
         return tuple(self._to_rule_record(row) for row in rows)
 
     async def list_rules_async(self) -> tuple[TriggerRuleRecord, ...]:
-        return await self._call_sync_async(self.list_rules)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_rules
+                ORDER BY created_at DESC
+                """,
+            )
+        )
+        return tuple(self._to_rule_record(row) for row in rows)
 
     def list_enabled_rules_for_repo(
         self,
@@ -773,9 +1145,18 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_enabled_rules_for_repo_async(
         self, repo_subscription_id: str
     ) -> tuple[TriggerRuleRecord, ...]:
-        return await self._call_sync_async(
-            self.list_enabled_rules_for_repo, repo_subscription_id
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_rules
+                WHERE repo_subscription_id=? AND enabled=1
+                ORDER BY created_at ASC
+                """,
+                (repo_subscription_id,),
+            )
         )
+        return tuple(self._to_rule_record(row) for row in rows)
 
     def delete_rule(self, trigger_rule_id: str) -> None:
         self._run_write(
@@ -801,7 +1182,32 @@ class TriggerRepository(SharedSqliteRepository):
         )
 
     async def delete_rule_async(self, trigger_rule_id: str) -> None:
-        return await self._call_sync_async(self.delete_rule, trigger_rule_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_action_attempts WHERE trigger_dispatch_id IN (SELECT trigger_dispatch_id FROM trigger_dispatches WHERE trigger_rule_id=?)",
+                (trigger_rule_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_dispatches WHERE trigger_rule_id=?",
+                (trigger_rule_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_evaluations WHERE trigger_rule_id=?",
+                (trigger_rule_id,),
+            )
+            await _execute_async(
+                conn,
+                "DELETE FROM trigger_rules WHERE trigger_rule_id=?",
+                (trigger_rule_id,),
+            )
+
+        await self._run_async_write(
+            operation_name="delete_rule_async",
+            operation=operation,
+        )
 
     def create_delivery(self, record: TriggerDeliveryRecord) -> TriggerDeliveryRecord:
         try:
@@ -851,7 +1257,50 @@ class TriggerRepository(SharedSqliteRepository):
     async def create_delivery_async(
         self, record: TriggerDeliveryRecord
     ) -> TriggerDeliveryRecord:
-        return await self._call_sync_async(self.create_delivery, record)
+        try:
+            await self._run_async_write(
+                operation_name="create_delivery_async",
+                operation=lambda conn: _execute_async(
+                    conn,
+                    """
+                    INSERT INTO trigger_deliveries(
+                        trigger_delivery_id, provider, provider_delivery_id,
+                        account_id, repo_subscription_id, event_name, event_action,
+                        signature_status, ingest_status, headers_json, payload_json,
+                        normalized_payload_json, received_at, processed_at, last_error
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        record.trigger_delivery_id,
+                        record.provider.value,
+                        record.provider_delivery_id,
+                        record.account_id,
+                        record.repo_subscription_id,
+                        record.event_name,
+                        record.event_action,
+                        record.signature_status.value,
+                        record.ingest_status.value,
+                        _json_dumps(record.headers),
+                        _json_dumps(record.payload),
+                        _json_dumps(record.normalized_payload),
+                        record.received_at.isoformat(),
+                        _to_iso(record.processed_at),
+                        record.last_error,
+                    ),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            if (
+                "trigger_deliveries.provider" in message
+                and "provider_delivery_id" in message
+            ):
+                raise TriggerDeliveryConflictError(
+                    "Trigger delivery already exists for provider delivery id"
+                ) from exc
+            raise
+        return record
 
     def update_delivery(self, record: TriggerDeliveryRecord) -> TriggerDeliveryRecord:
         self._run_write(
@@ -893,7 +1342,42 @@ class TriggerRepository(SharedSqliteRepository):
     async def update_delivery_async(
         self, record: TriggerDeliveryRecord
     ) -> TriggerDeliveryRecord:
-        return await self._call_sync_async(self.update_delivery, record)
+        await self._run_async_write(
+            operation_name="update_delivery_async",
+            operation=lambda conn: _execute_async(
+                conn,
+                """
+                UPDATE trigger_deliveries
+                SET account_id=?,
+                    repo_subscription_id=?,
+                    event_name=?,
+                    event_action=?,
+                    signature_status=?,
+                    ingest_status=?,
+                    headers_json=?,
+                    payload_json=?,
+                    normalized_payload_json=?,
+                    processed_at=?,
+                    last_error=?
+                WHERE trigger_delivery_id=?
+                """,
+                (
+                    record.account_id,
+                    record.repo_subscription_id,
+                    record.event_name,
+                    record.event_action,
+                    record.signature_status.value,
+                    record.ingest_status.value,
+                    _json_dumps(record.headers),
+                    _json_dumps(record.payload),
+                    _json_dumps(record.normalized_payload),
+                    _to_iso(record.processed_at),
+                    record.last_error,
+                    record.trigger_delivery_id,
+                ),
+            ),
+        )
+        return record
 
     def get_delivery(self, trigger_delivery_id: str) -> TriggerDeliveryRecord:
         row = self._run_read(
@@ -909,7 +1393,16 @@ class TriggerRepository(SharedSqliteRepository):
     async def get_delivery_async(
         self, trigger_delivery_id: str
     ) -> TriggerDeliveryRecord:
-        return await self._call_sync_async(self.get_delivery, trigger_delivery_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM trigger_deliveries WHERE trigger_delivery_id=?",
+                (trigger_delivery_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown trigger delivery: {trigger_delivery_id}")
+        return self._to_delivery_record(row)
 
     def get_delivery_by_provider_id(
         self,
@@ -933,11 +1426,19 @@ class TriggerRepository(SharedSqliteRepository):
     async def get_delivery_by_provider_id_async(
         self, *, provider: str, provider_delivery_id: str
     ) -> TriggerDeliveryRecord | None:
-        return await self._call_sync_async(
-            self.get_delivery_by_provider_id,
-            provider=provider,
-            provider_delivery_id=provider_delivery_id,
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT * FROM trigger_deliveries
+                WHERE provider=? AND provider_delivery_id=?
+                """,
+                (provider, provider_delivery_id),
+            )
         )
+        if row is None:
+            return None
+        return self._to_delivery_record(row)
 
     def list_deliveries(self) -> tuple[TriggerDeliveryRecord, ...]:
         rows = self._run_read(
@@ -951,7 +1452,16 @@ class TriggerRepository(SharedSqliteRepository):
         return tuple(self._to_delivery_record(row) for row in rows)
 
     async def list_deliveries_async(self) -> tuple[TriggerDeliveryRecord, ...]:
-        return await self._call_sync_async(self.list_deliveries)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_deliveries
+                ORDER BY received_at DESC
+                """,
+            )
+        )
+        return tuple(self._to_delivery_record(row) for row in rows)
 
     def create_evaluation(
         self,
@@ -983,7 +1493,29 @@ class TriggerRepository(SharedSqliteRepository):
     async def create_evaluation_async(
         self, record: TriggerEvaluationRecord
     ) -> TriggerEvaluationRecord:
-        return await self._call_sync_async(self.create_evaluation, record)
+        await self._run_async_write(
+            operation_name="create_evaluation_async",
+            operation=lambda conn: _execute_async(
+                conn,
+                """
+                INSERT INTO trigger_evaluations(
+                    trigger_evaluation_id, trigger_delivery_id, trigger_rule_id,
+                    matched, reason_code, reason_detail, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.trigger_evaluation_id,
+                    record.trigger_delivery_id,
+                    record.trigger_rule_id,
+                    1 if record.matched else 0,
+                    record.reason_code,
+                    record.reason_detail,
+                    record.created_at.isoformat(),
+                ),
+            ),
+        )
+        return record
 
     def list_evaluations_by_delivery(
         self,
@@ -1004,9 +1536,18 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_evaluations_by_delivery_async(
         self, trigger_delivery_id: str
     ) -> tuple[TriggerEvaluationRecord, ...]:
-        return await self._call_sync_async(
-            self.list_evaluations_by_delivery, trigger_delivery_id
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_evaluations
+                WHERE trigger_delivery_id=?
+                ORDER BY created_at ASC
+                """,
+                (trigger_delivery_id,),
+            )
         )
+        return tuple(self._to_evaluation_record(row) for row in rows)
 
     def create_dispatch(self, record: TriggerDispatchRecord) -> TriggerDispatchRecord:
         self._run_write(
@@ -1042,7 +1583,36 @@ class TriggerRepository(SharedSqliteRepository):
     async def create_dispatch_async(
         self, record: TriggerDispatchRecord
     ) -> TriggerDispatchRecord:
-        return await self._call_sync_async(self.create_dispatch, record)
+        await self._run_async_write(
+            operation_name="create_dispatch_async",
+            operation=lambda conn: _execute_async(
+                conn,
+                """
+                INSERT INTO trigger_dispatches(
+                    trigger_dispatch_id, trigger_delivery_id, trigger_rule_id,
+                    target_type, status, session_id, run_id, automation_project_id,
+                    started_at, completed_at, last_error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.trigger_dispatch_id,
+                    record.trigger_delivery_id,
+                    record.trigger_rule_id,
+                    record.target_type.value,
+                    record.status.value,
+                    record.session_id,
+                    record.run_id,
+                    record.automation_project_id,
+                    _to_iso(record.started_at),
+                    _to_iso(record.completed_at),
+                    record.last_error,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                ),
+            ),
+        )
+        return record
 
     def update_dispatch(self, record: TriggerDispatchRecord) -> TriggerDispatchRecord:
         self._run_write(
@@ -1078,7 +1648,36 @@ class TriggerRepository(SharedSqliteRepository):
     async def update_dispatch_async(
         self, record: TriggerDispatchRecord
     ) -> TriggerDispatchRecord:
-        return await self._call_sync_async(self.update_dispatch, record)
+        await self._run_async_write(
+            operation_name="update_dispatch_async",
+            operation=lambda conn: _execute_async(
+                conn,
+                """
+                UPDATE trigger_dispatches
+                SET status=?,
+                    session_id=?,
+                    run_id=?,
+                    automation_project_id=?,
+                    started_at=?,
+                    completed_at=?,
+                    last_error=?,
+                    updated_at=?
+                WHERE trigger_dispatch_id=?
+                """,
+                (
+                    record.status.value,
+                    record.session_id,
+                    record.run_id,
+                    record.automation_project_id,
+                    _to_iso(record.started_at),
+                    _to_iso(record.completed_at),
+                    record.last_error,
+                    record.updated_at.isoformat(),
+                    record.trigger_dispatch_id,
+                ),
+            ),
+        )
+        return record
 
     def get_dispatch(self, trigger_dispatch_id: str) -> TriggerDispatchRecord:
         row = self._run_read(
@@ -1094,7 +1693,16 @@ class TriggerRepository(SharedSqliteRepository):
     async def get_dispatch_async(
         self, trigger_dispatch_id: str
     ) -> TriggerDispatchRecord:
-        return await self._call_sync_async(self.get_dispatch, trigger_dispatch_id)
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM trigger_dispatches WHERE trigger_dispatch_id=?",
+                (trigger_dispatch_id,),
+            )
+        )
+        if row is None:
+            raise KeyError(f"Unknown trigger dispatch: {trigger_dispatch_id}")
+        return self._to_dispatch_record(row)
 
     def list_dispatches(self) -> tuple[TriggerDispatchRecord, ...]:
         rows = self._run_read(
@@ -1108,7 +1716,16 @@ class TriggerRepository(SharedSqliteRepository):
         return tuple(self._to_dispatch_record(row) for row in rows)
 
     async def list_dispatches_async(self) -> tuple[TriggerDispatchRecord, ...]:
-        return await self._call_sync_async(self.list_dispatches)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_dispatches
+                ORDER BY created_at DESC
+                """,
+            )
+        )
+        return tuple(self._to_dispatch_record(row) for row in rows)
 
     def list_dispatches_by_delivery(
         self,
@@ -1129,9 +1746,18 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_dispatches_by_delivery_async(
         self, trigger_delivery_id: str
     ) -> tuple[TriggerDispatchRecord, ...]:
-        return await self._call_sync_async(
-            self.list_dispatches_by_delivery, trigger_delivery_id
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_dispatches
+                WHERE trigger_delivery_id=?
+                ORDER BY created_at ASC
+                """,
+                (trigger_delivery_id,),
+            )
         )
+        return tuple(self._to_dispatch_record(row) for row in rows)
 
     def list_open_dispatches(self) -> tuple[TriggerDispatchRecord, ...]:
         rows = self._run_read(
@@ -1146,7 +1772,17 @@ class TriggerRepository(SharedSqliteRepository):
         return tuple(self._to_dispatch_record(row) for row in rows)
 
     async def list_open_dispatches_async(self) -> tuple[TriggerDispatchRecord, ...]:
-        return await self._call_sync_async(self.list_open_dispatches)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_dispatches
+                WHERE status IN ('pending', 'running')
+                ORDER BY created_at ASC
+                """,
+            )
+        )
+        return tuple(self._to_dispatch_record(row) for row in rows)
 
     def create_action_attempt(
         self,
@@ -1186,7 +1822,37 @@ class TriggerRepository(SharedSqliteRepository):
     async def create_action_attempt_async(
         self, record: TriggerActionAttemptRecord
     ) -> TriggerActionAttemptRecord:
-        return await self._call_sync_async(self.create_action_attempt, record)
+        await self._run_async_write(
+            operation_name="create_action_attempt_async",
+            operation=lambda conn: _execute_async(
+                conn,
+                """
+                INSERT INTO trigger_action_attempts(
+                    trigger_action_attempt_id, trigger_dispatch_id, phase, action_type,
+                    status, action_spec_json, request_payload_json,
+                    response_payload_json, provider_resource_id, attempt_count,
+                    last_error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.trigger_action_attempt_id,
+                    record.trigger_dispatch_id,
+                    record.phase.value,
+                    record.action_type.value,
+                    record.status.value,
+                    record.action_spec.model_dump_json(),
+                    _json_dumps(record.request_payload),
+                    _json_dumps(record.response_payload),
+                    record.provider_resource_id,
+                    record.attempt_count,
+                    record.last_error,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                ),
+            ),
+        )
+        return record
 
     def update_action_attempt(
         self,
@@ -1225,7 +1891,36 @@ class TriggerRepository(SharedSqliteRepository):
     async def update_action_attempt_async(
         self, record: TriggerActionAttemptRecord
     ) -> TriggerActionAttemptRecord:
-        return await self._call_sync_async(self.update_action_attempt, record)
+        await self._run_async_write(
+            operation_name="update_action_attempt_async",
+            operation=lambda conn: _execute_async(
+                conn,
+                """
+                UPDATE trigger_action_attempts
+                SET status=?,
+                    action_spec_json=?,
+                    request_payload_json=?,
+                    response_payload_json=?,
+                    provider_resource_id=?,
+                    attempt_count=?,
+                    last_error=?,
+                    updated_at=?
+                WHERE trigger_action_attempt_id=?
+                """,
+                (
+                    record.status.value,
+                    record.action_spec.model_dump_json(),
+                    _json_dumps(record.request_payload),
+                    _json_dumps(record.response_payload),
+                    record.provider_resource_id,
+                    record.attempt_count,
+                    record.last_error,
+                    record.updated_at.isoformat(),
+                    record.trigger_action_attempt_id,
+                ),
+            ),
+        )
+        return record
 
     def list_action_attempts(self) -> tuple[TriggerActionAttemptRecord, ...]:
         rows = self._run_read(
@@ -1241,7 +1936,16 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_action_attempts_async(
         self,
     ) -> tuple[TriggerActionAttemptRecord, ...]:
-        return await self._call_sync_async(self.list_action_attempts)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_action_attempts
+                ORDER BY created_at DESC
+                """,
+            )
+        )
+        return tuple(self._to_action_attempt_record(row) for row in rows)
 
     def list_action_attempts_by_dispatch(
         self,
@@ -1262,9 +1966,18 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_action_attempts_by_dispatch_async(
         self, trigger_dispatch_id: str
     ) -> tuple[TriggerActionAttemptRecord, ...]:
-        return await self._call_sync_async(
-            self.list_action_attempts_by_dispatch, trigger_dispatch_id
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_action_attempts
+                WHERE trigger_dispatch_id=?
+                ORDER BY created_at ASC
+                """,
+                (trigger_dispatch_id,),
+            )
         )
+        return tuple(self._to_action_attempt_record(row) for row in rows)
 
     def list_pending_action_attempts(
         self,
@@ -1283,7 +1996,17 @@ class TriggerRepository(SharedSqliteRepository):
     async def list_pending_action_attempts_async(
         self,
     ) -> tuple[TriggerActionAttemptRecord, ...]:
-        return await self._call_sync_async(self.list_pending_action_attempts)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                """
+                SELECT * FROM trigger_action_attempts
+                WHERE status IN ('pending', 'waiting_run', 'sending')
+                ORDER BY created_at ASC
+                """,
+            )
+        )
+        return tuple(self._to_action_attempt_record(row) for row in rows)
 
     @staticmethod
     def _to_account_record(row: sqlite3.Row) -> GitHubTriggerAccountRecord:
@@ -1459,6 +2182,15 @@ class TriggerRepository(SharedSqliteRepository):
 
 def _json_dumps(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+
+
+async def _execute_async(
+    conn: aiosqlite.Connection,
+    sql: str,
+    parameters: tuple[object, ...] = (),
+) -> None:
+    cursor = await conn.execute(sql, parameters)
+    await cursor.close()
 
 
 def _column_exists(

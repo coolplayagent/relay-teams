@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import aiosqlite
+
 from relay_teams.monitors.models import (
     MonitorActionType,
     MonitorEventEnvelope,
@@ -15,7 +17,11 @@ from relay_teams.monitors.models import (
     MonitorSubscriptionStatus,
     MonitorTriggerRecord,
 )
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 
 
 class MonitorRepository(SharedSqliteRepository):
@@ -150,7 +156,14 @@ class MonitorRepository(SharedSqliteRepository):
     async def create_subscription_async(
         self, record: MonitorSubscriptionRecord
     ) -> MonitorSubscriptionRecord:
-        return await self._call_sync_async(self.create_subscription, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _insert_subscription_async(conn=conn, record=record)
+
+        await self._run_async_write(
+            operation_name="create_subscription_async",
+            operation=operation,
+        )
+        return record
 
     def update_subscription(
         self,
@@ -206,7 +219,14 @@ class MonitorRepository(SharedSqliteRepository):
     async def update_subscription_async(
         self, record: MonitorSubscriptionRecord
     ) -> MonitorSubscriptionRecord:
-        return await self._call_sync_async(self.update_subscription, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _update_subscription_async(conn=conn, record=record)
+
+        await self._run_async_write(
+            operation_name="update_subscription_async",
+            operation=operation,
+        )
+        return record
 
     def get_subscription(self, monitor_id: str) -> MonitorSubscriptionRecord:
         row = self._run_read(
@@ -225,7 +245,20 @@ class MonitorRepository(SharedSqliteRepository):
     async def get_subscription_async(
         self, monitor_id: str
     ) -> MonitorSubscriptionRecord:
-        return await self._call_sync_async(self.get_subscription, monitor_id)
+        async def operation(conn: aiosqlite.Connection) -> MonitorSubscriptionRecord:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT * FROM monitor_subscriptions
+                WHERE monitor_id=?
+                """,
+                (monitor_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown monitor: {monitor_id}")
+            return _subscription_from_row(row)
+
+        return await self._run_async_read(operation)
 
     def list_for_run(self, run_id: str) -> tuple[MonitorSubscriptionRecord, ...]:
         rows = self._run_read(
@@ -243,7 +276,21 @@ class MonitorRepository(SharedSqliteRepository):
     async def list_for_run_async(
         self, run_id: str
     ) -> tuple[MonitorSubscriptionRecord, ...]:
-        return await self._call_sync_async(self.list_for_run, run_id)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[MonitorSubscriptionRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT * FROM monitor_subscriptions
+                WHERE run_id=?
+                ORDER BY created_at DESC
+                """,
+                (run_id,),
+            )
+            return tuple(_subscription_from_row(row) for row in rows)
+
+        return await self._run_async_read(operation)
 
     def delete_by_run(self, run_id: str) -> None:
         self._run_write(
@@ -261,7 +308,22 @@ class MonitorRepository(SharedSqliteRepository):
         )
 
     async def delete_by_run_async(self, run_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_run, run_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM monitor_triggers WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "DELETE FROM monitor_subscriptions WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_run_async",
+            operation=operation,
+        )
 
     def delete_by_session(self, session_id: str) -> None:
         self._run_write(
@@ -279,7 +341,22 @@ class MonitorRepository(SharedSqliteRepository):
         )
 
     async def delete_by_session_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_session, session_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM monitor_triggers WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+            cursor = await conn.execute(
+                "DELETE FROM monitor_subscriptions WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=operation,
+        )
 
     def list_active_for_source(
         self,
@@ -306,9 +383,25 @@ class MonitorRepository(SharedSqliteRepository):
     async def list_active_for_source_async(
         self, *, source_kind: str, source_key: str
     ) -> tuple[MonitorSubscriptionRecord, ...]:
-        return await self._call_sync_async(
-            self.list_active_for_source, source_kind=source_kind, source_key=source_key
-        )
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[MonitorSubscriptionRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT * FROM monitor_subscriptions
+                WHERE source_kind=? AND source_key=? AND status=?
+                ORDER BY created_at DESC
+                """,
+                (
+                    source_kind,
+                    source_key,
+                    MonitorSubscriptionStatus.ACTIVE.value,
+                ),
+            )
+            return tuple(_subscription_from_row(row) for row in rows)
+
+        return await self._run_async_read(operation)
 
     def create_trigger(self, record: MonitorTriggerRecord) -> MonitorTriggerRecord:
         self._run_write(
@@ -356,7 +449,14 @@ class MonitorRepository(SharedSqliteRepository):
     async def create_trigger_async(
         self, record: MonitorTriggerRecord
     ) -> MonitorTriggerRecord:
-        return await self._call_sync_async(self.create_trigger, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _insert_trigger_async(conn=conn, record=record)
+
+        await self._run_async_write(
+            operation_name="create_trigger_async",
+            operation=operation,
+        )
+        return record
 
     def record_matching_trigger(
         self,
@@ -496,7 +596,7 @@ class MonitorRepository(SharedSqliteRepository):
                     trigger.created_at.isoformat(),
                 ),
             )
-            return (updated, trigger)
+            return updated, trigger
 
         return self._run_write(
             operation_name="record_matching_trigger",
@@ -506,8 +606,110 @@ class MonitorRepository(SharedSqliteRepository):
     async def record_matching_trigger_async(
         self, *, monitor_id: str, envelope: MonitorEventEnvelope
     ) -> tuple[MonitorSubscriptionRecord, MonitorTriggerRecord] | None:
-        return await self._call_sync_async(
-            self.record_matching_trigger, monitor_id=monitor_id, envelope=envelope
+        dedupe_key = _nullable_text(envelope.dedupe_key)
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[MonitorSubscriptionRecord, MonitorTriggerRecord] | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT * FROM monitor_subscriptions
+                WHERE monitor_id=?
+                """,
+                (monitor_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown monitor: {monitor_id}")
+            subscription = _subscription_from_row(row)
+            if subscription.status != MonitorSubscriptionStatus.ACTIVE:
+                return None
+            if (
+                subscription.rule.max_triggers is not None
+                and subscription.trigger_count >= subscription.rule.max_triggers
+            ):
+                return None
+            if dedupe_key is not None:
+                existing = await async_fetchone(
+                    conn,
+                    """
+                    SELECT 1
+                    FROM monitor_triggers
+                    WHERE monitor_id=? AND dedupe_key=?
+                    LIMIT 1
+                    """,
+                    (monitor_id, dedupe_key),
+                )
+                if existing is not None:
+                    return None
+            if _cooldown_active(
+                subscription=subscription,
+                occurred_at=envelope.occurred_at,
+            ):
+                return None
+
+            now = datetime.now(tz=UTC)
+            next_trigger_count = subscription.trigger_count + 1
+            should_stop = subscription.rule.auto_stop_on_first_match or (
+                subscription.rule.max_triggers is not None
+                and next_trigger_count >= subscription.rule.max_triggers
+            )
+            updated = subscription.model_copy(
+                update={
+                    "trigger_count": next_trigger_count,
+                    "last_triggered_at": now,
+                    "updated_at": now,
+                    "status": (
+                        MonitorSubscriptionStatus.STOPPED
+                        if should_stop
+                        else subscription.status
+                    ),
+                    "stopped_at": now if should_stop else subscription.stopped_at,
+                }
+            )
+            cursor = await conn.execute(
+                """
+                UPDATE monitor_subscriptions
+                SET
+                    status=?,
+                    trigger_count=?,
+                    last_triggered_at=?,
+                    updated_at=?,
+                    stopped_at=?
+                WHERE monitor_id=?
+                """,
+                (
+                    updated.status.value,
+                    updated.trigger_count,
+                    _isoformat(updated.last_triggered_at),
+                    updated.updated_at.isoformat(),
+                    _isoformat(updated.stopped_at),
+                    updated.monitor_id,
+                ),
+            )
+            await cursor.close()
+            trigger = MonitorTriggerRecord(
+                monitor_trigger_id=f"mntg_{uuid4().hex[:12]}",
+                monitor_id=updated.monitor_id,
+                run_id=updated.run_id,
+                session_id=updated.session_id,
+                source_kind=envelope.source_kind,
+                source_key=envelope.source_key,
+                event_name=envelope.event_name,
+                dedupe_key=dedupe_key,
+                body_text=envelope.body_text,
+                attributes=dict(envelope.attributes),
+                raw_payload_json=envelope.raw_payload_json,
+                action_type=updated.action.action_type,
+                occurred_at=envelope.occurred_at,
+                created_at=now,
+            )
+            await _insert_trigger_async(conn=conn, record=trigger)
+            return (updated, trigger)
+
+        return await self._run_async_write(
+            operation_name="record_matching_trigger_async",
+            operation=operation,
         )
 
     def has_trigger_dedupe_key(self, *, monitor_id: str, dedupe_key: str) -> bool:
@@ -527,9 +729,20 @@ class MonitorRepository(SharedSqliteRepository):
     async def has_trigger_dedupe_key_async(
         self, *, monitor_id: str, dedupe_key: str
     ) -> bool:
-        return await self._call_sync_async(
-            self.has_trigger_dedupe_key, monitor_id=monitor_id, dedupe_key=dedupe_key
-        )
+        async def operation(conn: aiosqlite.Connection) -> bool:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT 1
+                FROM monitor_triggers
+                WHERE monitor_id=? AND dedupe_key=?
+                LIMIT 1
+                """,
+                (monitor_id, dedupe_key),
+            )
+            return row is not None
+
+        return await self._run_async_read(operation)
 
     def list_triggers_for_monitor(
         self, monitor_id: str
@@ -549,7 +762,161 @@ class MonitorRepository(SharedSqliteRepository):
     async def list_triggers_for_monitor_async(
         self, monitor_id: str
     ) -> tuple[MonitorTriggerRecord, ...]:
-        return await self._call_sync_async(self.list_triggers_for_monitor, monitor_id)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[MonitorTriggerRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT * FROM monitor_triggers
+                WHERE monitor_id=?
+                ORDER BY created_at DESC
+                """,
+                (monitor_id,),
+            )
+            return tuple(_trigger_from_row(row) for row in rows)
+
+        return await self._run_async_read(operation)
+
+
+async def _insert_subscription_async(
+    *, conn: aiosqlite.Connection, record: MonitorSubscriptionRecord
+) -> None:
+    cursor = await conn.execute(
+        """
+        INSERT INTO monitor_subscriptions(
+            monitor_id,
+            run_id,
+            session_id,
+            source_kind,
+            source_key,
+            created_by_instance_id,
+            created_by_role_id,
+            tool_call_id,
+            status,
+            rule_json,
+            action_json,
+            trigger_count,
+            last_triggered_at,
+            last_error,
+            created_at,
+            updated_at,
+            stopped_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.monitor_id,
+            record.run_id,
+            record.session_id,
+            record.source_kind.value,
+            record.source_key,
+            record.created_by_instance_id,
+            record.created_by_role_id,
+            record.tool_call_id,
+            record.status.value,
+            record.rule.model_dump_json(),
+            record.action.model_dump_json(),
+            record.trigger_count,
+            _isoformat(record.last_triggered_at),
+            record.last_error,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+            _isoformat(record.stopped_at),
+        ),
+    )
+    await cursor.close()
+
+
+async def _update_subscription_async(
+    *, conn: aiosqlite.Connection, record: MonitorSubscriptionRecord
+) -> None:
+    cursor = await conn.execute(
+        """
+        UPDATE monitor_subscriptions
+        SET
+            run_id=?,
+            session_id=?,
+            source_kind=?,
+            source_key=?,
+            created_by_instance_id=?,
+            created_by_role_id=?,
+            tool_call_id=?,
+            status=?,
+            rule_json=?,
+            action_json=?,
+            trigger_count=?,
+            last_triggered_at=?,
+            last_error=?,
+            created_at=?,
+            updated_at=?,
+            stopped_at=?
+        WHERE monitor_id=?
+        """,
+        (
+            record.run_id,
+            record.session_id,
+            record.source_kind.value,
+            record.source_key,
+            record.created_by_instance_id,
+            record.created_by_role_id,
+            record.tool_call_id,
+            record.status.value,
+            record.rule.model_dump_json(),
+            record.action.model_dump_json(),
+            record.trigger_count,
+            _isoformat(record.last_triggered_at),
+            record.last_error,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+            _isoformat(record.stopped_at),
+            record.monitor_id,
+        ),
+    )
+    await cursor.close()
+
+
+async def _insert_trigger_async(
+    *, conn: aiosqlite.Connection, record: MonitorTriggerRecord
+) -> None:
+    cursor = await conn.execute(
+        """
+        INSERT INTO monitor_triggers(
+            monitor_trigger_id,
+            monitor_id,
+            run_id,
+            session_id,
+            source_kind,
+            source_key,
+            event_name,
+            dedupe_key,
+            body_text,
+            attributes_json,
+            raw_payload_json,
+            action_type,
+            occurred_at,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.monitor_trigger_id,
+            record.monitor_id,
+            record.run_id,
+            record.session_id,
+            record.source_kind.value,
+            record.source_key,
+            record.event_name,
+            record.dedupe_key,
+            record.body_text,
+            json.dumps(record.attributes, ensure_ascii=False, sort_keys=True),
+            record.raw_payload_json,
+            record.action_type.value,
+            record.occurred_at.isoformat(),
+            record.created_at.isoformat(),
+        ),
+    )
+    await cursor.close()
 
 
 def _subscription_from_row(row: sqlite3.Row) -> MonitorSubscriptionRecord:

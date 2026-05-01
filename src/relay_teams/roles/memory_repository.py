@@ -5,7 +5,12 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+import aiosqlite
+
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchone,
+)
 from relay_teams.roles.memory_models import RoleMemoryRecord
 
 
@@ -45,9 +50,27 @@ class RoleMemoryRepository(SharedSqliteRepository):
     async def read_role_memory_async(
         self, *, role_id: str, workspace_id: str
     ) -> RoleMemoryRecord:
-        return await self._call_sync_async(
-            self.read_role_memory, role_id=role_id, workspace_id=workspace_id
-        )
+        async def operation(conn: aiosqlite.Connection) -> RoleMemoryRecord:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM role_memories WHERE role_id=? AND workspace_id=?",
+                (role_id, workspace_id),
+            )
+            if row is None:
+                return RoleMemoryRecord(
+                    role_id=role_id,
+                    workspace_id=workspace_id,
+                    content_markdown="",
+                    updated_at=None,
+                )
+            return RoleMemoryRecord(
+                role_id=str(row["role_id"]),
+                workspace_id=str(row["workspace_id"]),
+                content_markdown=str(row["content_markdown"]),
+                updated_at=datetime.fromisoformat(str(row["updated_at"])),
+            )
+
+        return await self._run_async_read(operation)
 
     def write_role_memory(
         self,
@@ -74,11 +97,24 @@ class RoleMemoryRepository(SharedSqliteRepository):
     async def write_role_memory_async(
         self, *, role_id: str, workspace_id: str, content_markdown: str
     ) -> None:
-        return await self._call_sync_async(
-            self.write_role_memory,
-            role_id=role_id,
-            workspace_id=workspace_id,
-            content_markdown=content_markdown,
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO role_memories(role_id, workspace_id, content_markdown, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(role_id, workspace_id)
+                DO UPDATE SET content_markdown=excluded.content_markdown,
+                              updated_at=excluded.updated_at
+                """,
+                (role_id, workspace_id, content_markdown, now),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="write_role_memory_async",
+            operation=operation,
         )
 
     def delete_role_memory(self, *, role_id: str, workspace_id: str) -> None:
@@ -93,8 +129,16 @@ class RoleMemoryRepository(SharedSqliteRepository):
     async def delete_role_memory_async(
         self, *, role_id: str, workspace_id: str
     ) -> None:
-        return await self._call_sync_async(
-            self.delete_role_memory, role_id=role_id, workspace_id=workspace_id
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM role_memories WHERE role_id=? AND workspace_id=?",
+                (role_id, workspace_id),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_role_memory_async",
+            operation=operation,
         )
 
     def _ensure_role_memories_schema(self) -> None:

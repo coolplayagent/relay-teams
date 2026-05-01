@@ -411,7 +411,36 @@ class BackgroundTaskRepository(SharedSqliteRepository):
         self,
         session_ids: tuple[str, ...],
     ) -> dict[str, tuple[BackgroundTaskRecord, ...]]:
-        return await self._call_sync_async(self.list_by_session_ids, session_ids)
+        if not session_ids:
+            return {}
+        grouped: dict[str, list[BackgroundTaskRecord]] = {}
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> dict[str, tuple[BackgroundTaskRecord, ...]]:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
+                    SELECT *
+                    FROM background_tasks
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, updated_at DESC, created_at DESC
+                    """,
+                    session_id_chunk,
+                )
+                for row in rows:
+                    record = _row_to_record(row)
+                    grouped.setdefault(record.session_id, []).append(record)
+            return {
+                session_id: tuple(records) for session_id, records in grouped.items()
+            }
+
+        return await self._run_async_read(operation)
 
     async def list_by_session_async(
         self, session_id: str

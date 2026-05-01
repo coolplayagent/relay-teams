@@ -8,11 +8,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+)
 from relay_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerRecord,
     SessionHistoryMarkerType,
@@ -110,12 +114,42 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
         marker_type: SessionHistoryMarkerType,
         metadata: dict[str, str] | None = None,
     ) -> SessionHistoryMarkerRecord:
-        return await self._call_sync_async(
-            self.create,
+        now = datetime.now(tz=timezone.utc)
+        record = SessionHistoryMarkerRecord(
+            marker_id=f"marker-{uuid.uuid4().hex}",
             session_id=session_id,
             marker_type=marker_type,
-            metadata=metadata,
+            metadata={} if metadata is None else dict(metadata),
+            created_at=now,
         )
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO session_history_markers(
+                    marker_id,
+                    session_id,
+                    marker_type,
+                    metadata_json,
+                    created_at
+                )
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (
+                    record.marker_id,
+                    record.session_id,
+                    record.marker_type.value,
+                    json.dumps(record.metadata, ensure_ascii=False),
+                    record.created_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_async",
+            operation=operation,
+        )
+        return record
 
     def create_clear_marker(self, session_id: str) -> SessionHistoryMarkerRecord:
         return self.create(
@@ -126,7 +160,10 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
     async def create_clear_marker_async(
         self, session_id: str
     ) -> SessionHistoryMarkerRecord:
-        return await self._call_sync_async(self.create_clear_marker, session_id)
+        return await self.create_async(
+            session_id=session_id,
+            marker_type=SessionHistoryMarkerType.CLEAR,
+        )
 
     def list_by_session(
         self,
@@ -149,7 +186,26 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
     async def list_by_session_async(
         self, session_id: str
     ) -> tuple[SessionHistoryMarkerRecord, ...]:
-        return await self._call_sync_async(self.list_by_session, session_id)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[SessionHistoryMarkerRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT marker_id, session_id, marker_type, metadata_json, created_at
+                FROM session_history_markers
+                WHERE session_id=?
+                ORDER BY created_at ASC, marker_id ASC
+                """,
+                (session_id,),
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def get_latest(
         self,
@@ -180,9 +236,30 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
     async def get_latest_async(
         self, session_id: str, *, marker_type: SessionHistoryMarkerType | None = None
     ) -> SessionHistoryMarkerRecord | None:
-        return await self._call_sync_async(
-            self.get_latest, session_id, marker_type=marker_type
-        )
+        query = """
+            SELECT marker_id, session_id, marker_type, metadata_json, created_at
+            FROM session_history_markers
+            WHERE session_id=?
+            """
+        params: tuple[str, ...]
+        if marker_type is None:
+            params = (session_id,)
+        else:
+            query += " AND marker_type=?"
+            params = (session_id, marker_type.value)
+        query += " ORDER BY created_at DESC, marker_id DESC"
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> SessionHistoryMarkerRecord | None:
+            rows = await async_fetchall(conn, query, params)
+            for row in rows:
+                record = self._record_or_none(row)
+                if record is not None:
+                    return record
+            return None
+
+        return await self._run_async_read(operation)
 
     def delete_by_session(self, session_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -198,7 +275,17 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
         )
 
     async def delete_by_session_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_session, session_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM session_history_markers WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=operation,
+        )
 
     def delete_by_conversation(self, session_id: str, conversation_id: str) -> None:
         def operation() -> None:
@@ -239,8 +326,37 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
     async def delete_by_conversation_async(
         self, session_id: str, conversation_id: str
     ) -> None:
-        return await self._call_sync_async(
-            self.delete_by_conversation, session_id, conversation_id
+        async def operation(conn: aiosqlite.Connection) -> None:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT marker_id, metadata_json
+                FROM session_history_markers
+                WHERE session_id=? AND marker_type=?
+                """,
+                (
+                    session_id,
+                    SessionHistoryMarkerType.COMPACTION.value,
+                ),
+            )
+            marker_ids = [
+                str(row["marker_id"])
+                for row in rows
+                if _load_metadata(str(row["metadata_json"])).get("conversation_id")
+                == conversation_id
+            ]
+            if not marker_ids:
+                return
+            placeholders = ",".join("?" for _ in marker_ids)
+            cursor = await conn.execute(
+                f"DELETE FROM session_history_markers WHERE marker_id IN ({placeholders})",
+                marker_ids,
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_conversation_async",
+            operation=operation,
         )
 
     @staticmethod

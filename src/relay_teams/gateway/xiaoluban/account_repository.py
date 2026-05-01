@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.gateway.xiaoluban.models import (
@@ -17,7 +18,11 @@ from relay_teams.gateway.xiaoluban.models import (
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.validation import (
     normalize_identifier_tuple,
     parse_persisted_datetime_or_none,
@@ -106,7 +111,22 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
         return tuple(records)
 
     async def list_accounts_async(self) -> Tuple[XiaolubanAccountRecord, ...]:
-        return await self._call_sync_async(self.list_accounts)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> Tuple[XiaolubanAccountRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                "SELECT * FROM xiaoluban_accounts ORDER BY created_at DESC",
+            )
+            records: List[XiaolubanAccountRecord] = []
+            for row in rows:
+                try:
+                    records.append(self._to_record(row))
+                except (ValidationError, ValueError) as exc:
+                    _log_invalid_row(row=row, error=exc)
+            return tuple(records)
+
+        return await self._run_async_read(operation)
 
     def get_account(self, account_id: str) -> XiaolubanAccountRecord:
         row = self._conn.execute(
@@ -122,7 +142,21 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown Xiaoluban account_id: {account_id}") from exc
 
     async def get_account_async(self, account_id: str) -> XiaolubanAccountRecord:
-        return await self._call_sync_async(self.get_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> XiaolubanAccountRecord:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM xiaoluban_accounts WHERE account_id=?",
+                (account_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown Xiaoluban account_id: {account_id}")
+            try:
+                return self._to_record(row)
+            except (ValidationError, ValueError) as exc:
+                _log_invalid_row(row=row, error=exc)
+                raise KeyError(f"Unknown Xiaoluban account_id: {account_id}") from exc
+
+        return await self._run_async_read(operation)
 
     def upsert_account(self, record: XiaolubanAccountRecord) -> XiaolubanAccountRecord:
         run_sqlite_write_with_retry(
@@ -181,7 +215,58 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
     async def upsert_account_async(
         self, record: XiaolubanAccountRecord
     ) -> XiaolubanAccountRecord:
-        return await self._call_sync_async(self.upsert_account, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO xiaoluban_accounts(
+                    account_id,
+                    display_name,
+                    base_url,
+                    status,
+                    derived_uid,
+                    notification_workspace_ids_json,
+                    notification_receiver,
+                    notification_receivers_json,
+                    notify_self,
+                    im_config_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    display_name=excluded.display_name,
+                    base_url=excluded.base_url,
+                    status=excluded.status,
+                    derived_uid=excluded.derived_uid,
+                    notification_workspace_ids_json=excluded.notification_workspace_ids_json,
+                    notification_receiver=excluded.notification_receiver,
+                    notification_receivers_json=excluded.notification_receivers_json,
+                    notify_self=excluded.notify_self,
+                    im_config_json=excluded.im_config_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    record.account_id,
+                    record.display_name,
+                    record.base_url,
+                    record.status.value,
+                    record.derived_uid,
+                    _workspace_ids_to_json(record.notification_workspace_ids),
+                    None,
+                    _notification_receivers_to_json(record.notification_receivers),
+                    1 if record.notify_self else 0,
+                    _im_config_to_json(record.im_config),
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_account_async",
+            operation=operation,
+        )
+        return await self.get_account_async(record.account_id)
 
     def delete_account(self, account_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -197,7 +282,17 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
         )
 
     async def delete_account_async(self, account_id: str) -> None:
-        return await self._call_sync_async(self.delete_account, account_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM xiaoluban_accounts WHERE account_id=?",
+                (account_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_account_async",
+            operation=operation,
+        )
 
     @staticmethod
     def _to_record(row: sqlite3.Row) -> XiaolubanAccountRecord:

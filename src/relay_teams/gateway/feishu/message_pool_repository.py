@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.gateway.feishu.models import (
@@ -16,7 +17,11 @@ from relay_teams.gateway.feishu.models import (
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -179,7 +184,21 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def create_or_get_async(
         self, record: FeishuMessagePoolRecord
     ) -> tuple[FeishuMessagePoolRecord, bool]:
-        return await self._call_sync_async(self.create_or_get, record)
+        try:
+            created = await self._create_async(record)
+        except FeishuMessageDuplicateError:
+            existing = await self.get_by_message_key_async(
+                trigger_id=record.trigger_id,
+                tenant_key=record.tenant_key,
+                message_key=record.message_key,
+            )
+            updated = await self.update_async(
+                existing.message_pool_id,
+                delivery_count=existing.delivery_count + 1,
+                updated_at=datetime.now(tz=timezone.utc),
+            )
+            return updated, False
+        return created, True
 
     def _create(self, record: FeishuMessagePoolRecord) -> FeishuMessagePoolRecord:
         def operation() -> None:
@@ -268,6 +287,37 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
             )
         return stored
 
+    async def _create_async(
+        self, record: FeishuMessagePoolRecord
+    ) -> FeishuMessagePoolRecord:
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _insert_message_pool_record_async(conn=conn, record=record)
+
+        try:
+            await self._run_async_write(
+                operation_name="create_async",
+                operation=operation,
+            )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            if (
+                "uq_feishu_message_pool_key" in message
+                or "feishu_message_pool.trigger_id, feishu_message_pool.tenant_key, feishu_message_pool.message_key"
+                in message
+            ):
+                raise FeishuMessageDuplicateError(
+                    record.trigger_id,
+                    record.tenant_key,
+                    record.message_key,
+                ) from exc
+            raise
+        stored = await self.get_async(record.message_pool_id)
+        if stored is None:
+            raise RuntimeError(
+                f"Failed to persist Feishu message pool record {record.message_pool_id}"
+            )
+        return stored
+
     def get(self, message_pool_id: str) -> FeishuMessagePoolRecord | None:
         with self._lock:
             row = self._conn.execute(
@@ -279,7 +329,19 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
         return self._record_or_none(row)
 
     async def get_async(self, message_pool_id: str) -> FeishuMessagePoolRecord | None:
-        return await self._call_sync_async(self.get, message_pool_id)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> FeishuMessagePoolRecord | None:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM feishu_message_pool WHERE message_pool_id=?",
+                (message_pool_id,),
+            )
+            if row is None:
+                return None
+            return self._record_or_none(row)
+
+        return await self._run_async_read(operation)
 
     def get_by_message_key(
         self,
@@ -314,12 +376,26 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def get_by_message_key_async(
         self, *, trigger_id: str, tenant_key: str, message_key: str
     ) -> FeishuMessagePoolRecord:
-        return await self._call_sync_async(
-            self.get_by_message_key,
-            trigger_id=trigger_id,
-            tenant_key=tenant_key,
-            message_key=message_key,
-        )
+        async def operation(conn: aiosqlite.Connection) -> FeishuMessagePoolRecord:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM feishu_message_pool
+                WHERE trigger_id=? AND tenant_key=? AND message_key=?
+                ORDER BY id DESC
+                """,
+                (trigger_id, tenant_key, message_key),
+            )
+            for row in rows:
+                if (record := self._record_or_none(row)) is not None:
+                    return record
+            raise KeyError(
+                "Unknown Feishu message pool record for "
+                f"trigger_id={trigger_id}, tenant_key={tenant_key}, message_key={message_key}"
+            )
+
+        return await self._run_async_read(operation)
 
     def get_latest_by_run_id(self, run_id: str) -> FeishuMessagePoolRecord | None:
         with self._lock:
@@ -340,7 +416,25 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def get_latest_by_run_id_async(
         self, run_id: str
     ) -> FeishuMessagePoolRecord | None:
-        return await self._call_sync_async(self.get_latest_by_run_id, run_id)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> FeishuMessagePoolRecord | None:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM feishu_message_pool
+                WHERE run_id=?
+                ORDER BY id DESC
+                """,
+                (run_id,),
+            )
+            for row in rows:
+                if (record := self._record_or_none(row)) is not None:
+                    return record
+            return None
+
+        return await self._run_async_read(operation)
 
     def update(
         self,
@@ -454,7 +548,26 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def update_async(
         self, message_pool_id: str, **changes: object
     ) -> FeishuMessagePoolRecord:
-        return await self._call_sync_async(self.update, message_pool_id, **changes)
+        current = await self.get_async(message_pool_id)
+        if current is None:
+            raise KeyError(f"Unknown Feishu message pool id: {message_pool_id}")
+        update = dict(changes)
+        update.setdefault("updated_at", datetime.now(tz=timezone.utc))
+        next_record = current.model_copy(update=update)
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            await _update_message_pool_record_async(conn=conn, record=next_record)
+
+        await self._run_async_write(
+            operation_name="update_async",
+            operation=operation,
+        )
+        stored = await self.get_async(message_pool_id)
+        if stored is None:
+            raise RuntimeError(
+                f"Failed to reload Feishu message pool record {message_pool_id}"
+            )
+        return stored
 
     def count_active_chat_messages_ahead(self, message_pool_id: str) -> int:
         with self._lock:
@@ -475,9 +588,25 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
         return int(row["total"]) if row is not None else 0
 
     async def count_active_chat_messages_ahead_async(self, message_pool_id: str) -> int:
-        return await self._call_sync_async(
-            self.count_active_chat_messages_ahead, message_pool_id
-        )
+        async def operation(conn: aiosqlite.Connection) -> int:
+            row = await async_fetchone(
+                conn,
+                f"""
+                SELECT COUNT(*) AS total
+                FROM feishu_message_pool AS queued
+                JOIN feishu_message_pool AS current
+                    ON current.message_pool_id=?
+                WHERE queued.trigger_id=current.trigger_id
+                  AND queued.tenant_key=current.tenant_key
+                  AND queued.chat_id=current.chat_id
+                  AND queued.id < current.id
+                  AND queued.processing_status IN ({",".join("?" for _ in _ACTIVE_PROCESSING_STATUSES)})
+                """,
+                (message_pool_id, *_ACTIVE_PROCESSING_STATUSES),
+            )
+            return int(row["total"]) if row is not None else 0
+
+        return await self._run_async_read(operation)
 
     def list_ready_for_processing(
         self,
@@ -521,9 +650,46 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def list_ready_for_processing_async(
         self, *, ready_at: datetime, limit: int = 20
     ) -> tuple[FeishuMessagePoolRecord, ...]:
-        return await self._call_sync_async(
-            self.list_ready_for_processing, ready_at=ready_at, limit=limit
-        )
+        safe_limit = max(1, min(limit, 100))
+        active_placeholders = ",".join("?" for _ in _ACTIVE_PROCESSING_STATUSES)
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[FeishuMessagePoolRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                f"""
+                SELECT current.*
+                FROM feishu_message_pool AS current
+                WHERE current.processing_status IN (?, ?)
+                  AND current.next_attempt_at <= ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM feishu_message_pool AS earlier
+                      WHERE earlier.trigger_id=current.trigger_id
+                        AND earlier.tenant_key=current.tenant_key
+                        AND earlier.chat_id=current.chat_id
+                        AND earlier.id < current.id
+                        AND earlier.processing_status IN ({active_placeholders})
+                  )
+                ORDER BY current.id ASC
+                LIMIT ?
+                """,
+                (
+                    FeishuMessageProcessingStatus.QUEUED.value,
+                    FeishuMessageProcessingStatus.RETRYABLE_FAILED.value,
+                    ready_at.isoformat(),
+                    *_ACTIVE_PROCESSING_STATUSES,
+                    safe_limit,
+                ),
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def list_waiting_for_result(
         self,
@@ -552,7 +718,11 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def list_waiting_for_result_async(
         self, *, limit: int = 20
     ) -> tuple[FeishuMessagePoolRecord, ...]:
-        return await self._call_sync_async(self.list_waiting_for_result, limit=limit)
+        return await self._list_by_status_async(
+            status=FeishuMessageProcessingStatus.WAITING_RESULT.value,
+            status_column="processing_status",
+            limit=limit,
+        )
 
     def list_pending_acknowledgements(
         self,
@@ -581,9 +751,32 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def list_pending_acknowledgements_async(
         self, *, limit: int = 20
     ) -> tuple[FeishuMessagePoolRecord, ...]:
-        return await self._call_sync_async(
-            self.list_pending_acknowledgements, limit=limit
-        )
+        safe_limit = max(1, min(limit, 100))
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[FeishuMessagePoolRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM feishu_message_pool
+                WHERE ack_status=? AND ack_text IS NOT NULL
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (
+                    FeishuMessageDeliveryStatus.PENDING.value,
+                    safe_limit,
+                ),
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def list_pending_reactions(
         self,
@@ -612,7 +805,11 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def list_pending_reactions_async(
         self, *, limit: int = 20
     ) -> tuple[FeishuMessagePoolRecord, ...]:
-        return await self._call_sync_async(self.list_pending_reactions, limit=limit)
+        return await self._list_by_status_async(
+            status=FeishuMessageDeliveryStatus.PENDING.value,
+            status_column="reaction_status",
+            limit=limit,
+        )
 
     def list_active_chat_messages(
         self,
@@ -641,12 +838,29 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def list_active_chat_messages_async(
         self, *, trigger_id: str, tenant_key: str, chat_id: str
     ) -> tuple[FeishuMessagePoolRecord, ...]:
-        return await self._call_sync_async(
-            self.list_active_chat_messages,
-            trigger_id=trigger_id,
-            tenant_key=tenant_key,
-            chat_id=chat_id,
-        )
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[FeishuMessagePoolRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM feishu_message_pool
+                WHERE trigger_id=?
+                  AND tenant_key=?
+                  AND chat_id=?
+                  AND processing_status IN ({",".join("?" for _ in _ACTIVE_PROCESSING_STATUSES)})
+                ORDER BY id ASC
+                """,
+                (trigger_id, tenant_key, chat_id, *_ACTIVE_PROCESSING_STATUSES),
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def get_chat_status_counts(
         self,
@@ -687,12 +901,40 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def get_chat_status_counts_async(
         self, *, trigger_id: str, tenant_key: str, chat_id: str
     ) -> dict[FeishuMessageProcessingStatus, int]:
-        return await self._call_sync_async(
-            self.get_chat_status_counts,
-            trigger_id=trigger_id,
-            tenant_key=tenant_key,
-            chat_id=chat_id,
-        )
+        counts: dict[FeishuMessageProcessingStatus, int] = {
+            status: 0
+            for status in (
+                FeishuMessageProcessingStatus.QUEUED,
+                FeishuMessageProcessingStatus.CLAIMED,
+                FeishuMessageProcessingStatus.WAITING_RESULT,
+                FeishuMessageProcessingStatus.RETRYABLE_FAILED,
+                FeishuMessageProcessingStatus.CANCELLED,
+                FeishuMessageProcessingStatus.DEAD_LETTER,
+            )
+        }
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> dict[FeishuMessageProcessingStatus, int]:
+            rows = await async_fetchall(
+                conn,
+                f"""
+                SELECT processing_status, COUNT(*) AS total
+                FROM feishu_message_pool
+                WHERE trigger_id=?
+                  AND tenant_key=?
+                  AND chat_id=?
+                  AND processing_status IN ({",".join("?" for _ in _VISIBLE_QUEUE_STATUSES)})
+                GROUP BY processing_status
+                """,
+                (trigger_id, tenant_key, chat_id, *_VISIBLE_QUEUE_STATUSES),
+            )
+            for row in rows:
+                status = FeishuMessageProcessingStatus(str(row["processing_status"]))
+                counts[status] = int(row["total"])
+            return counts
+
+        return await self._run_async_read(operation)
 
     def cancel_active_chat_messages(
         self,
@@ -753,12 +995,46 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
     async def cancel_active_chat_messages_async(
         self, *, trigger_id: str, tenant_key: str, chat_id: str, cancelled_at: datetime
     ) -> int:
-        return await self._call_sync_async(
-            self.cancel_active_chat_messages,
-            trigger_id=trigger_id,
-            tenant_key=tenant_key,
-            chat_id=chat_id,
-            cancelled_at=cancelled_at,
+        async def operation(conn: aiosqlite.Connection) -> int:
+            cursor = await conn.execute(
+                f"""
+                UPDATE feishu_message_pool
+                SET
+                    processing_status=?,
+                    reaction_status=?,
+                    ack_status=?,
+                    final_reply_status=?,
+                    next_attempt_at=?,
+                    completed_at=?,
+                    updated_at=?,
+                    last_error=?
+                WHERE trigger_id=?
+                  AND tenant_key=?
+                  AND chat_id=?
+                  AND processing_status IN ({",".join("?" for _ in _ACTIVE_PROCESSING_STATUSES)})
+                """,
+                (
+                    FeishuMessageProcessingStatus.CANCELLED.value,
+                    FeishuMessageDeliveryStatus.SKIPPED.value,
+                    FeishuMessageDeliveryStatus.SKIPPED.value,
+                    FeishuMessageDeliveryStatus.SKIPPED.value,
+                    cancelled_at.isoformat(),
+                    cancelled_at.isoformat(),
+                    cancelled_at.isoformat(),
+                    "cleared_by_user",
+                    trigger_id,
+                    tenant_key,
+                    chat_id,
+                    *_ACTIVE_PROCESSING_STATUSES,
+                ),
+            )
+            affected = int(cursor.rowcount or 0)
+            await cursor.close()
+            return affected
+
+        return await self._run_async_write(
+            operation_name="cancel_active_chat_messages_async",
+            operation=operation,
         )
 
     def recover_stale_claims(self, *, claimed_before: datetime) -> int:
@@ -797,9 +1073,67 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
         return affected
 
     async def recover_stale_claims_async(self, *, claimed_before: datetime) -> int:
-        return await self._call_sync_async(
-            self.recover_stale_claims, claimed_before=claimed_before
+        async def operation(conn: aiosqlite.Connection) -> int:
+            cursor = await conn.execute(
+                """
+                UPDATE feishu_message_pool
+                SET
+                    processing_status=?,
+                    updated_at=?,
+                    last_claimed_at=NULL
+                WHERE processing_status=?
+                  AND last_claimed_at IS NOT NULL
+                  AND last_claimed_at < ?
+                """,
+                (
+                    FeishuMessageProcessingStatus.QUEUED.value,
+                    datetime.now(tz=timezone.utc).isoformat(),
+                    FeishuMessageProcessingStatus.CLAIMED.value,
+                    claimed_before.isoformat(),
+                ),
+            )
+            affected = int(cursor.rowcount or 0)
+            await cursor.close()
+            return affected
+
+        return await self._run_async_write(
+            operation_name="recover_stale_claims_async",
+            operation=operation,
         )
+
+    async def _list_by_status_async(
+        self,
+        *,
+        status_column: str,
+        status: str,
+        limit: int,
+    ) -> tuple[FeishuMessagePoolRecord, ...]:
+        safe_limit = max(1, min(limit, 100))
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[FeishuMessagePoolRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                f"""
+                SELECT *
+                FROM feishu_message_pool
+                WHERE {status_column}=?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (
+                    status,
+                    safe_limit,
+                ),
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def _row_to_record(self, row: sqlite3.Row) -> FeishuMessagePoolRecord:
         message_pool_id = require_persisted_identifier(
@@ -902,6 +1236,153 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
             _log_invalid_feishu_message_pool_row(row=row, error=exc)
             return None
+
+
+async def _insert_message_pool_record_async(
+    *, conn: aiosqlite.Connection, record: FeishuMessagePoolRecord
+) -> None:
+    cursor = await conn.execute(
+        """
+        INSERT INTO feishu_message_pool(
+            message_pool_id, trigger_id, trigger_name, tenant_key, chat_id,
+            chat_type, event_id, message_key, message_id, command_name,
+            sender_name, intent_text, payload_json, metadata_json,
+            processing_status, reaction_status, reaction_type,
+            reaction_attempts, ack_status, ack_text, final_reply_status, final_reply_text,
+            delivery_count, process_attempts, ack_attempts,
+            final_reply_attempts, session_id, run_id, next_attempt_at,
+            last_claimed_at, last_error, created_at, updated_at, completed_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record.message_pool_id,
+            record.trigger_id,
+            record.trigger_name,
+            record.tenant_key,
+            record.chat_id,
+            record.chat_type,
+            record.event_id,
+            record.message_key,
+            record.message_id,
+            record.command_name,
+            record.sender_name,
+            record.intent_text,
+            json.dumps(record.payload),
+            json.dumps(record.metadata),
+            record.processing_status.value,
+            record.reaction_status.value,
+            record.reaction_type,
+            record.reaction_attempts,
+            record.ack_status.value,
+            record.ack_text,
+            record.final_reply_status.value,
+            record.final_reply_text,
+            record.delivery_count,
+            record.process_attempts,
+            record.ack_attempts,
+            record.final_reply_attempts,
+            record.session_id,
+            record.run_id,
+            record.next_attempt_at.isoformat(),
+            record.last_claimed_at.isoformat()
+            if record.last_claimed_at is not None
+            else None,
+            record.last_error,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+            record.completed_at.isoformat()
+            if record.completed_at is not None
+            else None,
+        ),
+    )
+    await cursor.close()
+
+
+async def _update_message_pool_record_async(
+    *, conn: aiosqlite.Connection, record: FeishuMessagePoolRecord
+) -> None:
+    cursor = await conn.execute(
+        """
+        UPDATE feishu_message_pool
+        SET
+            trigger_id=?,
+            trigger_name=?,
+            tenant_key=?,
+            chat_id=?,
+            chat_type=?,
+            event_id=?,
+            message_key=?,
+            message_id=?,
+            command_name=?,
+            sender_name=?,
+            intent_text=?,
+            payload_json=?,
+            metadata_json=?,
+            processing_status=?,
+            reaction_status=?,
+            reaction_type=?,
+            reaction_attempts=?,
+            ack_status=?,
+            ack_text=?,
+            final_reply_status=?,
+            final_reply_text=?,
+            delivery_count=?,
+            process_attempts=?,
+            ack_attempts=?,
+            final_reply_attempts=?,
+            session_id=?,
+            run_id=?,
+            next_attempt_at=?,
+            last_claimed_at=?,
+            last_error=?,
+            created_at=?,
+            updated_at=?,
+            completed_at=?
+        WHERE message_pool_id=?
+        """,
+        (
+            record.trigger_id,
+            record.trigger_name,
+            record.tenant_key,
+            record.chat_id,
+            record.chat_type,
+            record.event_id,
+            record.message_key,
+            record.message_id,
+            record.command_name,
+            record.sender_name,
+            record.intent_text,
+            json.dumps(record.payload),
+            json.dumps(record.metadata),
+            record.processing_status.value,
+            record.reaction_status.value,
+            record.reaction_type,
+            record.reaction_attempts,
+            record.ack_status.value,
+            record.ack_text,
+            record.final_reply_status.value,
+            record.final_reply_text,
+            record.delivery_count,
+            record.process_attempts,
+            record.ack_attempts,
+            record.final_reply_attempts,
+            record.session_id,
+            record.run_id,
+            record.next_attempt_at.isoformat(),
+            record.last_claimed_at.isoformat()
+            if record.last_claimed_at is not None
+            else None,
+            record.last_error,
+            record.created_at.isoformat(),
+            record.updated_at.isoformat(),
+            record.completed_at.isoformat()
+            if record.completed_at is not None
+            else None,
+            record.message_pool_id,
+        ),
+    )
+    await cursor.close()
 
 
 def _load_json_object(value: object, *, field_name: str) -> dict[str, JsonValue]:

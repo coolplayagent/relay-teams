@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.gateway.gateway_models import (
@@ -16,7 +17,11 @@ from relay_teams.gateway.gateway_models import (
     GatewaySessionRecord,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.validation import (
     normalize_persisted_text,
     parse_persisted_datetime_or_none,
@@ -124,7 +129,63 @@ class GatewaySessionRepository(SharedSqliteRepository):
         return record
 
     async def create_async(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
-        return await self._call_sync_async(self.create, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO gateway_sessions(
+                    gateway_session_id,
+                    channel_type,
+                    external_session_id,
+                    internal_session_id,
+                    active_run_id,
+                    peer_user_id,
+                    peer_chat_id,
+                    cwd,
+                    capabilities_json,
+                    channel_state_json,
+                    session_mcp_servers_json,
+                    mcp_connections_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.gateway_session_id,
+                    record.channel_type.value,
+                    record.external_session_id,
+                    record.internal_session_id,
+                    record.active_run_id,
+                    record.peer_user_id,
+                    record.peer_chat_id,
+                    record.cwd,
+                    json.dumps(record.capabilities, ensure_ascii=False),
+                    json.dumps(record.channel_state, ensure_ascii=False),
+                    json.dumps(
+                        [
+                            item.model_dump(mode="json")
+                            for item in record.session_mcp_servers
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        [
+                            item.model_dump(mode="json")
+                            for item in record.mcp_connections
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="create_async",
+            operation=operation,
+        )
+        return record
 
     def get(self, gateway_session_id: str) -> GatewaySessionRecord:
         row = self._run_read(
@@ -142,7 +203,23 @@ class GatewaySessionRepository(SharedSqliteRepository):
             raise KeyError(f"Unknown gateway_session_id: {gateway_session_id}") from exc
 
     async def get_async(self, gateway_session_id: str) -> GatewaySessionRecord:
-        return await self._call_sync_async(self.get, gateway_session_id)
+        async def operation(conn: aiosqlite.Connection) -> GatewaySessionRecord:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM gateway_sessions WHERE gateway_session_id=?",
+                (gateway_session_id,),
+            )
+            if row is None:
+                raise KeyError(f"Unknown gateway_session_id: {gateway_session_id}")
+            try:
+                return self._to_record(row)
+            except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+                _log_invalid_gateway_session_row(row=row, error=exc)
+                raise KeyError(
+                    f"Unknown gateway_session_id: {gateway_session_id}"
+                ) from exc
+
+        return await self._run_async_read(operation)
 
     def get_by_external(
         self,
@@ -166,11 +243,22 @@ class GatewaySessionRepository(SharedSqliteRepository):
     async def get_by_external_async(
         self, *, channel_type: GatewayChannelType, external_session_id: str
     ) -> GatewaySessionRecord | None:
-        return await self._call_sync_async(
-            self.get_by_external,
-            channel_type=channel_type,
-            external_session_id=external_session_id,
-        )
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> GatewaySessionRecord | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT * FROM gateway_sessions
+                WHERE channel_type=? AND external_session_id=?
+                """,
+                (channel_type.value, external_session_id),
+            )
+            if row is None:
+                return None
+            return self._record_or_none(row, fallback_invalid_timestamps=True)
+
+        return await self._run_async_read(operation)
 
     def get_by_internal_session_id(
         self,
@@ -195,9 +283,25 @@ class GatewaySessionRepository(SharedSqliteRepository):
     async def get_by_internal_session_id_async(
         self, internal_session_id: str
     ) -> GatewaySessionRecord | None:
-        return await self._call_sync_async(
-            self.get_by_internal_session_id, internal_session_id
-        )
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> GatewaySessionRecord | None:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT * FROM gateway_sessions
+                WHERE internal_session_id=?
+                ORDER BY updated_at DESC
+                """,
+                (internal_session_id,),
+            )
+            for row in rows:
+                record = self._record_or_none(row, fallback_invalid_timestamps=True)
+                if record is not None:
+                    return record
+            return None
+
+        return await self._run_async_read(operation)
 
     def update(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
         rowcount = self._run_write(
@@ -253,7 +357,61 @@ class GatewaySessionRepository(SharedSqliteRepository):
         return record
 
     async def update_async(self, record: GatewaySessionRecord) -> GatewaySessionRecord:
-        return await self._call_sync_async(self.update, record)
+        async def operation(conn: aiosqlite.Connection) -> int:
+            cursor = await conn.execute(
+                """
+                UPDATE gateway_sessions
+                SET external_session_id=?,
+                    internal_session_id=?,
+                    active_run_id=?,
+                    peer_user_id=?,
+                    peer_chat_id=?,
+                    cwd=?,
+                    capabilities_json=?,
+                    channel_state_json=?,
+                    session_mcp_servers_json=?,
+                    mcp_connections_json=?,
+                    updated_at=?
+                WHERE gateway_session_id=?
+                """,
+                (
+                    record.external_session_id,
+                    record.internal_session_id,
+                    record.active_run_id,
+                    record.peer_user_id,
+                    record.peer_chat_id,
+                    record.cwd,
+                    json.dumps(record.capabilities, ensure_ascii=False),
+                    json.dumps(record.channel_state, ensure_ascii=False),
+                    json.dumps(
+                        [
+                            item.model_dump(mode="json")
+                            for item in record.session_mcp_servers
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        [
+                            item.model_dump(mode="json")
+                            for item in record.mcp_connections
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    record.updated_at.isoformat(),
+                    record.gateway_session_id,
+                ),
+            )
+            updated_count = int(cursor.rowcount or 0)
+            await cursor.close()
+            return updated_count
+
+        rowcount = await self._run_async_write(
+            operation_name="update_async",
+            operation=operation,
+        )
+        if rowcount == 0:
+            raise KeyError(f"Unknown gateway_session_id: {record.gateway_session_id}")
+        return record
 
     def list_all(self) -> tuple[GatewaySessionRecord, ...]:
         rows = self._run_read(
@@ -266,7 +424,20 @@ class GatewaySessionRepository(SharedSqliteRepository):
         )
 
     async def list_all_async(self) -> tuple[GatewaySessionRecord, ...]:
-        return await self._call_sync_async(self.list_all)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[GatewaySessionRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                "SELECT * FROM gateway_sessions ORDER BY created_at DESC",
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def _to_record(
         self,
