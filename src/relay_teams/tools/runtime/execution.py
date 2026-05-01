@@ -514,15 +514,6 @@ async def execute_tool(
                 execution_status=ToolExecutionStatus.COMPLETED,
                 tool_content_parts=tool_content_parts,
             )
-            await _record_security_audit_event_async(
-                ctx=ctx,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                tool_input=effective_tool_input,
-                visible_envelope=envelope,
-                internal_data=internal_data,
-                execution_status=ToolExecutionStatus.COMPLETED,
-            )
             await _record_tool_metrics_async(
                 ctx=ctx,
                 tool_name=tool_name,
@@ -533,6 +524,15 @@ async def execute_tool(
                 await ctx.deps.approval_ticket_repo.mark_completed_async(
                     approval_ticket_id
                 )
+            await _record_security_audit_event_async(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_input=effective_tool_input,
+                visible_envelope=envelope,
+                internal_data=internal_data,
+                execution_status=ToolExecutionStatus.COMPLETED,
+            )
             if tool_return_content is not None:
                 return ToolReturn(
                     return_value=envelope,

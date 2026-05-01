@@ -334,6 +334,48 @@ def test_execute_tool_records_failed_audit_when_success_persistence_fails(
     assert page.items[0].outcome == "failed"
 
 
+def test_execute_tool_records_failed_audit_when_approval_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_repository = AuditEventRepository(tmp_path / "audit.db")
+    deps = _deps_with_audit(tmp_path, audit_repository)
+    deps.tool_approval_policy = _FakePolicy(needs_approval=True)
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-shell-cleanup"
+
+    async def fail_mark_completed(tool_call_id: str) -> object:
+        assert tool_call_id == "call-shell-cleanup"
+        raise RuntimeError("approval cleanup unavailable")
+
+    monkeypatch.setattr(
+        deps.approval_ticket_repo,
+        "mark_completed_async",
+        fail_mark_completed,
+    )
+
+    with pytest.raises(RuntimeError, match="approval cleanup unavailable"):
+        asyncio.run(
+            execute_tool(
+                cast(ToolContext, cast(object, ctx)),
+                tool_name="shell",
+                args_summary={"command": "uv run pytest"},
+                tool_input={"command": "uv run pytest"},
+                action=lambda: ToolResultProjection(
+                    visible_data={"status": "completed", "exit_code": 0},
+                    internal_data={"status": "completed", "exit_code": 0},
+                ),
+            )
+        )
+
+    page = audit_repository.list_events(
+        AuditEventFilter(event_type=AuditEventType.SHELL_COMMAND)
+    )
+    assert len(page.items) == 1
+    assert page.items[0].command == "uv run pytest"
+    assert page.items[0].outcome == "failed"
+
+
 def _deps_with_audit(
     tmp_path: Path,
     audit_repository: AuditEventRepository,

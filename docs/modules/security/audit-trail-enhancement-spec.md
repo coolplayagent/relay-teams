@@ -35,7 +35,7 @@ Raw file content is never stored in audit rows. Dispatch reasons are capped at 4
 
 ## Runtime Integration
 
-Audit recording is centralized in `relay_teams.tools.runtime.execution` after hook rewriting has produced the effective tool input. The runtime records successful audit events after the tool result envelope is persisted so persistence failures do not create contradictory completed and failed audit rows. Audit persistence failures are logged without failing the user-visible tool result.
+Audit recording is centralized in `relay_teams.tools.runtime.execution` after hook rewriting has produced the effective tool input. The runtime records successful audit events after the tool result envelope is persisted and post-run cleanup completes so persistence or cleanup failures do not create contradictory completed and failed audit rows. Audit persistence failures are logged without failing the user-visible tool result.
 
 The audit service is carried on `ToolDeps` as an optional backend dependency. Agent tools do not expose any audit mutation function, and the repository has no update/delete API.
 
@@ -48,7 +48,7 @@ The tool runtime builds audit events from the effective tool input and the persi
 - shell command events capture the command and selected execution metadata without storing stdout/stderr bodies;
 - Coordinator dispatch events capture the selected task/role target and a bounded dispatch reason.
 
-Successful audit rows are written only after tool result persistence succeeds. If result persistence fails, the failure path records one failed audit row for the same action. If audit persistence itself fails, the runtime logs `security.audit.record_failed` and preserves the user-visible tool outcome.
+Successful audit rows are written only after tool result persistence and approval-ticket cleanup succeed. If result persistence or cleanup fails, the failure path records one failed audit row for the same action. If audit persistence itself fails, the runtime logs `security.audit.record_failed` and preserves the user-visible tool outcome.
 
 ## API
 
@@ -69,6 +69,6 @@ Unit coverage includes:
 - repository append/filter/pagination
 - API route filtering and validation
 - UTC time filtering, dirty persisted value conversion, and missing-row behavior
-- tool runtime audit creation for file write variants, worker-thread digest calculation, shell command, Coordinator dispatch decision, persistence-failure ordering, and audit-write failure isolation
+- tool runtime audit creation for file write variants, worker-thread digest calculation, shell command, Coordinator dispatch decision, persistence/cleanup-failure ordering, and audit-write failure isolation
 
 End-to-end acceptance should start the FastAPI app, call `/api/audit` through a browser context, and confirm the endpoint returns the immutable audit page shape.
