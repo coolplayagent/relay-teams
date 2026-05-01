@@ -3,10 +3,17 @@ from __future__ import annotations
 
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractInvariant,
+    RoleContractInvariantType,
+)
 from relay_teams.roles.runtime_tools import (
     role_with_runtime_tools,
+    runtime_denied_tools_for_role,
     runtime_tools_for_role,
     strip_coordinator_only_tools,
+    strip_contract_denied_tools,
 )
 
 
@@ -114,3 +121,45 @@ def test_strip_coordinator_only_tools_removes_orchestration_tools() -> None:
         "read",
         "shell",
     )
+
+
+def test_runtime_tools_filter_contract_denied_tools() -> None:
+    registry = RoleRegistry()
+    registry.register(
+        RoleDefinition(
+            role_id="Coordinator",
+            name="Coordinator",
+            description="Coordinates work.",
+            version="1",
+            tools=("orch_dispatch_task",),
+            system_prompt="Coordinate.",
+        )
+    )
+    reviewer = RoleDefinition(
+        role_id="Reviewer",
+        name="Reviewer",
+        description="Reviews work.",
+        version="1",
+        tools=("read", "write_tmp", "shell"),
+        contract=RoleContract(
+            invariants=(
+                RoleContractInvariant(
+                    invariant=RoleContractInvariantType.MUST_NOT_HAVE_TOOLS,
+                    tools=("write_tmp", "shell"),
+                ),
+            ),
+        ),
+        system_prompt="Review.",
+    )
+
+    assert runtime_denied_tools_for_role(reviewer) == ("write_tmp", "shell")
+    assert strip_contract_denied_tools(
+        role=reviewer,
+        tools=reviewer.tools,
+        consumer="test",
+    ) == ("read",)
+    assert runtime_tools_for_role(
+        role_registry=registry,
+        role=reviewer,
+        consumer="test",
+    ) == ("read",)

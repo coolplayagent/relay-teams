@@ -15,6 +15,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Orchestration policy](modules/agents/orchestration-policy-design.md)
 - [Verification evidence and semantic checks](modules/agents/verification-evidence-semantic-spec.md)
 - [SP-2 role contracts](modules/agents/sp2-role-contracts-spec.md)
+- [SG-2 role behavior boundaries](modules/agents/sg2-role-behavior-boundaries-spec.md)
 - [Automation](modules/automation/ao4-async-path-unification.md)
 - [CLI commands](modules/cli/commands.md)
 - [Frontend](modules/frontend/README.md)

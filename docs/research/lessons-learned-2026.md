@@ -635,6 +635,10 @@ Crafter 在执行复杂任务时依赖单一 LLM 会话上下文。虽然存在 
 
 将角色的"禁区"约束从 prompt 层提升到工具注册层——为每个角色定义"工具调用的运行时权限策略"（existing `runtime/policy` 模块的增强版）。例如，Gater 角色的策略在运行时拦截所有 write 类工具调用，Designer 角色拦截所有 `shell` 工具调用。这实际上是现有 `tools/runtime/` 中策略机制的深化——从审批模式扩展到强制拒绝模式。
 
+#### 落地状态
+
+2026-05-01 已落地 SG-2 基础强制执行：`must_not_have_tools` 不变量会在运行时工具注册和共享工具执行策略中同时生效，脏的既有角色配置不会阻断启动，但被合约禁止的工具会被过滤并记录警告；旧的 runtime tool snapshot 也不能重新授予被合约禁止的工具。内置 Gater 已关闭 `shell` 与 `write_tmp`，只保留读取、后台任务观察和监控控制能力。设计与实现规格见 [`docs/modules/agents/sg2-role-behavior-boundaries-spec.md`](../modules/agents/sg2-role-behavior-boundaries-spec.md)。
+
 ---
 
 ### SG-3：审计追踪增强
