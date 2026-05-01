@@ -7,7 +7,12 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-from pydantic_ai.messages import FunctionToolResultEvent, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    FunctionToolResultEvent,
+    SystemPromptPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 
 from relay_teams.agents.execution import session_runtime as session_runtime_module
 from relay_teams.agents.tasks.models import (
@@ -816,6 +821,53 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
     None
 ):
     session = object.__new__(AgentLlmSession)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Implement API",
+        verification=VerificationPlan(),
+        spec=TaskSpec(requirements=("keep retry fallback available",)),
+        lifecycle=TaskLifecyclePolicy(
+            spec_checkpoint=SpecCheckpointPolicy(
+                refresh_interval_tool_calls=99,
+                refresh_interval_messages=1,
+                refresh_interval_history_tokens=999_999,
+            )
+        ),
+    )
+
+    class _TaskRepo:
+        async def get_async(self, task_id: str) -> TaskRecord:
+            assert task_id == "task-1"
+            return TaskRecord(envelope=task)
+
+    class _SpecCheckpointMessageRepo(_FakeMessageRepo):
+        async def append_system_prompt_if_missing_async(
+            self,
+            *,
+            session_id: str,
+            workspace_id: str,
+            conversation_id: str,
+            agent_role_id: str,
+            instance_id: str,
+            task_id: str,
+            trace_id: str,
+            content: str,
+        ) -> bool:
+            _ = (
+                session_id,
+                workspace_id,
+                conversation_id,
+                agent_role_id,
+                instance_id,
+                task_id,
+                trace_id,
+            )
+            self.appended_system_prompts.append(content)
+            return True
+
+    message_repo = _SpecCheckpointMessageRepo(history=[])
     session.__dict__["_config"] = ModelEndpointConfig(
         model="primary-model",
         base_url="https://example.test/v1",
@@ -829,12 +881,10 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
     session.__dict__["_allowed_tools"] = ()
     session.__dict__["_allowed_mcp_servers"] = ()
     session.__dict__["_allowed_skills"] = ()
-    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_task_repo"] = _TaskRepo()
     session.__dict__["_shared_store"] = cast(object, None)
     session.__dict__["_event_bus"] = cast(object, None)
-    session.__dict__["_message_repo"] = cast(
-        MessageRepository, _FakeMessageRepo(history=[])
-    )
+    session.__dict__["_message_repo"] = cast(MessageRepository, message_repo)
     session.__dict__["_approval_ticket_repo"] = cast(object, None)
     session.__dict__["_run_runtime_repo"] = cast(object, None)
     session.__dict__["_injection_manager"] = type(
@@ -943,9 +993,20 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
 
     async def _build_agent_iteration_context(
         **kwargs: object,
-    ) -> tuple[str, list[object], str, object]:
+    ) -> tuple[str, list[ModelRequest], str, object]:
         _ = kwargs
-        return "", [], "System prompt", _FailingAgent()
+        history = [ModelRequest(parts=[UserPromptPart(content="existing progress")])]
+        if message_repo.appended_system_prompts:
+            history.append(
+                ModelRequest(
+                    parts=[
+                        SystemPromptPart(
+                            content=message_repo.appended_system_prompts[-1]
+                        )
+                    ]
+                )
+            )
+        return "", history, "System prompt", _FailingAgent()
 
     session.__dict__["_build_agent_iteration_context"] = _build_agent_iteration_context
 
@@ -956,6 +1017,7 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
         )
 
     assert len(fallback_exhausted_calls) == 1
+    assert len(message_repo.appended_system_prompts) == 1
     assert retry_scheduled_calls == []
     assert retry_exhausted_calls == []
 

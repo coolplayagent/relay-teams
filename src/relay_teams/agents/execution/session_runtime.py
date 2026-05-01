@@ -728,7 +728,6 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 nonlocal coordination_agent
                 nonlocal seen_count
                 nonlocal buffered_messages
-                nonlocal attempt_messages_committed
 
                 decision = await _build_spec_checkpoint_decision_async(
                     task_repo=self._task_repo,
@@ -802,7 +801,6 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 coordination_agent = cast(CoordinationAgent, rebuilt_agent)
                 seen_count = 0
                 buffered_messages = []
-                attempt_messages_committed = True
                 return True
 
             async def process_safe_boundary(
