@@ -1,10 +1,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.enums import (
+    FormalVerificationLanguage,
+    FormalVerificationToolProfile,
+    TaskSpecSyncStatus,
+    TaskStatus,
+    VerificationLayer,
+)
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
-from relay_teams.agents.tasks.ids import TaskId, new_task_id
+from relay_teams.agents.tasks.ids import (
+    TaskId,
+    TaskSpecArtifactId,
+    new_task_id,
+    new_task_spec_artifact_id,
+)
 from relay_teams.agents.tasks.models import (
+    FormalVerificationPlan,
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
     SpecCheckpointPolicy,
@@ -13,6 +25,7 @@ from relay_teams.agents.tasks.models import (
     TaskLifecyclePolicy,
     TaskRecord,
     TaskSpec,
+    TaskSpecArtifact,
     VerificationCommand,
     VerificationCheckResult,
     VerificationEvidenceBundle,
@@ -30,6 +43,9 @@ __all__ = [
     "EventType",
     "SemanticEvaluationRequest",
     "SemanticEvaluationResult",
+    "FormalVerificationLanguage",
+    "FormalVerificationPlan",
+    "FormalVerificationToolProfile",
     "SpecCheckpointPolicy",
     "TaskEnvelope",
     "TaskHandoff",
@@ -38,6 +54,9 @@ __all__ = [
     "TaskRecord",
     "TaskRepository",
     "TaskSpec",
+    "TaskSpecArtifact",
+    "TaskSpecArtifactId",
+    "TaskSpecSyncStatus",
     "TaskStatus",
     "VerificationCommand",
     "VerificationCheckResult",
@@ -45,8 +64,10 @@ __all__ = [
     "VerificationEvidenceItem",
     "VerificationEvidenceLink",
     "VerificationEvidenceMetric",
+    "VerificationLayer",
     "VerificationPlan",
     "VerificationReport",
     "VerificationResult",
     "new_task_id",
+    "new_task_spec_artifact_id",
 ]

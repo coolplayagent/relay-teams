@@ -31,6 +31,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         objective: str | None = None,
         title: str | None = None,
         spec: TaskSpec | None = None,
+        spec_artifact_id: str | None = None,
+        spec_source_task_id: str | None = None,
         verification: VerificationPlan | None = None,
         lifecycle: TaskLifecyclePolicy | None = None,
         handoff: TaskHandoff | None = None,
@@ -55,6 +57,10 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                         None
                         if spec_value is None
                         else TaskSpec.model_validate(spec_value)
+                    ),
+                    spec_artifact_id=_optional_text(tool_input.get("spec_artifact_id")),
+                    spec_source_task_id=_optional_text(
+                        tool_input.get("spec_source_task_id")
                     ),
                     verification=(
                         None
@@ -82,6 +88,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "has_objective": objective is not None,
                 "has_title": title is not None,
                 "has_spec": spec is not None,
+                "has_spec_artifact_id": spec_artifact_id is not None,
+                "has_spec_source_task_id": spec_source_task_id is not None,
                 "has_verification": verification is not None,
                 "has_lifecycle": lifecycle is not None,
                 "has_handoff": handoff is not None,

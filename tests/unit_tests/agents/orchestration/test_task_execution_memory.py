@@ -667,6 +667,12 @@ def test_resolve_turn_objective_appends_task_contract_sections() -> None:
             "spec": TaskSpec(
                 summary="Ship task contracts",
                 requirements=("persist spec",),
+                entities=("TaskEnvelope",),
+                approach=("derive verification from the spec",),
+                structure=("agents/tasks models own the contract",),
+                operations=("persist spec artifact",),
+                norms=("use Pydantic models",),
+                safeguards=("preserve source task links",),
                 constraints=("use typed models",),
                 acceptance_criteria=("contract prompt visible",),
                 out_of_scope=("frontend redesign",),
@@ -674,6 +680,8 @@ def test_resolve_turn_objective_appends_task_contract_sections() -> None:
                 evidence_expectations=("coverage output",),
                 strictness=TaskSpecStrictness.HIGH,
             ),
+            "spec_artifact_id": "spec-1",
+            "spec_source_task_id": "task-designer",
             "lifecycle": TaskLifecyclePolicy(
                 timeout_seconds=90,
                 heartbeat_interval_seconds=15,
@@ -688,14 +696,25 @@ def test_resolve_turn_objective_appends_task_contract_sections() -> None:
     )
 
     assert objective.startswith("write the result\n\n## Task Spec")
+    assert "- Spec Artifact ID: spec-1" in objective
+    assert "- Spec Source Task ID: task-designer" in objective
     assert "- Summary: Ship task contracts" in objective
     assert "  - persist spec" in objective
+    assert "  - TaskEnvelope" in objective
+    assert "  - derive verification from the spec" in objective
+    assert "  - agents/tasks models own the contract" in objective
+    assert "  - persist spec artifact" in objective
+    assert "  - use Pydantic models" in objective
+    assert "  - preserve source task links" in objective
     assert "  - use typed models" in objective
     assert "  - contract prompt visible" in objective
     assert "  - frontend redesign" in objective
     assert "  - pytest tests/unit_tests/agents/tasks" in objective
     assert "  - coverage output" in objective
     assert "- Strictness: high" in objective
+    assert "- Prompt Artifact Version: 1" in objective
+    assert "- Prompt/Code Sync Status: unknown" in objective
+    assert "- Completion Evidence:" in objective
     assert "## Task Lifecycle" in objective
     assert "- Timeout Seconds: 90" in objective
     assert "- Heartbeat Interval Seconds: 15" in objective

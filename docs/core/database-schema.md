@@ -11,7 +11,7 @@
 
 - SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
 - Optional identifier fields still allow real `NULL` at the API and model layer.
-- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `run_todos`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, and `wechat_accounts`.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `run_todos`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, `wechat_accounts`, and `task_spec_artifacts`.
 - When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
 
 ---
@@ -184,6 +184,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_trace ON tasks(trace_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_session_trace
+    ON tasks(session_id, trace_id, created_at);
 ```
 
 Purpose: task runtime snapshot.
@@ -209,14 +211,60 @@ Required fields:
 - `objective: string`
 - `verification: { checklist: string[] }`
 
+Optional fields:
+- `spec: TaskSpec | null`
+- `spec_artifact_id: string | null`
+- `spec_source_task_id: string | null`
+- `evidence_bundle: VerificationEvidenceBundle | null`
+- `lifecycle: TaskLifecyclePolicy`
+- `handoff: TaskHandoff | null`
+- `depends_on_task_ids: string[]`
+
 Notes:
 - `role_id` is the execution target for the task.
 - `title` is a persisted task summary used by session projections and task APIs.
 - `lifecycle.spec_checkpoint` is stored inside `envelope_json` and controls automatic Spec Checkpoint refresh thresholds for long non-coordinator executions.
+- `spec_artifact_id` links the task envelope to the current versioned row in `task_spec_artifacts`.
+- `spec_source_task_id` records the upstream task whose specification this task derives from.
+- `evidence_bundle` stores normalized verification evidence generated from checklist, file, command, spec, and formal-verification checks.
 - The system no longer stores workflow graphs. `tasks` is the only orchestration source of truth.
 - Role behavioral contracts are not copied into `tasks.envelope_json`. The task
   stores only the selected `role_id`; dispatch and verification resolve the
   current role definition and apply its `contract` at runtime.
+
+---
+
+### 2.3.1 `task_spec_artifacts`
+
+```sql
+CREATE TABLE IF NOT EXISTS task_spec_artifacts (
+    artifact_id    TEXT PRIMARY KEY,
+    task_id        TEXT NOT NULL,
+    trace_id       TEXT NOT NULL,
+    session_id     TEXT NOT NULL,
+    source_task_id TEXT,
+    spec_json      TEXT NOT NULL,
+    version        INTEGER NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_spec_artifacts_task
+    ON task_spec_artifacts(task_id, version);
+CREATE INDEX IF NOT EXISTS idx_task_spec_artifacts_session
+    ON task_spec_artifacts(session_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_task_spec_artifacts_trace
+    ON task_spec_artifacts(trace_id, updated_at);
+```
+
+Purpose: durable, versioned task specifications. A task envelope carries the currently bound `spec_artifact_id`; the artifact table keeps the persisted spec payload stable for audit, prompt reconstruction, and downstream source links.
+
+Notes:
+- `artifact_id` is generated as `spec-{uuid}`.
+- `version` increments per task when a task spec changes.
+- `source_task_id` links derived tasks back to the upstream spec-bearing task.
+- `spec_json` stores `TaskSpec`, including REASONS Canvas fields, prompt/code sync status, strictness, evidence expectations, and optional formal verification plan metadata.
+- Deleting a task or session removes its associated spec artifact rows.
 
 ---
 
@@ -720,8 +768,9 @@ Notes:
 
 Primary query keys used by repositories:
 - `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `security_audit_events`, `messages`, `session_history_markers`, `token_usage`, `background_tasks`, `run_todos`.
-- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `security_audit_events`, `messages`, `token_usage`, `background_tasks`, `run_todos`.
-- `task_id`: task-level retrieval and task assignment tracking.
+- `trace_id` (`run_id`): run-level retrieval across `tasks`, `task_spec_artifacts`, `events`, `security_audit_events`, `messages`, `token_usage`, `background_tasks`, `run_todos`.
+- `task_id`: task-level retrieval and task assignment/spec tracking.
+- `artifact_id`: task spec artifact lookup.
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: Feishu-account scoped retrieval across `external_session_bindings`, `feishu_message_pool`.
 - `event_id`: message/event/audit level retrieval for audit and replay preparation.
@@ -745,7 +794,7 @@ Primary query keys used by repositories:
 - `relay_teams.audit`: `security_audit_events`.
 - `relay_teams.monitors`: `monitor_subscriptions`, `monitor_triggers`.
 - `relay_teams.agents`: `agent_instances`.
-- `relay_teams.agents.tasks`: `tasks`.
+- `relay_teams.agents.tasks`: `tasks`, `task_spec_artifacts`.
 - `relay_teams.agents.execution`: `messages`.
 - `relay_teams.tools.runtime`: `approval_tickets`.
 - `relay_teams.tools.workspace_tools`: `shell_approval_grants`.

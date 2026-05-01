@@ -635,13 +635,21 @@ export function createLiveRound(runId, intentText, intentParts = null) {
     }
 }
 
-export function showPendingRunStartPlaceholder(sessionId, intentText, intentParts = null) {
+export function showPendingRunStartPlaceholder(sessionId, intentText, intentParts = null, options = {}) {
     const safeSessionId = String(sessionId || '').trim();
-    if (!safeSessionId || safeSessionId !== String(state.currentSessionId || '').trim()) {
-        return;
-    }
     const container = els.chatMessages;
     if (!container) {
+        return;
+    }
+    const allowDraft = options?.allowDraft === true
+        && !!container.querySelector?.('.new-session-draft-page');
+    if (
+        !allowDraft
+        && (
+            !safeSessionId
+            || safeSessionId !== String(state.currentSessionId || '').trim()
+        )
+    ) {
         return;
     }
     renderRunStartPlaceholder(container, intentText, intentParts);

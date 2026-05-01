@@ -165,6 +165,87 @@ function createNode() {
     assert payload["summaryStatus"] == "Completed"
 
 
+def test_agent_panel_summary_shows_spec_and_evidence_bundle(
+    tmp_path: Path,
+) -> None:
+    payload = _run_history_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { syncAgentPanelState } = await import('./history.mjs');
+const { state } = await import('./mockState.mjs');
+const { setPanel } = await import('./mockPanelState.mjs');
+
+state.sessionTasks = [
+    {
+        task_id: 'task-spec',
+        title: 'Implement contract',
+        role_id: 'writer',
+        status: 'completed',
+        instance_id: 'inst-1',
+        run_id: 'run-1',
+        updated_at: '2026-03-16T08:20:00Z',
+        spec_artifact_id: 'spec-1234567890abcdef',
+        spec_strictness: 'high',
+        evidence_bundle: {
+            items: [
+                { passed: true },
+                { passed: false },
+                { passed: true },
+            ],
+        },
+    },
+];
+
+const panelEl = createPanelElement();
+setPanel('inst-1', {
+    panelEl,
+    scrollEl: panelEl.querySelector('.agent-panel-scroll'),
+    loadedSessionId: 'session-1',
+    loadedRunId: 'run-1',
+});
+
+syncAgentPanelState('inst-1', 'writer');
+
+console.log(JSON.stringify({
+    tasksHtml: panelEl.querySelector('.agent-panel-summary-tasks').innerHTML,
+}));
+
+function createPanelElement() {
+    return {
+        _nodes: new Map([
+            ['.agent-panel-scroll', createNode()],
+            ['.agent-panel-runtime-prompt-meta', createNode()],
+            ['.agent-panel-runtime-prompt-body', createNode()],
+            ['.agent-panel-runtime-tools-meta', createNode()],
+            ['.agent-panel-runtime-tools-body', createNode()],
+            ['.agent-panel-reflection-meta', createNode()],
+            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-summary-status', createNode()],
+            ['.agent-panel-summary-updated', createNode()],
+            ['.agent-panel-summary-tasks', createNode()],
+        ]),
+        querySelector(selector) {
+            return this._nodes.get(selector) || null;
+        },
+    };
+}
+
+function createNode() {
+    return {
+        innerHTML: '',
+        textContent: '',
+        className: '',
+        dataset: {},
+    };
+}
+""".strip(),
+    )
+
+    tasks_html = cast(str, payload["tasksHtml"])
+    assert "Spec: spec-1234...cdef / high" in tasks_html
+    assert "Evidence: 2/3" in tasks_html
+
+
 def test_sync_agent_panel_state_hides_coordinator_tools_for_non_coordinator(
     tmp_path: Path,
 ) -> None:
@@ -549,6 +630,9 @@ const translations = {
     "subagent.no_reflection_memory": "No reflection memory yet.",
     "subagent.no_tasks": "No delegated tasks yet.",
     "subagent.task": "Task",
+    "subagent.spec": "Spec",
+    "subagent.spec_bound": "bound",
+    "subagent.evidence": "Evidence",
     "subagent.task_prompt": "Task Prompt",
     "subagent.status_idle": "Idle",
 };

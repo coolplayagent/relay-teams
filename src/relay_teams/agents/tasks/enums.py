@@ -19,6 +19,14 @@ class TaskSpecStrictness(str, Enum):
     HIGH = "high"
 
 
+class TaskSpecSyncStatus(str, Enum):
+    UNKNOWN = "unknown"
+    IN_SYNC = "in_sync"
+    SPEC_AHEAD = "spec_ahead"
+    CODE_AHEAD = "code_ahead"
+    NEEDS_REVIEW = "needs_review"
+
+
 class TaskTimeoutAction(str, Enum):
     FAIL = "fail"
     RETRY = "retry"
@@ -33,6 +41,7 @@ class VerificationLayer(str, Enum):
     SPEC = "spec"
     CONTRACT = "contract"
     SECURITY = "security"
+    FORMAL = "formal"
 
 
 class VerificationEvidenceKind(str, Enum):
@@ -52,3 +61,21 @@ class VerificationEvidenceKind(str, Enum):
 class VerificationEvidenceTarget(str, Enum):
     ACCEPTANCE_CRITERION = "acceptance_criterion"
     EVIDENCE_EXPECTATION = "evidence_expectation"
+
+
+class FormalVerificationLanguage(str, Enum):
+    TLA_PLUS = "tla_plus"
+    ALLOY = "alloy"
+    LEAN = "lean"
+    COQ = "coq"
+    ISABELLE = "isabelle"
+    CUSTOM = "custom"
+
+
+class FormalVerificationToolProfile(str, Enum):
+    TLC = "tlc"
+    ALLOY_ANALYZER = "alloy_analyzer"
+    LEAN = "lean"
+    COQ = "coq"
+    ISABELLE = "isabelle"
+    CUSTOM = "custom"
