@@ -4,12 +4,18 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
+
 from relay_teams.gateway.wechat.models import (
     WeChatInboundQueueRecord,
     WeChatInboundQueueStatus,
 )
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 
 _NON_TERMINAL_QUEUE_STATUSES = (
     WeChatInboundQueueStatus.QUEUED.value,
@@ -105,7 +111,17 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def create_or_get_async(
         self, record: WeChatInboundQueueRecord
     ) -> tuple[WeChatInboundQueueRecord, bool]:
-        return await self._call_sync_async(self.create_or_get, record)
+        try:
+            return await self._create_async(record), True
+        except WeChatInboundQueueDuplicateError:
+            return (
+                await self.get_by_message_key_async(
+                    account_id=record.account_id,
+                    peer_user_id=record.peer_user_id,
+                    message_key=record.message_key,
+                ),
+                False,
+            )
 
     def _create(
         self,
@@ -179,6 +195,75 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
             )
         return stored
 
+    async def _create_async(
+        self,
+        record: WeChatInboundQueueRecord,
+    ) -> WeChatInboundQueueRecord:
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO wechat_inbound_queue(
+                    inbound_queue_id,
+                    account_id,
+                    message_key,
+                    gateway_session_id,
+                    session_id,
+                    peer_user_id,
+                    context_token,
+                    text,
+                    status,
+                    run_id,
+                    last_error,
+                    created_at,
+                    updated_at,
+                    completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.inbound_queue_id,
+                    record.account_id,
+                    record.message_key,
+                    record.gateway_session_id,
+                    record.session_id,
+                    record.peer_user_id,
+                    record.context_token,
+                    record.text,
+                    record.status.value,
+                    record.run_id,
+                    record.last_error,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                    _to_iso(record.completed_at),
+                ),
+            )
+            await cursor.close()
+
+        try:
+            await self._run_async_write(
+                operation_name="create_async",
+                operation=operation,
+            )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc).lower()
+            if (
+                "uq_wechat_inbound_queue_message" in message
+                or "wechat_inbound_queue.account_id, wechat_inbound_queue.peer_user_id, wechat_inbound_queue.message_key"
+                in message
+            ):
+                raise WeChatInboundQueueDuplicateError(
+                    account_id=record.account_id,
+                    peer_user_id=record.peer_user_id,
+                    message_key=record.message_key,
+                ) from exc
+            raise
+        stored = await self.get_async(record.inbound_queue_id)
+        if stored is None:
+            raise RuntimeError(
+                f"Failed to persist WeChat inbound queue {record.inbound_queue_id}"
+            )
+        return stored
+
     def update(self, record: WeChatInboundQueueRecord) -> WeChatInboundQueueRecord:
         run_sqlite_write_with_retry(
             conn=self._conn,
@@ -230,7 +315,52 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def update_async(
         self, record: WeChatInboundQueueRecord
     ) -> WeChatInboundQueueRecord:
-        return await self._call_sync_async(self.update, record)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                UPDATE wechat_inbound_queue
+                SET account_id=?,
+                    message_key=?,
+                    gateway_session_id=?,
+                    session_id=?,
+                    peer_user_id=?,
+                    context_token=?,
+                    text=?,
+                    status=?,
+                    run_id=?,
+                    last_error=?,
+                    updated_at=?,
+                    completed_at=?
+                WHERE inbound_queue_id=?
+                """,
+                (
+                    record.account_id,
+                    record.message_key,
+                    record.gateway_session_id,
+                    record.session_id,
+                    record.peer_user_id,
+                    record.context_token,
+                    record.text,
+                    record.status.value,
+                    record.run_id,
+                    record.last_error,
+                    record.updated_at.isoformat(),
+                    _to_iso(record.completed_at),
+                    record.inbound_queue_id,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="update_async",
+            operation=operation,
+        )
+        stored = await self.get_async(record.inbound_queue_id)
+        if stored is None:
+            raise RuntimeError(
+                f"Failed to reload WeChat inbound queue {record.inbound_queue_id}"
+            )
+        return stored
 
     def get(self, inbound_queue_id: str) -> WeChatInboundQueueRecord | None:
         with self._lock:
@@ -247,7 +377,23 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
         return self._to_record(row)
 
     async def get_async(self, inbound_queue_id: str) -> WeChatInboundQueueRecord | None:
-        return await self._call_sync_async(self.get, inbound_queue_id)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> WeChatInboundQueueRecord | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM wechat_inbound_queue
+                WHERE inbound_queue_id=?
+                """,
+                (inbound_queue_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_read(operation)
 
     def get_by_message_key(
         self,
@@ -278,12 +424,27 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def get_by_message_key_async(
         self, *, account_id: str, peer_user_id: str, message_key: str
     ) -> WeChatInboundQueueRecord:
-        return await self._call_sync_async(
-            self.get_by_message_key,
-            account_id=account_id,
-            peer_user_id=peer_user_id,
-            message_key=message_key,
-        )
+        async def operation(conn: aiosqlite.Connection) -> WeChatInboundQueueRecord:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM wechat_inbound_queue
+                WHERE account_id=? AND peer_user_id=? AND message_key=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (account_id, peer_user_id, message_key),
+            )
+            if row is None:
+                raise KeyError(
+                    "Unknown WeChat inbound queue record for "
+                    f"account_id={account_id}, peer_user_id={peer_user_id}, "
+                    f"message_key={message_key}"
+                )
+            return self._to_record(row)
+
+        return await self._run_async_read(operation)
 
     def get_latest_by_run_id(self, run_id: str) -> WeChatInboundQueueRecord | None:
         if not str(run_id).strip():
@@ -306,7 +467,28 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def get_latest_by_run_id_async(
         self, run_id: str
     ) -> WeChatInboundQueueRecord | None:
-        return await self._call_sync_async(self.get_latest_by_run_id, run_id)
+        if not str(run_id).strip():
+            return None
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> WeChatInboundQueueRecord | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM wechat_inbound_queue
+                WHERE run_id=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (run_id,),
+            )
+            if row is None:
+                return None
+            return self._to_record(row)
+
+        return await self._run_async_read(operation)
 
     def has_non_terminal_item_for_run(self, run_id: str) -> bool:
         if not str(run_id).strip():
@@ -325,7 +507,24 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
         return row is not None
 
     async def has_non_terminal_item_for_run_async(self, run_id: str) -> bool:
-        return await self._call_sync_async(self.has_non_terminal_item_for_run, run_id)
+        if not str(run_id).strip():
+            return False
+
+        async def operation(conn: aiosqlite.Connection) -> bool:
+            row = await async_fetchone(
+                conn,
+                f"""
+                SELECT 1
+                FROM wechat_inbound_queue
+                WHERE run_id=?
+                  AND status IN ({",".join("?" for _ in _NON_TERMINAL_QUEUE_STATUSES)})
+                LIMIT 1
+                """,
+                (run_id, *_NON_TERMINAL_QUEUE_STATUSES),
+            )
+            return row is not None
+
+        return await self._run_async_read(operation)
 
     def count_non_terminal_by_session(self, session_id: str) -> int:
         with self._lock:
@@ -341,9 +540,20 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
         return int(row["total"]) if row is not None else 0
 
     async def count_non_terminal_by_session_async(self, session_id: str) -> int:
-        return await self._call_sync_async(
-            self.count_non_terminal_by_session, session_id
-        )
+        async def operation(conn: aiosqlite.Connection) -> int:
+            row = await async_fetchone(
+                conn,
+                f"""
+                SELECT COUNT(*) AS total
+                FROM wechat_inbound_queue
+                WHERE session_id=?
+                  AND status IN ({",".join("?" for _ in _NON_TERMINAL_QUEUE_STATUSES)})
+                """,
+                (session_id, *_NON_TERMINAL_QUEUE_STATUSES),
+            )
+            return int(row["total"]) if row is not None else 0
+
+        return await self._run_async_read(operation)
 
     def count_non_terminal_ahead(self, inbound_queue_id: str) -> int:
         with self._lock:
@@ -362,9 +572,23 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
         return int(row["total"]) if row is not None else 0
 
     async def count_non_terminal_ahead_async(self, inbound_queue_id: str) -> int:
-        return await self._call_sync_async(
-            self.count_non_terminal_ahead, inbound_queue_id
-        )
+        async def operation(conn: aiosqlite.Connection) -> int:
+            row = await async_fetchone(
+                conn,
+                f"""
+                SELECT COUNT(*) AS total
+                FROM wechat_inbound_queue AS queued
+                JOIN wechat_inbound_queue AS current
+                    ON current.inbound_queue_id=?
+                WHERE queued.session_id=current.session_id
+                  AND queued.id < current.id
+                  AND queued.status IN ({",".join("?" for _ in _NON_TERMINAL_QUEUE_STATUSES)})
+                """,
+                (inbound_queue_id, *_NON_TERMINAL_QUEUE_STATUSES),
+            )
+            return int(row["total"]) if row is not None else 0
+
+        return await self._run_async_read(operation)
 
     def list_ready_to_start(
         self,
@@ -410,9 +634,47 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def list_ready_to_start_async(
         self, *, limit: int = 20, stale_before: datetime | None = None
     ) -> tuple[WeChatInboundQueueRecord, ...]:
-        return await self._call_sync_async(
-            self.list_ready_to_start, limit=limit, stale_before=stale_before
-        )
+        safe_limit = max(1, min(limit, 100))
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[WeChatInboundQueueRecord, ...]:
+            if stale_before is None:
+                rows = await async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM wechat_inbound_queue
+                    WHERE status=?
+                    ORDER BY id ASC
+                    LIMIT ?
+                    """,
+                    (
+                        WeChatInboundQueueStatus.QUEUED.value,
+                        safe_limit,
+                    ),
+                )
+            else:
+                rows = await async_fetchall(
+                    conn,
+                    """
+                    SELECT *
+                    FROM wechat_inbound_queue
+                    WHERE status=?
+                       OR (status=? AND updated_at<=?)
+                    ORDER BY id ASC
+                    LIMIT ?
+                    """,
+                    (
+                        WeChatInboundQueueStatus.QUEUED.value,
+                        WeChatInboundQueueStatus.STARTING.value,
+                        stale_before.isoformat(),
+                        safe_limit,
+                    ),
+                )
+            return tuple(self._to_record(row) for row in rows)
+
+        return await self._run_async_read(operation)
 
     def claim_starting(
         self,
@@ -460,10 +722,52 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def claim_starting_async(
         self, *, inbound_queue_id: str, stale_before: datetime
     ) -> WeChatInboundQueueRecord | None:
-        return await self._call_sync_async(
-            self.claim_starting,
-            inbound_queue_id=inbound_queue_id,
-            stale_before=stale_before,
+        claimed_at = stale_before.isoformat()
+        updated_at = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> WeChatInboundQueueRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE wechat_inbound_queue
+                SET status=?,
+                    last_error=?,
+                    updated_at=?
+                WHERE inbound_queue_id=?
+                  AND (
+                    status=?
+                    OR (status=? AND updated_at<=?)
+                  )
+                """,
+                (
+                    WeChatInboundQueueStatus.STARTING.value,
+                    None,
+                    updated_at,
+                    inbound_queue_id,
+                    WeChatInboundQueueStatus.QUEUED.value,
+                    WeChatInboundQueueStatus.STARTING.value,
+                    claimed_at,
+                ),
+            )
+            rowcount = int(cursor.rowcount or 0)
+            await cursor.close()
+            if rowcount <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM wechat_inbound_queue
+                WHERE inbound_queue_id=?
+                """,
+                (inbound_queue_id,),
+            )
+            return self._to_record(row) if row is not None else None
+
+        return await self._run_async_write(
+            operation_name="claim_starting_async",
+            operation=operation,
         )
 
     def requeue_if_starting(
@@ -510,10 +814,50 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
     async def requeue_if_starting_async(
         self, *, inbound_queue_id: str, last_error: str | None = None
     ) -> WeChatInboundQueueRecord | None:
-        return await self._call_sync_async(
-            self.requeue_if_starting,
-            inbound_queue_id=inbound_queue_id,
-            last_error=last_error,
+        updated_at = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> WeChatInboundQueueRecord | None:
+            cursor = await conn.execute(
+                """
+                UPDATE wechat_inbound_queue
+                SET status=?,
+                    run_id=?,
+                    last_error=?,
+                    updated_at=?,
+                    completed_at=?
+                WHERE inbound_queue_id=?
+                  AND status=?
+                """,
+                (
+                    WeChatInboundQueueStatus.QUEUED.value,
+                    None,
+                    last_error,
+                    updated_at,
+                    None,
+                    inbound_queue_id,
+                    WeChatInboundQueueStatus.STARTING.value,
+                ),
+            )
+            rowcount = int(cursor.rowcount or 0)
+            await cursor.close()
+            if rowcount <= 0:
+                return None
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM wechat_inbound_queue
+                WHERE inbound_queue_id=?
+                """,
+                (inbound_queue_id,),
+            )
+            return self._to_record(row) if row is not None else None
+
+        return await self._run_async_write(
+            operation_name="requeue_if_starting_async",
+            operation=operation,
         )
 
     def _to_record(self, row: sqlite3.Row) -> WeChatInboundQueueRecord:

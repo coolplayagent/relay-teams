@@ -7,11 +7,16 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+import aiosqlite
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.tools.workspace_tools.shell_policy import ShellRuntimeFamily
 from relay_teams.validation import (
     parse_persisted_datetime_or_none,
@@ -130,13 +135,45 @@ class ShellApprovalRepository(SharedSqliteRepository):
         scope: ShellApprovalScope,
         value: str,
     ) -> ShellApprovalGrant:
-        return await self._call_sync_async(
-            self.grant,
+        normalized_value = value.strip()
+        if not normalized_value:
+            raise ValueError("shell approval value must not be empty")
+        now = datetime.now(timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO shell_approval_grants(
+                    workspace_key, runtime_family, scope, value, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_key, runtime_family, scope, value)
+                DO UPDATE SET updated_at=excluded.updated_at
+                """,
+                (
+                    workspace_key,
+                    runtime_family.value,
+                    scope.value,
+                    normalized_value,
+                    now,
+                    now,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="grant_async",
+            operation=operation,
+        )
+        record = await self.get_async(
             workspace_key=workspace_key,
             runtime_family=runtime_family,
             scope=scope,
-            value=value,
+            value=normalized_value,
         )
+        if record is None:
+            raise RuntimeError("Failed to persist shell approval grant")
+        return record
 
     def get(
         self,
@@ -171,13 +208,25 @@ class ShellApprovalRepository(SharedSqliteRepository):
         scope: ShellApprovalScope,
         value: str,
     ) -> ShellApprovalGrant | None:
-        return await self._call_sync_async(
-            self.get,
-            workspace_key=workspace_key,
-            runtime_family=runtime_family,
-            scope=scope,
-            value=value,
-        )
+        async def operation(conn: aiosqlite.Connection) -> ShellApprovalGrant | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT * FROM shell_approval_grants
+                WHERE workspace_key=? AND runtime_family=? AND scope=? AND value=?
+                """,
+                (
+                    workspace_key,
+                    runtime_family.value,
+                    scope.value,
+                    value,
+                ),
+            )
+            if row is None:
+                return None
+            return self._row_to_record(row)
+
+        return await self._run_async_read(operation)
 
     def has_exact_grant(
         self,
@@ -203,11 +252,14 @@ class ShellApprovalRepository(SharedSqliteRepository):
         runtime_family: ShellRuntimeFamily,
         normalized_command: str,
     ) -> bool:
-        return await self._call_sync_async(
-            self.has_exact_grant,
-            workspace_key=workspace_key,
-            runtime_family=runtime_family,
-            normalized_command=normalized_command,
+        return (
+            await self.get_async(
+                workspace_key=workspace_key,
+                runtime_family=runtime_family,
+                scope=ShellApprovalScope.EXACT,
+                value=normalized_command,
+            )
+            is not None
         )
 
     def has_prefix_grants(
@@ -241,12 +293,26 @@ class ShellApprovalRepository(SharedSqliteRepository):
         runtime_family: ShellRuntimeFamily,
         prefix_candidates: tuple[str, ...],
     ) -> bool:
-        return await self._call_sync_async(
-            self.has_prefix_grants,
-            workspace_key=workspace_key,
-            runtime_family=runtime_family,
-            prefix_candidates=prefix_candidates,
-        )
+        if not prefix_candidates:
+            return False
+
+        async def operation(conn: aiosqlite.Connection) -> bool:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT value FROM shell_approval_grants
+                WHERE workspace_key=? AND runtime_family=? AND scope=?
+                """,
+                (
+                    workspace_key,
+                    runtime_family.value,
+                    ShellApprovalScope.PREFIX.value,
+                ),
+            )
+            granted_values = {str(row["value"]) for row in rows}
+            return all(candidate in granted_values for candidate in prefix_candidates)
+
+        return await self._run_async_read(operation)
 
     def _row_to_record(self, row: sqlite3.Row) -> ShellApprovalGrant:
         created_at = parse_persisted_datetime_or_none(row["created_at"])

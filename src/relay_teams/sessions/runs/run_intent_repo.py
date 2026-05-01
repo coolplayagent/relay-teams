@@ -454,15 +454,91 @@ class RunIntentRepository(SharedSqliteRepository):
         self,
         session_ids: tuple[str, ...],
     ) -> dict[str, IntentInput]:
-        return await self._call_sync_async(self.first_by_session_ids, session_ids)
+        if not session_ids:
+            return {}
+        records: dict[str, IntentInput] = {}
+
+        async def operation(conn: aiosqlite.Connection) -> dict[str, IntentInput]:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
+                    SELECT
+                        run_id,
+                        {_RUN_INTENT_SELECT_COLUMNS}
+                    FROM run_intents
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, created_at ASC
+                    """,
+                    session_id_chunk,
+                )
+                for row in rows:
+                    session_id = str(row["session_id"] or "").strip()
+                    if not session_id or session_id in records:
+                        continue
+                    try:
+                        intent = _intent_input_from_row(
+                            row,
+                            fallback_session_id=session_id,
+                        )
+                        if not content_parts_to_text(
+                            intent.display_input or intent.input
+                        ).strip():
+                            continue
+                        records[session_id] = intent
+                    except (KeyError, ValueError, ValidationError) as exc:
+                        _log_invalid_run_intent_row(row=row, error=exc)
+            return records
+
+        return await self._run_async_read(operation)
 
     async def first_titles_by_session_ids_async(
         self,
         session_ids: tuple[str, ...],
     ) -> dict[str, str]:
-        return await self._call_sync_async(
-            self.first_titles_by_session_ids, session_ids
-        )
+        if not session_ids:
+            return {}
+        records: dict[str, str] = {}
+
+        async def operation(conn: aiosqlite.Connection) -> dict[str, str]:
+            for index in range(0, len(session_ids), _SQLITE_SAFE_VARIABLE_LIMIT):
+                session_id_chunk = session_ids[
+                    index : index + _SQLITE_SAFE_VARIABLE_LIMIT
+                ]
+                placeholders = ", ".join("?" for _ in session_id_chunk)
+                rows = await async_fetchall(
+                    conn,
+                    f"""
+                    SELECT
+                        run_id,
+                        session_id,
+                        intent,
+                        input_json,
+                        display_input_json
+                    FROM run_intents
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id ASC, created_at ASC
+                    """,
+                    session_id_chunk,
+                )
+                for row in rows:
+                    session_id = str(row["session_id"] or "").strip()
+                    if not session_id or session_id in records:
+                        continue
+                    try:
+                        title = _run_intent_title_from_row(row)
+                    except (KeyError, ValueError) as exc:
+                        _log_invalid_run_intent_title_row(row=row, error=exc)
+                        continue
+                    if title is not None:
+                        records[session_id] = title
+            return records
+
+        return await self._run_async_read(operation)
 
     async def list_by_session_async(self, session_id: str) -> dict[str, IntentInput]:
         rows = await self._run_async_read(

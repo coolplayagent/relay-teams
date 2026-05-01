@@ -293,10 +293,36 @@ class EventLog(SharedSqliteRepository):
         self,
         trace_offsets: tuple[tuple[str, int], ...],
     ) -> tuple[dict[str, JsonValue], ...]:
-        return await self._call_sync_async(
-            self.list_by_traces_after_ids,
-            trace_offsets,
-        )
+        normalized_offsets = _normalize_trace_offsets(trace_offsets)
+        if not normalized_offsets:
+            return ()
+        after_by_trace = dict(normalized_offsets)
+        rows: list[sqlite3.Row] = []
+        chunk_size = _SQLITE_SAFE_VARIABLE_LIMIT - 1
+
+        async def operation() -> tuple[dict[str, JsonValue], ...]:
+            conn = await self._get_async_conn()
+            for index in range(0, len(normalized_offsets), chunk_size):
+                offset_chunk = normalized_offsets[index : index + chunk_size]
+                trace_ids = tuple(trace_id for trace_id, _offset in offset_chunk)
+                min_after_event_id = min(offset for _trace_id, offset in offset_chunk)
+                placeholders = ", ".join("?" for _trace_id in trace_ids)
+                rows.extend(
+                    await async_fetchall(
+                        conn,
+                        "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                        f"FROM events WHERE trace_id IN ({placeholders}) AND id>? ORDER BY id ASC",
+                        (*trace_ids, min_after_event_id),
+                    )
+                )
+            rows.sort(key=_row_event_id)
+            return tuple(
+                self._row_to_dict(row)
+                for row in rows
+                if _row_event_id(row) > after_by_trace.get(str(row["trace_id"]), 0)
+            )
+
+        return await self._run_async_read(lambda _conn: operation())
 
     def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         with self._lock:
@@ -355,11 +381,23 @@ class EventLog(SharedSqliteRepository):
         session_id: str,
         event_types: tuple[str, ...],
     ) -> tuple[dict[str, JsonValue], ...]:
-        return await self._call_sync_async(
-            self.list_by_session_event_types,
-            session_id,
-            event_types,
+        normalized_event_types = tuple(
+            dict.fromkeys(
+                event_type.strip() for event_type in event_types if event_type.strip()
+            )
         )
+        if not normalized_event_types:
+            return ()
+        placeholders = ", ".join("?" for _ in normalized_event_types)
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                f"FROM events WHERE session_id=? AND event_type IN ({placeholders}) ORDER BY id ASC",
+                (session_id, *normalized_event_types),
+            )
+        )
+        return tuple(self._row_to_dict(row) for row in rows)
 
     def list_by_session_run_ids_event_types(
         self,
@@ -404,12 +442,43 @@ class EventLog(SharedSqliteRepository):
         run_ids: tuple[str, ...],
         event_types: tuple[str, ...],
     ) -> tuple[dict[str, JsonValue], ...]:
-        return await self._call_sync_async(
-            self.list_by_session_run_ids_event_types,
-            session_id,
-            run_ids,
-            event_types,
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
         )
+        normalized_event_types = tuple(
+            dict.fromkeys(
+                event_type.strip() for event_type in event_types if event_type.strip()
+            )
+        )
+        if not normalized_run_ids or not normalized_event_types:
+            return ()
+        event_placeholders = ", ".join("?" for _ in normalized_event_types)
+        chunk_size = max(
+            1,
+            _SQLITE_SAFE_VARIABLE_LIMIT - len(normalized_event_types) - 1,
+        )
+        rows: list[sqlite3.Row] = []
+
+        async def operation() -> tuple[dict[str, JsonValue], ...]:
+            conn = await self._get_async_conn()
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                run_placeholders = ", ".join("?" for _ in run_id_chunk)
+                rows.extend(
+                    await async_fetchall(
+                        conn,
+                        "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                        f"FROM events WHERE session_id=? AND trace_id IN ({run_placeholders}) "
+                        f"AND event_type IN ({event_placeholders}) ORDER BY id ASC",
+                        (session_id, *run_id_chunk, *normalized_event_types),
+                    )
+                )
+            rows.sort(
+                key=lambda row: int(row["id"]) if isinstance(row["id"], int) else 0
+            )
+            return tuple(self._row_to_dict(row) for row in rows)
+
+        return await self._run_async_read(lambda _conn: operation())
 
     async def list_by_session_async(
         self, session_id: str

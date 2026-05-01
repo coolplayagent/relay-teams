@@ -521,6 +521,21 @@ def test_automation_bound_session_queue_repository_async_methods_do_not_use_call
 
 
 @pytest.mark.timeout(5)
+def test_sqlite_sync_bridge_has_no_runtime_callers() -> None:
+    project_root = Path(__file__).resolve().parents[2]
+    source_root = project_root / "src" / "relay_teams"
+    bridge_owner = source_root / "persistence" / "sqlite_repository.py"
+    callers = [
+        str(path.relative_to(source_root.parent))
+        for path in sorted(source_root.rglob("*.py"))
+        if path != bridge_owner
+        and "_call_sync_async" in path.read_text(encoding="utf-8")
+    ]
+
+    assert callers == []
+
+
+@pytest.mark.timeout(5)
 def test_async_runtime_entrypoints_do_not_call_sync_lifecycle_methods() -> None:
     violations = _async_sync_lifecycle_calls()
 

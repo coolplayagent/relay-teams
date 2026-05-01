@@ -6,11 +6,16 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import JsonValue, ValidationError
 
 from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.db import run_sqlite_write_with_retry
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.sessions.external_session_binding_models import (
     ExternalSessionBinding,
 )
@@ -110,13 +115,23 @@ class ExternalSessionBindingRepository(SharedSqliteRepository):
     async def get_binding_async(
         self, *, platform: str, trigger_id: str, tenant_key: str, external_chat_id: str
     ) -> ExternalSessionBinding | None:
-        return await self._call_sync_async(
-            self.get_binding,
-            platform=platform,
-            trigger_id=trigger_id,
-            tenant_key=tenant_key,
-            external_chat_id=external_chat_id,
-        )
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> ExternalSessionBinding | None:
+            row = await async_fetchone(
+                conn,
+                """
+                SELECT *
+                FROM external_session_bindings
+                WHERE platform=? AND trigger_id=? AND tenant_key=? AND external_chat_id=?
+                """,
+                (platform, trigger_id, tenant_key, external_chat_id),
+            )
+            if row is None:
+                return None
+            return self._record_or_none(row, fallback_invalid_timestamps=True)
+
+        return await self._run_async_read(operation)
 
     def upsert_binding(
         self,
@@ -181,14 +196,51 @@ class ExternalSessionBindingRepository(SharedSqliteRepository):
         external_chat_id: str,
         session_id: str,
     ) -> ExternalSessionBinding:
-        return await self._call_sync_async(
-            self.upsert_binding,
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO external_session_bindings(
+                    platform,
+                    trigger_id,
+                    tenant_key,
+                    external_chat_id,
+                    session_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform, trigger_id, tenant_key, external_chat_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    platform,
+                    trigger_id,
+                    tenant_key,
+                    external_chat_id,
+                    session_id,
+                    now,
+                    now,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="upsert_binding_async",
+            operation=operation,
+        )
+        binding = await self.get_binding_async(
             platform=platform,
             trigger_id=trigger_id,
             tenant_key=tenant_key,
             external_chat_id=external_chat_id,
-            session_id=session_id,
         )
+        if binding is None:
+            raise RuntimeError("Failed to load upserted external session binding")
+        return binding
 
     def list_by_platform(self, platform: str) -> tuple[ExternalSessionBinding, ...]:
         rows = self._conn.execute(
@@ -207,7 +259,26 @@ class ExternalSessionBindingRepository(SharedSqliteRepository):
     async def list_by_platform_async(
         self, platform: str
     ) -> tuple[ExternalSessionBinding, ...]:
-        return await self._call_sync_async(self.list_by_platform, platform)
+        async def operation(
+            conn: aiosqlite.Connection,
+        ) -> tuple[ExternalSessionBinding, ...]:
+            rows = await async_fetchall(
+                conn,
+                """
+                SELECT *
+                FROM external_session_bindings
+                WHERE platform=?
+                ORDER BY updated_at DESC
+                """,
+                (platform,),
+            )
+            return tuple(
+                record
+                for row in rows
+                if (record := self._record_or_none(row)) is not None
+            )
+
+        return await self._run_async_read(operation)
 
     def exists(
         self,
@@ -230,12 +301,14 @@ class ExternalSessionBindingRepository(SharedSqliteRepository):
     async def exists_async(
         self, *, platform: str, trigger_id: str, tenant_key: str, external_chat_id: str
     ) -> bool:
-        return await self._call_sync_async(
-            self.exists,
-            platform=platform,
-            trigger_id=trigger_id,
-            tenant_key=tenant_key,
-            external_chat_id=external_chat_id,
+        return (
+            await self.get_binding_async(
+                platform=platform,
+                trigger_id=trigger_id,
+                tenant_key=tenant_key,
+                external_chat_id=external_chat_id,
+            )
+            is not None
         )
 
     def delete_by_session(self, session_id: str) -> None:
@@ -252,7 +325,17 @@ class ExternalSessionBindingRepository(SharedSqliteRepository):
         )
 
     async def delete_by_session_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_session, session_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM external_session_bindings WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=operation,
+        )
 
     def delete_by_trigger(self, trigger_id: str) -> None:
         run_sqlite_write_with_retry(
@@ -268,7 +351,17 @@ class ExternalSessionBindingRepository(SharedSqliteRepository):
         )
 
     async def delete_by_trigger_async(self, trigger_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_trigger, trigger_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM external_session_bindings WHERE trigger_id=?",
+                (trigger_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_trigger_async",
+            operation=operation,
+        )
 
     @staticmethod
     def _to_record(

@@ -5,9 +5,14 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import aiosqlite
 from pydantic import BaseModel, ConfigDict
 
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    SharedSqliteRepository,
+    async_fetchall,
+    async_fetchone,
+)
 from relay_teams.sessions.session_history_marker_models import SessionHistoryMarkerType
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
@@ -270,22 +275,52 @@ class TokenUsageRepository(SharedSqliteRepository):
         context_window: int | None = None,
         model_profile: str = "",
     ) -> None:
-        return await self._call_sync_async(
-            self.record,
-            session_id=session_id,
-            run_id=run_id,
-            instance_id=instance_id,
-            role_id=role_id,
-            input_tokens=input_tokens,
-            cached_input_tokens=cached_input_tokens,
-            latest_input_tokens=latest_input_tokens,
-            max_input_tokens=max_input_tokens,
-            output_tokens=output_tokens,
-            reasoning_output_tokens=reasoning_output_tokens,
-            requests=requests,
-            tool_calls=tool_calls,
-            context_window=context_window,
-            model_profile=model_profile,
+        async def operation(conn: aiosqlite.Connection) -> None:
+            now = await self._next_recorded_at_async(
+                conn=conn,
+                session_id=session_id,
+            )
+            safe_input_tokens = self._coerce_non_negative_int(input_tokens)
+            safe_latest_input_tokens = self._coerce_non_negative_int(
+                latest_input_tokens
+            )
+            safe_max_input_tokens = self._coerce_non_negative_int(max_input_tokens)
+            if safe_latest_input_tokens <= 0:
+                safe_latest_input_tokens = safe_input_tokens
+            if safe_max_input_tokens <= 0:
+                safe_max_input_tokens = safe_latest_input_tokens
+            cursor = await conn.execute(
+                """
+                INSERT INTO token_usage
+                  (session_id, run_id, instance_id, role_id,
+                   input_tokens, cached_input_tokens, latest_input_tokens,
+                   max_input_tokens, output_tokens, reasoning_output_tokens,
+                   requests, tool_calls, context_window, model_profile, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    run_id,
+                    instance_id,
+                    role_id,
+                    safe_input_tokens,
+                    self._coerce_non_negative_int(cached_input_tokens),
+                    safe_latest_input_tokens,
+                    safe_max_input_tokens,
+                    self._coerce_non_negative_int(output_tokens),
+                    self._coerce_non_negative_int(reasoning_output_tokens),
+                    self._coerce_non_negative_int(requests),
+                    self._coerce_non_negative_int(tool_calls),
+                    self._coerce_non_negative_int(context_window),
+                    model_profile.strip(),
+                    now.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="record_async",
+            operation=operation,
         )
 
     def get_by_run(self, run_id: str) -> RunTokenUsage:
@@ -369,7 +404,15 @@ class TokenUsageRepository(SharedSqliteRepository):
         )
 
     async def get_by_run_async(self, run_id: str) -> RunTokenUsage:
-        return await self._call_sync_async(self.get_by_run, run_id)
+        async def operation(conn: aiosqlite.Connection) -> RunTokenUsage:
+            rows = await async_fetchall(
+                conn,
+                "SELECT * FROM token_usage WHERE run_id=? ORDER BY id ASC",
+                (run_id,),
+            )
+            return self._build_run_usage(run_id=run_id, rows=rows)
+
+        return await self._run_async_read(operation)
 
     def get_by_session(
         self,
@@ -467,9 +510,20 @@ class TokenUsageRepository(SharedSqliteRepository):
     async def get_by_session_async(
         self, session_id: str, *, include_cleared: bool = False
     ) -> SessionTokenUsage:
-        return await self._call_sync_async(
-            self.get_by_session, session_id, include_cleared=include_cleared
-        )
+        query = "SELECT * FROM token_usage WHERE session_id=?"
+        params: tuple[str, ...] = (session_id,)
+        if not include_cleared:
+            cutoff = await self._latest_clear_cutoff_async(session_id)
+            if cutoff is not None:
+                query += " AND recorded_at>?"
+                params = (session_id, cutoff)
+        query += " ORDER BY id ASC"
+
+        async def operation(conn: aiosqlite.Connection) -> SessionTokenUsage:
+            rows = await async_fetchall(conn, query, params)
+            return self._build_session_usage(session_id=session_id, rows=rows)
+
+        return await self._run_async_read(operation)
 
     def delete_by_session(self, session_id: str) -> None:
         self._run_write(
@@ -480,7 +534,17 @@ class TokenUsageRepository(SharedSqliteRepository):
         )
 
     async def delete_by_session_async(self, session_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_session, session_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM token_usage WHERE session_id=?",
+                (session_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_session_async",
+            operation=operation,
+        )
 
     def delete_by_run(self, run_id: str) -> None:
         self._run_write(
@@ -492,12 +556,183 @@ class TokenUsageRepository(SharedSqliteRepository):
         )
 
     async def delete_by_run_async(self, run_id: str) -> None:
-        return await self._call_sync_async(self.delete_by_run, run_id)
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "DELETE FROM token_usage WHERE run_id=?",
+                (run_id,),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_by_run_async",
+            operation=operation,
+        )
+
+    def _build_run_usage(
+        self, *, run_id: str, rows: list[sqlite3.Row]
+    ) -> RunTokenUsage:
+        by_instance: dict[str, AgentTokenSummary] = {}
+        for row in rows:
+            iid = str(row["instance_id"])
+            input_tokens = self._row_int(row, "input_tokens")
+            cached_input_tokens = self._row_int(row, "cached_input_tokens")
+            latest_input_tokens = self._row_int(row, "latest_input_tokens")
+            if latest_input_tokens <= 0:
+                latest_input_tokens = input_tokens
+            max_input_tokens = self._row_int(row, "max_input_tokens")
+            if max_input_tokens <= 0:
+                max_input_tokens = latest_input_tokens
+            output_tokens = self._row_int(row, "output_tokens")
+            reasoning_output_tokens = self._row_int(row, "reasoning_output_tokens")
+            requests = self._row_int(row, "requests")
+            tool_calls = self._row_int(row, "tool_calls")
+            context_window = self._positive_row_int_or_none(row, "context_window")
+            model_profile = self._row_text(row, "model_profile")
+            if iid in by_instance:
+                existing = by_instance[iid]
+                by_instance[iid] = AgentTokenSummary(
+                    instance_id=iid,
+                    role_id=str(row["role_id"]) or existing.role_id,
+                    input_tokens=existing.input_tokens + input_tokens,
+                    cached_input_tokens=(
+                        existing.cached_input_tokens + cached_input_tokens
+                    ),
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max(existing.max_input_tokens, max_input_tokens),
+                    output_tokens=existing.output_tokens + output_tokens,
+                    reasoning_output_tokens=(
+                        existing.reasoning_output_tokens + reasoning_output_tokens
+                    ),
+                    total_tokens=existing.total_tokens + input_tokens + output_tokens,
+                    requests=existing.requests + requests,
+                    tool_calls=existing.tool_calls + tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
+                )
+            else:
+                by_instance[iid] = AgentTokenSummary(
+                    instance_id=iid,
+                    role_id=str(row["role_id"]),
+                    input_tokens=input_tokens,
+                    cached_input_tokens=cached_input_tokens,
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max_input_tokens,
+                    output_tokens=output_tokens,
+                    reasoning_output_tokens=reasoning_output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                    requests=requests,
+                    tool_calls=tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
+                )
+
+        agents = list(by_instance.values())
+        total_input = sum(agent.input_tokens for agent in agents)
+        total_output = sum(agent.output_tokens for agent in agents)
+        total_cached_input = sum(agent.cached_input_tokens for agent in agents)
+        total_reasoning_output = sum(agent.reasoning_output_tokens for agent in agents)
+        return RunTokenUsage(
+            run_id=run_id,
+            total_input_tokens=total_input,
+            total_cached_input_tokens=total_cached_input,
+            total_output_tokens=total_output,
+            total_reasoning_output_tokens=total_reasoning_output,
+            total_tokens=total_input + total_output,
+            total_requests=sum(agent.requests for agent in agents),
+            total_tool_calls=sum(agent.tool_calls for agent in agents),
+            by_agent=agents,
+        )
+
+    def _build_session_usage(
+        self, *, session_id: str, rows: list[sqlite3.Row]
+    ) -> SessionTokenUsage:
+        by_role: dict[str, AgentTokenSummary] = {}
+        for row in rows:
+            role_id = str(row["role_id"])
+            input_tokens = self._row_int(row, "input_tokens")
+            cached_input_tokens = self._row_int(row, "cached_input_tokens")
+            latest_input_tokens = self._row_int(row, "latest_input_tokens")
+            if latest_input_tokens <= 0:
+                latest_input_tokens = input_tokens
+            max_input_tokens = self._row_int(row, "max_input_tokens")
+            if max_input_tokens <= 0:
+                max_input_tokens = latest_input_tokens
+            output_tokens = self._row_int(row, "output_tokens")
+            reasoning_output_tokens = self._row_int(row, "reasoning_output_tokens")
+            requests = self._row_int(row, "requests")
+            tool_calls = self._row_int(row, "tool_calls")
+            context_window = self._positive_row_int_or_none(row, "context_window")
+            model_profile = self._row_text(row, "model_profile")
+            if role_id in by_role:
+                existing = by_role[role_id]
+                by_role[role_id] = AgentTokenSummary(
+                    instance_id="",
+                    role_id=role_id,
+                    input_tokens=existing.input_tokens + input_tokens,
+                    cached_input_tokens=(
+                        existing.cached_input_tokens + cached_input_tokens
+                    ),
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max(existing.max_input_tokens, max_input_tokens),
+                    output_tokens=existing.output_tokens + output_tokens,
+                    reasoning_output_tokens=(
+                        existing.reasoning_output_tokens + reasoning_output_tokens
+                    ),
+                    total_tokens=existing.total_tokens + input_tokens + output_tokens,
+                    requests=existing.requests + requests,
+                    tool_calls=existing.tool_calls + tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
+                )
+            else:
+                by_role[role_id] = AgentTokenSummary(
+                    instance_id="",
+                    role_id=role_id,
+                    input_tokens=input_tokens,
+                    cached_input_tokens=cached_input_tokens,
+                    latest_input_tokens=latest_input_tokens,
+                    max_input_tokens=max_input_tokens,
+                    output_tokens=output_tokens,
+                    reasoning_output_tokens=reasoning_output_tokens,
+                    total_tokens=input_tokens + output_tokens,
+                    requests=requests,
+                    tool_calls=tool_calls,
+                    context_window=context_window,
+                    model_profile=model_profile,
+                )
+
+        roles = list(by_role.values())
+        total_input = sum(role.input_tokens for role in roles)
+        total_output = sum(role.output_tokens for role in roles)
+        total_cached_input = sum(role.cached_input_tokens for role in roles)
+        total_reasoning_output = sum(role.reasoning_output_tokens for role in roles)
+        return SessionTokenUsage(
+            session_id=session_id,
+            total_input_tokens=total_input,
+            total_cached_input_tokens=total_cached_input,
+            total_output_tokens=total_output,
+            total_reasoning_output_tokens=total_reasoning_output,
+            total_tokens=total_input + total_output,
+            total_requests=sum(role.requests for role in roles),
+            total_tool_calls=sum(role.tool_calls for role in roles),
+            by_role=by_role,
+        )
 
     def _latest_clear_cutoff(self, session_id: str) -> str | None:
         if self._session_history_marker_repo is None:
             return None
         latest_clear = self._session_history_marker_repo.get_latest(
+            session_id,
+            marker_type=SessionHistoryMarkerType.CLEAR,
+        )
+        if latest_clear is None:
+            return None
+        return latest_clear.created_at.isoformat()
+
+    async def _latest_clear_cutoff_async(self, session_id: str) -> str | None:
+        if self._session_history_marker_repo is None:
+            return None
+        latest_clear = await self._session_history_marker_repo.get_latest_async(
             session_id,
             marker_type=SessionHistoryMarkerType.CLEAR,
         )
@@ -517,6 +752,28 @@ class TokenUsageRepository(SharedSqliteRepository):
         )
         if self._session_history_marker_repo is not None:
             latest_clear = self._session_history_marker_repo.get_latest(
+                session_id,
+                marker_type=SessionHistoryMarkerType.CLEAR,
+            )
+            if latest_clear is not None:
+                candidate = _ensure_after_datetime(candidate, latest_clear.created_at)
+        return candidate
+
+    async def _next_recorded_at_async(
+        self, *, conn: aiosqlite.Connection, session_id: str
+    ) -> datetime:
+        candidate = datetime.now(tz=timezone.utc)
+        latest_usage_row = await async_fetchone(
+            conn,
+            "SELECT recorded_at FROM token_usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        )
+        candidate = _ensure_after_iso_value(
+            candidate,
+            None if latest_usage_row is None else str(latest_usage_row["recorded_at"]),
+        )
+        if self._session_history_marker_repo is not None:
+            latest_clear = await self._session_history_marker_repo.get_latest_async(
                 session_id,
                 marker_type=SessionHistoryMarkerType.CLEAR,
             )
