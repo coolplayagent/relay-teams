@@ -894,9 +894,18 @@ def _gate_finding_evidence_item(
         kind=VerificationEvidenceKind.GATE_FINDING,
         summary=f"Gate event {event_type} was recorded.",
         source="event_log",
-        passed=None,
+        passed=_gate_finding_passed(event_type=event_type, payload=payload),
         output_excerpt=_json_excerpt(feedback),
     )
+
+
+def _gate_finding_passed(*, event_type: str, payload: dict[str, object]) -> bool:
+    if event_type == EventType.TASK_TIMEOUT.value:
+        return False
+    passed = payload.get("passed")
+    if isinstance(passed, bool):
+        return passed
+    return True
 
 
 def _link_evidence_to_plan(

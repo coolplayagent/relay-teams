@@ -72,7 +72,7 @@ Supported kinds:
 - `formal_proof`: command output with formal verification markers
 - `tool_call`: scoped tool invocation event
 - `tool_result`: scoped tool result event
-- `gate_finding`: scoped gate, finding, or timeout event
+- `gate_finding`: scoped gate, finding, or timeout event; gate and finding events are successful evidence unless they explicitly carry `passed=false`, while timeout events are failed evidence
 
 `VerificationEvidenceLink` connects one acceptance criterion or evidence expectation to matching evidence item ids. A link is satisfied only when at least one eligible evidence item matches the target text.
 

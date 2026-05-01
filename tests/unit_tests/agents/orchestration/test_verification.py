@@ -18,6 +18,7 @@ from relay_teams.agents.tasks.enums import (
     VerificationEvidenceTarget,
     VerificationLayer,
 )
+from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
@@ -1130,7 +1131,18 @@ def test_event_evidence_helpers_parse_scoped_events() -> None:
     )
     assert gate_item is not None
     assert gate_item.kind == VerificationEvidenceKind.GATE_FINDING
+    assert gate_item.passed is True
     assert "looks good" in gate_item.output_excerpt
+    timeout_item = verification_module._event_evidence_item(
+        index=5,
+        event={
+            "event_type": EventType.TASK_TIMEOUT.value,
+            "payload_json": dumps({"reason": "deadline exceeded"}),
+        },
+    )
+    assert timeout_item is not None
+    assert timeout_item.kind == VerificationEvidenceKind.GATE_FINDING
+    assert timeout_item.passed is False
 
     assert verification_module._parse_event_payload(None) == {}
     assert verification_module._parse_event_payload("not-json") == {}
@@ -1227,6 +1239,27 @@ def test_evidence_linking_and_semantic_helper_edges() -> None:
     )
     assert weak_result.passed is False
     assert weak_result.evidence_ids == ("tool-call",)
+
+    gate_item = VerificationEvidenceItem(
+        evidence_id="gate-finding",
+        kind=VerificationEvidenceKind.GATE_FINDING,
+        summary="Gate finding matched.",
+        passed=True,
+        output_excerpt="target criterion",
+    )
+    gate_link = VerificationEvidenceLink(
+        target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+        text="target criterion",
+        evidence_ids=("gate-finding",),
+        satisfied=True,
+    )
+    gate_result = verification_module._rule_semantic_evaluation(
+        criterion="target criterion",
+        link=gate_link,
+        linked_evidence=(gate_item,),
+    )
+    assert gate_result.passed is True
+    assert gate_result.evidence_ids == ("gate-finding",)
 
     self_report_link = VerificationEvidenceLink(
         target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
