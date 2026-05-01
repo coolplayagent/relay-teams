@@ -4,14 +4,27 @@ import pytest
 
 from pydantic import ValidationError
 
-from relay_teams.agents.tasks.enums import TaskSpecStrictness, TaskTimeoutAction
+from relay_teams.agents.tasks.enums import (
+    TaskSpecStrictness,
+    TaskTimeoutAction,
+    VerificationEvidenceKind,
+    VerificationEvidenceTarget,
+    VerificationLayer,
+)
 from relay_teams.agents.tasks.models import (
+    SemanticEvaluationResult,
     TaskEnvelope,
     TaskHandoff,
     TaskLifecyclePolicy,
     TaskSpec,
     VerificationCommand,
+    VerificationCheckResult,
+    VerificationEvidenceBundle,
+    VerificationEvidenceItem,
+    VerificationEvidenceLink,
+    VerificationEvidenceMetric,
     VerificationPlan,
+    VerificationReport,
     _split_command_string,
 )
 
@@ -77,6 +90,54 @@ def test_task_contract_models_normalize_optional_text_inputs() -> None:
     assert spec.requirements == ("persist state",)
     assert handoff.reason == ""
     assert handoff.completed == ("implemented",)
+
+
+def test_verification_report_accepts_evidence_bundle() -> None:
+    evidence_item = VerificationEvidenceItem(
+        evidence_id="command-1",
+        kind=VerificationEvidenceKind.TEST_RESULT,
+        summary="pytest passed",
+        source="verification_check",
+        passed=True,
+        output_excerpt="1 passed",
+        metrics=(VerificationEvidenceMetric(name="tests_passed", value=1),),
+        supports=("unit tests pass",),
+    )
+    report = VerificationReport(
+        task_id="task-1",
+        passed=True,
+        checks=(
+            VerificationCheckResult(
+                layer=VerificationLayer.SEMANTIC,
+                name="semantic_acceptance:unit tests pass",
+                passed=True,
+            ),
+        ),
+        evidence_bundle=VerificationEvidenceBundle(
+            task_id="task-1",
+            items=(evidence_item,),
+            acceptance_links=(
+                VerificationEvidenceLink(
+                    target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+                    text="unit tests pass",
+                    evidence_ids=("command-1",),
+                    satisfied=True,
+                ),
+            ),
+        ),
+        semantic_results=(
+            SemanticEvaluationResult(
+                criterion="unit tests pass",
+                passed=True,
+                confidence=0.85,
+                evidence_ids=("command-1",),
+            ),
+        ),
+    )
+
+    assert report.evidence_bundle is not None
+    assert report.evidence_bundle.items[0].metrics[0].value == 1
+    assert report.semantic_results[0].evidence_ids == ("command-1",)
 
 
 def test_verification_command_uses_windows_aware_string_splitting() -> None:

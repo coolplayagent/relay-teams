@@ -1,23 +1,39 @@
 from __future__ import annotations
 
 import io
+import json
+import logging
+import re
 import subprocess
 import threading
 import time
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Literal, NamedTuple
 
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.models import (
+    SemanticEvaluationRequest,
+    SemanticEvaluationResult,
     VerificationCheckResult,
     VerificationCommand,
+    VerificationEvidenceBundle,
+    VerificationEvidenceItem,
+    VerificationEvidenceLink,
+    VerificationEvidenceMetric,
     VerificationPlan,
     VerificationReport,
     VerificationResult,
 )
-from relay_teams.agents.tasks.enums import VerificationLayer
+from relay_teams.agents.tasks.enums import (
+    VerificationEvidenceKind,
+    VerificationEvidenceTarget,
+    VerificationLayer,
+)
+from relay_teams.logger import get_logger, log_event
 from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.tools.runtime.models import ToolRuntimeDecision
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
@@ -27,6 +43,14 @@ _OUTPUT_READ_CHUNK_BYTES = 8192
 _OUTPUT_EXCERPT_CHARS = 2000
 _PROCESS_POLL_INTERVAL_SECONDS = 0.05
 _OUTPUT_READER_JOIN_TIMEOUT_SECONDS = 0.05
+_EVIDENCE_TEXT_MATCH_MIN_TOKEN_COUNT = 2
+_EVIDENCE_TEXT_MATCH_MIN_OVERLAP = 0.6
+
+LOGGER = get_logger(__name__)
+
+SemanticVerificationEvaluator = Callable[
+    [SemanticEvaluationRequest], SemanticEvaluationResult
+]
 
 
 class _BoundedCommandResult(NamedTuple):
@@ -34,6 +58,12 @@ class _BoundedCommandResult(NamedTuple):
     stdout: bytes
     stderr: bytes
     output_truncated: bool
+
+
+class _VerificationPlanRun(NamedTuple):
+    checks: tuple[VerificationCheckResult, ...]
+    evidence_bundle: VerificationEvidenceBundle
+    semantic_results: tuple[SemanticEvaluationResult, ...]
 
 
 class _BoundedOutputCapture:
@@ -80,8 +110,11 @@ def verify_task(
     allowed_tools: tuple[str, ...] = (),
     tool_approval_policy: ToolApprovalPolicy | None = None,
     workspace_root: Path | None = None,
+    semantic_evaluator: SemanticVerificationEvaluator | None = None,
 ) -> VerificationResult:
     task = task_repo.get(task_id)
+    evidence_bundle: VerificationEvidenceBundle | None = None
+    semantic_results: tuple[SemanticEvaluationResult, ...] = ()
     if task.status != TaskStatus.COMPLETED or task.result is None:
         passed = False
         details = ("Task not completed yet",)
@@ -95,13 +128,21 @@ def verify_task(
         )
         event_type = EventType.VERIFICATION_FAILED
     else:
-        checks = _run_verification_plan(
+        plan_run = _run_verification_plan(
+            task_id=task.envelope.task_id,
             plan=task.envelope.verification,
             result=task.result,
+            event_bus=event_bus,
+            trace_id=task.envelope.trace_id,
+            task_id_filter=task.envelope.task_id,
             allowed_tools=allowed_tools,
             tool_approval_policy=tool_approval_policy or ToolApprovalPolicy(),
             workspace_root=workspace_root,
+            semantic_evaluator=semantic_evaluator,
         )
+        checks = plan_run.checks
+        evidence_bundle = plan_run.evidence_bundle
+        semantic_results = plan_run.semantic_results
         missing = tuple(
             check.name for check in checks if not check.passed and check.name
         )
@@ -116,6 +157,8 @@ def verify_task(
         passed=passed,
         checks=checks,
         unmet_items=() if passed else details,
+        evidence_bundle=evidence_bundle,
+        semantic_results=semantic_results,
     )
     verification = VerificationResult(
         task_id=task.envelope.task_id,
@@ -137,25 +180,73 @@ def verify_task(
 
 def _run_verification_plan(
     *,
+    task_id: str,
     plan: VerificationPlan,
     result: str,
+    event_bus: EventLog,
+    trace_id: str,
+    task_id_filter: str,
     allowed_tools: tuple[str, ...],
     tool_approval_policy: ToolApprovalPolicy,
     workspace_root: Path | None,
-) -> tuple[VerificationCheckResult, ...]:
+    semantic_evaluator: SemanticVerificationEvaluator | None,
+) -> _VerificationPlanRun:
     checks: list[VerificationCheckResult] = []
+    evidence_items: list[VerificationEvidenceItem] = [
+        _task_result_evidence_item(result)
+    ]
     checks.extend(_run_checklist_checks(plan=plan, result=result))
-    checks.extend(_run_required_file_checks(plan=plan, workspace_root=workspace_root))
-    checks.extend(
-        _run_command_checks(
-            plan=plan,
-            allowed_tools=allowed_tools,
-            tool_approval_policy=tool_approval_policy,
-            workspace_root=workspace_root,
+    required_file_checks = _run_required_file_checks(
+        plan=plan, workspace_root=workspace_root
+    )
+    checks.extend(required_file_checks)
+    evidence_items.extend(_evidence_items_from_checks(required_file_checks))
+    command_checks = _run_command_checks(
+        plan=plan,
+        allowed_tools=allowed_tools,
+        tool_approval_policy=tool_approval_policy,
+        workspace_root=workspace_root,
+    )
+    checks.extend(command_checks)
+    evidence_items.extend(_evidence_items_from_checks(command_checks))
+    evidence_items.extend(
+        _event_evidence_items(
+            event_bus=event_bus,
+            trace_id=trace_id,
+            task_id=task_id_filter,
         )
     )
-    checks.extend(_run_spec_evidence_checks(plan=plan, result=result))
-    return tuple(checks)
+    (
+        evidence_items_with_supports,
+        acceptance_links,
+        expectation_links,
+    ) = _link_evidence_to_plan(plan=plan, evidence_items=tuple(evidence_items))
+    checks.extend(
+        _run_evidence_coverage_checks(
+            acceptance_links=acceptance_links,
+            expectation_links=expectation_links,
+        )
+    )
+    semantic_results = _run_semantic_evaluations(
+        task_id=task_id,
+        criteria=plan.acceptance_criteria,
+        result=result,
+        evidence_items=evidence_items_with_supports,
+        acceptance_links=acceptance_links,
+        semantic_evaluator=semantic_evaluator,
+    )
+    checks.extend(_semantic_evaluation_checks(semantic_results))
+    evidence_bundle = VerificationEvidenceBundle(
+        task_id=task_id,
+        items=evidence_items_with_supports,
+        acceptance_links=acceptance_links,
+        expectation_links=expectation_links,
+    )
+    return _VerificationPlanRun(
+        checks=tuple(checks),
+        evidence_bundle=evidence_bundle,
+        semantic_results=semantic_results,
+    )
 
 
 def _run_checklist_checks(
@@ -525,42 +616,737 @@ def _kill_process_and_wait(process: subprocess.Popen[bytes]) -> int:
     return process.wait()
 
 
-def _run_spec_evidence_checks(
+def _task_result_evidence_item(result: str) -> VerificationEvidenceItem:
+    return VerificationEvidenceItem(
+        evidence_id="task_result",
+        kind=VerificationEvidenceKind.TASK_RESULT,
+        summary="Task result text",
+        source="task_result",
+        passed=bool(result.strip()),
+        output_excerpt=_text_excerpt(result),
+    )
+
+
+def _evidence_items_from_checks(
+    checks: list[VerificationCheckResult],
+) -> tuple[VerificationEvidenceItem, ...]:
+    items: list[VerificationEvidenceItem] = []
+    for index, check in enumerate(checks, start=1):
+        items.append(
+            VerificationEvidenceItem(
+                evidence_id=_evidence_id("check", index, check.name),
+                kind=_evidence_kind_from_check(check),
+                summary=_check_evidence_summary(check),
+                source=_check_evidence_source(check),
+                passed=_check_evidence_passed(check),
+                path=check.evidence_path,
+                command=check.command,
+                exit_code=check.exit_code,
+                output_excerpt=check.output_excerpt,
+                metrics=_evidence_metrics_for_check(check),
+            )
+        )
+    return tuple(items)
+
+
+def _evidence_kind_from_check(
+    check: VerificationCheckResult,
+) -> VerificationEvidenceKind:
+    if check.layer == VerificationLayer.STRUCTURE and check.name.startswith(
+        "required_file:"
+    ):
+        return VerificationEvidenceKind.REQUIRED_FILE
+    if check.layer == VerificationLayer.BEHAVIOR:
+        return _command_evidence_kind(check)
+    return VerificationEvidenceKind.COMMAND
+
+
+def _command_evidence_kind(
+    check: VerificationCheckResult,
+) -> VerificationEvidenceKind:
+    command_text = " ".join(check.command).casefold()
+    output_text = check.output_excerpt.casefold()
+    combined_text = f"{command_text}\n{output_text}"
+    if _text_mentions_any(
+        combined_text,
+        ("ruff", "lint", "basedpyright", "pyright", "mypy", "flake8"),
+    ):
+        return VerificationEvidenceKind.LINT_RESULT
+    if _text_mentions_any(
+        combined_text,
+        ("git diff", "files changed", "insertion", "deletion"),
+    ):
+        return VerificationEvidenceKind.DIFF_SUMMARY
+    if _text_mentions_any(
+        combined_text,
+        ("tla", "alloy", "lean", "coq", "isabelle", "model check", "proof"),
+    ):
+        return VerificationEvidenceKind.FORMAL_PROOF
+    if _text_mentions_any(
+        combined_text,
+        ("pytest", "unittest", "test", "passed", "failed", "coverage"),
+    ):
+        return VerificationEvidenceKind.TEST_RESULT
+    return VerificationEvidenceKind.COMMAND
+
+
+def _check_evidence_summary(check: VerificationCheckResult) -> str:
+    if check.command:
+        command_text = " ".join(check.command)
+        status = "passed" if check.passed else "failed"
+        return f"Command {command_text} {status}."
+    if check.evidence_path is not None:
+        status = "exists" if check.passed else "missing"
+        return f"Required file {check.evidence_path} {status}."
+    return check.details or check.name
+
+
+def _check_evidence_source(check: VerificationCheckResult) -> str:
+    if "skipped until shell approval" in check.details:
+        return "verification_check_skipped"
+    return "verification_check"
+
+
+def _check_evidence_passed(check: VerificationCheckResult) -> bool | None:
+    if "skipped until shell approval" in check.details:
+        return None
+    return check.passed
+
+
+def _evidence_metrics_for_check(
+    check: VerificationCheckResult,
+) -> tuple[VerificationEvidenceMetric, ...]:
+    output = check.output_excerpt
+    values: dict[str, int] = {}
+    kind = _command_evidence_kind(check)
+    if kind == VerificationEvidenceKind.TEST_RESULT:
+        _collect_test_metrics(output, values)
+    elif kind == VerificationEvidenceKind.LINT_RESULT:
+        _collect_lint_metrics(output, values)
+    elif kind == VerificationEvidenceKind.DIFF_SUMMARY:
+        _collect_diff_metrics(output, values)
+    elif kind == VerificationEvidenceKind.FORMAL_PROOF:
+        _collect_formal_metrics(check, output, values)
+    return tuple(
+        VerificationEvidenceMetric(name=name, value=value)
+        for name, value in sorted(values.items())
+    )
+
+
+def _collect_test_metrics(output: str, values: dict[str, int]) -> None:
+    metric_patterns = {
+        "tests_passed": r"(\d+)\s+passed",
+        "tests_failed": r"(\d+)\s+failed",
+        "test_errors": r"(\d+)\s+errors?",
+        "tests_skipped": r"(\d+)\s+skipped",
+    }
+    for metric_name, pattern in metric_patterns.items():
+        match = re.search(pattern, output, flags=re.IGNORECASE)
+        if match is not None:
+            values[metric_name] = int(match.group(1))
+    ran_match = re.search(r"Ran\s+(\d+)\s+tests?", output, flags=re.IGNORECASE)
+    if ran_match is not None:
+        values["tests_total"] = int(ran_match.group(1))
+
+
+def _collect_lint_metrics(output: str, values: dict[str, int]) -> None:
+    found_match = re.search(r"Found\s+(\d+)\s+errors?", output, flags=re.IGNORECASE)
+    if found_match is not None:
+        values["lint_errors"] = int(found_match.group(1))
+        return
+    if re.search(r"All checks passed", output, flags=re.IGNORECASE) is not None:
+        values["lint_errors"] = 0
+
+
+def _collect_diff_metrics(output: str, values: dict[str, int]) -> None:
+    pattern_by_name = {
+        "files_changed": r"(\d+)\s+files?\s+changed",
+        "insertions": r"(\d+)\s+insertions?\(\+\)",
+        "deletions": r"(\d+)\s+deletions?\(-\)",
+    }
+    for metric_name, pattern in pattern_by_name.items():
+        match = re.search(pattern, output, flags=re.IGNORECASE)
+        if match is not None:
+            values[metric_name] = int(match.group(1))
+
+
+def _collect_formal_metrics(
+    check: VerificationCheckResult,
+    output: str,
+    values: dict[str, int],
+) -> None:
+    if _command_evidence_kind(check) != VerificationEvidenceKind.FORMAL_PROOF:
+        return
+    if check.passed or _text_mentions_any(
+        output.casefold(),
+        ("no error has been found", "proof completed", "qed", "no counterexample"),
+    ):
+        values["formal_checks_passed"] = 1
+
+
+def _event_evidence_items(
+    *,
+    event_bus: EventLog,
+    trace_id: str,
+    task_id: str,
+) -> tuple[VerificationEvidenceItem, ...]:
+    items: list[VerificationEvidenceItem] = []
+    for index, event in enumerate(event_bus.list_by_trace(trace_id), start=1):
+        event_task_id = str(event.get("task_id") or "")
+        if event_task_id != task_id:
+            continue
+        item = _event_evidence_item(index=index, event=event)
+        if item is not None:
+            items.append(item)
+    return tuple(items)
+
+
+def _event_evidence_item(
+    *,
+    index: int,
+    event: Mapping[str, object],
+) -> VerificationEvidenceItem | None:
+    event_type = str(event.get("event_type") or "")
+    payload = _parse_event_payload(event.get("payload_json"))
+    if event_type == RunEventType.TOOL_CALL.value:
+        return _tool_call_evidence_item(index=index, payload=payload)
+    if event_type == RunEventType.TOOL_RESULT.value:
+        return _tool_result_evidence_item(index=index, payload=payload)
+    if _is_gate_finding_event(event_type=event_type, payload=payload):
+        return _gate_finding_evidence_item(
+            index=index, event_type=event_type, payload=payload
+        )
+    return None
+
+
+def _tool_call_evidence_item(
+    *,
+    index: int,
+    payload: dict[str, object],
+) -> VerificationEvidenceItem | None:
+    tool_name = str(payload.get("tool_name") or "").strip()
+    tool_call_id = str(payload.get("tool_call_id") or "").strip()
+    if not tool_name or not tool_call_id:
+        return None
+    return VerificationEvidenceItem(
+        evidence_id=_evidence_id("tool_call", index, tool_call_id),
+        kind=VerificationEvidenceKind.TOOL_CALL,
+        summary=f"Tool {tool_name} was called.",
+        source="event_log",
+        passed=None,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        output_excerpt=_json_excerpt(payload.get("args")),
+    )
+
+
+def _tool_result_evidence_item(
+    *,
+    index: int,
+    payload: dict[str, object],
+) -> VerificationEvidenceItem | None:
+    tool_name = str(payload.get("tool_name") or "").strip()
+    tool_call_id = str(payload.get("tool_call_id") or "").strip()
+    if not tool_name or not tool_call_id:
+        return None
+    is_error = payload.get("error") is True
+    return VerificationEvidenceItem(
+        evidence_id=_evidence_id("tool_result", index, tool_call_id),
+        kind=VerificationEvidenceKind.TOOL_RESULT,
+        summary=f"Tool {tool_name} returned {'an error' if is_error else 'a result'}.",
+        source="event_log",
+        passed=not is_error,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        output_excerpt=_json_excerpt(payload.get("result")),
+    )
+
+
+def _is_gate_finding_event(
+    *,
+    event_type: str,
+    payload: dict[str, object],
+) -> bool:
+    role_id = str(payload.get("role_id") or "").casefold()
+    return (
+        "gater" in role_id
+        or "gate" in role_id
+        or "finding" in payload
+        or "findings" in payload
+        or event_type == EventType.TASK_TIMEOUT.value
+    )
+
+
+def _gate_finding_evidence_item(
+    *,
+    index: int,
+    event_type: str,
+    payload: dict[str, object],
+) -> VerificationEvidenceItem:
+    feedback = (
+        payload.get("findings")
+        or payload.get("finding")
+        or payload.get("feedback")
+        or payload
+    )
+    return VerificationEvidenceItem(
+        evidence_id=_evidence_id("gate", index, event_type),
+        kind=VerificationEvidenceKind.GATE_FINDING,
+        summary=f"Gate event {event_type} was recorded.",
+        source="event_log",
+        passed=_gate_finding_passed(event_type=event_type, payload=payload),
+        output_excerpt=_json_excerpt(feedback),
+    )
+
+
+def _gate_finding_passed(*, event_type: str, payload: dict[str, object]) -> bool:
+    if event_type == EventType.TASK_TIMEOUT.value:
+        return False
+    passed = payload.get("passed")
+    if isinstance(passed, bool):
+        return passed
+    return True
+
+
+def _link_evidence_to_plan(
     *,
     plan: VerificationPlan,
-    result: str,
-) -> list[VerificationCheckResult]:
-    normalized_result = result.lower()
+    evidence_items: tuple[VerificationEvidenceItem, ...],
+) -> tuple[
+    tuple[VerificationEvidenceItem, ...],
+    tuple[VerificationEvidenceLink, ...],
+    tuple[VerificationEvidenceLink, ...],
+]:
+    supports_by_id: dict[str, set[str]] = {
+        item.evidence_id: set(item.supports) for item in evidence_items
+    }
+    acceptance_links = tuple(
+        _link_text_to_evidence(
+            text=criterion,
+            target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+            evidence_items=evidence_items,
+            supports_by_id=supports_by_id,
+        )
+        for criterion in plan.acceptance_criteria
+    )
+    expectation_links = tuple(
+        _link_text_to_evidence(
+            text=expectation,
+            target=VerificationEvidenceTarget.EVIDENCE_EXPECTATION,
+            evidence_items=evidence_items,
+            supports_by_id=supports_by_id,
+        )
+        for expectation in plan.evidence_expectations
+    )
+    supported_items = tuple(
+        item.model_copy(
+            update={"supports": tuple(sorted(supports_by_id[item.evidence_id]))}
+        )
+        for item in evidence_items
+    )
+    return supported_items, acceptance_links, expectation_links
+
+
+def _link_text_to_evidence(
+    *,
+    text: str,
+    target: VerificationEvidenceTarget,
+    evidence_items: tuple[VerificationEvidenceItem, ...],
+    supports_by_id: dict[str, set[str]],
+) -> VerificationEvidenceLink:
+    evidence_ids: list[str] = []
+    for item in evidence_items:
+        if not _evidence_can_support_text(text=text, target=target, item=item):
+            continue
+        evidence_ids.append(item.evidence_id)
+        supports_by_id[item.evidence_id].add(text)
+    satisfied = bool(evidence_ids)
+    return VerificationEvidenceLink(
+        target=target,
+        text=text,
+        evidence_ids=tuple(evidence_ids),
+        satisfied=satisfied,
+        reason=_evidence_link_reason(
+            target=target,
+            evidence_ids=tuple(evidence_ids),
+        ),
+    )
+
+
+def _evidence_can_support_text(
+    *,
+    text: str,
+    target: VerificationEvidenceTarget,
+    item: VerificationEvidenceItem,
+) -> bool:
+    if item.passed is False:
+        return False
+    if item.source == "verification_check_skipped":
+        return False
+    if item.kind == VerificationEvidenceKind.TASK_RESULT:
+        return False
+    if (
+        target == VerificationEvidenceTarget.ACCEPTANCE_CRITERION
+        and item.kind == VerificationEvidenceKind.TOOL_CALL
+    ):
+        return False
+    return _text_matches_evidence(text=text, item=item)
+
+
+def _evidence_link_reason(
+    *,
+    target: VerificationEvidenceTarget,
+    evidence_ids: tuple[str, ...],
+) -> str:
+    if evidence_ids:
+        return (
+            f"Matched {len(evidence_ids)} evidence item(s): {', '.join(evidence_ids)}."
+        )
+    if target == VerificationEvidenceTarget.ACCEPTANCE_CRITERION:
+        return "No concrete evidence item matched this acceptance criterion."
+    return "No concrete evidence item matched this expected evidence."
+
+
+def _run_evidence_coverage_checks(
+    *,
+    acceptance_links: tuple[VerificationEvidenceLink, ...],
+    expectation_links: tuple[VerificationEvidenceLink, ...],
+) -> tuple[VerificationCheckResult, ...]:
     checks: list[VerificationCheckResult] = []
-    for criterion in plan.acceptance_criteria:
-        passed = criterion.lower() in normalized_result
+    for link in acceptance_links:
         checks.append(
             VerificationCheckResult(
-                layer=VerificationLayer.SPEC,
-                name=f"acceptance:{criterion}",
-                passed=passed,
-                details=(
-                    "Acceptance criterion was cited in the result."
-                    if passed
-                    else "Acceptance criterion was not cited in the result."
-                ),
+                layer=VerificationLayer.EVIDENCE,
+                name=f"acceptance_evidence:{link.text}",
+                passed=link.satisfied,
+                details=link.reason,
             )
         )
-    for expectation in plan.evidence_expectations:
-        passed = expectation.lower() in normalized_result
+    for link in expectation_links:
         checks.append(
             VerificationCheckResult(
-                layer=VerificationLayer.SPEC,
-                name=f"evidence:{expectation}",
-                passed=passed,
-                details=(
-                    "Expected evidence was cited in the result."
-                    if passed
-                    else "Expected evidence was not cited in the result."
-                ),
+                layer=VerificationLayer.EVIDENCE,
+                name=f"expected_evidence:{link.text}",
+                passed=link.satisfied,
+                details=link.reason,
             )
         )
-    return checks
+    return tuple(checks)
+
+
+def _run_semantic_evaluations(
+    *,
+    task_id: str,
+    criteria: tuple[str, ...],
+    result: str,
+    evidence_items: tuple[VerificationEvidenceItem, ...],
+    acceptance_links: tuple[VerificationEvidenceLink, ...],
+    semantic_evaluator: SemanticVerificationEvaluator | None,
+) -> tuple[SemanticEvaluationResult, ...]:
+    links_by_text = {link.text: link for link in acceptance_links}
+    results: list[SemanticEvaluationResult] = []
+    for criterion in criteria:
+        link = links_by_text.get(criterion)
+        linked_evidence = _linked_evidence_items(
+            link=link, evidence_items=evidence_items
+        )
+        baseline = _rule_semantic_evaluation(
+            criterion=criterion,
+            link=link,
+            linked_evidence=linked_evidence,
+        )
+        results.append(
+            _run_optional_semantic_evaluator(
+                task_id=task_id,
+                criterion=criterion,
+                result=result,
+                linked_evidence=linked_evidence,
+                baseline=baseline,
+                semantic_evaluator=semantic_evaluator,
+            )
+        )
+    return tuple(results)
+
+
+def _linked_evidence_items(
+    *,
+    link: VerificationEvidenceLink | None,
+    evidence_items: tuple[VerificationEvidenceItem, ...],
+) -> tuple[VerificationEvidenceItem, ...]:
+    if link is None:
+        return ()
+    evidence_ids = set(link.evidence_ids)
+    return tuple(item for item in evidence_items if item.evidence_id in evidence_ids)
+
+
+def _rule_semantic_evaluation(
+    *,
+    criterion: str,
+    link: VerificationEvidenceLink | None,
+    linked_evidence: tuple[VerificationEvidenceItem, ...],
+) -> SemanticEvaluationResult:
+    if link is None or not link.evidence_ids:
+        return SemanticEvaluationResult(
+            criterion=criterion,
+            passed=False,
+            confidence=0.0,
+            reason="No evidence was linked to this acceptance criterion.",
+        )
+    strong_evidence_ids = tuple(
+        item.evidence_id for item in linked_evidence if _is_strong_evidence(item)
+    )
+    if strong_evidence_ids:
+        return SemanticEvaluationResult(
+            criterion=criterion,
+            passed=True,
+            confidence=0.85,
+            reason="Concrete verification evidence supports this acceptance criterion.",
+            evidence_ids=strong_evidence_ids,
+        )
+    self_report_ids = tuple(
+        item.evidence_id
+        for item in linked_evidence
+        if item.kind == VerificationEvidenceKind.TASK_RESULT
+    )
+    if self_report_ids:
+        return SemanticEvaluationResult(
+            criterion=criterion,
+            passed=False,
+            confidence=0.25,
+            reason=(
+                "The task result self-reports this criterion, but independent "
+                "verification evidence is required."
+            ),
+            evidence_ids=self_report_ids,
+        )
+    return SemanticEvaluationResult(
+        criterion=criterion,
+        passed=False,
+        confidence=0.2,
+        reason="Only weak or inconclusive evidence was linked to this criterion.",
+        evidence_ids=tuple(item.evidence_id for item in linked_evidence),
+    )
+
+
+def _is_strong_evidence(item: VerificationEvidenceItem) -> bool:
+    if not item.passed:
+        return False
+    return item.kind in {
+        VerificationEvidenceKind.REQUIRED_FILE,
+        VerificationEvidenceKind.COMMAND,
+        VerificationEvidenceKind.TEST_RESULT,
+        VerificationEvidenceKind.LINT_RESULT,
+        VerificationEvidenceKind.DIFF_SUMMARY,
+        VerificationEvidenceKind.FORMAL_PROOF,
+        VerificationEvidenceKind.TOOL_RESULT,
+        VerificationEvidenceKind.GATE_FINDING,
+    }
+
+
+def _run_optional_semantic_evaluator(
+    *,
+    task_id: str,
+    criterion: str,
+    result: str,
+    linked_evidence: tuple[VerificationEvidenceItem, ...],
+    baseline: SemanticEvaluationResult,
+    semantic_evaluator: SemanticVerificationEvaluator | None,
+) -> SemanticEvaluationResult:
+    if semantic_evaluator is None:
+        return baseline
+    request = SemanticEvaluationRequest(
+        task_id=task_id,
+        criterion=criterion,
+        result_excerpt=_text_excerpt(result),
+        evidence=linked_evidence,
+    )
+    try:
+        evaluated = semantic_evaluator(request)
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="verification.semantic_evaluator_failed",
+            message="Semantic verification evaluator failed; using rule fallback",
+            payload={"task_id": task_id, "criterion": criterion, "error": str(exc)},
+        )
+        return baseline.model_copy(
+            update={
+                "reason": (
+                    f"{baseline.reason} External evaluator failed; rule fallback used."
+                )
+            }
+        )
+    evaluator_name = evaluated.evaluator
+    if evaluator_name == "rule":
+        evaluator_name = "external"
+    return evaluated.model_copy(
+        update={
+            "criterion": criterion,
+            "evaluator": evaluator_name,
+        }
+    )
+
+
+def _semantic_evaluation_checks(
+    semantic_results: tuple[SemanticEvaluationResult, ...],
+) -> tuple[VerificationCheckResult, ...]:
+    return tuple(
+        VerificationCheckResult(
+            layer=VerificationLayer.SEMANTIC,
+            name=f"semantic_acceptance:{result.criterion}",
+            passed=result.passed,
+            details=(
+                f"{result.reason} confidence={result.confidence:.2f}; "
+                f"evidence={', '.join(result.evidence_ids) or 'none'}"
+            ),
+        )
+        for result in semantic_results
+    )
+
+
+def _text_matches_evidence(
+    *,
+    text: str,
+    item: VerificationEvidenceItem,
+) -> bool:
+    normalized_text = text.casefold().strip()
+    searchable_text = _evidence_search_text(item).casefold()
+    if normalized_text and normalized_text in searchable_text:
+        return True
+    expected_tokens = _significant_tokens(normalized_text)
+    evidence_tokens = _significant_tokens(searchable_text)
+    if not expected_tokens:
+        return False
+    if len(expected_tokens) < _EVIDENCE_TEXT_MATCH_MIN_TOKEN_COUNT:
+        return expected_tokens.issubset(evidence_tokens)
+    overlap = len(expected_tokens & evidence_tokens) / len(expected_tokens)
+    return overlap >= _EVIDENCE_TEXT_MATCH_MIN_OVERLAP
+
+
+def _evidence_search_text(item: VerificationEvidenceItem) -> str:
+    path = "" if item.path is None else str(item.path)
+    metrics = " ".join(f"{metric.name} {metric.value}" for metric in item.metrics)
+    return "\n".join(
+        part
+        for part in (
+            item.kind.value.replace("_", " "),
+            item.summary,
+            item.source,
+            path,
+            " ".join(item.command),
+            item.tool_name,
+            item.output_excerpt,
+            metrics,
+        )
+        if part
+    )
+
+
+def _significant_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for token in re.findall(r"[a-zA-Z0-9_]+", text.casefold()):
+        normalized = _normalize_match_token(token)
+        if token in _MATCH_STOPWORDS or normalized in _MATCH_STOPWORDS:
+            continue
+        if normalized:
+            tokens.add(normalized)
+    return tokens
+
+
+_MATCH_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "be",
+        "by",
+        "for",
+        "from",
+        "in",
+        "is",
+        "it",
+        "of",
+        "or",
+        "output",
+        "should",
+        "that",
+        "the",
+        "this",
+        "to",
+        "with",
+    }
+)
+
+
+def _normalize_match_token(token: str) -> str:
+    normalized = token.strip("_")
+    if normalized == "pass":
+        return normalized
+    if normalized in {"pytest", "unittest"}:
+        return "test"
+    if normalized in {"passes", "passed", "passing"}:
+        return "pass"
+    if normalized in {"fails", "failed", "failing"}:
+        return "fail"
+    if len(normalized) > 4 and normalized.endswith("ies"):
+        return normalized[:-3] + "y"
+    if len(normalized) > 4 and normalized.endswith(
+        ("ches", "shes", "sses", "xes", "zes")
+    ):
+        return normalized[:-2]
+    if len(normalized) > 4 and normalized.endswith("es"):
+        return normalized[:-1]
+    if len(normalized) > 3 and normalized.endswith("s"):
+        return normalized[:-1]
+    return normalized
+
+
+def _parse_event_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(key): item for key, item in parsed.items()}
+
+
+def _json_excerpt(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _text_excerpt(value)
+    try:
+        return _text_excerpt(json.dumps(value, sort_keys=True))
+    except TypeError:
+        return _text_excerpt(str(value))
+
+
+def _text_excerpt(value: str) -> str:
+    return _command_output_excerpt(stdout=value, stderr="")
+
+
+def _evidence_id(prefix: str, index: int, text: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9_.:-]+", "-", text.strip()).strip("-").lower()
+    if not normalized:
+        return f"{prefix}:{index}"
+    return f"{prefix}:{index}:{normalized[:80]}"
+
+
+def _text_mentions_any(text: str, needles: tuple[str, ...]) -> bool:
+    for needle in needles:
+        if " " in needle:
+            if needle in text:
+                return True
+            continue
+        if re.search(rf"(?<![A-Za-z0-9_]){re.escape(needle)}(?![A-Za-z0-9_])", text):
+            return True
+    return False
 
 
 def _command_output_excerpt(

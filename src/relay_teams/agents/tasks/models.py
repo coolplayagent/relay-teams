@@ -12,6 +12,8 @@ from relay_teams.agents.tasks.enums import (
     TaskSpecStrictness,
     TaskStatus,
     TaskTimeoutAction,
+    VerificationEvidenceKind,
+    VerificationEvidenceTarget,
     VerificationLayer,
 )
 from relay_teams.validation import (
@@ -219,6 +221,85 @@ class VerificationCheckResult(BaseModel):
     output_excerpt: str = ""
 
 
+class VerificationEvidenceMetric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    value: int
+
+
+class VerificationEvidenceItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: RequiredIdentifierStr
+    kind: VerificationEvidenceKind
+    summary: str = Field(min_length=1)
+    source: str = ""
+    passed: bool | None = None
+    path: Path | None = None
+    command: tuple[str, ...] = ()
+    exit_code: int | None = None
+    tool_name: str = ""
+    tool_call_id: str = ""
+    output_excerpt: str = ""
+    metrics: tuple[VerificationEvidenceMetric, ...] = ()
+    supports: tuple[str, ...] = ()
+
+    @field_validator("command", "supports", mode="before")
+    @classmethod
+    def _normalize_text_items(cls, value: object) -> tuple[str, ...]:
+        return _normalize_text_tuple(value, field_name="verification evidence text")
+
+
+class VerificationEvidenceLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target: VerificationEvidenceTarget
+    text: str = Field(min_length=1)
+    evidence_ids: tuple[str, ...] = ()
+    satisfied: bool
+    reason: str = ""
+
+    @field_validator("evidence_ids", mode="before")
+    @classmethod
+    def _normalize_evidence_ids(cls, value: object) -> tuple[str, ...]:
+        return _normalize_text_tuple(value, field_name="verification evidence id")
+
+
+class VerificationEvidenceBundle(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: RequiredIdentifierStr
+    items: tuple[VerificationEvidenceItem, ...] = ()
+    acceptance_links: tuple[VerificationEvidenceLink, ...] = ()
+    expectation_links: tuple[VerificationEvidenceLink, ...] = ()
+
+
+class SemanticEvaluationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: RequiredIdentifierStr
+    criterion: str = Field(min_length=1)
+    result_excerpt: str = ""
+    evidence: tuple[VerificationEvidenceItem, ...] = ()
+
+
+class SemanticEvaluationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criterion: str = Field(min_length=1)
+    passed: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+    evidence_ids: tuple[str, ...] = ()
+    evaluator: str = "rule"
+
+    @field_validator("evidence_ids", mode="before")
+    @classmethod
+    def _normalize_semantic_evidence_ids(cls, value: object) -> tuple[str, ...]:
+        return _normalize_text_tuple(value, field_name="semantic evidence id")
+
+
 class VerificationReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -226,6 +307,8 @@ class VerificationReport(BaseModel):
     passed: bool
     checks: tuple[VerificationCheckResult, ...]
     unmet_items: tuple[str, ...] = ()
+    evidence_bundle: VerificationEvidenceBundle | None = None
+    semantic_results: tuple[SemanticEvaluationResult, ...] = ()
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc)
     )

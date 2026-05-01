@@ -5,6 +5,8 @@ from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.ids import TaskId, new_task_id
 from relay_teams.agents.tasks.models import (
+    SemanticEvaluationRequest,
+    SemanticEvaluationResult,
     TaskEnvelope,
     TaskHandoff,
     TaskLifecyclePolicy,
@@ -12,6 +14,10 @@ from relay_teams.agents.tasks.models import (
     TaskSpec,
     VerificationCommand,
     VerificationCheckResult,
+    VerificationEvidenceBundle,
+    VerificationEvidenceItem,
+    VerificationEvidenceLink,
+    VerificationEvidenceMetric,
     VerificationPlan,
     VerificationReport,
     VerificationResult,
@@ -21,6 +27,8 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 __all__ = [
     "EventEnvelope",
     "EventType",
+    "SemanticEvaluationRequest",
+    "SemanticEvaluationResult",
     "TaskEnvelope",
     "TaskHandoff",
     "TaskId",
@@ -31,6 +39,10 @@ __all__ = [
     "TaskStatus",
     "VerificationCommand",
     "VerificationCheckResult",
+    "VerificationEvidenceBundle",
+    "VerificationEvidenceItem",
+    "VerificationEvidenceLink",
+    "VerificationEvidenceMetric",
     "VerificationPlan",
     "VerificationReport",
     "VerificationResult",
