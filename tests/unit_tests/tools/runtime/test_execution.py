@@ -361,9 +361,11 @@ class _FakeDeps:
         self.notification_service = _build_notification_service(self.run_event_hub)
         self.hook_service: object | None = None
         self.reminder_service: object | None = None
+        self.audit_service: object | None = None
         self.hook_runtime_env: dict[str, str] = {}
         self.injection_manager = _FakeInjectionManager()
         self.media_asset_service: object | None = None
+        self.workspace: object | None = None
         self.message_repo = MessageRepository(db_path)
         self.approval_ticket_repo = ApprovalTicketRepository(db_path)
         self.run_runtime_repo = RunRuntimeRepository(db_path)

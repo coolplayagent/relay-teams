@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from pydantic_ai import RunContext
 
+from relay_teams.audit import AuditService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.orchestration.task_contracts import (
@@ -175,6 +176,7 @@ class ToolDeps(BaseModel):
     hook_service: SkipValidation[HookService | None] = None
     reminder_service: SkipValidation[SystemReminderService | None] = None
     auto_harness_service: SkipValidation[object | None] = None
+    audit_service: SkipValidation[AuditService | None] = None
     model_capabilities: SkipValidation[ModelCapabilities] = Field(
         default_factory=ModelCapabilities
     )
