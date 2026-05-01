@@ -27,6 +27,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Prompt behavior](modules/prompt/system-prompt-layering.md)
 - [Providers](modules/providers/)
 - [Reminders](modules/reminders/system-reminders-design.md)
+- [SG-1 runtime guardrails](modules/security/runtime-guardrails-sg1.md)
 - [Sessions](modules/sessions/)
 - [SP-3 spec checkpoint refresh](modules/sessions/spec-checkpoint-refresh-design.md)
 - [Skills](modules/skills/)

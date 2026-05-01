@@ -57,6 +57,7 @@ from relay_teams.sessions.runs.assistant_errors import (
     build_assistant_error_message,
 )
 from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.recoverable_pause import (
@@ -67,6 +68,7 @@ from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import (
     RunKind,
+    RunEvent,
     RuntimePromptConversationContext,
     RunThinkingConfig,
     RunTopologySnapshot,
@@ -79,6 +81,7 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
+from relay_teams.tools.runtime.guardrails import generate_runtime_guardrail_report_async
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
 LOGGER = get_logger(__name__)
@@ -459,6 +462,11 @@ class TaskExecutionService(BaseModel):
                     payload_json="{}",
                 )
             )
+            await self._publish_runtime_guardrail_report_async(
+                task=task,
+                instance_id=instance_id,
+                role_id=role_id,
+            )
             await persistence_harness.record_memory_if_needed_async(
                 role_id=role_id,
                 workspace_id=workspace.ref.workspace_id,
@@ -628,6 +636,50 @@ class TaskExecutionService(BaseModel):
                 ),
                 error_code="internal_execution_error",
                 error_message=str(exc),
+            )
+
+    async def _publish_runtime_guardrail_report_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+    ) -> None:
+        try:
+            report = await generate_runtime_guardrail_report_async(
+                shared_store=self.shared_store,
+                task_id=task.task_id,
+                run_id=task.trace_id,
+                session_id=task.session_id,
+                role_id=role_id,
+            )
+            event = RunEvent(
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                trace_id=task.trace_id,
+                task_id=task.task_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                event_type=RunEventType.RUNTIME_GUARDRAIL_REPORT,
+                payload_json=report.model_dump_json(),
+            )
+            if self.run_event_hub is not None:
+                _ = await self.run_event_hub.publish_async(event)
+            else:
+                _ = await self.event_bus.emit_run_event_async(event)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="task.execution.guardrail_report_failed",
+                message="Runtime guardrail report could not be generated",
+                payload={
+                    "task_id": task.task_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
             )
 
     def _start_task_heartbeat(

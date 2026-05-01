@@ -18,10 +18,22 @@ from relay_teams.roles.role_contracts import (
     RoleContractInvariant,
     RoleContractInvariantType,
 )
+from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.tools.runtime.context import ToolContext
 from relay_teams.tools.runtime.execution import execute_tool
+from relay_teams.tools.runtime.guardrails import (
+    RuntimeGuardrailAction,
+    RuntimeGuardrailLayer,
+    RuntimeGuardrailPolicy,
+    RuntimeGuardrailRule,
+    RuntimeGuardrailRuleType,
+)
 from relay_teams.tools.runtime.models import ToolApprovalRequest, ToolRuntimeDecision
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
+from relay_teams.tools.runtime.persisted_state import (
+    ToolExecutionStatus,
+    load_tool_call_state,
+)
 from tests.unit_tests.tools.runtime.test_execution import (
     _FakeApprovalManager,
     _FakeCtx,
@@ -349,3 +361,88 @@ def test_execute_tool_denies_when_role_capabilities_cannot_be_resolved() -> None
     assert error["type"] == "tool_policy_denied"
     assert meta["runtime_policy_decision"] == "deny"
     assert meta["approval_status"] == "denied_by_policy"
+
+
+def test_execute_tool_blocks_destructive_shell_in_pre_execution_guardrail() -> None:
+    deps = _PolicyDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(yolo=True),
+    )
+    deps.role_registry.register(
+        deps.role_registry.get("spec_coder").model_copy(update={"tools": ("shell",)})
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-guardrail-rm"
+    called = False
+
+    def action() -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "rm -rf build"},
+            tool_input={"command": "rm -rf build"},
+            action=action,
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert called is False
+    assert result["ok"] is False
+    assert error["type"] == "runtime_guardrail_denied"
+    assert meta["runtime_guardrail_status"] == "blocked"
+    assert meta["approval_status"] == "denied_by_guardrail"
+    assert any(
+        event.event_type == RunEventType.RUNTIME_GUARDRAIL_ALERT
+        for event in deps.run_event_hub.events
+    )
+
+
+def test_execute_tool_can_block_large_output_in_execution_guardrail() -> None:
+    policy = ToolApprovalPolicy(
+        yolo=True,
+        guardrails=RuntimeGuardrailPolicy(
+            rules=(
+                RuntimeGuardrailRule(
+                    rule_id="tiny-output",
+                    layer=RuntimeGuardrailLayer.IN_EXECUTION,
+                    rule_type=RuntimeGuardrailRuleType.OUTPUT_SIZE,
+                    action=RuntimeGuardrailAction.DENY,
+                    max_bytes=10,
+                ),
+            )
+        ),
+    )
+    deps = _PolicyDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=policy,
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-guardrail-output"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="webfetch",
+            args_summary={"url": "https://example.com"},
+            action=lambda: {"content": "x" * 128},
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-guardrail-output",
+    )
+    assert result["ok"] is False
+    assert error["type"] == "runtime_guardrail_denied"
+    assert meta["runtime_guardrail_status"] == "blocked"
+    assert state is not None
+    assert state.execution_status == ToolExecutionStatus.FAILED

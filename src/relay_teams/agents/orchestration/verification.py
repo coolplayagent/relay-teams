@@ -39,6 +39,11 @@ from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.tools.runtime.guardrails import (
+    RuntimeGuardrailReport,
+    RuntimeGuardrailStatus,
+    runtime_guardrail_report_from_payload,
+)
 from relay_teams.tools.runtime.models import ToolRuntimeDecision
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
@@ -116,6 +121,7 @@ def verify_task(
     workspace_root: Path | None = None,
     semantic_evaluator: SemanticVerificationEvaluator | None = None,
     role: RoleDefinition | None = None,
+    require_guardrail_report: bool = False,
 ) -> VerificationResult:
     task = task_repo.get(task_id)
     evidence_bundle: VerificationEvidenceBundle | None = None
@@ -144,6 +150,12 @@ def verify_task(
             tool_approval_policy=tool_approval_policy or ToolApprovalPolicy(),
             workspace_root=workspace_root,
             semantic_evaluator=semantic_evaluator,
+            guardrail_report=_latest_guardrail_report(
+                event_bus=event_bus,
+                trace_id=task.envelope.trace_id,
+                task_id=task.envelope.task_id,
+            ),
+            require_guardrail_report=require_guardrail_report,
         )
         checks = list(plan_run.checks)
         evidence_bundle = plan_run.evidence_bundle
@@ -203,6 +215,8 @@ def _run_verification_plan(
     tool_approval_policy: ToolApprovalPolicy,
     workspace_root: Path | None,
     semantic_evaluator: SemanticVerificationEvaluator | None,
+    guardrail_report: RuntimeGuardrailReport | None,
+    require_guardrail_report: bool,
 ) -> _VerificationPlanRun:
     checks: list[VerificationCheckResult] = []
     evidence_items: list[VerificationEvidenceItem] = [
@@ -229,6 +243,11 @@ def _run_verification_plan(
             task_id=task_id_filter,
         )
     )
+    guardrail_checks = _runtime_guardrail_checks(
+        report=guardrail_report,
+        required=require_guardrail_report,
+    )
+    checks.extend(guardrail_checks)
     (
         evidence_items_with_supports,
         acceptance_links,
@@ -825,6 +844,10 @@ def _event_evidence_item(
         return _tool_call_evidence_item(index=index, payload=payload)
     if event_type == RunEventType.TOOL_RESULT.value:
         return _tool_result_evidence_item(index=index, payload=payload)
+    if event_type == RunEventType.RUNTIME_GUARDRAIL_REPORT.value:
+        report = runtime_guardrail_report_from_payload(payload)
+        if report is not None:
+            return _runtime_guardrail_evidence_item(index=index, report=report)
     if _is_gate_finding_event(event_type=event_type, payload=payload):
         return _gate_finding_evidence_item(
             index=index, event_type=event_type, payload=payload
@@ -872,6 +895,111 @@ def _tool_result_evidence_item(
         tool_name=tool_name,
         tool_call_id=tool_call_id,
         output_excerpt=_json_excerpt(payload.get("result")),
+    )
+
+
+def _latest_guardrail_report(
+    *,
+    event_bus: EventLog,
+    trace_id: str,
+    task_id: str,
+) -> RuntimeGuardrailReport | None:
+    report: RuntimeGuardrailReport | None = None
+    for event in event_bus.list_by_trace(trace_id):
+        if str(event.get("task_id") or "") != task_id:
+            continue
+        if (
+            str(event.get("event_type") or "")
+            != RunEventType.RUNTIME_GUARDRAIL_REPORT.value
+        ):
+            continue
+        candidate = runtime_guardrail_report_from_payload(
+            _parse_event_payload(event.get("payload_json"))
+        )
+        if candidate is not None:
+            report = candidate
+    return report
+
+
+def _runtime_guardrail_checks(
+    *,
+    report: RuntimeGuardrailReport | None,
+    required: bool,
+) -> tuple[VerificationCheckResult, ...]:
+    if report is None:
+        if not required:
+            return ()
+        return (
+            VerificationCheckResult(
+                layer=VerificationLayer.SECURITY,
+                name="runtime_guardrail_report",
+                passed=False,
+                details="Runtime guardrail report is required but was not generated.",
+            ),
+        )
+    checks = [
+        VerificationCheckResult(
+            layer=VerificationLayer.SECURITY,
+            name=f"runtime_guardrail:{check.name}",
+            passed=check.passed,
+            details=check.details,
+        )
+        for check in report.checks
+    ]
+    checks.append(
+        VerificationCheckResult(
+            layer=VerificationLayer.SECURITY,
+            name="runtime_guardrail_status",
+            passed=report.status != RuntimeGuardrailStatus.BLOCKED,
+            details=(
+                "Runtime guardrail report is clear."
+                if report.status == RuntimeGuardrailStatus.PASSED
+                else (
+                    "Runtime guardrail report contains warnings."
+                    if report.status == RuntimeGuardrailStatus.WARNING
+                    else "Runtime guardrail report contains blocked actions."
+                )
+            ),
+        )
+    )
+    return tuple(checks)
+
+
+def _runtime_guardrail_evidence_items(
+    report: RuntimeGuardrailReport | None,
+) -> tuple[VerificationEvidenceItem, ...]:
+    if report is None:
+        return ()
+    return (_runtime_guardrail_evidence_item(index=0, report=report),)
+
+
+def _runtime_guardrail_evidence_item(
+    *,
+    index: int,
+    report: RuntimeGuardrailReport,
+) -> VerificationEvidenceItem:
+    status = report.status.value
+    return VerificationEvidenceItem(
+        evidence_id=_evidence_id("guardrail", index, report.task_id),
+        kind=VerificationEvidenceKind.RUNTIME_GUARDRAIL_REPORT,
+        summary=f"Runtime guardrail report status is {status}.",
+        source="runtime_guardrail_report",
+        passed=report.status != RuntimeGuardrailStatus.BLOCKED,
+        output_excerpt=_json_excerpt(report.model_dump(mode="json")),
+        metrics=(
+            VerificationEvidenceMetric(
+                name="guardrail_tool_calls",
+                value=report.total_tool_calls,
+            ),
+            VerificationEvidenceMetric(
+                name="guardrail_warnings",
+                value=report.warning_count,
+            ),
+            VerificationEvidenceMetric(
+                name="guardrail_blocks",
+                value=report.blocked_count,
+            ),
+        ),
     )
 
 
