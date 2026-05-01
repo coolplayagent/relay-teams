@@ -969,7 +969,9 @@ MCP 集成已存在（`mcp/` 模块），但 A2A 协议尚未实现。`external_
 
 部分已升级（2026-04-28）。`verify_task()` 不再只是非空/字符串 checklist：`VerificationPlan` 支持 `required_files`、`command_checks`、`acceptance_criteria`、`evidence_expectations`，命令验证会受 `ToolApprovalPolicy` 和 role allowed tools 约束，并对 stdout/stderr 做 bounded capture；结果汇总为结构化 `VerificationReport`。
 
-仍然薄弱的是语义层：acceptance criteria 和 evidence expectations 目前仍以"结果文本是否引用该条目"为主，无法判断实现是否真的满足规格；也没有将文件 diff、测试日志、工具调用、Gater findings 归一化为 Evidence Bundle。
+2026-05-01 已继续补齐 Evidence Bundle 与语义判定基础：`VerificationReport` 现在携带 normalized `VerificationEvidenceBundle`，会把任务结果、required file、命令输出、工具调用/结果事件和 Gater/timeout 类 findings 归一化为 evidence item；测试、lint、diff、形式化验证命令输出会解析为结构化 metrics。acceptance criteria 与 evidence expectations 不再只看结果文本引用，而是生成 evidence link，并新增 Evidence 与 Semantic 两层检查。语义层先落地规则 evaluator，并预留外部/LLM evaluator 注入点；外部 evaluator 失败时会记录日志并回退到规则判定。
+
+仍需后续增强的是：将真实 LLM evaluator 接入运行时 provider，并对高严格度任务增加更强的重复性控制、多模型互评和形式化验证 profile。
 
 #### 对比价值
 
@@ -985,7 +987,7 @@ MCP 集成已存在（`mcp/` 模块），但 A2A 协议尚未实现。`external_
 
 #### 实施建议
 
-在现有 `VerificationReport` 上继续升级为四层验证：(1) **结构验证**——沿用 required files、格式/schema、关键字段检查；(2) **行为验证**——沿用 command checks，并增加测试、lint、diff 统计的标准化解析；(3) **证据验证**——检查每条 acceptance criterion 是否有对应 evidence item，而不仅是文本引用；(4) **语义合规验证**——由 LLM 或规则+LLM 混合 evaluator 判断实现是否满足 spec，并输出可复核理由。
+在现有 `VerificationReport` 上继续升级为四层验证：(1) **结构验证**——沿用 required files、格式/schema、关键字段检查；(2) **行为验证**——沿用 command checks，并增加测试、lint、diff 统计的标准化解析；(3) **证据验证**——检查每条 acceptance criterion 是否有对应 evidence item，而不仅是文本引用；(4) **语义合规验证**——由 LLM 或规则+LLM 混合 evaluator 判断实现是否满足 spec，并输出可复核理由。第一阶段已落地 Evidence Bundle、证据链接、规则语义 evaluator 和外部 evaluator 回退机制，后续应把 LLM evaluator 接到受控运行时配置。
 
 #### 可行性确认
 

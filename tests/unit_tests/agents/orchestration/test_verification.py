@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from json import dumps
 import subprocess
 import sys
 import threading
@@ -13,12 +14,16 @@ from relay_teams.agents.orchestration import verification as verification_module
 from relay_teams.agents.orchestration.verification import verify_task
 from relay_teams.agents.tasks.enums import TaskStatus, VerificationLayer
 from relay_teams.agents.tasks.models import (
+    SemanticEvaluationRequest,
+    SemanticEvaluationResult,
     TaskEnvelope,
     VerificationCommand,
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
+from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 YOLO_TOOL_APPROVAL_POLICY = ToolApprovalPolicy(yolo=True)
@@ -111,9 +116,207 @@ def test_verify_task_builds_structured_report(tmp_path: Path) -> None:
     assert {check.layer for check in result.report.checks} == {
         VerificationLayer.STRUCTURE,
         VerificationLayer.BEHAVIOR,
-        VerificationLayer.SPEC,
+        VerificationLayer.EVIDENCE,
+        VerificationLayer.SEMANTIC,
     }
+    assert result.report.evidence_bundle is not None
+    assert result.report.evidence_bundle.acceptance_links[0].satisfied is True
+    assert result.report.evidence_bundle.expectation_links[0].satisfied is True
+    assert result.report.semantic_results[0].passed is True
     assert result.report.unmet_items == ()
+
+
+def test_verify_task_links_command_output_to_spec_evidence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_command_evidence.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Run tests",
+        verification=VerificationPlan(
+            command_checks=(
+                VerificationCommand(
+                    command=(
+                        sys.executable,
+                        "-c",
+                        "print('1 passed in 0.01s')",
+                    ),
+                    timeout_seconds=5,
+                ),
+            ),
+            acceptance_criteria=("unit tests pass",),
+            evidence_expectations=("pytest output",),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=tmp_path,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    command_evidence = next(
+        item
+        for item in result.report.evidence_bundle.items
+        if item.output_excerpt == "1 passed in 0.01s"
+    )
+    assert command_evidence.kind.value == "test_result"
+    assert command_evidence.metrics[0].name == "tests_passed"
+    assert command_evidence.metrics[0].value == 1
+    assert result.report.evidence_bundle.acceptance_links[0].evidence_ids == (
+        command_evidence.evidence_id,
+    )
+    assert result.report.evidence_bundle.expectation_links[0].evidence_ids == (
+        command_evidence.evidence_id,
+    )
+    assert result.report.semantic_results[0].passed is True
+    assert result.report.semantic_results[0].confidence == 0.85
+
+
+def test_verify_task_fails_acceptance_without_matching_evidence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_missing_evidence.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Run migration",
+        verification=VerificationPlan(
+            acceptance_criteria=("database migration runs",),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(task_repo, event_log, task.task_id)
+
+    assert result.passed is False
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    assert result.report.evidence_bundle.acceptance_links[0].satisfied is False
+    failed_checks = [check for check in result.report.checks if not check.passed]
+    assert "acceptance_evidence:database migration runs" in {
+        check.name for check in failed_checks
+    }
+    assert "semantic_acceptance:database migration runs" in {
+        check.name for check in failed_checks
+    }
+
+
+def test_verify_task_uses_tool_result_events_as_evidence(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_tool_event_evidence.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Read artifact",
+        verification=VerificationPlan(
+            acceptance_criteria=("read evidence file",),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            event_type=RunEventType.TOOL_RESULT,
+            payload_json=dumps(
+                {
+                    "tool_name": "read",
+                    "tool_call_id": "call-1",
+                    "result": "read evidence file contents",
+                    "error": False,
+                }
+            ),
+        )
+    )
+
+    result = verify_task(task_repo, event_log, task.task_id)
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    linked_id = result.report.evidence_bundle.acceptance_links[0].evidence_ids[0]
+    linked_item = next(
+        item
+        for item in result.report.evidence_bundle.items
+        if item.evidence_id == linked_id
+    )
+    assert linked_item.kind.value == "tool_result"
+    assert result.report.semantic_results[0].evidence_ids == (linked_id,)
+
+
+def test_verify_task_uses_rule_fallback_when_semantic_evaluator_fails(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_semantic_fallback.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Run tests",
+        verification=VerificationPlan(
+            command_checks=(
+                VerificationCommand(
+                    command=(
+                        sys.executable,
+                        "-c",
+                        "print('1 passed in 0.01s')",
+                    ),
+                    timeout_seconds=5,
+                ),
+            ),
+            acceptance_criteria=("unit tests pass",),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    def failing_evaluator(
+        _request: SemanticEvaluationRequest,
+    ) -> SemanticEvaluationResult:
+        raise RuntimeError("model unavailable")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=tmp_path,
+        semantic_evaluator=failing_evaluator,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    semantic_result = result.report.semantic_results[0]
+    assert semantic_result.passed is True
+    assert semantic_result.evaluator == "rule"
+    assert "rule fallback used" in semantic_result.reason
 
 
 def test_verify_task_required_file_rejects_directory(tmp_path: Path) -> None:
