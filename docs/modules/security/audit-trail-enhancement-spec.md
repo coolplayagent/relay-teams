@@ -44,7 +44,7 @@ The audit service is carried on `ToolDeps` as an optional backend dependency. Ag
 `relay_teams.audit` owns the event models, SQLite repository, and service wrapper. The repository stores audit rows as immutable append-only records and normalizes all persisted timestamps to UTC ISO-8601 text before SQL comparison. Dirty persisted JSON and integer values are converted through typed helpers so the read path remains explicit without exposing loose dictionaries.
 
 The tool runtime builds audit events from the effective tool input and the persisted result envelope:
-- file write events derive logical paths from the file-oriented tool input or result metadata, then calculate a final `sha256:<hex>` digest and byte size when the target exists;
+- file write events derive logical paths from the file-oriented tool input or result metadata, then calculate a final `sha256:<hex>` digest and byte size in a worker thread when the target exists;
 - shell command events capture the command and selected execution metadata without storing stdout/stderr bodies;
 - Coordinator dispatch events capture the selected task/role target and a bounded dispatch reason.
 
@@ -69,6 +69,6 @@ Unit coverage includes:
 - repository append/filter/pagination
 - API route filtering and validation
 - UTC time filtering, dirty persisted value conversion, and missing-row behavior
-- tool runtime audit creation for file write variants, shell command, Coordinator dispatch decision, persistence-failure ordering, and audit-write failure isolation
+- tool runtime audit creation for file write variants, worker-thread digest calculation, shell command, Coordinator dispatch decision, persistence-failure ordering, and audit-write failure isolation
 
 End-to-end acceptance should start the FastAPI app, call `/api/audit` through a browser context, and confirm the endpoint returns the immutable audit page shape.

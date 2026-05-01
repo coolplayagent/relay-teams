@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from hashlib import sha256
 from pathlib import Path
+from threading import get_ident
 from typing import cast
 
 import pytest
@@ -138,6 +139,53 @@ def test_execute_tool_records_file_write_variant_audit_events(tmp_path: Path) ->
     assert events["notebook.ipynb"].action == "edit_notebook"
     assert events["tmp/scratch.txt"].metadata["input_content_length"] == 8
     assert events["src/edit.txt"].metadata["created"] is False
+
+
+def test_execute_tool_hashes_file_write_digest_off_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_repository = AuditEventRepository(tmp_path / "audit.db")
+    deps = _deps_with_audit(tmp_path, audit_repository)
+    target_path = tmp_path / "src" / "audit.txt"
+    event_loop_thread_id = get_ident()
+    digest_thread_ids: list[int] = []
+    original_digest = execution_module._workspace_file_digest
+
+    def recording_digest(
+        *,
+        ctx: ToolContext,
+        logical_path: str,
+    ) -> tuple[str | None, int | None, str | None]:
+        digest_thread_ids.append(get_ident())
+        return original_digest(ctx=ctx, logical_path=logical_path)
+
+    monkeypatch.setattr(
+        execution_module,
+        "_workspace_file_digest",
+        recording_digest,
+    )
+
+    def action() -> ToolResultProjection:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("audit body", encoding="utf-8")
+        return ToolResultProjection(
+            visible_data={"output": "Wrote file successfully."},
+            internal_data={"path": "src/audit.txt"},
+        )
+
+    asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, _FakeCtx(deps))),
+            tool_name="write",
+            args_summary={"path": "src/audit.txt"},
+            tool_input={"path": "src/audit.txt", "content": "audit body"},
+            action=action,
+        )
+    )
+
+    assert digest_thread_ids
+    assert all(thread_id != event_loop_thread_id for thread_id in digest_thread_ids)
 
 
 def test_execute_tool_records_file_digest_error_when_target_missing(

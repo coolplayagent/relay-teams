@@ -852,7 +852,7 @@ async def _record_security_audit_event_async(
     service = _audit_service(ctx)
     if service is None:
         return
-    event = _build_security_audit_event(
+    event = await _build_security_audit_event_async(
         ctx=ctx,
         tool_name=tool_name,
         tool_call_id=tool_call_id,
@@ -887,7 +887,7 @@ def _audit_service(ctx: ToolContext) -> AuditService | None:
     return ctx.deps.audit_service
 
 
-def _build_security_audit_event(
+async def _build_security_audit_event_async(
     *,
     ctx: ToolContext,
     tool_name: str,
@@ -898,7 +898,7 @@ def _build_security_audit_event(
     execution_status: ToolExecutionStatus,
 ) -> AuditEventCreate | None:
     if tool_name in _AUDITED_FILE_WRITE_TOOLS:
-        return _build_file_write_audit_event(
+        return await _build_file_write_audit_event_async(
             ctx=ctx,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
@@ -926,7 +926,7 @@ def _build_security_audit_event(
     return None
 
 
-def _build_file_write_audit_event(
+async def _build_file_write_audit_event_async(
     *,
     ctx: ToolContext,
     tool_name: str,
@@ -939,7 +939,8 @@ def _build_file_write_audit_event(
     target = _file_write_target(tool_name, tool_input, internal_data)
     if target is None:
         return None
-    content_digest, content_size_bytes, digest_error = _workspace_file_digest(
+    content_digest, content_size_bytes, digest_error = await asyncio.to_thread(
+        _workspace_file_digest,
         ctx=ctx,
         logical_path=target,
     )
