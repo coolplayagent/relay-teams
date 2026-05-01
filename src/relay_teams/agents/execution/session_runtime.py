@@ -36,7 +36,7 @@ from relay_teams.agents.execution.spec_checkpoint import (
     SpecCheckpointDecision,
     build_spec_checkpoint_decision,
 )
-from relay_teams.agents.tasks.models import TaskEnvelope
+from relay_teams.agents.tasks.models import TaskRecord
 from relay_teams.logger import (
     close_model_stream,
     get_logger,
@@ -731,25 +731,27 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 nonlocal attempt_messages_committed
 
                 decision = await _build_spec_checkpoint_decision_async(
-                    session=self,
+                    task_repo=self._task_repo,
+                    role_registry=self._role_registry,
                     request=request,
                     history=history,
                 )
                 if not decision.should_inject:
                     return False
-                appended = (
-                    await self._message_repo.append_system_prompt_if_missing_async(
-                        session_id=request.session_id,
-                        workspace_id=resolved_workspace_id,
-                        conversation_id=resolved_conversation_id,
-                        agent_role_id=request.role_id,
-                        instance_id=request.instance_id,
-                        task_id=request.task_id,
-                        trace_id=request.trace_id,
-                        content=decision.content,
-                    )
+                append_system_prompt = (
+                    self._message_repo.append_system_prompt_if_missing_async
                 )
-                if appended is False:
+                checkpoint_appended = await append_system_prompt(
+                    session_id=request.session_id,
+                    workspace_id=resolved_workspace_id,
+                    conversation_id=resolved_conversation_id,
+                    agent_role_id=request.role_id,
+                    instance_id=request.instance_id,
+                    task_id=request.task_id,
+                    trace_id=request.trace_id,
+                    content=decision.content,
+                )
+                if not checkpoint_appended:
                     return False
                 await publish_run_event_async(
                     self._run_event_hub,
@@ -1631,26 +1633,36 @@ def _messages_include_final_answer(
     return False
 
 
+class _SpecCheckpointTaskRepository(Protocol):
+    async def get_async(self, task_id: str) -> TaskRecord:
+        raise NotImplementedError  # pragma: no cover
+
+
+class _SpecCheckpointRoleRegistry(Protocol):
+    def is_coordinator_role(self, role_id: str) -> bool:
+        raise NotImplementedError  # pragma: no cover
+
+
 async def _build_spec_checkpoint_decision_async(
     *,
-    session: AgentLlmSessionMixinBase,
+    task_repo: _SpecCheckpointTaskRepository | None,
+    role_registry: _SpecCheckpointRoleRegistry | None,
     request: LLMRequest,
     history: Sequence[ModelRequest | ModelResponse],
 ) -> SpecCheckpointDecision:
     if _role_uses_coordinator_checkpoint_exemption(
-        session=session,
+        role_registry=role_registry,
         role_id=request.role_id,
     ):
         return SpecCheckpointDecision()
-    try:
-        task_record = await session._task_repo.get_async(request.task_id)
-    except (AttributeError, KeyError):
+    if task_repo is None:
         return SpecCheckpointDecision()
-    task = getattr(task_record, "envelope", None)
-    if not isinstance(task, TaskEnvelope):
+    try:
+        task_record = await task_repo.get_async(request.task_id)
+    except KeyError:
         return SpecCheckpointDecision()
     return build_spec_checkpoint_decision(
-        task=task,
+        task=task_record.envelope,
         role_id=request.role_id,
         history=history,
     )
@@ -1658,15 +1670,14 @@ async def _build_spec_checkpoint_decision_async(
 
 def _role_uses_coordinator_checkpoint_exemption(
     *,
-    session: AgentLlmSessionMixinBase,
+    role_registry: _SpecCheckpointRoleRegistry | None,
     role_id: str,
 ) -> bool:
-    role_registry = getattr(session, "_role_registry", None)
     if role_registry is None:
         return False
     try:
         return bool(role_registry.is_coordinator_role(role_id))
-    except (AttributeError, KeyError):
+    except KeyError:
         return False
 
 
@@ -1675,15 +1686,14 @@ def _spec_checkpoint_event_payload(
     decision: SpecCheckpointDecision,
     request: LLMRequest,
 ) -> dict[str, JsonValue]:
+    history_tokens_since_last_checkpoint = decision.history_tokens_since_last_checkpoint
     return {
         "role_id": request.role_id,
         "instance_id": request.instance_id,
         "task_id": request.task_id,
         "sequence": decision.sequence,
         "reason": decision.reason,
-        "tool_calls_since_last_checkpoint": (decision.tool_calls_since_last_checkpoint),
+        "tool_calls_since_last_checkpoint": decision.tool_calls_since_last_checkpoint,
         "messages_since_last_checkpoint": decision.messages_since_last_checkpoint,
-        "history_tokens_since_last_checkpoint": (
-            decision.history_tokens_since_last_checkpoint
-        ),
+        "history_tokens_since_last_checkpoint": history_tokens_since_last_checkpoint,
     }

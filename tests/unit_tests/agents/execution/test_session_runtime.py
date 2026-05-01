@@ -14,6 +14,7 @@ from relay_teams.agents.tasks.models import (
     SpecCheckpointPolicy,
     TaskEnvelope,
     TaskLifecyclePolicy,
+    TaskRecord,
     TaskSpec,
     VerificationPlan,
 )
@@ -42,7 +43,6 @@ from .agent_llm_session_test_support import (
 
 @pytest.mark.asyncio
 async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> None:
-    session = object.__new__(AgentLlmSession)
     task = TaskEnvelope(
         task_id="task-1",
         session_id="session-1",
@@ -60,22 +60,20 @@ async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> N
     )
 
     class _TaskRepo:
-        async def get_async(self, task_id: str) -> object:
+        async def get_async(self, task_id: str) -> TaskRecord:
             assert task_id == "task-1"
-            return SimpleNamespace(envelope=task)
+            return TaskRecord(envelope=task)
 
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
             assert role_id == "Crafter"
             return False
 
-    session.__dict__["_task_repo"] = _TaskRepo()
-    session.__dict__["_role_registry"] = _RoleRegistry()
-
     decision = await session_runtime_module._build_spec_checkpoint_decision_async(
-        session=session,
+        task_repo=_TaskRepo(),
+        role_registry=_RoleRegistry(),
         request=_build_request(user_prompt=None).model_copy(
-            update={"role_id": "Crafter"}
+            update={"role_id": "Crafter", "task_id": "task-1"}
         ),
         history=[
             ModelRequest(
@@ -92,6 +90,86 @@ async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> N
 
     assert decision.should_inject is True
     assert "keep the route stable" in decision.content
+
+
+@pytest.mark.asyncio
+async def test_spec_checkpoint_decision_skips_coordinator_roles() -> None:
+    class _TaskRepo:
+        async def get_async(self, task_id: str) -> TaskRecord:
+            raise AssertionError(task_id)
+
+    class _RoleRegistry:
+        def is_coordinator_role(self, role_id: str) -> bool:
+            assert role_id == "Coordinator"
+            return True
+
+    decision = await session_runtime_module._build_spec_checkpoint_decision_async(
+        task_repo=_TaskRepo(),
+        role_registry=_RoleRegistry(),
+        request=_build_request(user_prompt=None).model_copy(
+            update={"role_id": "Coordinator", "task_id": "task-1"}
+        ),
+        history=[],
+    )
+
+    assert decision.should_inject is False
+
+
+@pytest.mark.asyncio
+async def test_spec_checkpoint_decision_ignores_missing_task_record() -> None:
+    class _TaskRepo:
+        async def get_async(self, task_id: str) -> TaskRecord:
+            assert task_id == "missing-task"
+            raise KeyError(task_id)
+
+    class _RoleRegistry:
+        def is_coordinator_role(self, role_id: str) -> bool:
+            assert role_id == "Crafter"
+            raise KeyError(role_id)
+
+    decision = await session_runtime_module._build_spec_checkpoint_decision_async(
+        task_repo=_TaskRepo(),
+        role_registry=_RoleRegistry(),
+        request=_build_request(user_prompt=None).model_copy(
+            update={"role_id": "Crafter", "task_id": "missing-task"}
+        ),
+        history=[],
+    )
+
+    assert decision.should_inject is False
+
+
+def test_spec_checkpoint_event_payload_contains_refresh_counters() -> None:
+    request = _build_request(user_prompt=None).model_copy(
+        update={
+            "role_id": "Crafter",
+            "instance_id": "inst-1",
+            "task_id": "task-1",
+        }
+    )
+    decision = session_runtime_module.SpecCheckpointDecision(
+        sequence=2,
+        reason="messages>=2",
+        tool_calls_since_last_checkpoint=1,
+        messages_since_last_checkpoint=2,
+        history_tokens_since_last_checkpoint=3,
+    )
+
+    payload = session_runtime_module._spec_checkpoint_event_payload(
+        decision=decision,
+        request=request,
+    )
+
+    assert payload == {
+        "role_id": "Crafter",
+        "instance_id": "inst-1",
+        "task_id": "task-1",
+        "sequence": 2,
+        "reason": "messages>=2",
+        "tool_calls_since_last_checkpoint": 1,
+        "messages_since_last_checkpoint": 2,
+        "history_tokens_since_last_checkpoint": 3,
+    }
 
 
 @pytest.mark.asyncio
