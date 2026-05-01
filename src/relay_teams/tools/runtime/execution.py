@@ -503,15 +503,6 @@ async def execute_tool(
                 tool_call_id=tool_call_id,
                 envelope=envelope,
             )
-            await _record_security_audit_event_async(
-                ctx=ctx,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                tool_input=effective_tool_input,
-                visible_envelope=envelope,
-                internal_data=internal_data,
-                execution_status=ToolExecutionStatus.COMPLETED,
-            )
             await _persist_and_publish_tool_result_async(
                 ctx=ctx,
                 tool_call_id=tool_call_id,
@@ -522,6 +513,15 @@ async def execute_tool(
                 runtime_meta=meta,
                 execution_status=ToolExecutionStatus.COMPLETED,
                 tool_content_parts=tool_content_parts,
+            )
+            await _record_security_audit_event_async(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                tool_input=effective_tool_input,
+                visible_envelope=envelope,
+                internal_data=internal_data,
+                execution_status=ToolExecutionStatus.COMPLETED,
             )
             await _record_tool_metrics_async(
                 ctx=ctx,

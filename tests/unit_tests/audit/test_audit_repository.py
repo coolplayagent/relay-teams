@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from pydantic import JsonValue
@@ -78,6 +78,41 @@ def test_audit_repository_paginates_async(tmp_path: Path) -> None:
         assert [item.target for item in next_page.items] == ["src/file_2.py"]
 
     asyncio.run(scenario())
+
+
+def test_audit_repository_normalizes_timestamp_filters_to_utc(tmp_path: Path) -> None:
+    repository = AuditEventRepository(tmp_path / "audit-time.db")
+    event = repository.append(
+        _event(
+            event_type=AuditEventType.FILE_WRITE,
+            target="src/offset.py",
+            occurred_at=datetime(
+                2026,
+                5,
+                1,
+                0,
+                0,
+                tzinfo=timezone(timedelta(hours=-5)),
+            ),
+        )
+    )
+
+    page = repository.list_events(
+        AuditEventFilter(
+            since=datetime(2026, 5, 1, 3, 0, tzinfo=UTC),
+            until=datetime(
+                2026,
+                5,
+                1,
+                1,
+                0,
+                tzinfo=timezone(timedelta(hours=-4)),
+            ),
+        )
+    )
+
+    assert [item.audit_event_id for item in page.items] == [event.audit_event_id]
+    assert page.items[0].occurred_at == datetime(2026, 5, 1, 5, 0, tzinfo=UTC)
 
 
 def _event(

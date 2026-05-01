@@ -327,6 +327,7 @@ Notes:
 - Shell command events record the command string plus execution context and result metadata such as `exit_code` when available.
 - Coordinator decision events record `orch_dispatch_task` selections as the task-to-role channel decision plus the dispatch prompt/reason, capped by the application layer.
 - `span_id` and `parent_span_id` bind each row to a `security.audit` trace span.
+- `occurred_at` and `created_at` are stored as UTC ISO 8601 text so SQLite range filters are stable across client-provided offsets.
 - Repositories expose append and list operations only; there is no source path for Agent tools to update or delete audit rows.
 
 ---

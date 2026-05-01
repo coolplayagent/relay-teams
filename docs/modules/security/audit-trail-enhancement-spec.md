@@ -35,13 +35,13 @@ Raw file content is never stored in audit rows. Dispatch reasons are capped at 4
 
 ## Runtime Integration
 
-Audit recording is centralized in `relay_teams.tools.runtime.execution` after hook rewriting has produced the effective tool input. The runtime records audit events before persisting the tool result envelope, and audit persistence failures are logged without failing the user-visible tool result.
+Audit recording is centralized in `relay_teams.tools.runtime.execution` after hook rewriting has produced the effective tool input. The runtime records successful audit events after the tool result envelope is persisted so persistence failures do not create contradictory completed and failed audit rows. Audit persistence failures are logged without failing the user-visible tool result.
 
 The audit service is carried on `ToolDeps` as an optional backend dependency. Agent tools do not expose any audit mutation function, and the repository has no update/delete API.
 
 ## API
 
-`GET /api/audit` accepts exact filters for event type and trace/session/run/task/role identifiers, cursor pagination with `after_id`, time filtering with `since`/`until`, and `limit` up to 500.
+`GET /api/audit` accepts exact filters for event type and trace/session/run/task/role identifiers, cursor pagination with `after_id`, time filtering with `since`/`until`, and `limit` up to 500. Persisted timestamps and query timestamp offsets are normalized to UTC before range comparison.
 
 The response is:
 

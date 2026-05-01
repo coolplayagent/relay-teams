@@ -30,7 +30,7 @@ Query fields:
 - `event_type`: optional `file_write`, `shell_command`, or `coordinator_decision`.
 - `trace_id`, `run_id`, `session_id`, `task_id`, `role_id`: optional exact-match filters.
 - `after_id`: optional cursor, default `0`.
-- `since`, `until`: optional ISO 8601 timestamps matched against `occurred_at`.
+- `since`, `until`: optional ISO 8601 timestamps matched against `occurred_at`; offsets are normalized to UTC before comparison.
 - `limit`: optional page size from `1` to `500`, default `100`.
 
 Response fields:
@@ -63,6 +63,7 @@ Notes:
 - File write audit events store a final content digest and size, not raw content.
 - Shell command audit events store the command text and execution context.
 - Coordinator decision audit events store the selected delegated task/role channel and the dispatch reason captured from `orch_dispatch_task`.
+- `occurred_at` and `created_at` are persisted and filtered as UTC ISO 8601 timestamps.
 - The API is read-only. Audit rows are written by backend runtime paths and cannot be mutated by Agent tools.
 
 ## Core Concepts

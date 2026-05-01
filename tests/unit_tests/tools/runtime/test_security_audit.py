@@ -5,11 +5,13 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
+import pytest
 from pydantic import JsonValue
 
 from relay_teams.audit import AuditEventFilter, AuditEventRepository, AuditEventType
 from relay_teams.audit.service import AuditService
 from relay_teams.tools.runtime.context import ToolContext
+from relay_teams.tools.runtime import execution as execution_module
 from relay_teams.tools.runtime.execution import execute_tool
 from relay_teams.tools.runtime.models import ToolResultProjection
 from tests.unit_tests.tools.runtime.test_execution import (
@@ -118,6 +120,45 @@ def test_execute_tool_records_shell_and_coordinator_audit_events(
     assert decision_page.items[0].target == "task:task-child->role:Reviewer"
     assert decision_page.items[0].decision_reason is not None
     assert "audit coverage" in decision_page.items[0].decision_reason
+
+
+def test_execute_tool_records_failed_audit_when_success_persistence_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_repository = AuditEventRepository(tmp_path / "audit.db")
+    deps = _deps_with_audit(tmp_path, audit_repository)
+
+    async def fail_persistence(**kwargs: object) -> None:
+        _ = kwargs
+        raise RuntimeError("tool result persistence unavailable")
+
+    monkeypatch.setattr(
+        execution_module,
+        "_persist_and_publish_tool_result_async",
+        fail_persistence,
+    )
+
+    with pytest.raises(RuntimeError, match="tool result persistence unavailable"):
+        asyncio.run(
+            execute_tool(
+                cast(ToolContext, cast(object, _FakeCtx(deps))),
+                tool_name="shell",
+                args_summary={"command": "uv run pytest"},
+                tool_input={"command": "uv run pytest"},
+                action=lambda: ToolResultProjection(
+                    visible_data={"status": "completed", "exit_code": 0},
+                    internal_data={"status": "completed", "exit_code": 0},
+                ),
+            )
+        )
+
+    page = audit_repository.list_events(
+        AuditEventFilter(event_type=AuditEventType.SHELL_COMMAND)
+    )
+    assert len(page.items) == 1
+    assert page.items[0].command == "uv run pytest"
+    assert page.items[0].outcome == "failed"
 
 
 def _deps_with_audit(

@@ -270,8 +270,8 @@ def _event_insert_values(
         event.decision_reason,
         event.outcome,
         dumps(event.metadata, ensure_ascii=False, sort_keys=True),
-        event.occurred_at.isoformat(),
-        created_at.isoformat(),
+        _utc_timestamp(event.occurred_at),
+        _utc_timestamp(created_at),
     )
 
 
@@ -298,10 +298,10 @@ def _list_query_parts(query: AuditEventFilter) -> tuple[str, tuple[object, ...]]
         parameters.append(query.role_id)
     if query.since is not None:
         clauses.append("occurred_at >= ?")
-        parameters.append(query.since.isoformat())
+        parameters.append(_utc_timestamp(query.since))
     if query.until is not None:
         clauses.append("occurred_at <= ?")
-        parameters.append(query.until.isoformat())
+        parameters.append(_utc_timestamp(query.until))
     sql = (
         _SELECT_COLUMNS
         + " FROM security_audit_events WHERE "
@@ -346,8 +346,8 @@ def _row_to_record(row: sqlite3.Row) -> AuditEventRecord:
         decision_reason=_optional_text(row["decision_reason"]),
         outcome=str(row["outcome"]),
         metadata=_json_object(str(row["metadata_json"])),
-        occurred_at=datetime.fromisoformat(str(row["occurred_at"])),
-        created_at=datetime.fromisoformat(str(row["created_at"])),
+        occurred_at=_parse_persisted_datetime(str(row["occurred_at"])),
+        created_at=_parse_persisted_datetime(str(row["created_at"])),
     )
 
 
@@ -386,3 +386,18 @@ def _json_value(value: object) -> JsonValue:
     if isinstance(value, dict):
         return {str(key): _json_value(item) for key, item in value.items()}
     return str(value)
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    if value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _utc_timestamp(value: datetime) -> str:
+    return _utc_datetime(value).isoformat(timespec="microseconds")
+
+
+def _parse_persisted_datetime(value: str) -> datetime:
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    return _utc_datetime(datetime.fromisoformat(text))
