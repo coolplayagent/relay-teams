@@ -12,12 +12,20 @@ import pytest
 
 from relay_teams.agents.orchestration import verification as verification_module
 from relay_teams.agents.orchestration.verification import verify_task
-from relay_teams.agents.tasks.enums import TaskStatus, VerificationLayer
+from relay_teams.agents.tasks.enums import (
+    TaskStatus,
+    VerificationEvidenceKind,
+    VerificationEvidenceTarget,
+    VerificationLayer,
+)
 from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
     TaskEnvelope,
     VerificationCommand,
+    VerificationCheckResult,
+    VerificationEvidenceItem,
+    VerificationEvidenceLink,
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -983,3 +991,245 @@ def test_verify_task_fails_when_command_output_exceeds_capture_limit(
     command_check = result.report.checks[-1]
     assert "output exceeded 32 byte" in command_check.details
     assert command_check.output_excerpt.endswith("...(truncated)")
+
+
+def test_evidence_helpers_classify_metrics_and_generic_checks() -> None:
+    generic_check = VerificationCheckResult(
+        layer=VerificationLayer.EVIDENCE,
+        name="manual",
+        passed=True,
+        details="manual evidence",
+    )
+    assert (
+        verification_module._evidence_kind_from_check(generic_check)
+        == VerificationEvidenceKind.COMMAND
+    )
+    assert (
+        verification_module._check_evidence_summary(generic_check) == "manual evidence"
+    )
+
+    lint_failure = VerificationCheckResult(
+        layer=VerificationLayer.BEHAVIOR,
+        name="command:ruff",
+        passed=False,
+        command=("ruff", "check"),
+        output_excerpt="Found 2 errors",
+    )
+    assert (
+        verification_module._command_evidence_kind(lint_failure)
+        == VerificationEvidenceKind.LINT_RESULT
+    )
+    assert {
+        metric.name: metric.value
+        for metric in verification_module._evidence_metrics_for_check(lint_failure)
+    } == {"lint_errors": 2, "test_errors": 2}
+
+    lint_success = lint_failure.model_copy(
+        update={"passed": True, "output_excerpt": "All checks passed!"}
+    )
+    assert {
+        metric.name: metric.value
+        for metric in verification_module._evidence_metrics_for_check(lint_success)
+    } == {"lint_errors": 0}
+
+    diff_check = VerificationCheckResult(
+        layer=VerificationLayer.BEHAVIOR,
+        name="command:diff",
+        passed=True,
+        command=("git", "diff", "--stat"),
+        output_excerpt="3 files changed, 4 insertions(+), 5 deletions(-)",
+    )
+    assert (
+        verification_module._command_evidence_kind(diff_check)
+        == VerificationEvidenceKind.DIFF_SUMMARY
+    )
+    assert {
+        metric.name: metric.value
+        for metric in verification_module._evidence_metrics_for_check(diff_check)
+    } == {"deletions": 5, "files_changed": 3, "insertions": 4}
+
+    formal_check = VerificationCheckResult(
+        layer=VerificationLayer.BEHAVIOR,
+        name="command:tla",
+        passed=False,
+        command=("tla", "check"),
+        output_excerpt="proof completed",
+    )
+    assert (
+        verification_module._command_evidence_kind(formal_check)
+        == VerificationEvidenceKind.FORMAL_PROOF
+    )
+    assert {
+        metric.name: metric.value
+        for metric in verification_module._evidence_metrics_for_check(formal_check)
+    } == {"formal_checks_passed": 1}
+
+    unittest_check = VerificationCheckResult(
+        layer=VerificationLayer.BEHAVIOR,
+        name="command:unittest",
+        passed=True,
+        command=("python", "-m", "unittest"),
+        output_excerpt="Ran 7 tests in 0.01s",
+    )
+    assert {
+        metric.name: metric.value
+        for metric in verification_module._evidence_metrics_for_check(unittest_check)
+    } == {"tests_total": 7}
+
+
+def test_event_evidence_helpers_parse_scoped_events() -> None:
+    invalid_tool_call = verification_module._event_evidence_item(
+        index=1,
+        event={
+            "event_type": RunEventType.TOOL_CALL.value,
+            "payload_json": dumps({"tool_name": "", "tool_call_id": ""}),
+        },
+    )
+    assert invalid_tool_call is None
+
+    tool_call = verification_module._event_evidence_item(
+        index=2,
+        event={
+            "event_type": RunEventType.TOOL_CALL.value,
+            "payload_json": dumps(
+                {"tool_name": "read", "tool_call_id": "call-1", "args": {"path": "a"}}
+            ),
+        },
+    )
+    assert tool_call is not None
+    assert tool_call.kind == VerificationEvidenceKind.TOOL_CALL
+    assert tool_call.output_excerpt == '{"path": "a"}'
+
+    invalid_tool_result = verification_module._event_evidence_item(
+        index=3,
+        event={
+            "event_type": RunEventType.TOOL_RESULT.value,
+            "payload_json": dumps({"tool_name": "read"}),
+        },
+    )
+    assert invalid_tool_result is None
+
+    gate_item = verification_module._event_evidence_item(
+        index=4,
+        event={
+            "event_type": "gate_finished",
+            "payload_json": dumps({"role_id": "Gater", "findings": ["looks good"]}),
+        },
+    )
+    assert gate_item is not None
+    assert gate_item.kind == VerificationEvidenceKind.GATE_FINDING
+    assert "looks good" in gate_item.output_excerpt
+
+    assert verification_module._parse_event_payload(None) == {}
+    assert verification_module._parse_event_payload("not-json") == {}
+    assert verification_module._parse_event_payload("[]") == {}
+    assert verification_module._json_excerpt(None) == ""
+    assert verification_module._json_excerpt({"bad": {1, 2}})
+
+
+def test_evidence_linking_and_semantic_helper_edges() -> None:
+    failed_item = VerificationEvidenceItem(
+        evidence_id="failed",
+        kind=VerificationEvidenceKind.COMMAND,
+        summary="failed",
+        passed=False,
+        output_excerpt="target criterion",
+    )
+    assert (
+        verification_module._evidence_can_support_text(
+            text="target criterion",
+            target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+            item=failed_item,
+        )
+        is False
+    )
+
+    skipped_item = failed_item.model_copy(
+        update={
+            "evidence_id": "skipped",
+            "source": "verification_check_skipped",
+            "passed": None,
+        }
+    )
+    assert (
+        verification_module._evidence_can_support_text(
+            text="target criterion",
+            target=VerificationEvidenceTarget.EVIDENCE_EXPECTATION,
+            item=skipped_item,
+        )
+        is False
+    )
+
+    tool_call_item = VerificationEvidenceItem(
+        evidence_id="tool-call",
+        kind=VerificationEvidenceKind.TOOL_CALL,
+        summary="Tool read was called.",
+        passed=None,
+        output_excerpt="target criterion",
+    )
+    assert (
+        verification_module._evidence_can_support_text(
+            text="target criterion",
+            target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+            item=tool_call_item,
+        )
+        is False
+    )
+    assert (
+        verification_module._evidence_link_reason(
+            target=VerificationEvidenceTarget.EVIDENCE_EXPECTATION,
+            evidence_ids=(),
+        )
+        == "No concrete evidence item matched this expected evidence."
+    )
+    assert (
+        verification_module._linked_evidence_items(link=None, evidence_items=()) == ()
+    )
+
+    weak_link = VerificationEvidenceLink(
+        target=VerificationEvidenceTarget.ACCEPTANCE_CRITERION,
+        text="target criterion",
+        evidence_ids=("tool-call",),
+        satisfied=True,
+    )
+    weak_result = verification_module._rule_semantic_evaluation(
+        criterion="target criterion",
+        link=weak_link,
+        linked_evidence=(tool_call_item,),
+    )
+    assert weak_result.passed is False
+    assert weak_result.evidence_ids == ("tool-call",)
+
+    def evaluator(
+        _request: SemanticEvaluationRequest,
+    ) -> SemanticEvaluationResult:
+        return SemanticEvaluationResult(
+            criterion="external criterion",
+            passed=True,
+            confidence=0.9,
+            evaluator="rule",
+        )
+
+    evaluated = verification_module._run_optional_semantic_evaluator(
+        task_id="task-1",
+        criterion="target criterion",
+        result="result text",
+        linked_evidence=(),
+        baseline=weak_result,
+        semantic_evaluator=evaluator,
+    )
+    assert evaluated.criterion == "target criterion"
+    assert evaluated.evaluator == "external"
+
+    assert (
+        verification_module._text_matches_evidence(text="", item=tool_call_item)
+        is False
+    )
+    assert verification_module._normalize_match_token("fails") == "fail"
+    assert verification_module._normalize_match_token("stories") == "story"
+    assert verification_module._normalize_match_token("boxes") == "box"
+    assert verification_module._evidence_id("empty", 3, "   ") == "empty:3"
+    assert verification_module._text_mentions_any(
+        "the model check completed",
+        ("model check",),
+    )
