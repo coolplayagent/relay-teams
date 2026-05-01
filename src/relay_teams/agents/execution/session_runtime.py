@@ -32,6 +32,11 @@ from relay_teams.agents.execution.message_commit import (
 )
 from relay_teams.agents.execution.prompt_history import PreparedPromptContext
 from relay_teams.agents.execution.session_mixin_base import AgentLlmSessionMixinBase
+from relay_teams.agents.execution.spec_checkpoint import (
+    SpecCheckpointDecision,
+    build_spec_checkpoint_decision,
+)
+from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.logger import (
     close_model_stream,
     get_logger,
@@ -716,6 +721,88 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     final_answer_ready=final_answer_ready,
                 )
 
+            async def apply_spec_checkpoint_if_due() -> bool:
+                nonlocal history
+                nonlocal prepared_prompt
+                nonlocal agent_system_prompt
+                nonlocal coordination_agent
+                nonlocal seen_count
+                nonlocal buffered_messages
+                nonlocal attempt_messages_committed
+
+                decision = await _build_spec_checkpoint_decision_async(
+                    session=self,
+                    request=request,
+                    history=history,
+                )
+                if not decision.should_inject:
+                    return False
+                appended = (
+                    await self._message_repo.append_system_prompt_if_missing_async(
+                        session_id=request.session_id,
+                        workspace_id=resolved_workspace_id,
+                        conversation_id=resolved_conversation_id,
+                        agent_role_id=request.role_id,
+                        instance_id=request.instance_id,
+                        task_id=request.task_id,
+                        trace_id=request.trace_id,
+                        content=decision.content,
+                    )
+                )
+                if appended is False:
+                    return False
+                await publish_run_event_async(
+                    self._run_event_hub,
+                    RunEvent(
+                        session_id=request.session_id,
+                        run_id=request.run_id,
+                        trace_id=request.trace_id,
+                        task_id=request.task_id,
+                        instance_id=request.instance_id,
+                        role_id=request.role_id,
+                        event_type=RunEventType.SPEC_CHECKPOINT_APPLIED,
+                        payload_json=dumps(
+                            _spec_checkpoint_event_payload(
+                                decision=decision,
+                                request=request,
+                            )
+                        ),
+                    ),
+                )
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    event="llm.spec_checkpoint.applied",
+                    message="Applied automatic spec checkpoint refresh",
+                    payload={
+                        "run_id": request.run_id,
+                        "task_id": request.task_id,
+                        "role_id": request.role_id,
+                        "instance_id": request.instance_id,
+                        "sequence": decision.sequence,
+                        "reason": decision.reason,
+                    },
+                )
+                (
+                    prepared_prompt,
+                    history,
+                    agent_system_prompt,
+                    rebuilt_agent,
+                ) = await self._build_agent_iteration_context(
+                    request=request,
+                    conversation_id=resolved_conversation_id,
+                    system_prompt=request.system_prompt,
+                    reserve_user_prompt_tokens=False,
+                    allowed_tools=allowed_tools,
+                    allowed_mcp_servers=self._allowed_mcp_servers,
+                    allowed_skills=self._allowed_skills,
+                )
+                coordination_agent = cast(CoordinationAgent, rebuilt_agent)
+                seen_count = 0
+                buffered_messages = []
+                attempt_messages_committed = True
+                return True
+
             async def process_safe_boundary(
                 boundary_agent_run: AgentRun,
                 *,
@@ -824,10 +911,12 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 if not boundary_has_activity and not final_answer_ready:
                     return False
                 boundary_checked_after_latest_batch = True
-                return await apply_queued_injections_at_boundary(
+                if await apply_queued_injections_at_boundary(
                     final_answer_ready=final_answer_ready
                     or _messages_include_final_answer(new_to_process),
-                )
+                ):
+                    return True
+                return not final_answer_ready and await apply_spec_checkpoint_if_due()
         except BaseException:
             await self._close_run_scoped_llm_http_client(request=request)
             raise
@@ -839,6 +928,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     if await apply_interrupt_injections():
                         continue
                     if await apply_queued_injections_at_boundary():
+                        continue
+                    if await apply_spec_checkpoint_if_due():
                         continue
                     restarted = False
                     provider_history = self._provider_history_for_model_turn(
@@ -1538,3 +1629,61 @@ def _messages_include_final_answer(
         if any(isinstance(part, TextPart) for part in message.parts):
             return True
     return False
+
+
+async def _build_spec_checkpoint_decision_async(
+    *,
+    session: AgentLlmSessionMixinBase,
+    request: LLMRequest,
+    history: Sequence[ModelRequest | ModelResponse],
+) -> SpecCheckpointDecision:
+    if _role_uses_coordinator_checkpoint_exemption(
+        session=session,
+        role_id=request.role_id,
+    ):
+        return SpecCheckpointDecision()
+    try:
+        task_record = await session._task_repo.get_async(request.task_id)
+    except (AttributeError, KeyError):
+        return SpecCheckpointDecision()
+    task = getattr(task_record, "envelope", None)
+    if not isinstance(task, TaskEnvelope):
+        return SpecCheckpointDecision()
+    return build_spec_checkpoint_decision(
+        task=task,
+        role_id=request.role_id,
+        history=history,
+    )
+
+
+def _role_uses_coordinator_checkpoint_exemption(
+    *,
+    session: AgentLlmSessionMixinBase,
+    role_id: str,
+) -> bool:
+    role_registry = getattr(session, "_role_registry", None)
+    if role_registry is None:
+        return False
+    try:
+        return bool(role_registry.is_coordinator_role(role_id))
+    except (AttributeError, KeyError):
+        return False
+
+
+def _spec_checkpoint_event_payload(
+    *,
+    decision: SpecCheckpointDecision,
+    request: LLMRequest,
+) -> dict[str, JsonValue]:
+    return {
+        "role_id": request.role_id,
+        "instance_id": request.instance_id,
+        "task_id": request.task_id,
+        "sequence": decision.sequence,
+        "reason": decision.reason,
+        "tool_calls_since_last_checkpoint": (decision.tool_calls_since_last_checkpoint),
+        "messages_since_last_checkpoint": decision.messages_since_last_checkpoint,
+        "history_tokens_since_last_checkpoint": (
+            decision.history_tokens_since_last_checkpoint
+        ),
+    }

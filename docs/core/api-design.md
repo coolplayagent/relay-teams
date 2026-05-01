@@ -1388,6 +1388,9 @@ Thinking events:
 - `thinking_delta`: payload includes `part_index`, `text`, `role_id`, `instance_id`.
 - `thinking_finished`: payload includes `part_index`, `role_id`, `instance_id`.
 
+Spec checkpoint events:
+- `spec_checkpoint_applied`: emitted at a safe model boundary when a non-coordinator task with a `TaskSpec` crosses its `lifecycle.spec_checkpoint` refresh threshold. The backend persists an internal system prompt containing the current task spec before rebuilding the next model request. Payload includes `task_id`, `role_id`, `instance_id`, `sequence`, `reason`, `tool_calls_since_last_checkpoint`, `messages_since_last_checkpoint`, and `history_tokens_since_last_checkpoint`.
+
 Retry events:
 - `llm_retry_scheduled`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `retry_in_ms`, `error_code`, and `error_message`.
 - `llm_retry_exhausted`: payload includes `instance_id`, `role_id`, `attempt_number`, `total_attempts`, `error_code`, and `error_message`.
@@ -1901,6 +1904,7 @@ Behavior:
 - Creates delegated task contracts only.
 - Role binding happens later during dispatch.
 - If a task contract sets `lifecycle.timeout_seconds`, the timeout is progress-sensitive rather than a strict wall clock cap. The dispatch starts with one timeout window, and each persisted model/tool message for the same task and assigned instance extends the deadline by another full window. If no new task message is persisted before the current deadline, the worker is cancelled and `lifecycle.on_timeout` is applied. Task status heartbeats only keep the running row fresh; they do not extend the lifecycle timeout by themselves.
+- `lifecycle.spec_checkpoint` controls automatic spec refresh for long non-coordinator runs. Defaults are enabled with refresh thresholds of 12 completed tool calls, 48 active history messages, or 8000 estimated history tokens since the previous checkpoint. The object accepts `enabled`, `refresh_interval_tool_calls`, `refresh_interval_messages`, `refresh_interval_history_tokens`, and `max_summary_chars`.
 
 Response:
 

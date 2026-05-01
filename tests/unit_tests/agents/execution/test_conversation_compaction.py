@@ -33,6 +33,7 @@ from pydantic_ai.messages import (
     PartStartEvent,
     TextPart,
     TextPartDelta,
+    SystemPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -258,6 +259,27 @@ def test_render_transcript_does_not_clip_mid_line_fact() -> None:
     assert "lunar-min" not in transcript
     assert "phase-4 anchor" not in transcript
     assert transcript.splitlines()[-1] == "Tool result [shell]: line-a"
+
+
+def test_render_transcript_preserves_spec_checkpoint_system_messages() -> None:
+    history = [
+        ModelRequest(
+            parts=[
+                SystemPromptPart(
+                    content=(
+                        "## Spec Checkpoint\n- Requirements:\n  - preserve public API"
+                    )
+                )
+            ]
+        )
+    ]
+
+    transcript = compaction_module._render_transcript(history, max_chars=4000)
+
+    assert "System: ## Spec Checkpoint" in transcript
+    assert "preserve public API" in transcript
+    assert compaction_module.message_has_replay_anchor(history[0]) is True
+    assert compaction_module.is_replayable_history(history) is True
 
 
 def test_render_transcript_keeps_single_line_message_body_when_truncated() -> None:

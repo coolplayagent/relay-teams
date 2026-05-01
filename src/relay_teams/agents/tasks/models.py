@@ -170,12 +170,33 @@ class TaskSpec(BaseModel):
         return _normalize_text_tuple(value, field_name="task spec text")
 
 
+class SpecCheckpointPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    refresh_interval_tool_calls: int = Field(default=12, ge=1, le=1000)
+    refresh_interval_messages: int = Field(default=48, ge=1, le=5000)
+    refresh_interval_history_tokens: int = Field(default=8000, ge=1, le=1_000_000)
+    max_summary_chars: int = Field(default=6000, ge=500, le=50_000)
+
+
 class TaskLifecyclePolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     timeout_seconds: float | None = Field(default=None, gt=0.0, le=86_400.0)
     heartbeat_interval_seconds: float | None = Field(default=None, gt=0.0, le=3600.0)
     on_timeout: TaskTimeoutAction = TaskTimeoutAction.FAIL
+    spec_checkpoint: SpecCheckpointPolicy = Field(default_factory=SpecCheckpointPolicy)
+
+    @field_validator("spec_checkpoint", mode="before")
+    @classmethod
+    def _normalize_spec_checkpoint(
+        cls,
+        value: object,
+    ) -> SpecCheckpointPolicy | object:
+        if value is None:
+            return SpecCheckpointPolicy()
+        return value
 
 
 class TaskHandoff(BaseModel):

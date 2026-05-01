@@ -10,6 +10,13 @@ import pytest
 from pydantic_ai.messages import FunctionToolResultEvent, ToolCallPart, ToolReturnPart
 
 from relay_teams.agents.execution import session_runtime as session_runtime_module
+from relay_teams.agents.tasks.models import (
+    SpecCheckpointPolicy,
+    TaskEnvelope,
+    TaskLifecyclePolicy,
+    TaskSpec,
+    VerificationPlan,
+)
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.tools.registry import ToolRegistry
@@ -31,6 +38,60 @@ from .agent_llm_session_test_support import (
     _build_request,
     httpx,
 )
+
+
+@pytest.mark.asyncio
+async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> None:
+    session = object.__new__(AgentLlmSession)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Implement API",
+        verification=VerificationPlan(),
+        spec=TaskSpec(requirements=("keep the route stable",)),
+        lifecycle=TaskLifecyclePolicy(
+            spec_checkpoint=SpecCheckpointPolicy(
+                refresh_interval_tool_calls=1,
+                refresh_interval_messages=99,
+                refresh_interval_history_tokens=999_999,
+            )
+        ),
+    )
+
+    class _TaskRepo:
+        async def get_async(self, task_id: str) -> object:
+            assert task_id == "task-1"
+            return SimpleNamespace(envelope=task)
+
+    class _RoleRegistry:
+        def is_coordinator_role(self, role_id: str) -> bool:
+            assert role_id == "Crafter"
+            return False
+
+    session.__dict__["_task_repo"] = _TaskRepo()
+    session.__dict__["_role_registry"] = _RoleRegistry()
+
+    decision = await session_runtime_module._build_spec_checkpoint_decision_async(
+        session=session,
+        request=_build_request(user_prompt=None).model_copy(
+            update={"role_id": "Crafter"}
+        ),
+        history=[
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="shell",
+                        tool_call_id="call-1",
+                        content="ok",
+                    )
+                ]
+            )
+        ],
+    )
+
+    assert decision.should_inject is True
+    assert "keep the route stable" in decision.content
 
 
 @pytest.mark.asyncio
