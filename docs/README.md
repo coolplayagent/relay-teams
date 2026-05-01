@@ -13,6 +13,7 @@ This directory is organized by documentation purpose and runtime module.
 
 - [Agents](modules/agents/)
 - [Orchestration policy](modules/agents/orchestration-policy-design.md)
+- [Verification evidence and semantic checks](modules/agents/verification-evidence-semantic-spec.md)
 - [Automation](modules/automation/ao4-async-path-unification.md)
 - [CLI commands](modules/cli/commands.md)
 - [Frontend](modules/frontend/README.md)

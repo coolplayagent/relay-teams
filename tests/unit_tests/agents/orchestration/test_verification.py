@@ -1270,6 +1270,9 @@ def test_evidence_linking_and_semantic_helper_edges() -> None:
     assert verification_module._normalize_match_token("fails") == "fail"
     assert verification_module._normalize_match_token("stories") == "story"
     assert verification_module._normalize_match_token("boxes") == "box"
+    assert verification_module._normalize_match_token("classes") == "class"
+    assert verification_module._normalize_match_token("cases") == "case"
+    assert verification_module._normalize_match_token("files") == "file"
     assert verification_module._evidence_id("empty", 3, "   ") == "empty:3"
     assert verification_module._text_mentions_any(
         "the model check completed",

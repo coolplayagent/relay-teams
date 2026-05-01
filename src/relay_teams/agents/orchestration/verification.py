@@ -1284,8 +1284,12 @@ def _normalize_match_token(token: str) -> str:
         return "fail"
     if len(normalized) > 4 and normalized.endswith("ies"):
         return normalized[:-3] + "y"
-    if len(normalized) > 4 and normalized.endswith("es"):
+    if len(normalized) > 4 and normalized.endswith(
+        ("ches", "shes", "sses", "xes", "zes")
+    ):
         return normalized[:-2]
+    if len(normalized) > 4 and normalized.endswith("es"):
+        return normalized[:-1]
     if len(normalized) > 3 and normalized.endswith("s"):
         return normalized[:-1]
     return normalized
