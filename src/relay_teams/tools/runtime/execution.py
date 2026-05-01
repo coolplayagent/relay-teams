@@ -47,6 +47,10 @@ from relay_teams.agents.tasks.task_status_sanitizer import (
     sanitize_task_status_payload,
 )
 from relay_teams.reminders import ToolResultObservation
+from relay_teams.roles.runtime_tools import (
+    runtime_denied_tools_for_role,
+    runtime_tools_for_role,
+)
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
@@ -2544,8 +2548,16 @@ async def _allowed_tools_for_runtime_policy(
             },
         )
         return ()
-    tools = set(role.tools)
+    tools = set(
+        runtime_tools_for_role(
+            role_registry=ctx.deps.role_registry,
+            role=role,
+            consumer="tools.runtime.execution.allowed_tools",
+        )
+    )
     tools.update(await _runtime_snapshot_tool_names_for_policy(ctx=ctx))
+    denied_tools = set(runtime_denied_tools_for_role(role))
+    tools.difference_update(denied_tools)
     return tuple(sorted(tools))
 
 

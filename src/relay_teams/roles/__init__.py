@@ -34,8 +34,10 @@ from relay_teams.roles.role_contracts import (
 from relay_teams.roles.role_registry import RoleLoader, RoleRegistry
 from relay_teams.roles.runtime_tools import (
     role_with_runtime_tools,
+    runtime_denied_tools_for_role,
     runtime_tools_for_role,
     strip_coordinator_only_tools,
+    strip_contract_denied_tools,
 )
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.roles.role_registry import (
@@ -80,8 +82,10 @@ __all__ = [
     "RoleValidationResult",
     "RuntimeRoleResolver",
     "role_with_runtime_tools",
+    "runtime_denied_tools_for_role",
     "runtime_tools_for_role",
     "strip_coordinator_only_tools",
+    "strip_contract_denied_tools",
     "ensure_required_system_roles",
     "TemporaryRoleRecord",
     "TemporaryRoleRepository",

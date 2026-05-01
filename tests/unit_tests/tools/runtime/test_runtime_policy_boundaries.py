@@ -13,6 +13,11 @@ from relay_teams.agents.instances.models import (
     RuntimeToolsSnapshot,
 )
 from relay_teams.computer import ComputerActionRisk
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractInvariant,
+    RoleContractInvariantType,
+)
 from relay_teams.tools.runtime.context import ToolContext
 from relay_teams.tools.runtime.execution import execute_tool
 from relay_teams.tools.runtime.models import ToolApprovalRequest, ToolRuntimeDecision
@@ -138,6 +143,102 @@ def test_execute_tool_denies_tool_outside_runtime_role_boundary() -> None:
     assert tool_result_payloads[0]["tool_call_id"] == "call-policy-deny"
     assert tool_result_payloads[0]["error"] is True
     assert tool_result_payloads[0]["result"] == result
+
+
+def test_execute_tool_denies_contract_forbidden_tool_from_dirty_role_state() -> None:
+    deps = _PolicyDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(yolo=True),
+    )
+    deps.role_registry.register(
+        deps.role_registry.get("spec_coder").model_copy(
+            update={
+                "tools": ("read", "shell"),
+                "contract": RoleContract(
+                    invariants=(
+                        RoleContractInvariant(
+                            invariant=RoleContractInvariantType.MUST_NOT_HAVE_TOOLS,
+                            tools=("shell",),
+                        ),
+                    ),
+                ),
+            }
+        )
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-policy-contract-deny"
+    called = False
+
+    def action() -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "touch a.txt"},
+            action=action,
+        )
+    )
+
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert called is False
+    assert result["ok"] is False
+    assert error["type"] == "tool_policy_denied"
+    assert meta["runtime_policy_decision"] == "deny"
+    assert meta["approval_status"] == "denied_by_policy"
+
+
+def test_execute_tool_contract_denial_overrides_runtime_snapshot() -> None:
+    snapshot = RuntimeToolsSnapshot(
+        local_tools=(RuntimeToolSnapshotEntry(source="local", name="shell"),),
+    )
+    deps = _PolicyDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(yolo=True),
+    )
+    deps.role_registry.register(
+        deps.role_registry.get("spec_coder").model_copy(
+            update={
+                "tools": ("read",),
+                "contract": RoleContract(
+                    invariants=(
+                        RoleContractInvariant(
+                            invariant=RoleContractInvariantType.MUST_NOT_HAVE_TOOLS,
+                            tools=("shell",),
+                        ),
+                    ),
+                ),
+            }
+        )
+    )
+    deps.agent_repo = _RuntimeToolsAgentRepo(snapshot.model_dump_json())
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-policy-contract-snapshot-deny"
+    called = False
+
+    def action() -> str:
+        nonlocal called
+        called = True
+        return "should not run"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="shell",
+            args_summary={"command": "touch a.txt"},
+            action=action,
+        )
+    )
+
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert called is False
+    assert result["ok"] is False
+    assert meta["runtime_policy_decision"] == "deny"
+    assert meta["approval_status"] == "denied_by_policy"
 
 
 def test_execute_tool_allows_skill_and_mcp_tools_from_runtime_snapshot() -> None:

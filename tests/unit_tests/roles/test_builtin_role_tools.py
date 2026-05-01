@@ -45,7 +45,8 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "auto_harness_synthesize_tool" in crafter.tools
     assert "auto_harness_enable_tool" in crafter.tools
     assert background_task_tools.issubset(set(crafter.tools))
-    assert background_task_tools.issubset(set(gater.tools))
+    assert background_task_tools.difference({"shell"}).issubset(set(gater.tools))
+    assert "shell" not in gater.tools
     assert background_task_tools.issubset(set(main_agent.tools))
     assert "spawn_subagent" in main_agent.tools
     assert "list_skill_roles" in main_agent.tools
@@ -84,6 +85,15 @@ def test_builtin_roles_mount_expected_write_tools() -> None:
     assert "office_read_markdown" in gater.tools
     assert "todo_write" not in gater.tools
     assert "todo_read" not in gater.tools
-    assert "write_tmp" in gater.tools
+    assert "write_tmp" not in gater.tools
     assert "write" not in gater.tools
     assert "edit" not in gater.tools
+    gater_denied_tools = {
+        tool
+        for invariant in gater.contract.invariants
+        for tool in invariant.tools
+        if invariant.invariant == "must_not_have_tools"
+    }
+    assert {"edit", "write", "notebook_edit", "write_tmp", "shell"}.issubset(
+        gater_denied_tools
+    )
