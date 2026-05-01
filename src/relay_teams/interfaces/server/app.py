@@ -39,6 +39,7 @@ from relay_teams.interfaces.server.runtime_identity import (
     build_server_health_payload,
 )
 from relay_teams.interfaces.server.routers import (
+    audit,
     automation,
     commands,
     feishu_gateway,
@@ -199,6 +200,7 @@ app = FastAPI(
 )
 
 app.include_router(system.router, prefix="/api")
+app.include_router(audit.router, prefix="/api")
 app.include_router(commands.router, prefix="/api")
 app.include_router(automation.router, prefix="/api")
 app.include_router(feishu_gateway.router, prefix="/api")

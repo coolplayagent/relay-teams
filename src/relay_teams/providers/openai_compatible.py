@@ -11,6 +11,7 @@ import httpx
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelRequest, ModelResponse
 
+from relay_teams.audit import AuditService
 from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionService,
 )
@@ -142,6 +143,7 @@ class OpenAICompatibleProvider(LLMProvider):
         hook_service: HookService | None = None,
         reminder_service: SystemReminderService | None = None,
         auto_harness_service: object | None = None,
+        audit_service: AuditService | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
@@ -202,6 +204,7 @@ class OpenAICompatibleProvider(LLMProvider):
             hook_service=hook_service,
             reminder_service=reminder_service,
             auto_harness_service=auto_harness_service,
+            audit_service=audit_service,
         )
 
     @override

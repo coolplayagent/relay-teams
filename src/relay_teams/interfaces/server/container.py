@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import FrozenSet, List, Optional, Protocol, Tuple
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
+from relay_teams.audit import AuditEventRepository, AuditService
 from relay_teams.automation.automation_bound_session_queue_repository import (
     AutomationBoundSessionQueueRepository,
 )
@@ -413,6 +414,10 @@ class ServerContainer:
         )
 
         self.task_repo: TaskRepository = TaskRepository(runtime.paths.db_path)
+        self.audit_repository: AuditEventRepository = AuditEventRepository(
+            runtime.paths.db_path
+        )
+        self.audit_service: AuditService = AuditService(self.audit_repository)
         self.shared_store: SharedStateRepository = SharedStateRepository(
             runtime.paths.db_path
         )
@@ -718,6 +723,7 @@ class ServerContainer:
                 None,
             ),
             computer_runtime=self.computer_runtime,
+            audit_service=self.audit_service,
         )
         self.run_control_manager.bind_runtime(
             run_event_hub=self.run_event_hub,
@@ -1064,6 +1070,7 @@ class ServerContainer:
         )
         self._async_closeables: tuple[AsyncCloseableRepository, ...] = (
             self.task_repo,
+            self.audit_repository,
             self.shared_store,
             self.workspace_repo,
             self.ssh_profile_repo,
@@ -1161,6 +1168,7 @@ class ServerContainer:
             hook_service=self.hook_service,
             reminder_service=self.reminder_service,
             auto_harness_service=self.auto_harness_service,
+            audit_service=self.audit_service,
         )
         self.task_execution_service = create_task_execution_service(
             role_registry=self.role_registry,

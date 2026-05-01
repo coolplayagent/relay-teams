@@ -35,6 +35,7 @@ from pydantic_ai.usage import RunUsage
 from relay_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
 )
+from relay_teams.audit import AuditService
 from relay_teams.computer import ComputerRuntime
 from relay_teams.media import MediaAssetService
 from relay_teams.monitors import MonitorService
@@ -197,6 +198,7 @@ class ExternalAcpHostToolBridge:
         computer_runtime: ComputerRuntime | None = None,
         shell_approval_repo: ShellApprovalRepository | None = None,
         reminder_service: SystemReminderService | None = None,
+        audit_service: AuditService | None = None,
     ) -> None:
         self._task_repo = task_repo
         self._shared_store = shared_store
@@ -235,6 +237,7 @@ class ExternalAcpHostToolBridge:
         self._computer_runtime = computer_runtime
         self._shell_approval_repo = shell_approval_repo
         self._reminder_service = reminder_service
+        self._audit_service = audit_service
 
         self._catalog_by_name: dict[str, HostedToolDefinition] = {}
         self._catalog_signature = ""
@@ -579,6 +582,7 @@ class ExternalAcpHostToolBridge:
                 None,
             ),
             reminder_service=getattr(self, "_reminder_service", None),
+            audit_service=getattr(self, "_audit_service", None),
             model_capabilities=self._resolve_request_model_capabilities(
                 request=request
             ),

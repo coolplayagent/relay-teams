@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Annotated, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from pydantic_ai import RunContext
 
+from relay_teams.audit import AuditService
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.orchestration.task_contracts import (
@@ -122,6 +123,9 @@ class SkillRegistryLike(Protocol):
     ) -> str | None: ...
 
 
+_SKIP_VALIDATION: object = SkipValidation
+
+
 class ToolDeps(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -129,23 +133,27 @@ class ToolDeps(BaseModel):
         arbitrary_types_allowed=True,
     )
 
-    task_repo: SkipValidation[TaskRepository]
-    shared_store: SkipValidation[SharedStateRepository]
-    event_bus: SkipValidation[EventLog]
-    message_repo: SkipValidation[MessageRepository]
-    approval_ticket_repo: SkipValidation[ApprovalTicketRepository]
-    user_question_repo: SkipValidation[UserQuestionRepository | None] = None
-    run_runtime_repo: SkipValidation[RunRuntimeRepository]
-    injection_manager: SkipValidation[RunInjectionManager]
-    run_event_hub: SkipValidation[RunEventHub]
-    agent_repo: SkipValidation[AgentInstanceRepository]
-    workspace: SkipValidation[WorkspaceHandle]
-    role_memory: SkipValidation[RoleMemoryService | None] = None
-    media_asset_service: SkipValidation[MediaAssetService | None] = None
-    computer_runtime: SkipValidation[ComputerRuntime | None] = None
-    background_task_service: SkipValidation[BackgroundTaskService | None] = None
-    monitor_service: SkipValidation[MonitorService | None] = None
-    todo_service: SkipValidation[TodoService | None] = None
+    task_repo: Annotated[TaskRepository, _SKIP_VALIDATION]
+    shared_store: Annotated[SharedStateRepository, _SKIP_VALIDATION]
+    event_bus: Annotated[EventLog, _SKIP_VALIDATION]
+    message_repo: Annotated[MessageRepository, _SKIP_VALIDATION]
+    approval_ticket_repo: Annotated[ApprovalTicketRepository, _SKIP_VALIDATION]
+    user_question_repo: Annotated[UserQuestionRepository | None, _SKIP_VALIDATION] = (
+        None
+    )
+    run_runtime_repo: Annotated[RunRuntimeRepository, _SKIP_VALIDATION]
+    injection_manager: Annotated[RunInjectionManager, _SKIP_VALIDATION]
+    run_event_hub: Annotated[RunEventHub, _SKIP_VALIDATION]
+    agent_repo: Annotated[AgentInstanceRepository, _SKIP_VALIDATION]
+    workspace: Annotated[WorkspaceHandle, _SKIP_VALIDATION]
+    role_memory: Annotated[RoleMemoryService | None, _SKIP_VALIDATION] = None
+    media_asset_service: Annotated[MediaAssetService | None, _SKIP_VALIDATION] = None
+    computer_runtime: Annotated[ComputerRuntime | None, _SKIP_VALIDATION] = None
+    background_task_service: Annotated[
+        BackgroundTaskService | None, _SKIP_VALIDATION
+    ] = None
+    monitor_service: Annotated[MonitorService | None, _SKIP_VALIDATION] = None
+    todo_service: Annotated[TodoService | None, _SKIP_VALIDATION] = None
     run_id: str
     trace_id: str
     task_id: str
@@ -156,26 +164,33 @@ class ToolDeps(BaseModel):
     conversation_id: str
     instance_id: str
     role_id: str
-    role_registry: SkipValidation[RoleRegistry]
-    runtime_role_resolver: SkipValidation[RuntimeRoleResolver | None] = None
-    skill_registry: SkipValidation[SkillRegistryLike | None] = None
-    mcp_registry: SkipValidation[McpRegistry]
-    task_service: SkipValidation[TaskOrchestrationServiceLike]
-    task_execution_service: SkipValidation[TaskExecutionServiceLike]
-    run_control_manager: SkipValidation[RunControlManager]
-    tool_approval_manager: SkipValidation[ToolApprovalManager]
-    user_question_manager: SkipValidation[UserQuestionManager | None] = None
-    tool_approval_policy: SkipValidation[ToolApprovalPolicy]
-    shell_approval_repo: SkipValidation[ShellApprovalRepository | None] = None
-    metric_recorder: SkipValidation[MetricRecorder | None] = None
-    notification_service: SkipValidation[NotificationService | None] = None
-    im_tool_service: SkipValidation[ImToolServiceLike | None] = None
+    role_registry: Annotated[RoleRegistry, _SKIP_VALIDATION]
+    runtime_role_resolver: Annotated[RuntimeRoleResolver | None, _SKIP_VALIDATION] = (
+        None
+    )
+    skill_registry: Annotated[SkillRegistryLike | None, _SKIP_VALIDATION] = None
+    mcp_registry: Annotated[McpRegistry, _SKIP_VALIDATION]
+    task_service: Annotated[TaskOrchestrationServiceLike, _SKIP_VALIDATION]
+    task_execution_service: Annotated[TaskExecutionServiceLike, _SKIP_VALIDATION]
+    run_control_manager: Annotated[RunControlManager, _SKIP_VALIDATION]
+    tool_approval_manager: Annotated[ToolApprovalManager, _SKIP_VALIDATION]
+    user_question_manager: Annotated[UserQuestionManager | None, _SKIP_VALIDATION] = (
+        None
+    )
+    tool_approval_policy: Annotated[ToolApprovalPolicy, _SKIP_VALIDATION]
+    shell_approval_repo: Annotated[ShellApprovalRepository | None, _SKIP_VALIDATION] = (
+        None
+    )
+    metric_recorder: Annotated[MetricRecorder | None, _SKIP_VALIDATION] = None
+    notification_service: Annotated[NotificationService | None, _SKIP_VALIDATION] = None
+    im_tool_service: Annotated[ImToolServiceLike | None, _SKIP_VALIDATION] = None
     xiaoluban_notify_service: XiaolubanNotifyServiceLike | None = None
     gateway_session_lookup: GatewaySessionLookupLike | None = None
-    hook_service: SkipValidation[HookService | None] = None
-    reminder_service: SkipValidation[SystemReminderService | None] = None
-    auto_harness_service: SkipValidation[object | None] = None
-    model_capabilities: SkipValidation[ModelCapabilities] = Field(
+    hook_service: Annotated[HookService | None, _SKIP_VALIDATION] = None
+    reminder_service: Annotated[SystemReminderService | None, _SKIP_VALIDATION] = None
+    auto_harness_service: Annotated[object | None, _SKIP_VALIDATION] = None
+    audit_service: Annotated[AuditService | None, _SKIP_VALIDATION] = None
+    model_capabilities: Annotated[ModelCapabilities, _SKIP_VALIDATION] = Field(
         default_factory=ModelCapabilities
     )
     hook_runtime_env: dict[str, str] = Field(default_factory=dict)

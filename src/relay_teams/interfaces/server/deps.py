@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import Request, WebSocket
 
+from relay_teams.audit import AuditService
 from relay_teams.commands import CommandRegistry
 from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
@@ -78,6 +79,10 @@ def get_session_service(request: Request) -> SessionService:
 
 def get_task_service(request: Request) -> TaskOrchestrationService:
     return get_container(request).task_service
+
+
+def get_audit_service(request: Request) -> AuditService:
+    return get_container(request).audit_service
 
 
 def get_automation_service(request: Request) -> AutomationService:

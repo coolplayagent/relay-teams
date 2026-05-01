@@ -20,6 +20,52 @@ Common validation rules:
 - Identifier and reference fields reject blank strings, whitespace-only strings, and the explicit string values `"None"` and `"null"` with `422`.
 - Optional identifier fields still accept real JSON `null`.
 
+## Audit APIs
+
+### `GET /audit`
+
+Lists immutable security audit events for external compliance systems.
+
+Query fields:
+- `event_type`: optional `file_write`, `shell_command`, or `coordinator_decision`.
+- `trace_id`, `run_id`, `session_id`, `task_id`, `role_id`: optional exact-match filters.
+- `after_id`: optional cursor, default `0`.
+- `since`, `until`: optional ISO 8601 timestamps matched against `occurred_at`; offsets are normalized to UTC before comparison.
+- `limit`: optional page size from `1` to `500`, default `100`.
+
+Response fields:
+- `items[]`
+  - `id`
+  - `audit_event_id`
+  - `event_type`
+  - `trace_id`
+  - `run_id`
+  - `session_id`
+  - `task_id`
+  - `instance_id`
+  - `role_id`
+  - `tool_call_id`
+  - `span_id`
+  - `parent_span_id`
+  - `action`
+  - `target`
+  - `content_digest`
+  - `content_size_bytes`
+  - `command`
+  - `decision_reason`
+  - `outcome`
+  - `metadata`
+  - `occurred_at`
+  - `created_at`
+- `next_after_id`: cursor for the next page when more rows are available.
+
+Notes:
+- File write audit events store a final content digest and size, not raw content.
+- Shell command audit events store the command text and execution context.
+- Coordinator decision audit events store the selected delegated task/role channel and the dispatch reason captured from `orch_dispatch_task`.
+- `occurred_at` and `created_at` are persisted and filtered as UTC ISO 8601 timestamps.
+- The API is read-only. Audit rows are written by backend runtime paths and cannot be mutated by Agent tools.
+
 ## Core Concepts
 
 - A run starts from one root task.

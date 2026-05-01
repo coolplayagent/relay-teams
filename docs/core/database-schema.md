@@ -275,6 +275,63 @@ Tool call and tool result events are the durable source used to rebuild missing 
 
 ---
 
+### 2.5.1 `security_audit_events`
+
+```sql
+CREATE TABLE IF NOT EXISTS security_audit_events (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_event_id     TEXT NOT NULL UNIQUE,
+    event_type         TEXT NOT NULL,
+    trace_id           TEXT NOT NULL,
+    run_id             TEXT NOT NULL,
+    session_id         TEXT NOT NULL,
+    task_id            TEXT,
+    instance_id        TEXT,
+    role_id            TEXT,
+    tool_call_id       TEXT,
+    span_id            TEXT,
+    parent_span_id     TEXT,
+    action             TEXT NOT NULL,
+    target             TEXT NOT NULL,
+    content_digest     TEXT,
+    content_size_bytes INTEGER,
+    command            TEXT,
+    decision_reason    TEXT,
+    outcome            TEXT NOT NULL,
+    metadata_json      TEXT NOT NULL,
+    occurred_at        TEXT NOT NULL,
+    created_at         TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_type_id
+    ON security_audit_events(event_type, id);
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_trace_id
+    ON security_audit_events(trace_id, id);
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_run_id
+    ON security_audit_events(run_id, id);
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_session_id
+    ON security_audit_events(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_task_id
+    ON security_audit_events(task_id, id);
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_role_id
+    ON security_audit_events(role_id, id);
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_time_id
+    ON security_audit_events(occurred_at, id);
+```
+
+Purpose: immutable security/compliance audit log separate from the business run event stream.
+
+Notes:
+- `event_type` is `file_write`, `shell_command`, or `coordinator_decision`.
+- File write events record the logical path, final content SHA-256 digest, byte size, role, task, run, and tool call context. Raw file content is not stored.
+- Shell command events record the command string plus execution context and result metadata such as `exit_code` when available.
+- Coordinator decision events record `orch_dispatch_task` selections as the task-to-role channel decision plus the dispatch prompt/reason, capped by the application layer.
+- `span_id` and `parent_span_id` bind each row to a `security.audit` trace span.
+- `occurred_at` and `created_at` are stored as UTC ISO 8601 text so SQLite range filters are stable across client-provided offsets.
+- Repositories expose append and list operations only; there is no source path for Agent tools to update or delete audit rows.
+
+---
+
 ### 2.6 `messages`
 
 ```sql
@@ -662,12 +719,12 @@ Notes:
 ## 3. Relationship Keys
 
 Primary query keys used by repositories:
-- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `messages`, `session_history_markers`, `token_usage`, `background_tasks`, `run_todos`.
-- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `messages`, `token_usage`, `background_tasks`, `run_todos`.
+- `session_id`: session-level retrieval across `sessions`, `external_agent_sessions`, `tasks`, `agent_instances`, `events`, `security_audit_events`, `messages`, `session_history_markers`, `token_usage`, `background_tasks`, `run_todos`.
+- `trace_id` (`run_id`): run-level retrieval across `tasks`, `events`, `security_audit_events`, `messages`, `token_usage`, `background_tasks`, `run_todos`.
 - `task_id`: task-level retrieval and task assignment tracking.
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: Feishu-account scoped retrieval across `external_session_bindings`, `feishu_message_pool`.
-- `event_id`: message/event level retrieval for audit and replay preparation.
+- `event_id`: message/event/audit level retrieval for audit and replay preparation.
 - `platform + trigger_id + tenant_key + external_chat_id`: external-chat lookup for inbound IM accounts.
 - `gateway_session_id`: external channel session retrieval across `gateway_sessions`.
 - `external_session_id`: channel-scoped lookup key for reconnect and session resume flows.
@@ -685,6 +742,7 @@ Primary query keys used by repositories:
 - `relay_teams.external_agents`: `external_agent_sessions`.
 - `relay_teams.workspace`: `workspaces`.
 - `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`, `run_todos`.
+- `relay_teams.audit`: `security_audit_events`.
 - `relay_teams.monitors`: `monitor_subscriptions`, `monitor_triggers`.
 - `relay_teams.agents`: `agent_instances`.
 - `relay_teams.agents.tasks`: `tasks`.

@@ -17,6 +17,7 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart
 from pydantic_ai.messages import UserPromptPart
 
+from relay_teams.audit import AuditService
 from relay_teams.computer import (
     ComputerRuntime,
     build_computer_tool_payload,
@@ -191,6 +192,7 @@ class ExternalAcpSessionManager:
         ) = None,
         computer_runtime: ComputerRuntime | None = None,
         reminder_service: SystemReminderService | None = None,
+        audit_service: AuditService | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._config_service = config_service
@@ -232,6 +234,7 @@ class ExternalAcpSessionManager:
         self._get_gateway_session_lookup = get_gateway_session_lookup
         self._computer_runtime = computer_runtime
         self._reminder_service = reminder_service
+        self._audit_service = audit_service
         self._conversations: dict[str, _ConversationHandle] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -1078,6 +1081,7 @@ class ExternalAcpSessionManager:
             ),
             computer_runtime=self._computer_runtime,
             reminder_service=self._reminder_service,
+            audit_service=self._audit_service,
         )
 
     def _resolve_transport_agent_config(

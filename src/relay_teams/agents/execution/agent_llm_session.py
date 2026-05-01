@@ -84,6 +84,7 @@ from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
 )
 from relay_teams.workspace import WorkspaceManager
+from relay_teams.audit import AuditService
 
 
 class AgentLlmSession(
@@ -148,6 +149,7 @@ class AgentLlmSession(
         hook_service: HookService | None = None,
         reminder_service: SystemReminderService | None = None,
         auto_harness_service: object | None = None,
+        audit_service: AuditService | None = None,
     ) -> None:
         self._config = config
         self._profile_name = (
@@ -205,6 +207,7 @@ class AgentLlmSession(
         self._hook_service = hook_service
         self._reminder_service = reminder_service
         self._auto_harness_service = auto_harness_service
+        self._audit_service = audit_service
         self._mcp_tool_context_token_cache: dict[str, int] = {}
 
 

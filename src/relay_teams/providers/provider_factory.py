@@ -7,6 +7,7 @@ import json
 from threading import Lock
 from typing import TYPE_CHECKING
 
+from relay_teams.audit import AuditService
 from relay_teams.external_agents.provider import (
     ExternalAcpProvider,
     ExternalAcpSessionManager,
@@ -126,6 +127,7 @@ def create_provider_factory(
     hook_service: HookService | None = None,
     reminder_service: SystemReminderService | None = None,
     auto_harness_service: object | None = None,
+    audit_service: AuditService | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
     fallback_cooldown_registries: dict[tuple[str, ...], ProfileCooldownRegistry] = {}
     fallback_cooldown_registry_lock = Lock()
@@ -271,6 +273,7 @@ def create_provider_factory(
                 hook_service=hook_service,
                 reminder_service=reminder_service,
                 auto_harness_service=auto_harness_service,
+                audit_service=audit_service,
             ),
         )
         return provider_registry.create(config_to_use)

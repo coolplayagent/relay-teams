@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from relay_teams.interfaces.server.routers import (
+    audit,
     automation,
     commands,
     feishu_gateway,
@@ -22,6 +23,7 @@ from relay_teams.interfaces.server.routers import (
 )
 
 __all__ = [
+    "audit",
     "automation",
     "commands",
     "feishu_gateway",
