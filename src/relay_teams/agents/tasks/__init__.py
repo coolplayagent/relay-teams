@@ -7,6 +7,7 @@ from relay_teams.agents.tasks.ids import TaskId, new_task_id
 from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
+    SpecCheckpointPolicy,
     TaskEnvelope,
     TaskHandoff,
     TaskLifecyclePolicy,
@@ -29,6 +30,7 @@ __all__ = [
     "EventType",
     "SemanticEvaluationRequest",
     "SemanticEvaluationResult",
+    "SpecCheckpointPolicy",
     "TaskEnvelope",
     "TaskHandoff",
     "TaskId",

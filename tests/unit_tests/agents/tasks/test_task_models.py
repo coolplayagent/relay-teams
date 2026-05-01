@@ -13,6 +13,7 @@ from relay_teams.agents.tasks.enums import (
 )
 from relay_teams.agents.tasks.models import (
     SemanticEvaluationResult,
+    SpecCheckpointPolicy,
     TaskEnvelope,
     TaskHandoff,
     TaskLifecyclePolicy,
@@ -66,6 +67,7 @@ def test_task_envelope_accepts_spec_lifecycle_and_handoff() -> None:
     assert envelope.spec is not None
     assert envelope.spec.requirements == ("persist state",)
     assert envelope.lifecycle.on_timeout == TaskTimeoutAction.HUMAN_GATE
+    assert envelope.lifecycle.spec_checkpoint.enabled is True
     assert envelope.handoff is not None
     assert envelope.handoff.next_steps == ("rerun tests",)
 
@@ -138,6 +140,28 @@ def test_verification_report_accepts_evidence_bundle() -> None:
     assert report.evidence_bundle is not None
     assert report.evidence_bundle.items[0].metrics[0].value == 1
     assert report.semantic_results[0].evidence_ids == ("command-1",)
+
+
+def test_task_lifecycle_accepts_spec_checkpoint_policy() -> None:
+    lifecycle = TaskLifecyclePolicy.model_validate(
+        {
+            "spec_checkpoint": {
+                "refresh_interval_tool_calls": 3,
+                "refresh_interval_messages": 12,
+                "refresh_interval_history_tokens": 2000,
+                "max_summary_chars": 1200,
+            }
+        }
+    )
+    defaulted = TaskLifecyclePolicy.model_validate({"spec_checkpoint": None})
+
+    assert lifecycle.spec_checkpoint == SpecCheckpointPolicy(
+        refresh_interval_tool_calls=3,
+        refresh_interval_messages=12,
+        refresh_interval_history_tokens=2000,
+        max_summary_chars=1200,
+    )
+    assert defaulted.spec_checkpoint.enabled is True
 
 
 def test_verification_command_uses_windows_aware_string_splitting() -> None:

@@ -47,6 +47,7 @@ class RunEventType(str, Enum):
     TOOL_CALL_BATCH_SEALED = "tool_call_batch_sealed"
     TOOL_INPUT_VALIDATION_FAILED = "tool_input_validation_failed"
     TOOL_RESULT = "tool_result"
+    SPEC_CHECKPOINT_APPLIED = "spec_checkpoint_applied"
     INJECTION_ENQUEUED = "injection_enqueued"
     INJECTION_APPLIED = "injection_applied"
     TOOL_APPROVAL_REQUESTED = "tool_approval_requested"

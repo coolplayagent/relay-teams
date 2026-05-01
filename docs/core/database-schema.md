@@ -212,6 +212,7 @@ Required fields:
 Notes:
 - `role_id` is the execution target for the task.
 - `title` is a persisted task summary used by session projections and task APIs.
+- `lifecycle.spec_checkpoint` is stored inside `envelope_json` and controls automatic Spec Checkpoint refresh thresholds for long non-coordinator executions.
 - The system no longer stores workflow graphs. `tasks` is the only orchestration source of truth.
 - Role behavioral contracts are not copied into `tasks.envelope_json`. The task
   stores only the selected `role_id`; dispatch and verification resolve the
@@ -270,6 +271,7 @@ CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
 
 Purpose: append-only business/run event log.
 Tool call and tool result events are the durable source used to rebuild missing `tool_call_state:*` and `tool_call_batch:*` shared-state entries after a forced backend stop.
+`spec_checkpoint_applied` events are durable observability markers emitted after an internal spec-refresh system prompt is persisted for the next model request.
 
 ---
 
@@ -309,6 +311,7 @@ Notes:
 - Session-level `clear` operations no longer delete rows from `messages`.
 - The active conversation context is derived by looking up the latest `session_history_markers.marker_type = 'clear'` entry for the same `session_id` and filtering rows with `created_at` after that marker.
 - Historical session round rendering may still read the full `messages` history for the same session.
+- Runtime-internal guidance, including automatic Spec Checkpoint refreshes, may be stored as `ModelRequest` rows whose message part is `system-prompt`; the `role` column remains `user` because it describes the persisted Pydantic message envelope, not the semantic prompt authority.
 
 ---
 
@@ -330,7 +333,7 @@ CREATE INDEX IF NOT EXISTS idx_session_history_markers_session
 Purpose: append-only logical history boundaries for a session.
 
 Notes:
-- `marker_type` currently starts with `clear`.
+- `marker_type` currently includes `clear` and `compaction`.
 - A `clear` marker divides active context from earlier persisted history without deleting earlier `messages`, `events`, or `token_usage`.
 - Multiple markers may exist for the same session. Runtime context uses the latest matching marker.
 

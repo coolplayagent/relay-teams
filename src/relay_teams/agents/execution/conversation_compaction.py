@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
     PartEndEvent,
     PartStartEvent,
     RetryPromptPart,
+    SystemPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPart,
@@ -605,6 +606,8 @@ class ConversationCompactionService:
                 "Rewrite the summary as concise markdown that preserves the information needed to continue the conversation after older turns are hidden. "
                 "Keep objectives, decisions, constraints, tool outcomes, artifacts, unresolved threads, important paths, filenames, commands, identifiers, and concrete next-step instructions whenever they matter. "
                 "Preserve exact technical details when they are needed for future execution, especially filesystem paths, branch names, API names, config keys, error messages, and artifact locations. "
+                "If the transcript contains a Task Spec or Spec Checkpoint, preserve its requirements, constraints, acceptance criteria, out-of-scope items, verification commands, and evidence expectations in a dedicated spec section. "
+                "Spec constraints are higher priority than ordinary conversation details and must not be weakened or generalized. "
                 "Drop chatter, repetition, timestamps, and redundant narration. "
                 "Output only the final markdown."
             ),
@@ -931,6 +934,8 @@ def _render_message(message: ModelRequest | ModelResponse) -> str:
     for part in message.parts:
         if isinstance(part, UserPromptPart):
             fragments.append(f"User: {user_prompt_content_to_text(part.content)}")
+        elif isinstance(part, SystemPromptPart):
+            fragments.append(f"System: {str(part.content or '').strip()}")
         elif isinstance(part, TextPart):
             fragments.append(f"Assistant: {str(part.content or '').strip()}")
         elif isinstance(part, ThinkingPart):
@@ -977,6 +982,8 @@ def message_has_replay_anchor(message: ModelRequest | ModelResponse) -> bool:
     if not isinstance(message, ModelRequest):
         return False
     for part in message.parts:
+        if isinstance(part, SystemPromptPart):
+            return True
         if isinstance(part, UserPromptPart):
             return True
         if isinstance(part, RetryPromptPart) and not str(part.tool_name or "").strip():
