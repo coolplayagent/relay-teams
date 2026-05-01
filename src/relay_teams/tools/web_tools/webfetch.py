@@ -1866,7 +1866,8 @@ async def download_binary_range_segment(
     segment: BinaryDownloadSegment,
     download_dir: Path,
     cancel_check: Callable[[], None],
-    persist_progress: Callable[..., asyncio.Future | None] | Callable[..., object],
+    persist_progress: Callable[..., asyncio.Future[object] | None]
+    | Callable[..., object],
 ) -> None:
     segment_length = binary_segment_length(segment)
     if segment.downloaded_bytes >= segment_length:

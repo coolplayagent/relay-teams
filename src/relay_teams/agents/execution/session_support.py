@@ -1250,14 +1250,11 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 )
             return None
         if state.execution_status == ToolExecutionStatus.RUNNING:
-            return cast(
-                dict[str, JsonValue],
-                build_tool_error_result(
-                    error_code="tool_execution_interrupted",
-                    message=(
-                        "Tool execution was interrupted before its result was "
-                        "durably recorded; it was not retried automatically."
-                    ),
+            return build_tool_error_result(
+                error_code="tool_execution_interrupted",
+                message=(
+                    "Tool execution was interrupted before its result was "
+                    "durably recorded; it was not retried automatically."
                 ),
             )
         return None

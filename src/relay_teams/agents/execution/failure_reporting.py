@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from json import dumps
 from typing import Protocol, cast
 
@@ -150,7 +150,7 @@ class FailureHandlingService:
         total_attempts: int,
         error: LlmRetryErrorInfo,
     ) -> None:
-        payload = {
+        payload: dict[str, JsonValue] = {
             "role_id": request.role_id,
             "instance_id": request.instance_id,
             "attempt_number": retry_number + 1,
@@ -190,7 +190,7 @@ class FailureHandlingService:
         total_attempts: int,
         decision: LlmFallbackDecision,
     ) -> None:
-        payload = {
+        payload: dict[str, JsonValue] = {
             "role_id": request.role_id,
             "instance_id": request.instance_id,
             "attempt_number": retry_number + 1,
@@ -227,7 +227,7 @@ class FailureHandlingService:
         error: LlmRetryErrorInfo,
         fallback_state: FallbackAttemptState,
     ) -> None:
-        payload = {
+        payload: dict[str, JsonValue] = {
             "role_id": request.role_id,
             "instance_id": request.instance_id,
             "attempt_number": retry_number + 1,
@@ -764,7 +764,7 @@ class FailureHandlingService:
         *,
         request: LLMRequest,
         event_type: RunEventType,
-        payload: dict[str, object],
+        payload: Mapping[str, object],
     ) -> None:
         if self._run_event_hub is None:
             return

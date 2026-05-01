@@ -5,7 +5,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from relay_teams.validation import (
     OptionalIdentifierStr,
@@ -102,10 +109,10 @@ class XiaolubanAccountCreateInput(BaseModel):
 
     @field_validator("display_name", "token", "base_url")
     @classmethod
-    def _normalize_text(cls, value: str, info) -> str:
-        normalized = normalize_optional_string(value, field_name=info.field_name)
+    def _normalize_text(cls, value: str, info: ValidationInfo) -> str:
+        normalized = normalize_optional_string(value, field_name=info.field_name or "")
         if normalized is None:
-            raise ValueError(f"{info.field_name} must not be empty")
+            raise ValueError(f"{info.field_name or ''} must not be empty")
         return normalized
 
     @field_validator("notification_workspace_ids", mode="before")
@@ -156,8 +163,10 @@ class XiaolubanAccountUpdateInput(BaseModel):
 
     @field_validator("display_name", "token", "base_url", "notification_receiver")
     @classmethod
-    def _normalize_optional_text(cls, value: Optional[str], info) -> Optional[str]:
-        return normalize_optional_string(value, field_name=info.field_name)
+    def _normalize_optional_text(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        return normalize_optional_string(value, field_name=info.field_name or "")
 
     @field_validator("notification_workspace_ids", mode="before")
     @classmethod

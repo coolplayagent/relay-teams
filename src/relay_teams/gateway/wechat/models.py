@@ -5,7 +5,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from relay_teams.validation import (
     normalize_optional_string,
@@ -90,10 +97,12 @@ class WeChatAccountUpdateInput(BaseModel):
 
     @field_validator("display_name", "base_url", "cdn_base_url")
     @classmethod
-    def _normalize_optional_text(cls, value: str | None, info) -> str | None:
+    def _normalize_optional_text(
+        cls, value: str | None, info: ValidationInfo
+    ) -> str | None:
         return normalize_optional_string(
             value,
-            field_name=info.field_name,
+            field_name=info.field_name or "",
         )
 
     @field_validator("route_tag")

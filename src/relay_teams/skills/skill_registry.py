@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import json
 import logging
 from pathlib import Path
@@ -544,7 +546,7 @@ def _select_skill_files(
     )
 
 
-def _skill_payload_char_count(payload: dict[str, JsonValue]) -> int:
+def _skill_payload_char_count(payload: Mapping[str, object]) -> int:
     return len(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 

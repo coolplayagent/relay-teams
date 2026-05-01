@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
+from typing import Self
 
 from relay_teams.computer import (
     ComputerActionRisk,
@@ -27,7 +29,9 @@ class ToolError(BaseModel):
     details: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_serializer(mode="wrap")
-    def _serialize(self, handler):
+    def _serialize(
+        self, handler: Callable[[Self], dict[str, object]]
+    ) -> dict[str, object]:
         payload = handler(self)
         if not self.details:
             payload.pop("details", None)

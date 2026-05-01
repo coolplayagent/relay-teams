@@ -1806,5 +1806,5 @@ def _build_header_secret_sync_profile(
     if "headers" not in raw_profile:
         return raw_profile
     sync_profile = dict(raw_profile)
-    sync_profile["provider"] = cast(JsonValue, provider_raw)
+    sync_profile["provider"] = provider_raw
     return sync_profile

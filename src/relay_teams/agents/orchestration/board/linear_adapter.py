@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from collections.abc import Mapping
 from datetime import datetime
-
-from pydantic import JsonValue
 
 from relay_teams.agents.orchestration.board.adapter import (
     BoardTask,
@@ -30,7 +29,7 @@ _LINEAR_STATE_MAP: dict[str, BoardTaskState] = {
 }
 
 
-def _linear_issue_to_board(issue: dict[str, JsonValue]) -> BoardTask:
+def _linear_issue_to_board(issue: Mapping[str, object]) -> BoardTask:
     state_raw = issue.get("state")
     state_dict = state_raw if isinstance(state_raw, dict) else {}
     state_name = str(state_dict.get("name", "backlog")).lower()
@@ -66,7 +65,7 @@ def _linear_issue_to_board(issue: dict[str, JsonValue]) -> BoardTask:
         source_url=str(issue.get("url", "")),
         created_at=_parse_dt(issue.get("createdAt")),
         updated_at=_parse_dt(issue.get("updatedAt")),
-        raw_payload=dict(issue),
+        raw_payload={k: v for k, v in issue.items()},
     )
 
 

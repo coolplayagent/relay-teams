@@ -51,7 +51,7 @@ class SessionRecoveryMixin(AgentLlmSessionMixinBase):
         request: LLMRequest,
         schedule: LlmRetrySchedule,
     ) -> None:
-        payload = {
+        payload: dict[str, object] = {
             "role_id": request.role_id,
             "instance_id": request.instance_id,
             "attempt_number": schedule.next_attempt_number,

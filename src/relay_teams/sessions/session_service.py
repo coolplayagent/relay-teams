@@ -1893,7 +1893,7 @@ class SessionService:
                 if exec_record.execution_mode == "background"
             )
         ]
-        active_run = {
+        active_run: dict[str, object] = {
             "run_id": run_id,
             "status": runtime.status.value,
             "phase": self._public_phase(runtime, len(approvals), len(user_questions)),

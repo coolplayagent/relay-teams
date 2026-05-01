@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.agents.tasks.enums import TaskStatus
 
@@ -46,7 +46,7 @@ class BoardTask(BaseModel):
     source_url: str = ""
     created_at: datetime | None = None
     updated_at: datetime | None = None
-    raw_payload: dict[str, JsonValue] = Field(default_factory=dict)
+    raw_payload: dict[str, object] = Field(default_factory=dict)
 
 
 class TaskBoardStateMap(BaseModel):

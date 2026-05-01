@@ -400,7 +400,7 @@ class _ScriptedResult:
         self,
         *,
         response: object,
-        messages: list[object],
+        messages: Sequence[object],
     ) -> None:
         self.response = response
         self._messages = messages
@@ -423,7 +423,7 @@ class _ScriptedAgentRun:
         self,
         *,
         nodes: list[object],
-        messages_by_step: list[list[object]],
+        messages_by_step: Sequence[Sequence[object]],
         result: _ScriptedResult,
         raise_on_exhaust: BaseException | None = None,
     ) -> None:
@@ -804,7 +804,7 @@ class _FakeAgentWithMutableUsageNode:
 class _PartEventStream:
     def __init__(
         self,
-        events: list[object],
+        events: Sequence[object],
         usage_snapshot: SimpleNamespace,
     ) -> None:
         self._events = list(events)
@@ -828,7 +828,7 @@ class _PartEventStream:
 class _PartEventStreamContext:
     def __init__(
         self,
-        events: list[object],
+        events: Sequence[object],
         usage_snapshot: SimpleNamespace,
     ) -> None:
         self._events = events
@@ -845,7 +845,7 @@ class _PartEventStreamContext:
 class _PartEventNode:
     def __init__(
         self,
-        events: list[object],
+        events: Sequence[object],
         usage_snapshot: SimpleNamespace,
     ) -> None:
         self._events = events

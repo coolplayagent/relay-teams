@@ -40,6 +40,7 @@ from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
+    RunEvent,
     RunThinkingConfig,
     RuntimePromptConversationContext,
 )
@@ -1326,7 +1327,7 @@ class WeChatGatewayService:
         return "\n".join(parts).strip()
 
     @staticmethod
-    def _terminal_text(event) -> str:
+    def _terminal_text(event: RunEvent) -> str:
         payload = parse_terminal_payload_json(event.payload_json)
         if event.event_type == RunEventType.RUN_COMPLETED:
             output = extract_terminal_output(payload)
@@ -1344,7 +1345,7 @@ class WeChatGatewayService:
         return "Run failed."
 
     @staticmethod
-    def _paused_text(event) -> str:
+    def _paused_text(event: RunEvent) -> str:
         try:
             payload = json.loads(event.payload_json)
         except json.JSONDecodeError:

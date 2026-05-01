@@ -1909,7 +1909,7 @@ def _resolve_pydantic_model_list_type(
         return None
     for item in get_args(annotation):
         if inspect.isclass(item) and issubclass(item, BaseModel):
-            return cast(type[BaseModel], item)
+            return item
     return None
 
 
@@ -1917,7 +1917,7 @@ def _resolve_pydantic_model_type(
     annotation: object,
 ) -> type[BaseModel] | None:
     if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
-        return cast(type[BaseModel], annotation)
+        return annotation
     origin = get_origin(annotation)
     if origin is None:
         return None
@@ -1925,7 +1925,7 @@ def _resolve_pydantic_model_type(
         if item is type(None):
             continue
         if inspect.isclass(item) and issubclass(item, BaseModel):
-            return cast(type[BaseModel], item)
+            return item
     return None
 
 
@@ -1946,7 +1946,7 @@ def _resolve_enum_type(
 
 def _enum_type_from_annotation(annotation: object) -> type[Enum] | None:
     if inspect.isclass(annotation) and issubclass(annotation, Enum):
-        return cast(type[Enum], annotation)
+        return annotation
     origin = get_origin(annotation)
     if origin is None:
         return None
@@ -1954,7 +1954,7 @@ def _enum_type_from_annotation(annotation: object) -> type[Enum] | None:
         if item is type(None):
             continue
         if inspect.isclass(item) and issubclass(item, Enum):
-            return cast(type[Enum], item)
+            return item
     return None
 
 
@@ -3363,7 +3363,7 @@ async def _evaluate_tool_approval_policy(
             task_id=ctx.deps.task_id,
             allowed_tools=allowed_tools,
         )
-    required = cast(bool, policy.requires_approval(tool_name))
+    required = policy.requires_approval(tool_name)
     return ToolApprovalDecision(
         required=required,
         runtime_decision=(

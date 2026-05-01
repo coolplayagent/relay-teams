@@ -13,6 +13,7 @@ from relay_teams.workspace.ssh_profile_service import SshProfileService
 from relay_teams.workspace.workspace_models import (
     WorkspaceLocations,
     WorkspaceMountProvider,
+    WorkspaceMountRecord,
     WorkspaceRemoteMountRoot,
     WorkspaceRecord,
     WorkspaceRef,
@@ -127,7 +128,7 @@ class WorkspaceManager(BaseModel):
         self,
         *,
         workspace_dir: Path,
-        mount,
+        mount: WorkspaceMountRecord,
         tmp_root: Path,
         remote_mount_roots: tuple[WorkspaceRemoteMountRoot, ...] = (),
     ) -> WorkspaceLocations:
@@ -167,7 +168,7 @@ class WorkspaceManager(BaseModel):
         self,
         *,
         workspace_dir: Path,
-        mount,
+        mount: WorkspaceMountRecord,
         remote_mount_root: WorkspaceRemoteMountRoot,
         tmp_root: Path,
         remote_mount_roots: tuple[WorkspaceRemoteMountRoot, ...],

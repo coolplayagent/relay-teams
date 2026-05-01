@@ -411,7 +411,7 @@ def _run_web_settings_script(
     mock_logger_path = tmp_path / "mockLogger.mjs"
     module_under_test_path = tmp_path / "webSettings.mjs"
     runner_path = tmp_path / "runner.mjs"
-    fetch_web_config = {
+    fetch_web_config: dict[str, object] = {
         "provider": "exa",
         "exa_api_key": None,
         "fallback_provider": "searxng",

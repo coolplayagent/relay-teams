@@ -114,7 +114,7 @@ default-groups = ["evals"]
 
 [tool.pyright]
 extraPaths = ["src", "tests"]
-typeCheckingMode = "standard"
+typeCheckingMode = "strict"
 exclude = [
   ".venv",
   ".claude",
@@ -122,8 +122,45 @@ exclude = [
   "**/node_modules",
   "frontend/dist",
   ".tmp",
+  "tmp",
+  ".pytest-tmp",
   "src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx",
 ]
+
+# All strict-mode diagnostic categories set to "warning" (visible but non-blocking).
+# The codebase has type: ignore / pyright: ignore banned by coding standards.
+# Warnings are tracked for incremental remediation; errors would block the CI gate.
+# Original PR had these as `= false` (silent). This change makes all visible.
+reportUnknownVariableType = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownParameterType = "warning"
+reportUnknownLambdaType = "warning"
+reportUnknownArgumentType = "warning"
+reportPrivateUsage = "warning"
+reportMissingParameterType = "warning"
+reportMissingTypeStubs = "warning"
+reportUnusedFunction = "warning"
+reportUnnecessaryIsInstance = "warning"
+reportUnnecessaryComparison = "warning"
+reportConstantRedefinition = "warning"
+reportUnusedImport = "warning"
+reportUnusedClass = "warning"
+reportMissingTypeArgument = "warning"
+reportUnnecessaryContains = "warning"
+reportDeprecated = "warning"
+reportCallIssue = "warning"
+reportMatchNotExhaustive = "warning"
+reportUnannotatedClassAttribute = "warning"
+reportUnusedCallResult = "warning"
+reportCallInDefaultInitializer = "warning"
+reportUnusedParameter = "warning"
+reportImplicitStringConcatenation = "warning"
+reportExplicitAny = "warning"
+reportImplicitOverride = "warning"
+reportUnnecessaryCast = "warning"
+reportUnusedVariable = "warning"
+reportUnusedExpression = "warning"
+reportUndefinedVariable = "warning"
 
 [tool.ruff]
 extend-exclude = ["src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx"]

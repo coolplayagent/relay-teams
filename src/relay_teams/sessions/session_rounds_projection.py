@@ -712,7 +712,7 @@ def _project_injection_messages(
                 )
                 is True,
             }
-            projected_by_run[run_id][key] = existing
+            projected_by_run[run_id][key] = cast(dict[str, object], existing)
     return {
         run_id: sorted(
             items.values(),
@@ -1224,7 +1224,7 @@ def _coerce_user_prompt_content_projection_item(
     if not isinstance(normalized, dict):
         return None
 
-    projection_item = dict(cast(dict[str, object], normalized))
+    projection_item: dict[str, object] = {k: v for k, v in normalized.items()}
     label = str(projection_item.get("label") or "").strip()
     if label and not str(projection_item.get("name") or "").strip():
         projection_item["name"] = label

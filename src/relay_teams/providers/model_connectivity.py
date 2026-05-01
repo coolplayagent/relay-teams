@@ -878,7 +878,7 @@ class ModelConnectivityProbeService:
             config,
             extra_headers={"Content-Type": "application/json"},
         )
-        payload = {
+        payload: dict[str, object] = {
             "model": config.model,
             "messages": [{"role": "user", "content": "reply with pong"}],
             "temperature": config.sampling.temperature,
@@ -994,7 +994,7 @@ class ModelConnectivityProbeService:
             config,
             extra_headers={"Content-Type": "application/json"},
         )
-        payload = {
+        payload: dict[str, object] = {
             "model": config.model,
             "messages": [{"role": "user", "content": "reply with pong"}],
             "temperature": config.sampling.temperature,
@@ -1050,7 +1050,7 @@ class ModelConnectivityProbeService:
             config,
             extra_headers={"Content-Type": "application/json"},
         )
-        payload = {
+        payload: dict[str, object] = {
             "model": config.model,
             "messages": [{"role": "user", "content": "reply with pong"}],
             "max_tokens": 1,
@@ -1086,7 +1086,7 @@ class ModelConnectivityProbeService:
         if config.codeagent_auth is None:
             raise ValueError("CodeAgent probe requires codeagent_auth configuration.")
         endpoint = f"{config.base_url.rstrip('/')}/chat/completions"
-        payload = {
+        payload: dict[str, object] = {
             "model": config.model,
             "messages": [{"role": "user", "content": "reply with pong"}],
             "temperature": config.sampling.temperature,
