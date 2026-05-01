@@ -732,7 +732,7 @@ Notes:
 - `yolo` controls whether tool approvals are skipped entirely for that run.
 - `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
 - `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
-- `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
+- `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role and effective orchestration policy, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later.
 - `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly and the automation direct-send override used by IM-bound scheduled runs.
 
 ---

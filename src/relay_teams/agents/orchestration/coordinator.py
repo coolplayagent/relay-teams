@@ -19,6 +19,7 @@ from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraph,
     OrchestrationGraphNode,
 )
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.orchestration.verification import verify_task
@@ -72,8 +73,6 @@ from relay_teams.hooks import (
 )
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
-MAX_ORCHESTRATION_CYCLES = 8
-MAX_PARALLEL_DELEGATED_TASKS = 4
 LOGGER = get_logger(__name__)
 
 
@@ -86,6 +85,26 @@ class CoordinatorRunResult(BaseModel):
     completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
     error_code: str | None = None
     error_message: str | None = None
+
+
+class DelegatedTaskExecutionDisabledError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        trace_id: str,
+        root_task_id: str,
+        pending_lane_count: int,
+        max_parallel_tasks: int,
+    ) -> None:
+        self.trace_id = trace_id
+        self.root_task_id = root_task_id
+        self.pending_lane_count = pending_lane_count
+        self.max_parallel_tasks = max_parallel_tasks
+        message = (
+            "Delegated task execution is disabled by the orchestration policy "
+            f"while {pending_lane_count} delegated task lane(s) are ready."
+        )
+        super().__init__(message)
 
 
 class CoordinatorGraph(BaseModel):
@@ -432,6 +451,7 @@ class CoordinatorGraph(BaseModel):
                 topology=topology,
                 initial_result=initial_result,
             )
+        policy = _orchestration_policy(topology)
         coordinator_result = TaskExecutionResult(output=initial_result)
         coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
@@ -445,10 +465,56 @@ class CoordinatorGraph(BaseModel):
                 logging.DEBUG,
                 event="coord.cycle.first_pass.completed",
                 message="Coordinator first pass completed",
+                payload={
+                    "max_orchestration_cycles": policy.max_orchestration_cycles,
+                    "max_parallel_delegated_tasks": (
+                        policy.max_parallel_delegated_tasks
+                    ),
+                },
             )
 
+        if policy.max_orchestration_cycles < 1:
+            pending_task_count = await self._pending_delegated_task_count_async(
+                trace_id=trace_id,
+                root_task_id=root_task.task_id,
+            )
+            if pending_task_count:
+                error_message = (
+                    "Orchestration policy allows zero orchestration cycles while "
+                    f"{pending_task_count} delegated task(s) are pending."
+                )
+                assistant_message = build_assistant_error_message(
+                    error_code="orchestration_cycles_exhausted",
+                    error_message=error_message,
+                )
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="coord.cycle.blocked",
+                    message="Coordinator cycle blocked by zero-cycle orchestration policy",
+                    payload={
+                        "trace_id": trace_id,
+                        "root_task_id": root_task.task_id,
+                        "pending_task_count": pending_task_count,
+                        "max_orchestration_cycles": policy.max_orchestration_cycles,
+                    },
+                )
+                await self._fail_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="orchestration_cycles_exhausted",
+                    error_message=error_message,
+                )
+                return TaskExecutionResult(
+                    output=assistant_message,
+                    completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                    error_code="orchestration_cycles_exhausted",
+                    error_message=error_message,
+                )
+
         cycle = 0
-        while cycle < MAX_ORCHESTRATION_CYCLES:
+        while cycle < policy.max_orchestration_cycles:
             cycle += 1
             log_event(
                 LOGGER,
@@ -457,10 +523,44 @@ class CoordinatorGraph(BaseModel):
                 message="Coordinator cycle started",
                 payload={"cycle": cycle},
             )
-            ran_any = await self._run_pending_delegated_tasks(
-                trace_id=trace_id,
-                root_task_id=root_task.task_id,
-            )
+            try:
+                ran_any = await self._run_pending_delegated_tasks(
+                    trace_id=trace_id,
+                    root_task_id=root_task.task_id,
+                    max_parallel_tasks=policy.max_parallel_delegated_tasks,
+                )
+            except DelegatedTaskExecutionDisabledError as exc:
+                error_message = str(exc)
+                assistant_message = build_assistant_error_message(
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="coord.cycle.blocked",
+                    message="Coordinator cycle blocked by orchestration policy",
+                    payload={
+                        "cycle": cycle,
+                        "trace_id": trace_id,
+                        "root_task_id": root_task.task_id,
+                        "pending_lane_count": exc.pending_lane_count,
+                        "max_parallel_tasks": exc.max_parallel_tasks,
+                    },
+                )
+                await self._fail_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
+                return TaskExecutionResult(
+                    output=assistant_message,
+                    completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
             if not ran_any:
                 log_event(
                     LOGGER,
@@ -500,6 +600,11 @@ class CoordinatorGraph(BaseModel):
         graph = topology.orchestration_graph
         if graph is None:
             return TaskExecutionResult(output=initial_result)
+        policy = _orchestration_policy(topology)
+        max_parallel_tasks = min(
+            graph.max_parallel_tasks,
+            policy.max_parallel_delegated_tasks,
+        )
 
         log_event(
             LOGGER,
@@ -510,6 +615,11 @@ class CoordinatorGraph(BaseModel):
                 "trace_id": trace_id,
                 "root_task_id": root_task.task_id,
                 "node_count": len(graph.nodes),
+                "graph_max_parallel_tasks": graph.max_parallel_tasks,
+                "policy_max_parallel_delegated_tasks": (
+                    policy.max_parallel_delegated_tasks
+                ),
+                "resolved_max_parallel_tasks": max_parallel_tasks,
             },
         )
         missing_role_ids = self._missing_graph_role_ids(graph)
@@ -530,7 +640,7 @@ class CoordinatorGraph(BaseModel):
             graph_status = await self._graph_status_async(
                 trace_id=trace_id, graph=graph
             )
-            await self._fail_graph_root_task_async(
+            await self._fail_root_task_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 coordinator_instance_id=coordinator_instance_id,
@@ -552,11 +662,34 @@ class CoordinatorGraph(BaseModel):
                 graph=graph,
                 root_task=root_task,
             )
-            ran_any = await self._run_pending_delegated_tasks(
-                trace_id=trace_id,
-                root_task_id=root_task.task_id,
-                max_parallel_tasks=graph.max_parallel_tasks,
-            )
+            try:
+                ran_any = await self._run_pending_delegated_tasks(
+                    trace_id=trace_id,
+                    root_task_id=root_task.task_id,
+                    max_parallel_tasks=max_parallel_tasks,
+                )
+            except DelegatedTaskExecutionDisabledError as exc:
+                graph_status = await self._graph_status_async(
+                    trace_id=trace_id,
+                    graph=graph,
+                )
+                error_message = str(exc)
+                await self._fail_root_task_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
+                return TaskExecutionResult(
+                    output=(
+                        self._graph_execution_summary(graph_status=graph_status)
+                        + f"\n\n{error_message}"
+                    ),
+                    completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                    error_code="delegated_task_execution_disabled",
+                    error_message=error_message,
+                )
             graph_status = await self._graph_status_async(
                 trace_id=trace_id,
                 graph=graph,
@@ -567,7 +700,7 @@ class CoordinatorGraph(BaseModel):
                 break
             if not created_any and not ran_any:
                 error_message = "Graph execution made no progress."
-                await self._fail_graph_root_task_async(
+                await self._fail_root_task_async(
                     trace_id=trace_id,
                     root_task=root_task,
                     coordinator_instance_id=coordinator_instance_id,
@@ -584,7 +717,7 @@ class CoordinatorGraph(BaseModel):
         graph_status = await self._graph_status_async(trace_id=trace_id, graph=graph)
         if graph_status.failed:
             error_message = "One or more graph nodes failed."
-            await self._fail_graph_root_task_async(
+            await self._fail_root_task_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 coordinator_instance_id=coordinator_instance_id,
@@ -599,7 +732,7 @@ class CoordinatorGraph(BaseModel):
             )
         if not graph_status.completed:
             error_message = "Graph execution did not complete."
-            await self._fail_graph_root_task_async(
+            await self._fail_root_task_async(
                 trace_id=trace_id,
                 root_task=root_task,
                 coordinator_instance_id=coordinator_instance_id,
@@ -692,7 +825,7 @@ class CoordinatorGraph(BaseModel):
                 },
             )
 
-    async def _fail_graph_root_task_async(
+    async def _fail_root_task_async(
         self,
         *,
         trace_id: str,
@@ -989,7 +1122,7 @@ class CoordinatorGraph(BaseModel):
         *,
         trace_id: str,
         root_task_id: str,
-        max_parallel_tasks: int = MAX_PARALLEL_DELEGATED_TASKS,
+        max_parallel_tasks: int | None = None,
     ) -> bool:
         records = await self.task_repo.list_by_trace_async(trace_id)
         records_by_task_id = {record.envelope.task_id: record for record in records}
@@ -1053,7 +1186,32 @@ class CoordinatorGraph(BaseModel):
         if not lanes:
             return False
 
-        semaphore = asyncio.Semaphore(max_parallel_tasks)
+        resolved_max_parallel_tasks = (
+            OrchestrationPolicy().max_parallel_delegated_tasks
+            if max_parallel_tasks is None
+            else max_parallel_tasks
+        )
+        if resolved_max_parallel_tasks < 1:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.delegated_tasks.blocked",
+                message="Delegated task execution blocked by orchestration policy",
+                payload={
+                    "trace_id": trace_id,
+                    "root_task_id": root_task_id,
+                    "pending_lane_count": len(lanes),
+                    "max_parallel_tasks": resolved_max_parallel_tasks,
+                },
+            )
+            raise DelegatedTaskExecutionDisabledError(
+                trace_id=trace_id,
+                root_task_id=root_task_id,
+                pending_lane_count=len(lanes),
+                max_parallel_tasks=resolved_max_parallel_tasks,
+            )
+
+        semaphore = asyncio.Semaphore(resolved_max_parallel_tasks)
 
         async def run_lane(instance_id: str, lane_records: list[TaskRecord]) -> bool:
             lane_instance = instances[instance_id]
@@ -1083,6 +1241,21 @@ class CoordinatorGraph(BaseModel):
             )
         )
         return any(lane_results)
+
+    async def _pending_delegated_task_count_async(
+        self,
+        *,
+        trace_id: str,
+        root_task_id: str,
+    ) -> int:
+        records = await self.task_repo.list_by_trace_async(trace_id)
+        pending_statuses = {TaskStatus.ASSIGNED, TaskStatus.CREATED}
+        return sum(
+            1
+            for record in records
+            if record.envelope.task_id != root_task_id
+            and record.status in pending_statuses
+        )
 
     async def _fail_task_if_dependency_failed_async(
         self,
@@ -1675,6 +1848,14 @@ def _format_task_results(records: tuple[TaskRecord, ...]) -> str:
         if record.error_message:
             lines.append(f"  error={record.error_message}")
     return "\n".join(lines)
+
+
+def _orchestration_policy(
+    topology: RunTopologySnapshot | None,
+) -> OrchestrationPolicy:
+    if topology is None:
+        return OrchestrationPolicy()
+    return topology.orchestration_policy
 
 
 def _dependencies_completed(

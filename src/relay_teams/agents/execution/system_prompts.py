@@ -18,6 +18,9 @@ from relay_teams.agents.instances.models import RuntimeToolsSnapshot
 from relay_teams.agents.orchestration.graph_models import (
     build_orchestration_graph_prompt,
 )
+from relay_teams.agents.orchestration.policy_models import (
+    build_orchestration_policy_prompt,
+)
 from relay_teams.agents.execution.prompt_instructions import (
     LoadedPromptInstructions,
     PromptInstructionResolver,
@@ -702,6 +705,10 @@ async def build_runtime_system_prompt_result(
     if topology is not None and topology.orchestration_prompt.strip():
         workspace_context_sections.append(
             "## Orchestration Prompt\n" + topology.orchestration_prompt.strip()
+        )
+    if topology is not None:
+        workspace_context_sections.append(
+            build_orchestration_policy_prompt(topology.orchestration_policy)
         )
     if topology is not None and topology.orchestration_graph is not None:
         workspace_context_sections.append(

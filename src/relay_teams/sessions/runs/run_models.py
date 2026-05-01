@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from relay_teams.agents.orchestration.graph_models import OrchestrationGraph
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.media import ContentPart
 from relay_teams.media import ContentPartsAdapter
 from relay_teams.media import UserPromptContent
@@ -53,6 +54,9 @@ class RunTopologySnapshot(BaseModel):
     orchestration_preset_id: OptionalIdentifierStr = None
     orchestration_prompt: str = ""
     allowed_role_ids: tuple[str, ...] = ()
+    orchestration_policy: OrchestrationPolicy = Field(
+        default_factory=OrchestrationPolicy
+    )
     orchestration_graph: OrchestrationGraph | None = None
 
 
@@ -115,6 +119,7 @@ class IntentInput(BaseModel):
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
     skills: Optional[tuple[str, ...]] = None
+    orchestration_policy: OrchestrationPolicy | None = None
     session_mode: SessionMode = SessionMode.NORMAL
     topology: RunTopologySnapshot | None = None
     conversation_context: RuntimePromptConversationContext | None = None

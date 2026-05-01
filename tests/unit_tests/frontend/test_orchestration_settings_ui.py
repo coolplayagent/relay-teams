@@ -150,11 +150,68 @@ console.log(JSON.stringify({
     default_preset = next(
         preset for preset in saved_presets if preset["preset_id"] == "default"
     )
+    policy = cast(dict[str, JsonValue], default_preset["policy"])
     graph = cast(dict[str, JsonValue], default_preset["graph"])
     nodes = cast(list[dict[str, JsonValue]], graph["nodes"])
     edges = cast(list[dict[str, JsonValue]], graph["edges"])
+    assert policy["max_orchestration_cycles"] == 6
+    assert policy["max_parallel_delegated_tasks"] == 3
     assert nodes[0]["node_id"] == "write"
     assert edges[0]["from_node_id"] == "write"
+
+
+def test_orchestration_default_is_set_from_list_action(tmp_path: Path) -> None:
+    payload = _run_orchestration_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindOrchestrationSettingsHandlers, loadOrchestrationSettingsPanel } from "./orchestrationSettings.mjs";
+
+installGlobals(createElements());
+bindOrchestrationSettingsHandlers();
+await loadOrchestrationSettingsPanel();
+
+const defaultButtons = document.getElementById("orchestration-preset-list").querySelectorAll(".orchestration-set-default-btn");
+await defaultButtons[1].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    firstButtonDisabled: defaultButtons[0].disabled,
+    secondButtonDisabled: defaultButtons[1].disabled,
+    saveCalls: globalThis.__saveCalls,
+    notifications: globalThis.__feedbackNotifications,
+}));
+""".strip(),
+    )
+
+    save_calls = cast(list[dict[str, JsonValue]], payload["saveCalls"])
+    notifications = cast(list[dict[str, JsonValue]], payload["notifications"])
+    saved_config = cast(dict[str, JsonValue], save_calls[0]["config"])
+    assert payload["firstButtonDisabled"] is True
+    assert payload["secondButtonDisabled"] is False
+    assert saved_config["default_orchestration_preset_id"] == "shipping"
+    assert notifications[0]["title"] == "Default Orchestration Updated"
+
+
+def test_orchestration_editor_does_not_render_default_checkbox(
+    tmp_path: Path,
+) -> None:
+    payload = _run_orchestration_settings_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindOrchestrationSettingsHandlers, loadOrchestrationSettingsPanel } from "./orchestrationSettings.mjs";
+
+installGlobals(createElements());
+bindOrchestrationSettingsHandlers();
+await loadOrchestrationSettingsPanel();
+
+await document.getElementById("orchestration-preset-list").querySelectorAll(".orchestration-edit-btn")[0].onclick({ stopPropagation() {} });
+
+console.log(JSON.stringify({
+    editorHtml: document.getElementById("orchestration-preset-editor").innerHTML,
+}));
+""".strip(),
+    )
+
+    assert "orchestration-default-input" not in cast(str, payload["editorHtml"])
 
 
 def _run_orchestration_settings_script(
@@ -189,6 +246,10 @@ let orchestrationConfig = {
             description: "General routing.",
             role_ids: ["Writer", "Reviewer"],
             orchestration_prompt: "Route by capability.",
+            policy: {
+                max_orchestration_cycles: 6,
+                max_parallel_delegated_tasks: 3,
+            },
             graph: {
                 nodes: [
                     {
@@ -288,6 +349,10 @@ const translations = {
     "settings.orchestration.empty_title": "No orchestrations",
     "settings.orchestration.empty_copy": "Add an orchestration to choose roles and orchestration-specific coordinator instructions.",
     "settings.orchestration.default_badge": "Default",
+    "settings.orchestration.default_action": "Set as default orchestration",
+    "settings.orchestration.default_action_short": "Set default",
+    "settings.orchestration.default_saved_title": "Default Orchestration Updated",
+    "settings.orchestration.default_saved_message": "{name} is now the default orchestration.",
     "settings.orchestration.no_description": "No description",
     "settings.orchestration.edit": "Edit",
     "settings.orchestration.no_roles_title": "No Roles Available",
@@ -301,6 +366,10 @@ const translations = {
     "settings.orchestration.field.name": "Orchestration Name",
     "settings.orchestration.field.description": "Description",
     "settings.orchestration.field.default": "Set as default orchestration",
+    "settings.orchestration.policy.max_cycles": "Max Cycles",
+    "settings.orchestration.policy.max_parallel": "Max Parallel Tasks",
+    "settings.orchestration.policy.max_cycles_required": "Max cycles must be an integer from 0 to 64.",
+    "settings.orchestration.policy.max_parallel_required": "Max parallel tasks must be an integer from 0 to 16.",
     "settings.orchestration.allowed_roles": "Allowed Roles",
     "settings.orchestration.prompt_title": "Orchestration Prompt",
     "settings.orchestration.prompt_placeholder": "Explain how Coordinator should split work, choose roles, and drive work to completion.",
@@ -381,11 +450,13 @@ function createElement(initialDisplay = "block") {{
     let html = "";
     let cachedRoleRecords = [];
     let cachedEditButtons = [];
+    let cachedDefaultButtons = [];
     let cachedCheckboxes = [];
 
     function refreshCaches(source) {{
         cachedRoleRecords = [];
         cachedEditButtons = [];
+        cachedDefaultButtons = [];
         cachedCheckboxes = [];
 
         const recordPattern = /class="role-record([^"]*)" data-orchestration-id="([^"]+)"/g;
@@ -407,6 +478,17 @@ function createElement(initialDisplay = "block") {{
                 onclick: null,
             }});
             editMatch = editPattern.exec(source);
+        }}
+
+        const defaultPattern = /<button class="[^"]*orchestration-set-default-btn[^"]*" data-orchestration-id="([^"]+)"[^>]*>/g;
+        let defaultMatch = defaultPattern.exec(source);
+        while (defaultMatch) {{
+            cachedDefaultButtons.push({{
+                dataset: {{ orchestrationId: defaultMatch[1] }},
+                disabled: defaultMatch[0].includes("disabled"),
+                onclick: null,
+            }});
+            defaultMatch = defaultPattern.exec(source);
         }}
 
         const checkboxPattern = /<input type="checkbox" data-role-id="([^"]+)"( checked)?>/g;
@@ -440,6 +522,9 @@ function createElement(initialDisplay = "block") {{
             }}
             if (selector === ".orchestration-edit-btn") {{
                 return cachedEditButtons;
+            }}
+            if (selector === ".orchestration-set-default-btn") {{
+                return cachedDefaultButtons;
             }}
             if (selector === 'input[type="checkbox"]') {{
                 return cachedCheckboxes;
@@ -481,7 +566,8 @@ function createElements() {{
         ["orchestration-id-input", createElement("block")],
         ["orchestration-name-input", createElement("block")],
         ["orchestration-description-input", createElement("block")],
-        ["orchestration-default-input", createElement("block")],
+        ["orchestration-max-cycles-input", createElement("block")],
+        ["orchestration-max-parallel-input", createElement("block")],
         ["orchestration-role-picker", createElement("block")],
         ["orchestration-prompt-input", createElement("block")],
         ["orchestration-graph-input", createElement("block")],
@@ -529,13 +615,15 @@ function installGlobals(elements) {{
         const descMatch = html.match(/id="orchestration-description-input" value="([^"]*)"/);
         const promptMatch = html.match(/<textarea id="orchestration-prompt-input"[^>]*>([\\s\\S]*?)<\\/textarea>/);
         const graphMatch = html.match(/<textarea id="orchestration-graph-input"[^>]*>([\\s\\S]*?)<\\/textarea>/);
-        const defaultMatch = html.match(/id="orchestration-default-input"( checked)?/);
+        const maxCyclesMatch = html.match(/id="orchestration-max-cycles-input" value="([^"]*)"/);
+        const maxParallelMatch = html.match(/id="orchestration-max-parallel-input" value="([^"]*)"/);
         elements.get("orchestration-id-input").value = idMatch ? idMatch[1] : "";
         elements.get("orchestration-name-input").value = nameMatch ? nameMatch[1] : "";
         elements.get("orchestration-description-input").value = descMatch ? descMatch[1] : "";
         elements.get("orchestration-prompt-input").value = promptMatch ? decodeHtml(promptMatch[1]) : "";
         elements.get("orchestration-graph-input").value = graphMatch ? decodeHtml(graphMatch[1]) : "";
-        elements.get("orchestration-default-input").checked = Boolean(defaultMatch && defaultMatch[1]);
+        elements.get("orchestration-max-cycles-input").value = maxCyclesMatch ? decodeHtml(maxCyclesMatch[1]) : "";
+        elements.get("orchestration-max-parallel-input").value = maxParallelMatch ? decodeHtml(maxParallelMatch[1]) : "";
 
         const rolePicker = elements.get("orchestration-role-picker");
         rolePicker.innerHTML = html;

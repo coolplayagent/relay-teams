@@ -471,7 +471,10 @@ class SessionRunService:
                     "skills": skills,
                 }
             )
-        topology = self._orchestration_settings_service.resolve_run_topology(session)
+        topology = self._orchestration_settings_service.resolve_run_topology(
+            session,
+            policy_override=intent.orchestration_policy,
+        )
         return intent.model_copy(
             update={
                 "session_mode": session.session_mode,
@@ -494,7 +497,10 @@ class SessionRunService:
                     "skills": skills,
                 }
             )
-        topology = self._orchestration_settings_service.resolve_run_topology(session)
+        topology = self._orchestration_settings_service.resolve_run_topology(
+            session,
+            policy_override=intent.orchestration_policy,
+        )
         return intent.model_copy(
             update={
                 "session_mode": session.session_mode,

@@ -10,6 +10,10 @@ from typing import Awaitable, Callable, Literal, cast
 import pytest
 from pydantic import JsonValue
 
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
+from relay_teams.agents.orchestration.settings_service import (
+    OrchestrationSettingsService,
+)
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.media import (
@@ -54,6 +58,7 @@ from relay_teams.sessions.runs.run_models import (
     RunEvent,
     RunKind,
     RunResult,
+    RunTopologySnapshot,
     VideoGenerationConfig,
 )
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
@@ -96,7 +101,7 @@ from relay_teams.sessions.runs.user_question_repository import (
     UserQuestionStatusConflictError,
 )
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
-from relay_teams.sessions.session_models import SessionRecord
+from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from relay_teams.roles.role_models import RoleDefinition
@@ -153,6 +158,27 @@ class _SessionRepo:
 class _EventBus:
     def emit(self, event) -> None:
         _ = event
+
+
+class _CapturingOrchestrationSettingsService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, OrchestrationPolicy | None]] = []
+
+    def resolve_run_topology(
+        self,
+        session: SessionRecord,
+        *,
+        policy_override: OrchestrationPolicy | None = None,
+    ) -> RunTopologySnapshot:
+        self.calls.append((session.session_id, policy_override))
+        return RunTopologySnapshot(
+            session_mode=session.session_mode,
+            main_agent_role_id="MainAgent",
+            normal_root_role_id="MainAgent",
+            coordinator_role_id="Coordinator",
+            orchestration_preset_id=session.orchestration_preset_id,
+            orchestration_policy=policy_override or OrchestrationPolicy(),
+        )
 
 
 class _NativeImageProvider(LLMProvider):
@@ -288,6 +314,7 @@ def _build_manager(
     background_task_service: BackgroundTaskService | None = None,
     todo_service: TodoService | None = None,
     monitor_service: MonitorService | None = None,
+    orchestration_settings_service: OrchestrationSettingsService | None = None,
 ) -> SessionRunService:
     control = RunControlManager()
     injection = RunInjectionManager()
@@ -335,6 +362,7 @@ def _build_manager(
         todo_service=todo_service,
         monitor_service=monitor_service,
         notification_service=None,
+        orchestration_settings_service=orchestration_settings_service,
         media_asset_service=media_asset_service,
         shell_approval_repo=shell_approval_repo,
         user_question_manager=UserQuestionManager(),
@@ -420,6 +448,69 @@ def test_run_service_compatibility_facade_delegates_to_split_services(
         "persist-shell:none:approved",
         "questions:run-interaction",
     ]
+
+
+def test_prepare_intent_resolves_topology_with_policy_override(tmp_path: Path) -> None:
+    settings_service = _CapturingOrchestrationSettingsService()
+    manager = _build_manager(
+        tmp_path / "run_service_prepare_intent_topology.db",
+        orchestration_settings_service=cast(
+            OrchestrationSettingsService,
+            settings_service,
+        ),
+    )
+    policy = OrchestrationPolicy(
+        max_orchestration_cycles=2,
+        max_parallel_delegated_tasks=1,
+    )
+
+    prepared = manager._prepare_intent(
+        IntentInput(
+            session_id="session-1",
+            session_mode=SessionMode.ORCHESTRATION,
+            target_role_id=" writer ",
+            skills=("plan",),
+            orchestration_policy=policy,
+        )
+    )
+
+    assert settings_service.calls == [("session-1", policy)]
+    assert prepared.session_mode == SessionMode.NORMAL
+    assert prepared.target_role_id == "writer"
+    assert prepared.skills == ("plan",)
+    assert prepared.topology is not None
+    assert prepared.topology.orchestration_policy == policy
+
+
+@pytest.mark.asyncio
+async def test_prepare_intent_async_resolves_topology_with_policy_override(
+    tmp_path: Path,
+) -> None:
+    settings_service = _CapturingOrchestrationSettingsService()
+    manager = _build_manager(
+        tmp_path / "run_service_prepare_intent_async_topology.db",
+        orchestration_settings_service=cast(
+            OrchestrationSettingsService,
+            settings_service,
+        ),
+    )
+    policy = OrchestrationPolicy(
+        max_orchestration_cycles=3,
+        max_parallel_delegated_tasks=2,
+    )
+
+    prepared = await manager._prepare_intent_async(
+        IntentInput(
+            session_id="session-1",
+            session_mode=SessionMode.ORCHESTRATION,
+            orchestration_policy=policy,
+        )
+    )
+
+    assert settings_service.calls == [("session-1", policy)]
+    assert prepared.session_mode == SessionMode.NORMAL
+    assert prepared.topology is not None
+    assert prepared.topology.orchestration_policy == policy
 
 
 def test_get_todo_uses_run_session_from_runtime(

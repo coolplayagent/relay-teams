@@ -4,6 +4,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from relay_teams.agents.orchestration.graph_models import OrchestrationGraph
+from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 
 
 class OrchestrationPreset(BaseModel):
@@ -14,6 +15,7 @@ class OrchestrationPreset(BaseModel):
     description: str = ""
     role_ids: tuple[str, ...] = Field(default_factory=tuple)
     orchestration_prompt: str = Field(min_length=1)
+    policy: OrchestrationPolicy = Field(default_factory=OrchestrationPolicy)
     graph: OrchestrationGraph | None = None
 
     @model_validator(mode="after")

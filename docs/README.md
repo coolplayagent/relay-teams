@@ -12,6 +12,7 @@ This directory is organized by documentation purpose and runtime module.
 ## Modules
 
 - [Agents](modules/agents/)
+- [Orchestration policy](modules/agents/orchestration-policy-design.md)
 - [Automation](modules/automation/ao4-async-path-unification.md)
 - [CLI commands](modules/cli/commands.md)
 - [Frontend](modules/frontend/README.md)

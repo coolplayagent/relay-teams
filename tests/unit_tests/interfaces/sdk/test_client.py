@@ -962,6 +962,10 @@ async def test_create_run_includes_target_role_id(monkeypatch) -> None:
         input="hello",
         session_id="session-1",
         target_role_id="writer",
+        orchestration_policy={
+            "max_orchestration_cycles": 2,
+            "max_parallel_delegated_tasks": 1,
+        },
     )
 
     assert handle.run_id == "run-1"
@@ -975,6 +979,10 @@ async def test_create_run_includes_target_role_id(monkeypatch) -> None:
             "execution_mode": "ai",
             "yolo": False,
             "target_role_id": "writer",
+            "orchestration_policy": {
+                "max_orchestration_cycles": 2,
+                "max_parallel_delegated_tasks": 1,
+            },
         },
     }
 

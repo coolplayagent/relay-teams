@@ -187,7 +187,11 @@ def test_workspace_shell_hides_execution_mode_selector() -> None:
     assert 'id="cancel-orchestration-btn"' in settings_index_script
     assert "main_agent_prompt" not in orchestration_settings_script
     assert "default_orchestration_preset_id" in orchestration_settings_script
-    assert "t('settings.orchestration.field.default')" in orchestration_settings_script
+    assert "orchestration-set-default-btn" in orchestration_settings_script
+    assert "t('settings.orchestration.default_action')" in orchestration_settings_script
+    assert (
+        "t('settings.orchestration.field.default')" not in orchestration_settings_script
+    )
     assert "showOrchestrationList" in orchestration_settings_script
     assert "showOrchestrationEditor" in orchestration_settings_script
     assert "showConfirmDialog" in orchestration_settings_script

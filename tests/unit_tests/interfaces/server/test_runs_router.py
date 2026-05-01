@@ -641,6 +641,30 @@ def test_create_run_route_accepts_yolo() -> None:
     assert fake_service.started_run_ids == ["run-1"]
 
 
+def test_create_run_route_accepts_orchestration_policy_override() -> None:
+    fake_service = _FakeRunService()
+    client = _create_client(fake_service)
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "hello"}],
+            "execution_mode": "ai",
+            "orchestration_policy": {
+                "max_orchestration_cycles": 1,
+                "max_parallel_delegated_tasks": 0,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    created = fake_service.created_run_inputs[0]
+    assert created.orchestration_policy is not None
+    assert created.orchestration_policy.max_orchestration_cycles == 1
+    assert created.orchestration_policy.max_parallel_delegated_tasks == 0
+
+
 def test_create_run_route_accepts_explicit_skills() -> None:
     fake_service = _FakeRunService()
     fake_skill_registry = _FakeSkillRegistry()

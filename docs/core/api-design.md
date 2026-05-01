@@ -670,6 +670,10 @@ Response fields:
   - `description`
   - `role_ids`
   - `orchestration_prompt`
+  - `policy`
+    - `max_orchestration_cycles`
+    - `max_parallel_delegated_tasks`
+  - `graph`, optional DAG template
 
 ### `PUT /system/configs/orchestration`
 
@@ -678,6 +682,8 @@ The request body is the `OrchestrationSettings` object directly; the backend no 
 
 Rules:
 - `presets[].role_ids` may contain only normal roles; reserved system roles are rejected.
+- `presets[].policy.max_orchestration_cycles` accepts `0..64`.
+- `presets[].policy.max_parallel_delegated_tasks` accepts `0..16`; `0` disables automatic delegated task execution for simple direct-answer presets.
 - The default preset id must match one existing preset.
 - `MainAgent` and `Coordinator` base role prompts are edited through `/roles/configs/*`, not this config.
 - `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.
@@ -1308,6 +1314,10 @@ Request:
   "thinking": {
     "enabled": false,
     "effort": null
+  },
+  "orchestration_policy": {
+    "max_orchestration_cycles": 8,
+    "max_parallel_delegated_tasks": 4
   }
 }
 ```
@@ -1342,6 +1352,7 @@ Notes:
 - `thinking.effort` optionally sets provider reasoning effort (`minimal`, `low`, `medium`, `high`); when set, it is forwarded to OpenAI-compatible providers as `openai_reasoning_effort`.
 - `target_role_id` is optional. When set, that run starts from the specified role instead of the session-default root role, without mutating the saved session topology.
 - `target_role_id` may point to `Coordinator`, `MainAgent`, or any normal role known to the role registry.
+- `orchestration_policy` is optional. When provided, it overrides the selected orchestration preset policy for that run only and is stored in the run topology snapshot.
 - The backend resolves the session mode at run creation time and snapshots the chosen root topology into the run intent for queued and recoverable resume flows.
 - `session_id`, `target_role_id`, `run_id`, and other identifier-style request fields follow the common identifier validation rules above.
 

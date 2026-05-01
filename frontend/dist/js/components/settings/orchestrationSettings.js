@@ -20,6 +20,10 @@ let orchestrationRoleOptions = [];
 let editingDraft = null;
 let editingSourceId = '';
 let handlersBound = false;
+const DEFAULT_ORCHESTRATION_POLICY = Object.freeze({
+    max_orchestration_cycles: 8,
+    max_parallel_delegated_tasks: 4,
+});
 
 function formatMessage(key, values = {}) {
     return Object.entries(values).reduce(
@@ -117,6 +121,12 @@ function renderOrchestrationList() {
             openOrchestrationEditor(button.dataset.orchestrationId);
         };
     });
+    host.querySelectorAll('.orchestration-set-default-btn').forEach(button => {
+        button.onclick = event => {
+            event.stopPropagation();
+            void handleSetDefaultOrchestration(button.dataset.orchestrationId);
+        };
+    });
     host.querySelectorAll('.role-record').forEach(button => {
         button.onclick = () => {
             openOrchestrationEditor(button.dataset.orchestrationId);
@@ -152,6 +162,7 @@ function renderOrchestrationRecord(orchestration) {
                 </div>
             </div>
             <div class="role-record-actions">
+                <button class="settings-inline-action settings-list-action profile-card-action-btn orchestration-set-default-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button" title="${escapeHtml(t('settings.orchestration.default_action'))}" ${isDefault ? 'disabled' : ''}>${escapeHtml(t('settings.orchestration.default_action_short'))}</button>
                 <button class="settings-inline-action settings-list-action orchestration-edit-btn" data-orchestration-id="${escapeHtml(orchestrationId)}" type="button">${escapeHtml(t('settings.orchestration.edit'))}</button>
             </div>
         </div>
@@ -188,6 +199,7 @@ function handleAddOrchestration() {
         description: '',
         role_ids: [orchestrationRoleOptions[0].role_id],
         orchestration_prompt: '',
+        policy: normalizePolicy(null),
         graph: null,
         is_default: orchestrationConfig.presets.length === 0,
     };
@@ -248,9 +260,15 @@ function renderOrchestrationEditor() {
                         <input type="text" id="orchestration-description-input" value="${escapeHtml(editingDraft.description)}" autocomplete="off">
                     </div>
                 </div>
-                <div class="profile-default-row orchestration-default-row">
-                    <input type="checkbox" id="orchestration-default-input"${editingDraft.is_default ? ' checked' : ''}>
-                    <label for="orchestration-default-input">${t('settings.orchestration.field.default')}</label>
+                <div class="profile-editor-grid role-editor-grid orchestration-policy-grid">
+                    <div class="form-group">
+                        <label for="orchestration-max-cycles-input">${t('settings.orchestration.policy.max_cycles')}</label>
+                        <input type="number" id="orchestration-max-cycles-input" value="${escapeHtml(editingDraft.policy.max_orchestration_cycles)}" min="0" max="64" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="orchestration-max-parallel-input">${t('settings.orchestration.policy.max_parallel')}</label>
+                        <input type="number" id="orchestration-max-parallel-input" value="${escapeHtml(editingDraft.policy.max_parallel_delegated_tasks)}" min="0" max="16" step="1">
+                    </div>
                 </div>
             </section>
             <section class="role-editor-section orchestration-role-section">
@@ -369,6 +387,42 @@ async function handleDeleteOrchestration() {
     }
 }
 
+async function handleSetDefaultOrchestration(orchestrationId) {
+    const nextDefaultId = String(orchestrationId || '').trim();
+    const orchestration = orchestrationConfig.presets.find(
+        item => String(item?.preset_id || '').trim() === nextDefaultId,
+    );
+    if (
+        !orchestration
+        || nextDefaultId === String(orchestrationConfig.default_orchestration_preset_id || '').trim()
+    ) {
+        return;
+    }
+
+    try {
+        await saveOrchestrationConfig({
+            default_orchestration_preset_id: nextDefaultId,
+            presets: orchestrationConfig.presets.map(item => serializeOrchestration(item)),
+        });
+        showToast({
+            title: t('settings.orchestration.default_saved_title'),
+            message: formatMessage('settings.orchestration.default_saved_message', {
+                name: orchestration.name || nextDefaultId,
+            }),
+            tone: 'success',
+        });
+        document.dispatchEvent(new CustomEvent('orchestration-settings-updated'));
+        await loadOrchestrationSettingsPanel();
+    } catch (error) {
+        renderStatus(error.message || t('settings.orchestration.save_failed_detail'), 'danger');
+        showToast({
+            title: t('settings.orchestration.save_failed_title'),
+            message: error.message || t('settings.orchestration.save_failed_detail'),
+            tone: 'danger',
+        });
+    }
+}
+
 function handleCancelOrchestrationEdit() {
     editingDraft = null;
     editingSourceId = '';
@@ -395,6 +449,18 @@ function readDraftFromForm() {
     const graph = parseGraphFromEditor(
         String(document.getElementById('orchestration-graph-input')?.value || '').trim(),
     );
+    const policy = {
+        max_orchestration_cycles: parsePolicyLimit(
+            document.getElementById('orchestration-max-cycles-input')?.value,
+            'settings.orchestration.policy.max_cycles_required',
+            64,
+        ),
+        max_parallel_delegated_tasks: parsePolicyLimit(
+            document.getElementById('orchestration-max-parallel-input')?.value,
+            'settings.orchestration.policy.max_parallel_required',
+            16,
+        ),
+    };
     const roleIds = [];
     document.getElementById('orchestration-role-picker')
         ?.querySelectorAll('input[type="checkbox"]')
@@ -403,7 +469,6 @@ function readDraftFromForm() {
                 roleIds.push(String(input.dataset.roleId || '').trim());
             }
         });
-    const isDefault = document.getElementById('orchestration-default-input')?.checked === true;
 
     if (!orchestrationId) {
         throw new Error(t('settings.orchestration.id_required'));
@@ -424,8 +489,9 @@ function readDraftFromForm() {
         description,
         role_ids: roleIds.filter(Boolean),
         orchestration_prompt: orchestrationPrompt,
+        policy,
         graph,
-        is_default: isDefault,
+        is_default: false,
     };
     return { ...editingDraft };
 }
@@ -437,13 +503,11 @@ function buildSavedConfig(draft) {
     nextPresets.push(cloneOrchestration(draft));
 
     const normalizedPresets = nextPresets.map(item => serializeOrchestration(item));
-    const defaultOrchestrationId = draft.is_default
-        ? draft.preset_id
-        : resolveDefaultOrchestrationId({
-            presets: nextPresets,
-            editingSourceId,
-            fallbackId: draft.preset_id,
-        });
+    const defaultOrchestrationId = resolveDefaultOrchestrationId({
+        presets: nextPresets,
+        editingSourceId,
+        fallbackId: draft.preset_id,
+    });
 
     if (!defaultOrchestrationId) {
         throw new Error(t('settings.orchestration.default_required'));
@@ -506,6 +570,7 @@ function cloneOrchestration(source) {
             ? source.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
             : [],
         orchestration_prompt: String(source?.orchestration_prompt || '').trim(),
+        policy: normalizePolicy(source?.policy),
         graph: normalizeGraph(source?.graph),
         is_default: orchestrationId === String(orchestrationConfig.default_orchestration_preset_id || '').trim()
             || source?.is_default === true,
@@ -521,6 +586,7 @@ function serializeOrchestration(orchestration) {
             ? orchestration.role_ids.map(roleId => String(roleId || '').trim()).filter(Boolean)
             : [],
         orchestration_prompt: String(orchestration?.orchestration_prompt || '').trim(),
+        policy: normalizePolicy(orchestration?.policy),
     };
     const graph = normalizeGraph(orchestration?.graph);
     if (graph) {
@@ -534,6 +600,47 @@ function normalizeGraph(graph) {
         return null;
     }
     return JSON.parse(JSON.stringify(graph));
+}
+
+function normalizePolicy(policy) {
+    const source = policy && typeof policy === 'object' && !Array.isArray(policy)
+        ? policy
+        : DEFAULT_ORCHESTRATION_POLICY;
+    return {
+        max_orchestration_cycles: normalizePolicyLimit(
+            source.max_orchestration_cycles,
+            DEFAULT_ORCHESTRATION_POLICY.max_orchestration_cycles,
+            64,
+        ),
+        max_parallel_delegated_tasks: normalizePolicyLimit(
+            source.max_parallel_delegated_tasks,
+            DEFAULT_ORCHESTRATION_POLICY.max_parallel_delegated_tasks,
+            16,
+        ),
+    };
+}
+
+function normalizePolicyLimit(value, fallback, maxValue) {
+    const parsed = Number.parseInt(String(value ?? ''), 10);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    return Math.min(Math.max(parsed, 0), maxValue);
+}
+
+function parsePolicyLimit(value, requiredMessageKey, maxValue) {
+    const rawValue = String(value ?? '').trim();
+    if (!rawValue) {
+        throw new Error(t(requiredMessageKey));
+    }
+    const parsed = Number.parseInt(rawValue, 10);
+    if (!Number.isFinite(parsed) || String(parsed) !== rawValue) {
+        throw new Error(t(requiredMessageKey));
+    }
+    if (parsed < 0 || parsed > maxValue) {
+        throw new Error(t(requiredMessageKey));
+    }
+    return parsed;
 }
 
 function formatGraphForEditor(graph) {
