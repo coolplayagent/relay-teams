@@ -5,7 +5,6 @@ from datetime import UTC, datetime
 from json import dumps, loads
 import sqlite3
 from pathlib import Path
-from typing import cast
 
 from pydantic import JsonValue
 
@@ -386,4 +385,4 @@ def _json_value(value: object) -> JsonValue:
         return [_json_value(item) for item in value]
     if isinstance(value, dict):
         return {str(key): _json_value(item) for key, item in value.items()}
-    return cast(JsonValue, str(value))
+    return str(value)

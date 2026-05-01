@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Annotated, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from pydantic_ai import RunContext
@@ -138,7 +138,7 @@ class ToolDeps(BaseModel):
     user_question_repo: SkipValidation[UserQuestionRepository | None] = None
     run_runtime_repo: SkipValidation[RunRuntimeRepository]
     injection_manager: SkipValidation[RunInjectionManager]
-    run_event_hub: SkipValidation[RunEventHub]
+    run_event_hub: Annotated[RunEventHub, SkipValidation]
     agent_repo: SkipValidation[AgentInstanceRepository]
     workspace: SkipValidation[WorkspaceHandle]
     role_memory: SkipValidation[RoleMemoryService | None] = None

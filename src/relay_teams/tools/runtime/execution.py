@@ -884,10 +884,7 @@ async def _record_security_audit_event_async(
 
 
 def _audit_service(ctx: ToolContext) -> AuditService | None:
-    service = getattr(ctx.deps, "audit_service", None)
-    if service is None:
-        return None
-    return cast(AuditService, service)
+    return ctx.deps.audit_service
 
 
 def _build_security_audit_event(
