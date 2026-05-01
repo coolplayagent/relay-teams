@@ -33,6 +33,7 @@ let selectedRoleId = '';
 let selectedSourceRoleId = '';
 let promptPreviewMode = 'edit';
 let currentMemoryProfile = { enabled: true };
+let currentRoleContract = {};
 let hasLoadedRoleConfigOptions = false;
 let currentSelections = {
     tools: [],
@@ -404,6 +405,7 @@ function applyRoleRecord(record) {
     if (emptyEl) emptyEl.style.display = 'none';
 
     currentMemoryProfile = normalizeMemoryProfile(record.memory_profile);
+    currentRoleContract = normalizeRoleContract(record.contract);
     currentBoundAgentId = String(record.bound_agent_id || '').trim();
     currentExecutionSurface = String(record.execution_surface || 'api').trim() || 'api';
     currentSelections = {
@@ -422,6 +424,7 @@ function applyRoleRecord(record) {
     renderExecutionSurfaceSelect(currentExecutionSurface);
     renderRoleOptionPickers();
     renderMemoryProfileSelects(currentMemoryProfile);
+    renderRoleContractInput(currentRoleContract);
     setInputValue('role-system-prompt-input', record.system_prompt || '');
     setPromptPreviewMode('edit');
 
@@ -966,6 +969,38 @@ function renderMemoryProfileSelects(memoryProfile) {
     );
 }
 
+function normalizeRoleContract(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return {};
+    }
+    return value;
+}
+
+function renderRoleContractInput(contract) {
+    const input = document.getElementById('role-contract-input');
+    if (!input) return;
+    const normalized = normalizeRoleContract(contract);
+    const keys = Object.keys(normalized);
+    input.value = keys.length > 0 ? JSON.stringify(normalized, null, 2) : '';
+}
+
+function parseRoleContractInput() {
+    const raw = String(getInputValue('role-contract-input') || '').trim();
+    if (!raw) {
+        return {};
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        throw new Error(t('settings.roles.contract_invalid_json'));
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(t('settings.roles.contract_invalid_object'));
+    }
+    return parsed;
+}
+
 function renderBooleanSelect(id, selected) {
     const selectEl = document.getElementById(id);
     if (!selectEl) return;
@@ -1058,6 +1093,7 @@ function handleAddRole() {
         bound_agent_id: null,
         execution_surface: 'api',
         memory_profile: { enabled: true },
+        contract: {},
         system_prompt: '',
         file_name: '',
     });
@@ -1201,6 +1237,8 @@ function buildDraftFromForm() {
         ...(currentMemoryProfile || {}),
         enabled: getBooleanSelectValue('role-memory-enabled-input', true),
     };
+    const contract = parseRoleContractInput();
+    currentRoleContract = contract;
 
     return {
         source_role_id: selectedSourceRoleId || null,
@@ -1215,6 +1253,7 @@ function buildDraftFromForm() {
         mcp_servers: [...currentSelections.mcp_servers],
         skills: [...currentSelections.skills],
         memory_profile: memoryProfile,
+        contract,
         system_prompt: systemPrompt,
     };
 }

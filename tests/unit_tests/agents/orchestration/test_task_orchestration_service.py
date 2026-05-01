@@ -16,6 +16,11 @@ from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractPrecondition,
+    RoleContractPreconditionType,
+)
 from relay_teams.roles.role_registry import RoleRegistry
 
 from relay_teams.agents.instances.enums import InstanceLifecycle
@@ -163,6 +168,23 @@ def _build_role_registry() -> RoleRegistry:
             version="1.0.0",
             tools=(),
             system_prompt="Review code.",
+        )
+    )
+    registry.register(
+        RoleDefinition(
+            role_id="spec_required",
+            name="Spec Required",
+            description="Requires a task spec before execution.",
+            version="1.0.0",
+            tools=(),
+            contract=RoleContract(
+                preconditions=(
+                    RoleContractPrecondition(
+                        condition=RoleContractPreconditionType.TASK_HAS_SPEC,
+                    ),
+                )
+            ),
+            system_prompt="Implement only from a spec.",
         )
     )
     return registry
@@ -794,6 +816,56 @@ async def test_dispatch_task_rejects_followup_prompt_for_completed_task(
             "Execute this task contract and return the requested result.",
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_task_enforces_role_contract_preconditions(
+    tmp_path: Path,
+) -> None:
+    (
+        service,
+        task_repo,
+        _agent_repo,
+        _message_repo,
+        execution_service,
+    ) = _build_service(tmp_path / "task_orchestration_role_contract.db")
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-1",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id=None,
+            title="Implement endpoint",
+            objective="Implement the endpoint",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    with pytest.raises(ValueError, match="Role contract preconditions failed"):
+        await service.dispatch_task(
+            run_id="run-1",
+            task_id="task-1",
+            role_id="spec_required",
+        )
+
+    record = task_repo.get("task-1")
+    assert record.status == TaskStatus.CREATED
+    assert record.envelope.role_id is None
+    assert record.assigned_instance_id is None
+    assert execution_service.calls == []
+
+    payload = await service.dispatch_task(
+        run_id="run-1",
+        task_id="task-1",
+        role_id="spec_coder",
+    )
+
+    record = task_repo.get("task-1")
+    task_payload = cast(dict[str, JsonValue], payload["task"])
+    assert record.envelope.role_id == "spec_coder"
+    assert task_payload["assigned_role_id"] == "spec_coder"
+    assert execution_service.calls[0][1:3] == ("spec_coder", "task-1")
 
 
 @pytest.mark.asyncio

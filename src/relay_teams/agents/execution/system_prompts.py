@@ -35,6 +35,7 @@ from relay_teams.hooks import (
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.roles.role_contracts import build_role_contract_prompt
 from relay_teams.roles.role_registry import (
     RoleRegistry,
     is_coordinator_role_definition,
@@ -627,6 +628,9 @@ async def build_runtime_system_prompt_result(
     run_event_hub: RunEventHub | None = None,
 ) -> RuntimePromptSections:
     base_instruction_sections: list[str] = [data.role.system_prompt, COMMON_MODE_PROMPT]
+    role_contract_prompt = build_role_contract_prompt(data.role.contract)
+    if role_contract_prompt:
+        base_instruction_sections.append(role_contract_prompt)
     capability_summary_sections: list[str] = []
     workspace_context_sections: list[str] = []
     topology = data.topology

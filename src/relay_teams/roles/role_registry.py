@@ -19,6 +19,7 @@ from relay_teams.roles.default_role_tools import (
     apply_default_role_tools,
 )
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
+from relay_teams.roles.role_contracts import RoleContract
 from relay_teams.roles.role_models import RoleConfigSource, RoleDefinition, RoleMode
 
 MAIN_AGENT_ROLE_ID = "MainAgent"
@@ -321,6 +322,13 @@ class RoleLoader:
                 raise ValueError(f"memory_profile must be an object in {source_name}")
             memory_profile = MemoryProfile.model_validate(memory_profile_raw)
 
+        contract_raw = parsed.get("contract")
+        contract = RoleContract()
+        if contract_raw is not None:
+            if not isinstance(contract_raw, dict):
+                raise ValueError(f"contract must be an object in {source_name}")
+            contract = RoleContract.model_validate(contract_raw)
+
         return RoleDefinition(
             role_id=str(parsed["role_id"]),
             name=str(parsed["name"]),
@@ -345,6 +353,7 @@ class RoleLoader:
             ),
             mode=RoleMode(str(parsed.get("mode", RoleMode.PRIMARY.value))),
             memory_profile=memory_profile,
+            contract=contract,
             hooks=_parse_frontmatter_hooks(
                 parsed.get("hooks"),
                 source_name=source_name,
@@ -423,6 +432,10 @@ def _namespace_plugin_role(
                 plugin_name=plugin_name,
                 refs=role.skills,
             ),
+            "contract": _namespace_plugin_contract(
+                plugin_name=plugin_name,
+                contract=role.contract,
+            ),
             "hooks": _namespace_plugin_hooks(
                 plugin_name=plugin_name,
                 hooks=role.hooks,
@@ -451,6 +464,45 @@ def _namespace_plugin_refs(
             namespace_plugin_ref(plugin_name=plugin_name, local_name=normalized)
         )
     return tuple(namespaced)
+
+
+def _namespace_plugin_contract(
+    *,
+    plugin_name: str,
+    contract: RoleContract,
+) -> RoleContract:
+    if contract == RoleContract():
+        return contract
+    return contract.model_copy(
+        update={
+            "preconditions": tuple(
+                precondition.model_copy(
+                    update={
+                        "role_ids": _namespace_plugin_refs(
+                            plugin_name=plugin_name,
+                            refs=precondition.role_ids,
+                        )
+                    }
+                )
+                for precondition in contract.preconditions
+            ),
+            "invariants": tuple(
+                invariant.model_copy(
+                    update={
+                        "mcp_servers": _namespace_plugin_refs(
+                            plugin_name=plugin_name,
+                            refs=invariant.mcp_servers,
+                        ),
+                        "skills": _namespace_plugin_refs(
+                            plugin_name=plugin_name,
+                            refs=invariant.skills,
+                        ),
+                    }
+                )
+                for invariant in contract.invariants
+            ),
+        }
+    )
 
 
 def _namespace_plugin_hooks(

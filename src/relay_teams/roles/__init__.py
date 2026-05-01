@@ -22,6 +22,15 @@ from relay_teams.roles.memory_models import (
 )
 from relay_teams.roles.memory_repository import RoleMemoryRepository
 from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.roles.role_contracts import (
+    RoleContract,
+    RoleContractInvariant,
+    RoleContractInvariantType,
+    RoleContractPostcondition,
+    RoleContractPostconditionType,
+    RoleContractPrecondition,
+    RoleContractPreconditionType,
+)
 from relay_teams.roles.role_registry import RoleLoader, RoleRegistry
 from relay_teams.roles.runtime_tools import (
     role_with_runtime_tools,
@@ -46,6 +55,13 @@ __all__ = [
     "MemoryProfile",
     "NormalModeRoleOption",
     "RoleAgentOption",
+    "RoleContract",
+    "RoleContractInvariant",
+    "RoleContractInvariantType",
+    "RoleContractPostcondition",
+    "RoleContractPostconditionType",
+    "RoleContractPrecondition",
+    "RoleContractPreconditionType",
     "RoleConfigOptions",
     "RoleConfigSource",
     "RoleDefinition",

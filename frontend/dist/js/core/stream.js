@@ -105,13 +105,6 @@ function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
 
 export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
     const safeSessionId = String(sessionId || '').trim();
-    const runStart = {
-        token: ++runStartTokenSeed,
-        sessionId: safeSessionId,
-        runId: '',
-        detached: false,
-    };
-    pendingRunStart = runStart;
     const yolo = options.yolo === true;
     const thinking = options.thinking && typeof options.thinking === 'object'
         ? {
@@ -119,6 +112,27 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
             effort: String(options.thinking.effort || 'medium'),
         }
         : { enabled: false, effort: null };
+    if (options.detached === true) {
+        await startDetachedIntentStream(promptText, safeSessionId, {
+            yolo,
+            thinking,
+            targetRoleId: options.targetRoleId || null,
+            inputParts: Array.isArray(options.inputParts) ? options.inputParts : null,
+            skills: Array.isArray(options.skills) ? options.skills : null,
+            displayInputParts: Array.isArray(options.displayInputParts)
+                ? options.displayInputParts
+                : null,
+        });
+        return;
+    }
+
+    const runStart = {
+        token: ++runStartTokenSeed,
+        sessionId: safeSessionId,
+        runId: '',
+        detached: false,
+    };
+    pendingRunStart = runStart;
     creatingRun = true;
     state.activeRunId = null;
     setStreamUiBusy(true);
@@ -208,6 +222,53 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
         reason: 'start',
         makeUiBusy: false,
     });
+}
+
+async function startDetachedIntentStream(promptText, sessionId, options) {
+    try {
+        const run = await sendUserPrompt(
+            sessionId,
+            promptText,
+            options.yolo === true,
+            options.thinking,
+            options.targetRoleId || null,
+            options.inputParts,
+            options.skills,
+            options.displayInputParts,
+        );
+        const runId = String(run?.run_id || '').trim();
+        if (!runId) {
+            throw new Error('Run creation did not return a run id.');
+        }
+        clearRunUnavailableCooldown(runId);
+        setRunPrimaryRole(
+            runId,
+            run.target_role_id || options.targetRoleId || getPrimaryRoleId(),
+        );
+        logInfo('frontend.run.created', 'Frontend background run created', {
+            run_id: runId,
+            session_id: sessionId,
+            yolo: options.yolo === true,
+            thinking_enabled: options.thinking?.enabled === true,
+            thinking_effort: options.thinking?.effort || null,
+            target_role_id: run.target_role_id || options.targetRoleId || null,
+        });
+        scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, {
+            forceRefresh: true,
+        });
+        attachRunStreamAsBackground(runId, sessionId, {
+            reason: 'start-background',
+        });
+    } catch (err) {
+        logError(
+            'frontend.run.create_failed',
+            err.message || 'Failed to create background run',
+            errorToPayload(err, { session_id: sessionId, detached: true }),
+        );
+        scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, {
+            forceRefresh: true,
+        });
+    }
 }
 
 export function endStream(options = {}) {

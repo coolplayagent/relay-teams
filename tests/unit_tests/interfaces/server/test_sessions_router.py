@@ -68,6 +68,19 @@ class _FakeSessionService:
             metadata={} if metadata is None else dict(metadata),
         )
 
+    async def create_session_async(
+        self,
+        *,
+        session_id: str | None = None,
+        workspace_id: str,
+        metadata: dict[str, str] | None = None,
+    ) -> SessionRecord:
+        return self.create_session(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            metadata=metadata,
+        )
+
     def update_session(self, session_id: str, patch: SessionMetadataPatch) -> None:
         if self.raise_missing:
             raise KeyError(session_id)

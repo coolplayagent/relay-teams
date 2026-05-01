@@ -20,6 +20,9 @@ from relay_teams.agents.orchestration.task_contracts import (
 from relay_teams.agents.orchestration.policy_models import (
     DEFAULT_MAX_PARALLEL_DELEGATED_TASKS,
 )
+from relay_teams.agents.orchestration.role_contracts import (
+    role_contract_precondition_failures,
+)
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import (
@@ -39,6 +42,7 @@ from relay_teams.hooks import (
     TaskCreatedInput,
 )
 from relay_teams.roles.role_registry import RoleRegistry
+from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -276,7 +280,7 @@ class TaskOrchestrationService:
         normalized_role_id = str(role_id).strip()
         if not normalized_role_id:
             raise ValueError("role_id must not be empty")
-        await self._resolve_role_async(
+        role_definition = await self._resolve_role_definition_async(
             run_id=resolved_run_id,
             role_id=normalized_role_id,
         )
@@ -284,6 +288,7 @@ class TaskOrchestrationService:
         normalized_prompt = prompt.strip()
         bound_role_id = str(record.envelope.role_id or "").strip()
         instance_id = record.assigned_instance_id or ""
+        contract_checked = False
 
         if record.status == TaskStatus.CREATED:
             async with self._role_assignment_lock_slot(
@@ -298,12 +303,24 @@ class TaskOrchestrationService:
                             raise ValueError(
                                 f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
                             )
+                        contract_record = record
+                        if not bound_role_id:
+                            contract_record = record.model_copy(
+                                update={
+                                    "envelope": record.envelope.model_copy(
+                                        update={"role_id": normalized_role_id}
+                                    )
+                                }
+                            )
+                        await self._assert_role_contract_preconditions_async(
+                            role=role_definition,
+                            record=contract_record,
+                        )
+                        contract_checked = True
                         if not bound_role_id:
                             record = await self._task_repo.update_envelope_async(
                                 task_id,
-                                record.envelope.model_copy(
-                                    update={"role_id": normalized_role_id}
-                                ),
+                                contract_record.envelope,
                             )
                             bound_role_id = normalized_role_id
                         instance_id = await self._ensure_execution_instance_async(
@@ -337,6 +354,11 @@ class TaskOrchestrationService:
                 raise ValueError(
                     f"Task is already bound to role {bound_role_id}; create a replacement task to change roles."
                 )
+        if not contract_checked:
+            await self._assert_role_contract_preconditions_async(
+                role=role_definition,
+                record=record,
+            )
         if record.status == TaskStatus.COMPLETED:
             raise ValueError(
                 f"Task '{record.envelope.title}' (role={bound_role_id}) "
@@ -604,13 +626,37 @@ class TaskOrchestrationService:
             )
 
     async def _resolve_role_async(self, *, run_id: str, role_id: str) -> None:
+        _ = await self._resolve_role_definition_async(run_id=run_id, role_id=role_id)
+
+    async def _resolve_role_definition_async(
+        self, *, run_id: str, role_id: str
+    ) -> RoleDefinition:
         if self._runtime_role_resolver is not None:
-            await self._runtime_role_resolver.get_effective_role_async(
+            return await self._runtime_role_resolver.get_effective_role_async(
                 run_id=run_id,
                 role_id=role_id,
             )
-            return
-        self._role_registry.get(role_id)
+        return self._role_registry.get(role_id)
+
+    async def _assert_role_contract_preconditions_async(
+        self,
+        *,
+        role: RoleDefinition,
+        record: TaskRecord,
+    ) -> None:
+        records = await self._task_repo.list_by_trace_async(record.envelope.trace_id)
+        failures = role_contract_precondition_failures(
+            role=role,
+            task=record.envelope,
+            records_by_id={
+                candidate.envelope.task_id: candidate for candidate in records
+            },
+        )
+        if failures:
+            raise ValueError(
+                f"Role contract preconditions failed for {role.role_id}: "
+                + "; ".join(failures)
+            )
 
     async def _assign_created_task_async(
         self,

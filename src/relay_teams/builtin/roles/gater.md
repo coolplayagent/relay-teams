@@ -18,6 +18,19 @@ tools:
   - create_monitor
   - list_monitors
   - stop_monitor
+contract:
+  postconditions:
+    - guarantee: result_mentions_acceptance_criteria
+      description: audit every configured acceptance criterion
+    - guarantee: result_mentions_evidence_expectations
+      description: audit every configured evidence expectation
+  invariants:
+    - invariant: must_not_have_tools
+      description: Gater must not edit production files
+      tools:
+        - edit
+        - write
+        - notebook_edit
 ---
 
 ## 角色：Gater (质量审计员) 

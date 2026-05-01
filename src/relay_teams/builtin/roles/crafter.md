@@ -29,6 +29,12 @@ tools:
   - websearch
   - auto_harness_synthesize_tool
   - auto_harness_enable_tool
+contract:
+  postconditions:
+    - guarantee: result_mentions_acceptance_criteria
+      description: cite each acceptance criterion in the completion result when criteria are configured
+    - guarantee: result_mentions_evidence_expectations
+      description: cite expected evidence in the completion result when evidence expectations are configured
 ---
 
 

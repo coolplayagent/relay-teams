@@ -11,6 +11,18 @@ tools:
   - read
   - office_read_markdown
   - write_tmp
+contract:
+  postconditions:
+    - guarantee: result_mentions_acceptance_criteria
+      description: produced specs must preserve configured acceptance criteria
+  invariants:
+    - invariant: must_not_have_tools
+      description: Designer must not implement production changes
+      tools:
+        - edit
+        - write
+        - notebook_edit
+        - shell
 ---
 
 ## 角色：Designer (规格架构师) 

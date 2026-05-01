@@ -9,6 +9,9 @@ from relay_teams.computer import ExecutionSurface
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles import (
+    RoleContract,
+    RoleContractInvariant,
+    RoleContractInvariantType,
     RoleDocumentDraft,
     RoleConfigSource,
     RoleMode,
@@ -78,6 +81,50 @@ def test_save_role_document_renames_role_file_and_reloads_registry(
     assert "execution_surface: hybrid" in saved.content
     assert "mode: subagent" in saved.content
     assert captured_registry[-1].get("writer_v2").name == "Writer V2"
+
+
+def test_validate_role_document_rejects_contract_invariant_violation(
+    tmp_path: Path,
+) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda registry: None,
+    )
+
+    with pytest.raises(ValueError, match="Role contract invariants failed"):
+        service.validate_role_document(
+            RoleDocumentDraft(
+                role_id="writer",
+                name="Writer",
+                description="Drafts user-facing content.",
+                version="1.0.0",
+                tools=("write",),
+                mcp_servers=(),
+                skills=(),
+                model_profile="default",
+                memory_profile=default_memory_profile(),
+                contract=RoleContract(
+                    invariants=(
+                        RoleContractInvariant(
+                            invariant=RoleContractInvariantType.MUST_NOT_HAVE_TOOLS,
+                            tools=("write",),
+                        ),
+                    )
+                ),
+                system_prompt="Write clearly.",
+            )
+        )
 
 
 def test_save_role_document_preserves_plugin_roles_on_reload(
