@@ -27,6 +27,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Providers](modules/providers/)
 - [Reminders](modules/reminders/system-reminders-design.md)
 - [Sessions](modules/sessions/)
+- [SP-3 spec checkpoint refresh](modules/sessions/spec-checkpoint-refresh-design.md)
 - [Skills](modules/skills/)
 - [Workspace runtime](modules/workspace/)
 

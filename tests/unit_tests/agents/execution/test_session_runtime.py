@@ -219,8 +219,59 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
         parts=[TextPart(content="done")],
         model_name="fake-model",
     )
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Implement API",
+        verification=VerificationPlan(),
+        spec=TaskSpec(requirements=("return the completed answer without restart",)),
+        lifecycle=TaskLifecyclePolicy(
+            spec_checkpoint=SpecCheckpointPolicy(
+                refresh_interval_tool_calls=99,
+                refresh_interval_messages=1,
+                refresh_interval_history_tokens=999_999,
+            )
+        ),
+    )
     provider_history = [echoed_request]
-    message_repo = _FakeMessageRepo(history=[])
+
+    class _TaskRepo:
+        async def get_async(self, task_id: str) -> TaskRecord:
+            assert task_id == "task-1"
+            return TaskRecord(envelope=task)
+
+    class _RoleRegistry:
+        def is_coordinator_role(self, role_id: str) -> bool:
+            assert role_id == "writer"
+            return False
+
+    class _SpecCheckpointMessageRepo(_FakeMessageRepo):
+        async def append_system_prompt_if_missing_async(
+            self,
+            *,
+            session_id: str,
+            workspace_id: str,
+            conversation_id: str,
+            agent_role_id: str,
+            instance_id: str,
+            task_id: str,
+            trace_id: str,
+            content: str,
+        ) -> bool:
+            _ = (
+                session_id,
+                workspace_id,
+                conversation_id,
+                agent_role_id,
+                instance_id,
+                task_id,
+                trace_id,
+            )
+            self.appended_system_prompts.append(content)
+            return True
+
+    message_repo = _SpecCheckpointMessageRepo(history=[])
     streamed_tool_result = ToolReturnPart(
         tool_name="test_tool",
         content={"ok": True},
@@ -352,7 +403,7 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
     session.__dict__["_allowed_tools"] = ()
     session.__dict__["_allowed_mcp_servers"] = ()
     session.__dict__["_allowed_skills"] = ()
-    session.__dict__["_task_repo"] = cast(object, None)
+    session.__dict__["_task_repo"] = _TaskRepo()
     session.__dict__["_shared_store"] = cast(object, None)
     session.__dict__["_event_bus"] = cast(object, None)
     session.__dict__["_message_repo"] = cast(MessageRepository, message_repo)
@@ -375,7 +426,7 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
     session.__dict__["_conversation_microcompact_service"] = None
     session.__dict__["_mcp_registry"] = McpRegistry()
     session.__dict__["_skill_registry"] = cast(object, None)
-    session.__dict__["_role_registry"] = cast(object, None)
+    session.__dict__["_role_registry"] = _RoleRegistry()
     session.__dict__["_task_execution_service"] = cast(object, object())
     session.__dict__["_task_service"] = cast(object, None)
     session.__dict__["_run_control_manager"] = _FakeRunControlManager()
@@ -437,10 +488,16 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
         _publish_committed_tool_outcome_events_from_messages_async
     )
 
+    build_context_calls = 0
+
     async def _build_agent_iteration_context(
         **kwargs: object,
     ) -> tuple[object, Sequence[ModelRequest | ModelResponse], str, object]:
+        nonlocal build_context_calls
         _ = kwargs
+        build_context_calls += 1
+        if build_context_calls > 1:
+            raise AssertionError("final answer boundary should not restart")
         prepared_prompt = SimpleNamespace(
             history=(),
             system_prompt="System prompt",
@@ -490,6 +547,8 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
     assert result == "done"
     assert observed_histories
     assert all(list(history) == provider_history for history in observed_histories)
+    assert build_context_calls == 1
+    assert message_repo.appended_system_prompts == []
     assert len(message_repo.append_calls) == 1
     assert message_repo.append_calls[0] == [
         canonical_tool_call,

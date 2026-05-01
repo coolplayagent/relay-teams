@@ -911,12 +911,17 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 if not boundary_has_activity and not final_answer_ready:
                     return False
                 boundary_checked_after_latest_batch = True
+                boundary_final_answer_ready = (
+                    final_answer_ready or _messages_include_final_answer(new_to_process)
+                )
                 if await apply_queued_injections_at_boundary(
-                    final_answer_ready=final_answer_ready
-                    or _messages_include_final_answer(new_to_process),
+                    final_answer_ready=boundary_final_answer_ready,
                 ):
                     return True
-                return not final_answer_ready and await apply_spec_checkpoint_if_due()
+                return (
+                    not boundary_final_answer_ready
+                    and await apply_spec_checkpoint_if_due()
+                )
         except BaseException:
             await self._close_run_scoped_llm_http_client(request=request)
             raise
