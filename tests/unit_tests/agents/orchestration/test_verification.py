@@ -1030,10 +1030,14 @@ def test_evidence_helpers_classify_metrics_and_generic_checks() -> None:
     assert {
         metric.name: metric.value
         for metric in verification_module._evidence_metrics_for_check(lint_failure)
-    } == {"lint_errors": 2, "test_errors": 2}
+    } == {"lint_errors": 2}
 
     lint_success = lint_failure.model_copy(
         update={"passed": True, "output_excerpt": "All checks passed!"}
+    )
+    assert (
+        verification_module._command_evidence_kind(lint_success)
+        == VerificationEvidenceKind.LINT_RESULT
     )
     assert {
         metric.name: metric.value

@@ -669,11 +669,6 @@ def _command_evidence_kind(
     combined_text = f"{command_text}\n{output_text}"
     if _text_mentions_any(
         combined_text,
-        ("pytest", "unittest", "test", "passed", "failed", "coverage"),
-    ):
-        return VerificationEvidenceKind.TEST_RESULT
-    if _text_mentions_any(
-        combined_text,
         ("ruff", "lint", "basedpyright", "pyright", "mypy", "flake8"),
     ):
         return VerificationEvidenceKind.LINT_RESULT
@@ -687,6 +682,11 @@ def _command_evidence_kind(
         ("tla", "alloy", "lean", "coq", "isabelle", "model check", "proof"),
     ):
         return VerificationEvidenceKind.FORMAL_PROOF
+    if _text_mentions_any(
+        combined_text,
+        ("pytest", "unittest", "test", "passed", "failed", "coverage"),
+    ):
+        return VerificationEvidenceKind.TEST_RESULT
     return VerificationEvidenceKind.COMMAND
 
 
@@ -718,10 +718,15 @@ def _evidence_metrics_for_check(
 ) -> tuple[VerificationEvidenceMetric, ...]:
     output = check.output_excerpt
     values: dict[str, int] = {}
-    _collect_test_metrics(output, values)
-    _collect_lint_metrics(output, values)
-    _collect_diff_metrics(output, values)
-    _collect_formal_metrics(check, output, values)
+    kind = _command_evidence_kind(check)
+    if kind == VerificationEvidenceKind.TEST_RESULT:
+        _collect_test_metrics(output, values)
+    elif kind == VerificationEvidenceKind.LINT_RESULT:
+        _collect_lint_metrics(output, values)
+    elif kind == VerificationEvidenceKind.DIFF_SUMMARY:
+        _collect_diff_metrics(output, values)
+    elif kind == VerificationEvidenceKind.FORMAL_PROOF:
+        _collect_formal_metrics(check, output, values)
     return tuple(
         VerificationEvidenceMetric(name=name, value=value)
         for name, value in sorted(values.items())
