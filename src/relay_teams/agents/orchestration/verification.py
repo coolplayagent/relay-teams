@@ -1113,7 +1113,7 @@ def _rule_semantic_evaluation(
 
 
 def _is_strong_evidence(item: VerificationEvidenceItem) -> bool:
-    if item.passed is not True:
+    if not item.passed:
         return False
     return item.kind in {
         VerificationEvidenceKind.REQUIRED_FILE,
