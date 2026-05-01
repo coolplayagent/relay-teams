@@ -268,6 +268,50 @@ def test_verify_task_uses_tool_result_events_as_evidence(
     assert result.report.semantic_results[0].evidence_ids == (linked_id,)
 
 
+def test_verify_task_ignores_unscoped_tool_result_events(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_unscoped_tool_event_evidence.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Read artifact",
+        verification=VerificationPlan(
+            acceptance_criteria=("read evidence file",),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+    event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            event_type=RunEventType.TOOL_RESULT,
+            payload_json=dumps(
+                {
+                    "tool_name": "read",
+                    "tool_call_id": "call-1",
+                    "result": "read evidence file contents",
+                    "error": False,
+                }
+            ),
+        )
+    )
+
+    result = verify_task(task_repo, event_log, task.task_id)
+
+    assert result.passed is False
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    assert result.report.evidence_bundle.acceptance_links[0].satisfied is False
+    evidence_kinds = {item.kind.value for item in result.report.evidence_bundle.items}
+    assert "tool_result" not in evidence_kinds
+
+
 def test_verify_task_uses_rule_fallback_when_semantic_evaluator_fails(
     tmp_path: Path,
 ) -> None:

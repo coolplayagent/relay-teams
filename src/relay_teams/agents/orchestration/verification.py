@@ -788,7 +788,7 @@ def _event_evidence_items(
     items: list[VerificationEvidenceItem] = []
     for index, event in enumerate(event_bus.list_by_trace(trace_id), start=1):
         event_task_id = str(event.get("task_id") or "")
-        if event_task_id and event_task_id != task_id:
+        if event_task_id != task_id:
             continue
         item = _event_evidence_item(index=index, event=event)
         if item is not None:
