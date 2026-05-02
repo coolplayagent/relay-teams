@@ -86,10 +86,10 @@ def get_llm_evaluator(request: Request) -> object:
     from relay_teams.roles.role_models import RoleDefinition
 
     container = get_container(request)
-    model_config = container._resolve_reflection_model_config()
+    model_config = container.resolve_reflection_model_config()
     model = model_config.model if model_config is not None else "gpt-4o"
-    profile_name = container._resolve_reflection_model_profile_name()
-    provider = container._provider_factory(
+    profile_name = container.resolve_reflection_model_profile_name()
+    provider = container.create_provider(
         RoleDefinition(
             role_id="llm-evaluator",
             name="LLM Evaluator",

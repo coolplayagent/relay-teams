@@ -494,7 +494,7 @@ class AutoHarnessService:
             current_role_id=current_role_id,
             target_role_id=target_role_id or record.target_role_id,
         )
-        previous_register = self._tool_registry._tools.get(normalized_tool_name)
+        previous_register = self._tool_registry.get_tool_register(normalized_tool_name)
         self._tool_registry.unregister_tool(normalized_tool_name)
         try:
             role_updated = self._remove_tool_from_role(
@@ -590,7 +590,7 @@ class AutoHarnessService:
                 f"implementation.py does not match for upgrade: {normalized_tool_name}"
             ),
         )
-        old_register = self._tool_registry._tools.get(normalized_tool_name)
+        old_register = self._tool_registry.get_tool_register(normalized_tool_name)
 
         draft = await self._generate_tool_draft(
             role=role,
@@ -882,6 +882,9 @@ class AutoHarnessService:
                 )
 
         return register
+
+    def load_record(self, tool_name: str) -> GeneratedToolRecord:
+        return self._load_record(tool_name)
 
     def _load_record(self, tool_name: str) -> GeneratedToolRecord:
         manifest_path = self._manifest_path(tool_name)

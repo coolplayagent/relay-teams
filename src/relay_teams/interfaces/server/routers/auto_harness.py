@@ -89,7 +89,7 @@ async def get_generated_tool(
 
     service: AutoHarnessService = _get_auto_harness_service(request)  # type: ignore[assignment]
     try:
-        record = service._load_record(tool_name)
+        record = service.load_record(tool_name)
     except KeyError as exc:
         raise HTTPException(
             status_code=404,

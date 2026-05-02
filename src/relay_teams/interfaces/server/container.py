@@ -1245,6 +1245,19 @@ class ServerContainer:
             return profile_name
         return None
 
+    def resolve_reflection_model_config(self) -> Optional[ModelEndpointConfig]:
+        return self._resolve_reflection_model_config()
+
+    def resolve_reflection_model_profile_name(self) -> Optional[str]:
+        return self._resolve_reflection_model_profile_name()
+
+    def create_provider(
+        self,
+        role_definition: RoleDefinition,
+        session_id: Optional[str],
+    ) -> LLMProvider:
+        return self._provider_factory(role_definition, session_id)
+
     def _resolve_hook_model_config(
         self,
         model_profile: Optional[str],

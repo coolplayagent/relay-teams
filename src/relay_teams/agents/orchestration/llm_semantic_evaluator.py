@@ -23,6 +23,15 @@ from relay_teams.providers.model_config import ModelEndpointConfig
 _EVALUATION_MAX_TOKENS = 1200
 _EVALUATION_TEMPERATURE = 0.1
 
+
+def _passed_label(value: bool | None) -> str:
+    if value is True:
+        return "PASS"
+    if value is False:
+        return "FAIL"
+    return "N/A"
+
+
 ModelConfigResolver = Callable[[], tuple[ModelEndpointConfig | None, str | None]]
 
 
@@ -120,12 +129,7 @@ def _build_semantic_evaluation_prompt(request: SemanticEvaluationRequest) -> str
         for item in request.evidence:
             evidence_summary = item.summary
             evidence_excerpt = item.output_excerpt[:200] if item.output_excerpt else ""
-            if item.passed is True:
-                passed_label = "PASS"
-            elif item.passed is False:
-                passed_label = "FAIL"
-            else:
-                passed_label = "N/A"
+            passed_label = _passed_label(item.passed)
             parts.append(f"- [{item.evidence_id}] ({passed_label}) {evidence_summary}")
             if evidence_excerpt:
                 parts.append(f"  Output: {evidence_excerpt}")
