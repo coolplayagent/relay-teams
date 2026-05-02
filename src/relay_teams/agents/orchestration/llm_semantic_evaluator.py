@@ -25,7 +25,7 @@ _EVALUATION_TEMPERATURE = 0.1
 
 
 def _passed_label(value: bool | None) -> str:
-    if value is True:
+    if value:
         return "PASS"
     if value is False:
         return "FAIL"
