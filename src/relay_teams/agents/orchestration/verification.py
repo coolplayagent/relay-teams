@@ -774,7 +774,7 @@ def _check_command_repeatability(
                 layer=VerificationLayer.BEHAVIOR,
                 name=f"repeatability:{command_label}",
                 passed=False,
-                details=(f"Repeatability run {run_index}/{total_runs} timed out."),
+                details=f"Repeatability run {run_index}/{total_runs} timed out.",
                 command=command_check.command,
             )
         except OSError as exc:
@@ -782,7 +782,7 @@ def _check_command_repeatability(
                 layer=VerificationLayer.BEHAVIOR,
                 name=f"repeatability:{command_label}",
                 passed=False,
-                details=(f"Repeatability run {run_index}/{total_runs} failed: {exc}"),
+                details=f"Repeatability run {run_index}/{total_runs} failed: {exc}",
                 command=command_check.command,
             )
         if rerun.returncode != 0:
@@ -790,10 +790,7 @@ def _check_command_repeatability(
                 layer=VerificationLayer.BEHAVIOR,
                 name=f"repeatability:{command_label}",
                 passed=False,
-                details=(
-                    f"Repeatability run {run_index}/{total_runs} "
-                    f"exited with code {rerun.returncode}."
-                ),
+                details=f"Repeatability run {run_index}/{total_runs} exited with code {rerun.returncode}.",
                 command=command_check.command,
                 exit_code=rerun.returncode,
             )

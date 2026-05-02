@@ -17,11 +17,8 @@ from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
 )
-from relay_teams.logger import get_logger
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.providers.model_config import ModelEndpointConfig
-
-_LOGGER = get_logger(__name__)
 
 _EVALUATION_MAX_TOKENS = 1200
 _EVALUATION_TEMPERATURE = 0.1

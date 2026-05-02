@@ -176,7 +176,11 @@ async def evaluate_task_spec(
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Task not found") from exc
 
-    spec = record.spec if isinstance(record.spec, TaskSpec) else TaskSpec()
+    spec = (
+        record.envelope.spec
+        if isinstance(record.envelope.spec, TaskSpec)
+        else TaskSpec()
+    )
     eval_request = LLMEvaluationRequest(
         task_id=task_id,
         spec_summary=spec.summary,

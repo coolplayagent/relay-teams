@@ -41,7 +41,11 @@ def _valid_llm_json_response() -> str:
                 {"dimension": "clarity", "score": 5, "reasoning": "Clear"},
                 {"dimension": "testability", "score": 3, "reasoning": "Needs work"},
                 {"dimension": "consistency", "score": 4, "reasoning": "Consistent"},
-                {"dimension": "appropriateness", "score": 4, "reasoning": "Appropriate"},
+                {
+                    "dimension": "appropriateness",
+                    "score": 4,
+                    "reasoning": "Appropriate",
+                },
             ],
             "summary": "Overall good spec with minor testability gaps.",
             "recommendations": [

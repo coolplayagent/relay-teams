@@ -182,13 +182,11 @@ def _build_spec_quality_prompt(request: LLMEvaluationRequest) -> str:
         parts.append(f"Summary: {request.spec_summary}")
     if request.requirements:
         parts.append(
-            "Requirements:\n"
-            + "\n".join(f"- {r}" for r in request.requirements),
+            "Requirements:\n" + "\n".join(f"- {r}" for r in request.requirements),
         )
     if request.constraints:
         parts.append(
-            "Constraints:\n"
-            + "\n".join(f"- {c}" for c in request.constraints),
+            "Constraints:\n" + "\n".join(f"- {c}" for c in request.constraints),
         )
     if request.acceptance_criteria:
         parts.append(

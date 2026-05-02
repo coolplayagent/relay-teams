@@ -16,7 +16,7 @@ class LLMEvaluationScore(BaseModel):
     @field_validator("score", mode="before")
     @classmethod
     def _clamp_score(cls, value: object) -> int:
-        return max(1, min(5, int(value)))
+        return max(1, min(5, int(str(value))))
 
 
 class LLMEvaluationResult(BaseModel):
