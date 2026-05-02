@@ -41,12 +41,14 @@ from relay_teams.roles.role_models import RoleConfigSource, RoleDefinition
 from relay_teams.roles.role_registry import RoleLoader, RoleRegistry
 from relay_teams.sessions.runs.run_models import RunKind, RunThinkingConfig
 from relay_teams.tools.generated_tools.models import (
+    GeneratedToolDisableResult,
     GeneratedToolDraft,
     GeneratedToolEnableResult,
     GeneratedToolRecord,
     GeneratedToolStatus,
     GeneratedToolSynthesisResult,
     GeneratedToolTestCase,
+    GeneratedToolUpgradeResult,
 )
 from relay_teams.tools.registry import ToolRegister, ToolRegistry
 from relay_teams.tools.runtime.context import ToolContext, ToolDeps
@@ -57,12 +59,15 @@ LOGGER = get_logger(__name__)
 GENERATED_TOOL_PREFIX = "generated_"
 AUTO_HARNESS_SYNTHESIZE_TOOL = "auto_harness_synthesize_tool"
 AUTO_HARNESS_ENABLE_TOOL = "auto_harness_enable_tool"
+AUTO_HARNESS_DISABLE_TOOL = "auto_harness_disable_tool"
+AUTO_HARNESS_UPGRADE_TOOL = "auto_harness_upgrade_tool"
 _MANIFEST_NAME = "tool.json"
 _IMPLEMENTATION_NAME = "implementation.py"
 _GENERATED_TOOLS_DIR = "generated_tools"
 _EXECUTION_TIMEOUT_SECONDS = 2.0
 _EXECUTION_POLL_INTERVAL_SECONDS = 0.02
 _MODEL_OUTPUT_MAX_TOKENS = 2400
+_MAX_SYNTHESIS_RETRIES = 2
 _ALLOWED_CALL_NAMES = frozenset(
     {
         "abs",
@@ -286,6 +291,9 @@ class AutoHarnessService:
             or self._tool_dir(normalized_tool_name).exists()
         ):
             raise ValueError(f"Tool already exists: {normalized_tool_name}")
+
+        retry_count = 0
+        retry_messages: list[str] = []
         draft = await self._generate_tool_draft(
             role=role,
             session_id=session_id,
@@ -303,13 +311,50 @@ class AutoHarnessService:
         )
         code = _strip_markdown_code_fence(draft.code)
         _validate_generated_code(code)
-        for test_case in test_cases:
-            await self._execute_code(
-                code=code,
-                tool_input=test_case.input,
-                expected=test_case.expected,
-                has_expected=test_case.has_expected,
-            )
+
+        failure_details = await self._run_test_cases(code, test_cases)
+        if failure_details:
+            retry_messages.extend(failure_details)
+            for retry_attempt in range(_MAX_SYNTHESIS_RETRIES):
+                retry_count += 1
+                regeneration_prompt = _build_regeneration_prompt(
+                    role=role,
+                    tool_name=normalized_tool_name,
+                    description=description,
+                    input_schema=input_schema,
+                    behavior=behavior,
+                    test_cases=test_cases,
+                    profile_name=None,
+                    failure_details=tuple(failure_details),
+                )
+                draft = await self._generate_tool_draft(
+                    role=role,
+                    session_id=session_id,
+                    run_id=run_id,
+                    task_id=task_id,
+                    workspace_id=workspace_id,
+                    conversation_id=conversation_id,
+                    instance_id=instance_id,
+                    tool_name=normalized_tool_name,
+                    description=description,
+                    input_schema=input_schema,
+                    behavior=behavior,
+                    test_cases=test_cases,
+                    thinking=thinking,
+                    extra_prompt=regeneration_prompt,
+                )
+                code = _strip_markdown_code_fence(draft.code)
+                _validate_generated_code(code)
+                failure_details = await self._run_test_cases(code, test_cases)
+                if not failure_details:
+                    break
+                retry_messages.extend(failure_details)
+            if failure_details:
+                raise ValueError(
+                    "Generated tool synthesis failed after "
+                    f"{_MAX_SYNTHESIS_RETRIES} retries: " + "; ".join(failure_details)
+                )
+
         code_hash = _code_hash(code)
         record = GeneratedToolRecord(
             tool_name=normalized_tool_name,
@@ -328,6 +373,8 @@ class AutoHarnessService:
             status=record.status,
             test_count=len(record.test_cases),
             notes=draft.notes.strip(),
+            retry_count=retry_count,
+            retry_messages=tuple(retry_messages),
         )
 
     async def enable_tool(
@@ -426,6 +473,214 @@ class AutoHarnessService:
             role_updated=role_updated,
         )
 
+    async def disable_tool(
+        self,
+        *,
+        current_role_id: str,
+        tool_name: str,
+        code_hash: str,
+        target_role_id: str | None = None,
+        run_id: str | None = None,
+        instance_id: str | None = None,
+        session_id: str | None = None,
+    ) -> GeneratedToolDisableResult:
+        normalized_tool_name = _normalize_generated_tool_name(tool_name)
+        record = await self._load_record_async(normalized_tool_name)
+        if record.status != GeneratedToolStatus.ENABLED:
+            raise ValueError(f"Generated tool is not enabled: {normalized_tool_name}")
+        if record.code_hash != code_hash.strip():
+            raise ValueError("code_hash does not match the enabled generated tool")
+        target_role = self._resolve_target_role(
+            current_role_id=current_role_id,
+            target_role_id=target_role_id or record.target_role_id,
+        )
+        previous_register = self._tool_registry._tools.get(normalized_tool_name)
+        self._tool_registry.unregister_tool(normalized_tool_name)
+        try:
+            role_updated = self._remove_tool_from_role(
+                role=target_role,
+                tool_name=normalized_tool_name,
+            )
+        except Exception:
+            if previous_register is not None:
+                self._tool_registry.register_tool(
+                    normalized_tool_name, previous_register
+                )
+            raise
+        disabled = record.model_copy(
+            update={
+                "status": GeneratedToolStatus.DISABLED,
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+        )
+        await self._write_record_async(
+            record=disabled,
+            code=await self._load_validated_record_implementation_async(
+                record,
+                hash_mismatch_message=(
+                    f"implementation.py does not match for disable: {normalized_tool_name}"
+                ),
+            ),
+        )
+        if run_id:
+            dirty_instance_ids: list[str] = []
+            if target_role.role_id == current_role_id and instance_id:
+                dirty_instance_ids.append(instance_id)
+            if session_id and self._resolve_role_instance_id is not None:
+                target_instance_id = self._resolve_role_instance_id(
+                    session_id,
+                    target_role.role_id,
+                )
+                if target_instance_id and target_instance_id not in dirty_instance_ids:
+                    dirty_instance_ids.append(target_instance_id)
+            for dirty_instance_id in dirty_instance_ids:
+                self.mark_runtime_tools_dirty(
+                    run_id=run_id,
+                    instance_id=dirty_instance_id,
+                    tool_names=(normalized_tool_name,),
+                )
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="autoharness.generated_tool_disabled",
+            message="Generated tool disabled and detached from role",
+            payload={
+                "tool_name": normalized_tool_name,
+                "target_role_id": target_role.role_id,
+                "current_role_id": current_role_id,
+            },
+        )
+        return GeneratedToolDisableResult(
+            tool_name=normalized_tool_name,
+            code_hash=disabled.code_hash,
+            target_role_id=target_role.role_id,
+            status=disabled.status,
+            role_updated=role_updated,
+        )
+
+    async def upgrade_tool(
+        self,
+        *,
+        role: RoleDefinition,
+        session_id: str,
+        run_id: str,
+        task_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        instance_id: str,
+        tool_name: str,
+        description: str,
+        input_schema: dict[str, JsonValue],
+        behavior: str,
+        test_cases: tuple[GeneratedToolTestCase, ...],
+        target_role_id: str | None,
+        thinking: RunThinkingConfig,
+    ) -> GeneratedToolUpgradeResult:
+        normalized_tool_name = _normalize_generated_tool_name(tool_name)
+        existing_record = await self._load_record_async(normalized_tool_name)
+        if existing_record.status != GeneratedToolStatus.ENABLED:
+            raise ValueError(f"Generated tool is not enabled: {normalized_tool_name}")
+        target_role = self._resolve_target_role(
+            current_role_id=role.role_id,
+            target_role_id=target_role_id or existing_record.target_role_id,
+        )
+        old_code = await self._load_validated_record_implementation_async(
+            existing_record,
+            hash_mismatch_message=(
+                f"implementation.py does not match for upgrade: {normalized_tool_name}"
+            ),
+        )
+        old_register = self._tool_registry._tools.get(normalized_tool_name)
+
+        draft = await self._generate_tool_draft(
+            role=role,
+            session_id=session_id,
+            run_id=run_id,
+            task_id=task_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            instance_id=instance_id,
+            tool_name=normalized_tool_name,
+            description=description,
+            input_schema=input_schema,
+            behavior=behavior,
+            test_cases=test_cases,
+            thinking=thinking,
+        )
+        new_code = _strip_markdown_code_fence(draft.code)
+        _validate_generated_code(new_code)
+
+        failure_details = await self._run_test_cases(new_code, test_cases)
+        if failure_details:
+            raise ValueError(
+                "Generated tool upgrade failed test cases: "
+                + "; ".join(failure_details)
+            )
+
+        new_code_hash = _code_hash(new_code)
+        self._tool_registry.unregister_tool(normalized_tool_name)
+        new_version = existing_record.version + 1
+        upgraded = existing_record.model_copy(
+            update={
+                "status": GeneratedToolStatus.ENABLED,
+                "description": description.strip(),
+                "input_schema": input_schema,
+                "test_cases": test_cases,
+                "code_hash": new_code_hash,
+                "target_role_id": target_role.role_id,
+                "version": new_version,
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+        )
+        try:
+            await self._write_record_async(record=upgraded, code=new_code)
+            self._register_record(upgraded)
+        except Exception:
+            await self._write_record_async(record=existing_record, code=old_code)
+            if old_register is not None:
+                self._tool_registry.register_tool(normalized_tool_name, old_register)
+            raise
+
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="autoharness.generated_tool_upgraded",
+            message="Generated tool upgraded to new version",
+            payload={
+                "tool_name": normalized_tool_name,
+                "previous_version": existing_record.version,
+                "new_version": new_version,
+                "target_role_id": target_role.role_id,
+            },
+        )
+        return GeneratedToolUpgradeResult(
+            tool_name=normalized_tool_name,
+            code_hash=new_code_hash,
+            target_role_id=target_role.role_id,
+            status=upgraded.status,
+            previous_version=existing_record.version,
+            new_version=new_version,
+            test_count=len(test_cases),
+        )
+
+    @staticmethod
+    async def _run_test_cases(
+        code: str,
+        test_cases: tuple[GeneratedToolTestCase, ...],
+    ) -> tuple[str, ...]:
+        failures: list[str] = []
+        for test_case in test_cases:
+            try:
+                await AutoHarnessService._execute_code(
+                    code=code,
+                    tool_input=test_case.input,
+                    expected=test_case.expected,
+                    has_expected=test_case.has_expected,
+                )
+            except Exception as exc:
+                failures.append(str(exc))
+        return tuple(failures)
+
     def mark_runtime_tools_dirty(
         self,
         *,
@@ -480,6 +735,7 @@ class AutoHarnessService:
         behavior: str,
         test_cases: tuple[GeneratedToolTestCase, ...],
         thinking: RunThinkingConfig,
+        extra_prompt: str | None = None,
     ) -> GeneratedToolDraft:
         config, profile_name = self._resolve_model_config(role, session_id)
         if config is None:
@@ -516,7 +772,7 @@ class AutoHarnessService:
             model_settings=_model_settings(config),
             retries=2,
         )
-        prompt = _build_generation_prompt(
+        prompt = extra_prompt or _build_generation_prompt(
             role=role,
             tool_name=tool_name,
             description=description,
@@ -826,6 +1082,78 @@ class AutoHarnessService:
             raise
         return True
 
+    def _remove_tool_from_role(self, *, role: RoleDefinition, tool_name: str) -> bool:
+        if tool_name not in role.tools:
+            return False
+        source_path, source = self._resolve_role_source(role)
+        content = source_path.read_text(encoding="utf-8")
+        front_matter, body = _split_markdown_front_matter(content)
+        parsed = yaml.safe_load(front_matter)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"Invalid role front matter: {source_path.name}")
+        raw_tools = parsed.get("tools", [])
+        if raw_tools is None:
+            raw_tools = []
+        if not isinstance(raw_tools, list):
+            raise ValueError(f"Role tools must be a list: {source_path.name}")
+        tools = [
+            str(item)
+            for item in raw_tools
+            if str(item).strip() and str(item) != tool_name
+        ]
+        parsed["tools"] = tools
+        target_path = (
+            self._roles_dir / f"{role.role_id}.md"
+            if source == RoleConfigSource.BUILTIN
+            else source_path
+        )
+        previous_content = (
+            target_path.read_text(encoding="utf-8") if target_path.exists() else None
+        )
+        current_registry = self._get_role_registry()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target_path.write_text(
+                _render_role_markdown(front_matter=parsed, body=body),
+                encoding="utf-8",
+            )
+            updated_registry = RoleLoader().load_builtin_and_app(
+                builtin_roles_dir=self._builtin_roles_dir,
+                app_roles_dir=self._roles_dir,
+                allow_empty=True,
+            )
+            current_registry.register(updated_registry.get(role.role_id))
+            self._on_roles_reloaded(updated_registry)
+        except Exception as exc:
+            try:
+                if previous_content is None:
+                    target_path.unlink(missing_ok=True)
+                else:
+                    target_path.write_text(previous_content, encoding="utf-8")
+                rollback_registry = RoleLoader().load_builtin_and_app(
+                    builtin_roles_dir=self._builtin_roles_dir,
+                    app_roles_dir=self._roles_dir,
+                    allow_empty=True,
+                )
+                current_registry.register(rollback_registry.get(role.role_id))
+                self._on_roles_reloaded(rollback_registry)
+            except Exception as rollback_exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="autoharness.role_remove_rollback_failed",
+                    message="Failed to roll back generated tool role removal",
+                    payload={
+                        "role_id": role.role_id,
+                        "tool_name": tool_name,
+                        "target_path": str(target_path),
+                        "error_type": type(exc).__name__,
+                    },
+                    exc_info=rollback_exc,
+                )
+            raise
+        return True
+
     def _tool_dir(self, tool_name: str) -> Path:
         return self._tools_dir / tool_name
 
@@ -921,6 +1249,37 @@ def _build_generation_prompt(
             "run(tool_input). Do not include markdown fences.",
         )
     )
+
+
+def _build_regeneration_prompt(
+    *,
+    role: RoleDefinition,
+    tool_name: str,
+    description: str,
+    input_schema: dict[str, JsonValue],
+    behavior: str,
+    test_cases: tuple[GeneratedToolTestCase, ...],
+    profile_name: str | None,
+    failure_details: tuple[str, ...],
+) -> str:
+    base = _build_generation_prompt(
+        role=role,
+        tool_name=tool_name,
+        description=description,
+        input_schema=input_schema,
+        behavior=behavior,
+        test_cases=test_cases,
+        profile_name=profile_name,
+    )
+    failure_section = "\n".join(
+        (
+            "",
+            "Previous attempt failures:",
+            *(f"  - {detail}" for detail in failure_details),
+            "Fix the code so all test cases pass.",
+        )
+    )
+    return base + failure_section
 
 
 def _normalize_generated_tool_name(tool_name: str) -> str:

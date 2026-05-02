@@ -5,11 +5,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from relay_teams.agents.orchestration.llm_evaluator import LLMEvaluator
+from relay_teams.agents.orchestration.llm_evaluator_models import (
+    LLMEvaluationRequest,
+    LLMEvaluationResult,
+)
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
-from relay_teams.interfaces.server.deps import get_task_service
+from relay_teams.interfaces.server.deps import get_llm_evaluator, get_task_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -148,3 +153,37 @@ async def get_task_evidence_bundle(
             exc, key_error_detail="Evidence bundle not found"
         ) from exc
     return bundle.model_dump(mode="json")
+
+
+class EvaluateSpecRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_result: str | None = None
+
+
+@router.post(
+    "/{task_id}/evaluate-spec",
+    response_model=LLMEvaluationResult,
+)
+async def evaluate_task_spec(
+    task_id: RequiredIdentifierStr,
+    req: EvaluateSpecRequest,
+    service: TaskOrchestrationService = Depends(get_task_service),
+    evaluator: LLMEvaluator = Depends(get_llm_evaluator),
+) -> LLMEvaluationResult:
+    try:
+        record = await service.get_task_async(task_id=task_id)
+    except KeyError as exc:
+        raise http_exception_for(exc, key_error_detail="Task not found") from exc
+
+    spec = record.spec if isinstance(record.spec, TaskSpec) else TaskSpec()
+    eval_request = LLMEvaluationRequest(
+        task_id=task_id,
+        spec_summary=spec.summary,
+        requirements=spec.requirements,
+        constraints=spec.constraints,
+        acceptance_criteria=spec.acceptance_criteria,
+        evidence_expectations=spec.evidence_expectations,
+        task_result=req.task_result,
+    )
+    return await evaluator.evaluate_spec_quality(eval_request)

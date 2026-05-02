@@ -13,6 +13,9 @@ from typing import IO, Literal, NamedTuple
 
 from relay_teams.agents.tasks.enums import TaskSpecStrictness, TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
+from relay_teams.agents.orchestration.multi_model_evaluator import (
+    MultiModelSemanticEvaluator,
+)
 from relay_teams.agents.tasks.models import (
     FormalVerificationPlan,
     SemanticEvaluationRequest,
@@ -204,6 +207,9 @@ def verify_task(
             EventType.VERIFICATION_PASSED if passed else EventType.VERIFICATION_FAILED
         )
 
+    repeatability_checks = tuple(
+        check for check in checks if check.name.startswith("repeatability:")
+    )
     report = VerificationReport(
         task_id=task.envelope.task_id,
         passed=passed,
@@ -211,6 +217,7 @@ def verify_task(
         unmet_items=() if passed else details,
         evidence_bundle=evidence_bundle,
         semantic_results=semantic_results,
+        repeatability_results=repeatability_checks,
     )
     verification = VerificationResult(
         task_id=task.envelope.task_id,
@@ -302,13 +309,17 @@ def _run_verification_plan(
             expectation_links=expectation_links,
         )
     )
+    effective_evaluator = _wrap_cross_evaluation_evaluator(
+        semantic_evaluator=semantic_evaluator,
+        cross_evaluation_models=plan.cross_evaluation_models,
+    )
     semantic_results = _run_semantic_evaluations(
         task_id=task_id,
         criteria=plan.acceptance_criteria,
         result=result,
         evidence_items=evidence_items_with_supports,
         acceptance_links=acceptance_links,
-        semantic_evaluator=semantic_evaluator,
+        semantic_evaluator=effective_evaluator,
     )
     checks.extend(_semantic_evaluation_checks(semantic_results))
     evidence_bundle = VerificationEvidenceBundle(
@@ -456,10 +467,40 @@ def _run_command_checks(
             )
             for command_check in plan.command_checks
         ]
-    return [
-        _run_command_check(command_check, workspace_root=workspace_root)
-        for command_check in plan.command_checks
-    ]
+    checks: list[VerificationCheckResult] = []
+    for command_check in plan.command_checks:
+        result = _run_command_check(command_check, workspace_root=workspace_root)
+        checks.append(result)
+        if (
+            result.passed
+            and plan.strictness == TaskSpecStrictness.HIGH
+            and plan.repeatability_runs > 1
+        ):
+            cwd = _resolve_command_cwd(command_check, workspace_root=workspace_root)
+            if cwd is not None:
+                initial_stdout = (result.output_excerpt or "") if result.passed else ""
+                repeatability_failure = _check_command_repeatability(
+                    command_check=command_check,
+                    cwd=cwd,
+                    repeatability_runs=plan.repeatability_runs,
+                    initial_stdout=initial_stdout,
+                )
+                if repeatability_failure is not None:
+                    checks.append(repeatability_failure)
+                else:
+                    checks.append(
+                        VerificationCheckResult(
+                            layer=VerificationLayer.BEHAVIOR,
+                            name=f"repeatability:{' '.join(command_check.command)}",
+                            passed=True,
+                            details=(
+                                f"Command produced consistent results across "
+                                f"{plan.repeatability_runs} run(s)."
+                            ),
+                            command=command_check.command,
+                        )
+                    )
+    return checks
 
 
 def _run_command_check(
@@ -692,6 +733,89 @@ def _kill_process_and_wait(process: subprocess.Popen[bytes]) -> int:
     return process.wait()
 
 
+def _resolve_command_cwd(
+    command_check: VerificationCommand,
+    *,
+    workspace_root: Path | None,
+) -> Path | None:
+    return (
+        _resolve_verification_path(command_check.cwd, workspace_root=workspace_root)
+        if command_check.cwd is not None
+        else workspace_root
+    )
+
+
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_PATTERN.sub("", text)
+
+
+def _check_command_repeatability(
+    *,
+    command_check: VerificationCommand,
+    cwd: Path,
+    repeatability_runs: int,
+    initial_stdout: str,
+) -> VerificationCheckResult | None:
+    command_label = " ".join(command_check.command)
+    total_runs = repeatability_runs
+    clean_initial = _strip_ansi(initial_stdout)
+    for run_index in range(2, total_runs + 1):
+        try:
+            rerun = _run_bounded_command(
+                command=command_check.command,
+                cwd=cwd,
+                timeout_seconds=command_check.timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return VerificationCheckResult(
+                layer=VerificationLayer.BEHAVIOR,
+                name=f"repeatability:{command_label}",
+                passed=False,
+                details=(f"Repeatability run {run_index}/{total_runs} timed out."),
+                command=command_check.command,
+            )
+        except OSError as exc:
+            return VerificationCheckResult(
+                layer=VerificationLayer.BEHAVIOR,
+                name=f"repeatability:{command_label}",
+                passed=False,
+                details=(f"Repeatability run {run_index}/{total_runs} failed: {exc}"),
+                command=command_check.command,
+            )
+        if rerun.returncode != 0:
+            return VerificationCheckResult(
+                layer=VerificationLayer.BEHAVIOR,
+                name=f"repeatability:{command_label}",
+                passed=False,
+                details=(
+                    f"Repeatability run {run_index}/{total_runs} "
+                    f"exited with code {rerun.returncode}."
+                ),
+                command=command_check.command,
+                exit_code=rerun.returncode,
+            )
+        rerun_stdout = _strip_ansi(_coerce_process_output(rerun.stdout))
+        if rerun_stdout != clean_initial:
+            return VerificationCheckResult(
+                layer=VerificationLayer.BEHAVIOR,
+                name=f"repeatability:{command_label}",
+                passed=False,
+                details=(
+                    f"Repeatability run {run_index}/{total_runs} "
+                    f"produced inconsistent output."
+                ),
+                command=command_check.command,
+                output_excerpt=_command_output_excerpt(
+                    stdout=_coerce_process_output(rerun.stdout),
+                    stderr=_coerce_process_output(rerun.stderr),
+                ),
+            )
+    return None
+
+
 def _run_formal_checks(
     *,
     plan: VerificationPlan,
@@ -894,7 +1018,7 @@ def _run_strictness_checks(*, plan: VerificationPlan) -> list[VerificationCheckR
         or plan.formal_checks
         or plan.evidence_expectations
     )
-    return [
+    checks: list[VerificationCheckResult] = [
         VerificationCheckResult(
             layer=VerificationLayer.SPEC,
             name="strictness:high:evidence_required",
@@ -909,6 +1033,24 @@ def _run_strictness_checks(*, plan: VerificationPlan) -> list[VerificationCheckR
             ),
         )
     ]
+    if plan.repeatability_runs >= 1:
+        checks.append(
+            VerificationCheckResult(
+                layer=VerificationLayer.SPEC,
+                name="strictness:high:repeatability_configured",
+                passed=True,
+                details=(
+                    f"High strictness repeatability configured: "
+                    f"{plan.repeatability_runs} run(s)."
+                    if plan.repeatability_runs > 1
+                    else (
+                        "High strictness with repeatability_runs=1; "
+                        "consider increasing for production-critical tasks."
+                    )
+                ),
+            )
+        )
+    return checks
 
 
 def _task_result_evidence_item(result: str) -> VerificationEvidenceItem:
@@ -1441,6 +1583,30 @@ def _run_evidence_coverage_checks(
             )
         )
     return tuple(checks)
+
+
+def _wrap_cross_evaluation_evaluator(
+    *,
+    semantic_evaluator: SemanticVerificationEvaluator | None,
+    cross_evaluation_models: tuple[str, ...],
+) -> SemanticVerificationEvaluator | None:
+    if semantic_evaluator is None or not cross_evaluation_models:
+        return semantic_evaluator
+    evaluator_count = len(cross_evaluation_models)
+    evaluators = tuple(semantic_evaluator for _ in range(evaluator_count))
+    log_event(
+        LOGGER,
+        logging.INFO,
+        event="verification.cross_evaluation_configured",
+        message=(
+            "Wrapping semantic evaluator with multi-model cross-validation "
+            f"for {evaluator_count} model(s)"
+        ),
+        payload={
+            "models": list(cross_evaluation_models),
+        },
+    )
+    return MultiModelSemanticEvaluator(evaluators=evaluators)
 
 
 def _run_semantic_evaluations(

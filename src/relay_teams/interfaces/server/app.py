@@ -40,6 +40,7 @@ from relay_teams.interfaces.server.runtime_identity import (
 )
 from relay_teams.interfaces.server.routers import (
     audit,
+    auto_harness,
     automation,
     commands,
     feishu_gateway,
@@ -203,6 +204,7 @@ app.include_router(system.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
 app.include_router(commands.router, prefix="/api")
 app.include_router(automation.router, prefix="/api")
+app.include_router(auto_harness.router, prefix="/api")
 app.include_router(feishu_gateway.router, prefix="/api")
 app.include_router(gateway.router, prefix="/api")
 app.include_router(mcp.router, prefix="/api")

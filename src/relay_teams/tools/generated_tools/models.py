@@ -59,6 +59,7 @@ class GeneratedToolRecord(BaseModel):
     status: GeneratedToolStatus = GeneratedToolStatus.PENDING
     target_role_id: RequiredIdentifierStr
     created_by_role_id: RequiredIdentifierStr
+    version: int = Field(default=1, ge=1)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -78,6 +79,8 @@ class GeneratedToolSynthesisResult(BaseModel):
     status: GeneratedToolStatus
     test_count: int = Field(ge=0)
     notes: str = ""
+    retry_count: int = Field(default=0, ge=0)
+    retry_messages: tuple[str, ...] = ()
 
 
 class GeneratedToolEnableResult(BaseModel):
@@ -88,3 +91,25 @@ class GeneratedToolEnableResult(BaseModel):
     target_role_id: RequiredIdentifierStr
     status: GeneratedToolStatus
     role_updated: bool
+
+
+class GeneratedToolDisableResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: RequiredIdentifierStr
+    code_hash: str = Field(min_length=1)
+    target_role_id: RequiredIdentifierStr
+    status: GeneratedToolStatus
+    role_updated: bool
+
+
+class GeneratedToolUpgradeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: RequiredIdentifierStr
+    code_hash: str = Field(min_length=1)
+    target_role_id: RequiredIdentifierStr
+    status: GeneratedToolStatus
+    previous_version: int = Field(ge=1)
+    new_version: int = Field(ge=1)
+    test_count: int = Field(ge=0)

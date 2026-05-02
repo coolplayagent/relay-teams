@@ -69,6 +69,7 @@ class _DraftAutoHarnessService(AutoHarnessService):
         behavior: str,
         test_cases: tuple[GeneratedToolTestCase, ...],
         thinking: RunThinkingConfig,
+        extra_prompt: str | None = None,
     ) -> GeneratedToolDraft:
         _ = (
             role,
@@ -84,6 +85,7 @@ class _DraftAutoHarnessService(AutoHarnessService):
             behavior,
             test_cases,
             thinking,
+            extra_prompt,
         )
         return self._draft
 
@@ -99,6 +101,23 @@ class _DraftAutoHarnessService(AutoHarnessService):
         if has_expected and result != expected:
             raise ValueError("Generated tool test case failed")
         return result
+
+    @staticmethod
+    async def _run_test_cases(
+        code: str,
+        test_cases: tuple[GeneratedToolTestCase, ...],
+    ) -> tuple[str, ...]:
+        failures: list[str] = []
+        for test_case in test_cases:
+            try:
+                result = generated_service_module._execute_generated_code_sync(
+                    code, test_case.input
+                )
+                if test_case.has_expected and result != test_case.expected:
+                    failures.append("Generated tool test case failed")
+            except Exception as exc:
+                failures.append(str(exc))
+        return tuple(failures)
 
 
 class _ToolCaptureAgent:

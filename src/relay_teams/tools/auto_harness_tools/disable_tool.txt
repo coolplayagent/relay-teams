@@ -1,0 +1,5 @@
+Disable an enabled AutoHarness generated role tool after human approval.
+
+Pass the `tool_name` and `code_hash` of the tool to disable. The runtime will unregister the tool from the ToolRegistry, remove it from the target role's tool list, and mark the tool record as disabled.
+
+This action always requires approval because it changes role capabilities.

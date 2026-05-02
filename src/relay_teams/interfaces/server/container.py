@@ -51,6 +51,9 @@ from relay_teams.agents.orchestration.settings_service import (
 )
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
 from relay_teams.agents.orchestration.human_gate import GateManager
+from relay_teams.agents.orchestration.llm_semantic_evaluator import (
+    LlmSemanticEvaluator,
+)
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -749,6 +752,12 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
+        semantic_evaluator = LlmSemanticEvaluator(
+            resolve_model_config=lambda: (
+                self._resolve_reflection_model_config(),
+                self._resolve_reflection_model_profile_name(),
+            ),
+        )
         coordinator = CoordinatorGraph(
             role_registry=self.role_registry,
             task_repo=self.task_repo,
@@ -773,6 +782,7 @@ class ServerContainer:
             session_repo=self.session_repo,
             gate_manager=self.gate_manager,
             run_event_hub=self.run_event_hub,
+            semantic_evaluator=semantic_evaluator,
         )
         self.meta_agent: MetaAgent = MetaAgent(coordinator=coordinator)
         self.run_service: SessionRunService = SessionRunService(

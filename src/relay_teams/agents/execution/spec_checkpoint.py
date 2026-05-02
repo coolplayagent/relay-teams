@@ -103,6 +103,13 @@ def task_spec_has_content(spec: TaskSpec) -> bool:
         or spec.out_of_scope
         or spec.verification_commands
         or spec.evidence_expectations
+        or spec.entities
+        or spec.approach
+        or spec.structure
+        or spec.operations
+        or spec.norms
+        or spec.safeguards
+        or spec.formal_verification is not None
     )
 
 
@@ -158,15 +165,59 @@ def render_spec_checkpoint(
         "",
         "### Task Spec",
     ]
+    if task.spec_artifact_id is not None:
+        lines.append(f"- Spec Artifact ID: {task.spec_artifact_id}")
+    if task.spec_source_task_id is not None:
+        lines.append(f"- Spec Source Task ID: {task.spec_source_task_id}")
     if spec.summary:
         lines.append(f"- Summary: {_clip_item(spec.summary)}")
     lines.extend(_format_items("Requirements", spec.requirements))
+    lines.extend(_format_items("Entities", spec.entities))
+    lines.extend(_format_items("Approach", spec.approach))
+    lines.extend(_format_items("Structure", spec.structure))
+    lines.extend(_format_items("Operations", spec.operations))
+    lines.extend(_format_items("Norms", spec.norms))
+    lines.extend(_format_items("Safeguards", spec.safeguards))
     lines.extend(_format_items("Constraints", spec.constraints))
     lines.extend(_format_items("Acceptance Criteria", spec.acceptance_criteria))
     lines.extend(_format_items("Out of Scope", spec.out_of_scope))
     lines.extend(_format_items("Verification Commands", spec.verification_commands))
     lines.extend(_format_items("Evidence Expectations", spec.evidence_expectations))
     lines.append(f"- Strictness: {spec.strictness.value}")
+    lines.append(f"- Prompt Artifact Version: {spec.prompt_artifact_version}")
+    lines.append(f"- Prompt/Code Sync Status: {spec.prompt_code_sync_status.value}")
+    if spec.formal_verification is not None:
+        formal = spec.formal_verification
+        lines.append("- Formal Verification:")
+        lines.append(f"  - Spec Language: {formal.spec_language.value}")
+        lines.append(f"  - Tool Profile: {formal.tool_profile.value}")
+        lines.extend(_format_nested_items("Properties", formal.properties))
+        lines.extend(
+            _format_nested_items(
+                "Proof Artifacts",
+                tuple(str(path) for path in formal.proof_artifacts),
+            )
+        )
+        if formal.counterexample_path is not None:
+            lines.append(f"  - Counterexample Path: {formal.counterexample_path}")
+        if formal.replay_command is not None:
+            lines.append(
+                "  - Replay Command: " + " ".join(formal.replay_command.command)
+            )
+    if spec.acceptance_criteria or spec.evidence_expectations:
+        lines.append(
+            "- Completion Evidence: cite each acceptance criterion and "
+            "evidence expectation in the final handoff."
+        )
+    if policy.include_reasons:
+        lines.extend(
+            _format_reasons_canvas(
+                reason,
+                tool_calls_since_checkpoint,
+                messages_since_checkpoint,
+                tokens_since_checkpoint,
+            )
+        )
     return _clip_checkpoint_text(
         "\n".join(lines).strip(),
         max_chars=policy.max_summary_chars,
@@ -232,6 +283,12 @@ def _format_items(label: str, items: tuple[str, ...]) -> list[str]:
     return [f"- {label}:"] + [f"  - {_clip_item(item)}" for item in items]
 
 
+def _format_nested_items(label: str, items: tuple[str, ...]) -> list[str]:
+    if not items:
+        return []
+    return [f"  - {label}:"] + [f"    - {_clip_item(item)}" for item in items]
+
+
 def _clip_item(item: str) -> str:
     text = str(item or "").strip()
     if len(text) <= _ITEM_MAX_CHARS:
@@ -263,3 +320,36 @@ def _extract_sequence(content: str) -> int:
     if not raw_sequence.isdigit():
         return 0
     return int(raw_sequence)
+
+
+def _format_reasons_canvas(
+    trigger_reason: str,
+    tool_calls: int,
+    messages: int,
+    tokens: int,
+) -> list[str]:
+    """Format the REASONS section for spec checkpoint rendering (FE-5 FE5-14)."""
+    if not trigger_reason:
+        return []
+    from datetime import datetime, timezone
+
+    timestamp = datetime.now(tz=timezone.utc).isoformat()
+    changed_fields: list[str] = []
+    if tool_calls > 0:
+        changed_fields.append(f"tool_calls={tool_calls}")
+    if messages > 0:
+        changed_fields.append(f"messages={messages}")
+    if tokens > 0:
+        changed_fields.append(f"history_tokens={tokens}")
+    lines = [
+        "",
+        "### REASONS",
+        f"- timestamp: {timestamp}",
+        f"- trigger: {trigger_reason}",
+        f"- changed_fields: {', '.join(changed_fields)}",
+        (
+            "- reason: Automatic spec checkpoint refresh triggered by "
+            f"threshold breach: {trigger_reason}."
+        ),
+    ]
+    return lines
