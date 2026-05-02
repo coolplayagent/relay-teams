@@ -9,7 +9,10 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from relay_teams.agents.tasks.enums import (
+    FormalVerificationLanguage,
+    FormalVerificationToolProfile,
     TaskSpecStrictness,
+    TaskSpecSyncStatus,
     TaskStatus,
     TaskTimeoutAction,
     VerificationEvidenceKind,
@@ -109,6 +112,23 @@ class VerificationCommand(BaseModel):
         return _normalize_text_tuple(value, field_name="command")
 
 
+class FormalVerificationPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    spec_language: FormalVerificationLanguage = FormalVerificationLanguage.CUSTOM
+    tool_profile: FormalVerificationToolProfile = FormalVerificationToolProfile.CUSTOM
+    properties: tuple[str, ...] = ()
+    proof_artifacts: tuple[Path, ...] = ()
+    counterexample_path: Path | None = None
+    replay_command: VerificationCommand | None = None
+    required: bool = True
+
+    @field_validator("properties", mode="before")
+    @classmethod
+    def _normalize_properties(cls, value: object) -> tuple[str, ...]:
+        return _normalize_text_tuple(value, field_name="formal verification property")
+
+
 class VerificationPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -117,6 +137,8 @@ class VerificationPlan(BaseModel):
     command_checks: tuple[VerificationCommand, ...] = ()
     acceptance_criteria: tuple[str, ...] = ()
     evidence_expectations: tuple[str, ...] = ()
+    strictness: TaskSpecStrictness = TaskSpecStrictness.LOW
+    formal_checks: tuple[FormalVerificationPlan, ...] = ()
 
     @field_validator("checklist", mode="before")
     @classmethod
@@ -147,7 +169,16 @@ class TaskSpec(BaseModel):
     out_of_scope: tuple[str, ...] = ()
     verification_commands: tuple[str, ...] = ()
     evidence_expectations: tuple[str, ...] = ()
-    strictness: TaskSpecStrictness = TaskSpecStrictness.LOW
+    strictness: TaskSpecStrictness = TaskSpecStrictness.MEDIUM
+    entities: tuple[str, ...] = ()
+    approach: tuple[str, ...] = ()
+    structure: tuple[str, ...] = ()
+    operations: tuple[str, ...] = ()
+    norms: tuple[str, ...] = ()
+    safeguards: tuple[str, ...] = ()
+    prompt_artifact_version: int = Field(default=1, ge=1)
+    prompt_code_sync_status: TaskSpecSyncStatus = TaskSpecSyncStatus.UNKNOWN
+    formal_verification: FormalVerificationPlan | None = None
 
     @field_validator("summary", mode="before")
     @classmethod
@@ -163,6 +194,12 @@ class TaskSpec(BaseModel):
         "out_of_scope",
         "verification_commands",
         "evidence_expectations",
+        "entities",
+        "approach",
+        "structure",
+        "operations",
+        "norms",
+        "safeguards",
         mode="before",
     )
     @classmethod
@@ -291,9 +328,13 @@ class VerificationEvidenceBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: RequiredIdentifierStr
+    spec_artifact_id: OptionalIdentifierStr = None
+    spec_source_task_id: OptionalIdentifierStr = None
     items: tuple[VerificationEvidenceItem, ...] = ()
     acceptance_links: tuple[VerificationEvidenceLink, ...] = ()
     expectation_links: tuple[VerificationEvidenceLink, ...] = ()
+    formal_verification_required: bool = False
+    formal_verification_passed: bool | None = None
 
 
 class SemanticEvaluationRequest(BaseModel):
@@ -335,6 +376,20 @@ class VerificationReport(BaseModel):
     )
 
 
+class TaskSpecArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: RequiredIdentifierStr
+    task_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    trace_id: RequiredIdentifierStr
+    source_task_id: OptionalIdentifierStr = None
+    spec: TaskSpec
+    version: int = Field(default=1, ge=1)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+
 class TaskEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -348,6 +403,9 @@ class TaskEnvelope(BaseModel):
     skills: Optional[tuple[str, ...]] = None
     verification: VerificationPlan
     spec: TaskSpec | None = None
+    spec_artifact_id: OptionalIdentifierStr = None
+    spec_source_task_id: OptionalIdentifierStr = None
+    evidence_bundle: VerificationEvidenceBundle | None = None
     lifecycle: TaskLifecyclePolicy = Field(default_factory=TaskLifecyclePolicy)
     handoff: TaskHandoff | None = None
     orchestration_node_id: OptionalIdentifierStr = None

@@ -11,5 +11,15 @@ class TaskId(BaseModel):
     value: str
 
 
+class TaskSpecArtifactId(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    value: str
+
+
 def new_task_id() -> TaskId:
     return TaskId(value=str(uuid4()))
+
+
+def new_task_spec_artifact_id() -> TaskSpecArtifactId:
+    return TaskSpecArtifactId(value=f"spec-{uuid4()}")

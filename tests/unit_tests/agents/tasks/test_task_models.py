@@ -5,13 +5,17 @@ import pytest
 from pydantic import ValidationError
 
 from relay_teams.agents.tasks.enums import (
+    FormalVerificationLanguage,
+    FormalVerificationToolProfile,
     TaskSpecStrictness,
+    TaskSpecSyncStatus,
     TaskTimeoutAction,
     VerificationEvidenceKind,
     VerificationEvidenceTarget,
     VerificationLayer,
 )
 from relay_teams.agents.tasks.models import (
+    FormalVerificationPlan,
     SemanticEvaluationResult,
     SpecCheckpointPolicy,
     TaskEnvelope,
@@ -55,7 +59,22 @@ def test_task_envelope_accepts_spec_lifecycle_and_handoff() -> None:
             acceptance_criteria=("unit tests pass",),
             evidence_expectations=("pytest output",),
             strictness=TaskSpecStrictness.HIGH,
+            entities=("TaskSpec",),
+            approach=("persist the contract as an artifact",),
+            structure=("agents/tasks owns the task lifecycle contract",),
+            operations=("create artifact",),
+            norms=("use typed Pydantic models",),
+            safeguards=("do not accept drift without review",),
+            prompt_code_sync_status=TaskSpecSyncStatus.IN_SYNC,
+            formal_verification=FormalVerificationPlan(
+                spec_language=FormalVerificationLanguage.TLA_PLUS,
+                tool_profile=FormalVerificationToolProfile.TLC,
+                properties=("Task eventually verifies",),
+                replay_command=VerificationCommand(command=("true",)),
+            ),
         ),
+        spec_artifact_id="spec-1",
+        spec_source_task_id="task-designer",
         lifecycle=TaskLifecyclePolicy(
             timeout_seconds=30,
             heartbeat_interval_seconds=5,
@@ -66,6 +85,11 @@ def test_task_envelope_accepts_spec_lifecycle_and_handoff() -> None:
 
     assert envelope.spec is not None
     assert envelope.spec.requirements == ("persist state",)
+    assert envelope.spec.entities == ("TaskSpec",)
+    assert envelope.spec.formal_verification is not None
+    assert envelope.spec.formal_verification.properties == ("Task eventually verifies",)
+    assert envelope.spec_artifact_id == "spec-1"
+    assert envelope.spec_source_task_id == "task-designer"
     assert envelope.lifecycle.on_timeout == TaskTimeoutAction.HUMAN_GATE
     assert envelope.lifecycle.spec_checkpoint.enabled is True
     assert envelope.handoff is not None
@@ -90,6 +114,7 @@ def test_task_contract_models_normalize_optional_text_inputs() -> None:
     assert verification.evidence_expectations == ("coverage output",)
     assert spec.summary == ""
     assert spec.requirements == ("persist state",)
+    assert spec.strictness == TaskSpecStrictness.MEDIUM
     assert handoff.reason == ""
     assert handoff.completed == ("implemented",)
 

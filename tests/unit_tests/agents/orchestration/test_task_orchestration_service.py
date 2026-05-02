@@ -39,6 +39,7 @@ from relay_teams.agents.tasks.models import (
     TaskHandoff,
     TaskLifecyclePolicy,
     TaskSpec,
+    VerificationEvidenceBundle,
     VerificationPlan,
 )
 
@@ -489,12 +490,14 @@ async def test_create_tasks_persists_spec_verification_and_lifecycle(
 
     assert record.envelope.spec is not None
     assert record.envelope.spec.acceptance_criteria == ("returns 201",)
+    assert record.envelope.spec_artifact_id is not None
     assert record.envelope.verification.acceptance_criteria == ("returns 201",)
     assert record.envelope.verification.command_checks[0].command == (
         "pytest",
         "tests/unit_tests/agents/tasks",
     )
     assert spec_payload["summary"] == "Endpoint contract"
+    assert created_task["spec_artifact_id"] == record.envelope.spec_artifact_id
     assert verification_payload["acceptance_criteria"] == ["returns 201"]
     assert verification_payload["command_checks"] == [
         {
@@ -505,6 +508,559 @@ async def test_create_tasks_persists_spec_verification_and_lifecycle(
     ]
     assert verification_payload["evidence_expectations"] == ["pytest"]
     assert lifecycle_payload["timeout_seconds"] == 60
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_inherits_spec_artifact_from_source_dependency(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_spec_source.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-designer",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Design contract",
+            objective="Design the contract",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(
+                summary="Reusable contract",
+                acceptance_criteria=("contract reused",),
+            ),
+        )
+    )
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Implement the reusable contract",
+                depends_on_task_ids=(source.envelope.task_id,),
+            )
+        ],
+    )
+
+    created_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    record = task_repo.get(str(created_task["task_id"]))
+
+    assert record.envelope.spec is not None
+    assert record.envelope.spec.summary == "Reusable contract"
+    assert record.envelope.spec_artifact_id is not None
+    assert record.envelope.spec_artifact_id != source.envelope.spec_artifact_id
+    assert record.envelope.spec_source_task_id == "task-designer"
+    assert created_task["spec_source_task_id"] == "task-designer"
+    artifact = task_repo.get_spec_artifact(record.envelope.spec_artifact_id)
+    assert artifact.task_id == record.envelope.task_id
+    assert artifact.source_task_id == "task-designer"
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_imports_spec_artifact_without_cross_task_rebinding(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_spec_artifact_import.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-designer",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Design contract",
+            objective="Design the contract",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Artifact contract"),
+        )
+    )
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Implement the artifact contract",
+                spec_artifact_id=source.envelope.spec_artifact_id,
+            )
+        ],
+    )
+
+    created_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    record = task_repo.get(str(created_task["task_id"]))
+
+    assert record.envelope.spec is not None
+    assert record.envelope.spec.summary == "Artifact contract"
+    assert record.envelope.spec_artifact_id is not None
+    assert record.envelope.spec_artifact_id != source.envelope.spec_artifact_id
+    assert record.envelope.spec_source_task_id == "task-designer"
+    artifact = task_repo.get_spec_artifact(record.envelope.spec_artifact_id)
+    assert artifact.task_id == record.envelope.task_id
+    assert artifact.source_task_id == "task-designer"
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_inherits_resolved_in_batch_artifact_spec(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_in_batch_spec_artifact.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-designer",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Design contract",
+            objective="Design the contract",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Batch artifact contract"),
+        )
+    )
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Implement the batch artifact contract",
+                depends_on_node_ids=("source-node",),
+            ),
+            TaskDraft(
+                objective="Materialize the source spec",
+                orchestration_node_id="source-node",
+                spec_artifact_id=source.envelope.spec_artifact_id,
+            ),
+        ],
+    )
+
+    created_tasks = cast(list[JsonValue], payload["tasks"])
+    implement_task = cast(dict[str, JsonValue], created_tasks[0])
+    source_task = cast(dict[str, JsonValue], created_tasks[1])
+    implement_record = task_repo.get(str(implement_task["task_id"]))
+
+    assert implement_record.envelope.spec is not None
+    assert implement_record.envelope.spec.summary == "Batch artifact contract"
+    assert implement_record.envelope.spec_artifact_id is not None
+    assert implement_record.envelope.spec_source_task_id == source_task["task_id"]
+    artifact = task_repo.get_spec_artifact(implement_record.envelope.spec_artifact_id)
+    assert artifact.task_id == implement_record.envelope.task_id
+    assert artifact.source_task_id == source_task["task_id"]
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_rejects_spec_source_task_without_bound_spec(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_empty_spec_source.db"
+    )
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-without-spec",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="No spec",
+            objective="No spec is bound",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    with pytest.raises(ValueError, match="spec_source_task_id has no bound spec"):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Implement from a missing spec",
+                    spec_source_task_id="task-without-spec",
+                )
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_rejects_spec_artifact_with_conflicting_inline_spec(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_conflicting_artifact_spec.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-source",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Source",
+            objective="Source spec",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Source contract"),
+        )
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="spec_artifact_id references a different task spec",
+    ):
+        await service.create_tasks(
+            run_id="run-1",
+            tasks=[
+                TaskDraft(
+                    objective="Implement conflicting spec",
+                    spec_artifact_id=source.envelope.spec_artifact_id,
+                    spec=TaskSpec(summary="Different contract"),
+                )
+            ],
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_tasks_imports_artifact_with_deleted_source_provenance(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_deleted_source_artifact_import.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-source",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Source",
+            objective="Source spec",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Source contract"),
+        )
+    )
+    imported_payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Import source before cleanup",
+                spec_source_task_id=source.envelope.task_id,
+            )
+        ],
+    )
+    imported_task = cast(
+        dict[str, JsonValue],
+        cast(list[JsonValue], imported_payload["tasks"])[0],
+    )
+    imported_record = task_repo.get(str(imported_task["task_id"]))
+    task_repo.delete(source.envelope.task_id)
+
+    payload = await service.create_tasks(
+        run_id="run-1",
+        tasks=[
+            TaskDraft(
+                objective="Import artifact after source cleanup",
+                spec_artifact_id=imported_record.envelope.spec_artifact_id,
+            )
+        ],
+    )
+
+    created_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    created_record = task_repo.get(str(created_task["task_id"]))
+    assert created_record.envelope.spec is not None
+    assert created_record.envelope.spec.summary == "Source contract"
+    assert created_record.envelope.spec_source_task_id == source.envelope.task_id
+
+
+@pytest.mark.asyncio
+async def test_update_task_imports_source_spec_without_cross_task_artifact_rebinding(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_update_source_spec.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-source",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Source",
+            objective="Source spec",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Source contract"),
+        )
+    )
+    target = task_repo.create(
+        TaskEnvelope(
+            task_id="task-target",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Target",
+            objective="Target task",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    await service.update_task_async(
+        run_id="run-1",
+        task_id=target.envelope.task_id,
+        update=TaskUpdate(spec_source_task_id=source.envelope.task_id),
+    )
+
+    updated = task_repo.get(target.envelope.task_id)
+    assert updated.envelope.spec is not None
+    assert updated.envelope.spec.summary == "Source contract"
+    assert updated.envelope.spec_source_task_id == source.envelope.task_id
+    assert updated.envelope.spec_artifact_id is not None
+    assert updated.envelope.spec_artifact_id != source.envelope.spec_artifact_id
+    artifact = task_repo.get_spec_artifact(updated.envelope.spec_artifact_id)
+    assert artifact.task_id == target.envelope.task_id
+    assert artifact.source_task_id == source.envelope.task_id
+
+
+@pytest.mark.asyncio
+async def test_update_task_reuses_current_spec_artifact_and_self_source(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_update_current_spec_artifact.db"
+    )
+    custom_verification = VerificationPlan(
+        checklist=("custom_verification",),
+        acceptance_criteria=("preserve custom plan",),
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-target",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Target",
+            objective="Target task",
+            verification=custom_verification,
+            spec=TaskSpec(summary="Target contract"),
+        )
+    )
+
+    reused_payload = await service.update_task_async(
+        run_id="run-1",
+        task_id=created.envelope.task_id,
+        update=TaskUpdate(spec_artifact_id=created.envelope.spec_artifact_id),
+    )
+    self_source_payload = await service.update_task_async(
+        run_id="run-1",
+        task_id=created.envelope.task_id,
+        update=TaskUpdate(spec_source_task_id=created.envelope.task_id),
+    )
+    fetched_artifact = await service.get_task_spec_artifact_async(
+        task_id=created.envelope.task_id
+    )
+
+    reused_task = cast(dict[str, JsonValue], reused_payload["task"])
+    self_source_task = cast(dict[str, JsonValue], self_source_payload["task"])
+    updated = task_repo.get(created.envelope.task_id)
+    assert reused_task["spec_artifact_id"] == created.envelope.spec_artifact_id
+    assert self_source_task["spec_source_task_id"] == created.envelope.task_id
+    assert updated.envelope.spec_artifact_id == created.envelope.spec_artifact_id
+    assert updated.envelope.spec_source_task_id == created.envelope.task_id
+    assert updated.envelope.verification == custom_verification
+    assert fetched_artifact.artifact_id == created.envelope.spec_artifact_id
+
+
+@pytest.mark.asyncio
+async def test_update_task_rolls_back_artifact_with_deleted_source_provenance(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_deleted_source_artifact_rollback.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-source",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Source",
+            objective="Source spec",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Source contract"),
+        )
+    )
+    target = task_repo.create(
+        TaskEnvelope(
+            task_id="task-target",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Target",
+            objective="Target task",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=source.envelope.spec,
+            spec_source_task_id=source.envelope.task_id,
+        )
+    )
+    rollback_artifact_id = target.envelope.spec_artifact_id
+    assert rollback_artifact_id is not None
+    v2 = task_repo.update_envelope(
+        target.envelope.task_id,
+        target.envelope.model_copy(update={"spec": TaskSpec(summary="Updated spec")}),
+    )
+    task_repo.delete(source.envelope.task_id)
+
+    await service.update_task_async(
+        run_id="run-1",
+        task_id=v2.envelope.task_id,
+        update=TaskUpdate(spec_artifact_id=rollback_artifact_id),
+    )
+
+    updated = task_repo.get(target.envelope.task_id)
+    assert updated.envelope.spec is not None
+    assert updated.envelope.spec.summary == "Source contract"
+    assert updated.envelope.spec_artifact_id == rollback_artifact_id
+    assert updated.envelope.spec_source_task_id == source.envelope.task_id
+
+
+@pytest.mark.asyncio
+async def test_update_task_rejects_conflicting_artifact_and_specless_source(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_update_rejects_spec_edges.db"
+    )
+    source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-source",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Source",
+            objective="Source spec",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Source contract"),
+        )
+    )
+    target = task_repo.create(
+        TaskEnvelope(
+            task_id="task-target",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Target",
+            objective="Target task",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            spec=TaskSpec(summary="Target contract"),
+        )
+    )
+    empty_source = task_repo.create(
+        TaskEnvelope(
+            task_id="task-empty-source",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="designer",
+            title="Empty Source",
+            objective="No spec",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    with pytest.raises(
+        ValueError, match="spec_artifact_id references a different task"
+    ):
+        await service.update_task_async(
+            run_id="run-1",
+            task_id=target.envelope.task_id,
+            update=TaskUpdate(spec_artifact_id=source.envelope.spec_artifact_id),
+        )
+    with pytest.raises(
+        ValueError,
+        match="spec_artifact_id references a different task spec",
+    ):
+        await service.update_task_async(
+            run_id="run-1",
+            task_id=source.envelope.task_id,
+            update=TaskUpdate(
+                spec=TaskSpec(summary="Different contract"),
+                spec_artifact_id=source.envelope.spec_artifact_id,
+            ),
+        )
+    with pytest.raises(ValueError, match="spec_source_task_id has no bound spec"):
+        await service.update_task_async(
+            run_id="run-1",
+            task_id=target.envelope.task_id,
+            update=TaskUpdate(spec_source_task_id=empty_source.envelope.task_id),
+        )
+    with pytest.raises(ValueError, match="spec_source_task_id has no bound spec"):
+        await service.update_task_async(
+            run_id="run-1",
+            task_id=target.envelope.task_id,
+            update=TaskUpdate(
+                spec=TaskSpec(summary="Inline contract"),
+                spec_source_task_id=empty_source.envelope.task_id,
+            ),
+        )
+    with pytest.raises(KeyError, match="Unknown task_id: task-missing-source"):
+        await service.update_task_async(
+            run_id="run-1",
+            task_id=target.envelope.task_id,
+            update=TaskUpdate(
+                spec=TaskSpec(summary="Inline contract"),
+                spec_source_task_id="task-missing-source",
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_task_service_returns_evidence_bundle_projection(
+    tmp_path: Path,
+) -> None:
+    service, task_repo, _agent_repo, _message_repo, _execution_service = _build_service(
+        tmp_path / "task_orchestration_evidence_projection.db"
+    )
+    created = task_repo.create(
+        TaskEnvelope(
+            task_id="task-target",
+            session_id="session-1",
+            parent_task_id="task-root",
+            trace_id="run-1",
+            role_id="spec_coder",
+            title="Target",
+            objective="Target task",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+            evidence_bundle=VerificationEvidenceBundle(task_id="task-target"),
+        )
+    )
+
+    bundle = await service.get_task_evidence_bundle_async(
+        task_id=created.envelope.task_id
+    )
+    payload = await service.list_delegated_tasks_async(run_id="run-1")
+    projected_task = cast(
+        dict[str, JsonValue], cast(list[JsonValue], payload["tasks"])[0]
+    )
+    projected_bundle = cast(dict[str, JsonValue], projected_task["evidence_bundle"])
+
+    assert bundle.task_id == created.envelope.task_id
+    assert projected_bundle["task_id"] == created.envelope.task_id
+    with pytest.raises(KeyError, match="No evidence bundle found"):
+        await service.get_task_evidence_bundle_async(task_id="task-root")
 
 
 @pytest.mark.asyncio
@@ -713,6 +1269,8 @@ async def test_update_task_recomputes_verification_when_spec_changes(
 
     assert updated_record.envelope.spec is not None
     assert updated_record.envelope.spec.summary == "Updated contract"
+    assert updated_record.envelope.spec_artifact_id is not None
+    assert updated_record.envelope.spec.prompt_artifact_version == 2
     assert updated_record.envelope.verification.acceptance_criteria == (
         "new acceptance",
     )

@@ -33,6 +33,8 @@ class TaskDraft(BaseModel):
     depends_on_task_ids: tuple[str, ...] = ()
     depends_on_node_ids: tuple[str, ...] = ()
     spec: TaskSpec | None = None
+    spec_artifact_id: OptionalIdentifierStr = None
+    spec_source_task_id: OptionalIdentifierStr = None
     verification: VerificationPlan | None = None
     lifecycle: TaskLifecyclePolicy = Field(default_factory=TaskLifecyclePolicy)
 
@@ -48,6 +50,8 @@ class TaskUpdate(BaseModel):
     objective: Optional[str] = None
     title: Optional[str] = None
     spec: TaskSpec | None = None
+    spec_artifact_id: OptionalIdentifierStr = None
+    spec_source_task_id: OptionalIdentifierStr = None
     verification: VerificationPlan | None = None
     lifecycle: TaskLifecyclePolicy | None = None
     handoff: TaskHandoff | None = None
@@ -58,6 +62,8 @@ class TaskUpdate(BaseModel):
             self.objective is None
             and self.title is None
             and self.spec is None
+            and self.spec_artifact_id is None
+            and self.spec_source_task_id is None
             and self.verification is None
             and self.lifecycle is None
             and self.handoff is None

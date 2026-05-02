@@ -3,5 +3,6 @@ Update a task that has not been dispatched yet.
 Usage:
 - `task_id` identifies the created task to modify.
 - `objective` and `title` are optional patch fields; omitted fields remain unchanged.
+- `spec`, `spec_source_task_id`, and `spec_artifact_id` can revise or bind the structured task specification before dispatch.
 - Use this tool to correct scope or improve the task contract before execution starts.
 - This tool is only valid while the task is still in the created state.

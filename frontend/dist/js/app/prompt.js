@@ -337,26 +337,28 @@ export async function handleSend(options = {}) {
   if (els.sendBtn) els.sendBtn.disabled = true;
   if (els.promptInput) els.promptInput.disabled = true;
   refreshSessionTopologyControls();
-  let runSessionId = String(state.currentSessionId || "").trim();
-  const draftPlaceholderShown = isNewSessionDraftActive();
-  if (draftPlaceholderShown) {
-    roundsTimeline.showDraftRunStartPlaceholder(promptPreviewText, displayInputParts);
+  const isDraftSend = isNewSessionDraftActive();
+  if (isDraftSend) {
+    roundsTimeline.showPendingRunStartPlaceholder(
+      null,
+      promptPreviewText,
+      displayInputParts,
+      { allowDraft: true },
+    );
   }
-  if (isNewSessionDraftActive()) {
+  let runSessionId = String(state.currentSessionId || "").trim();
+  let continueDetachedDraftRun = false;
+  if (isDraftSend) {
     try {
       const sessionId = await ensureSessionForNewSessionDraft({
         shouldCommit: () => isForegroundSubmissionActive(submission),
         allowDetachedRun: true,
       });
-      runSessionId = String(sessionId || "").trim();
-      if (
-        !isForegroundSubmissionActive(submission)
-        && !isForegroundSubmissionDetached(submission)
-      ) {
-        finishForegroundSubmission(submission);
-        return;
-      }
+      continueDetachedDraftRun = !isForegroundSubmissionActive(submission);
       if (!sessionId) {
+        if (!continueDetachedDraftRun) {
+          roundsTimeline.clearPendingRunStartPlaceholder();
+        }
         finishForegroundSubmission(submission);
         state.isGenerating = false;
         if (els.sendBtn) els.sendBtn.disabled = false;
@@ -365,12 +367,14 @@ export async function handleSend(options = {}) {
         sysLog(t("composer.error.no_active_session"), "log-error");
         return;
       }
+      runSessionId = String(sessionId || "").trim();
     } catch (error) {
       if (!isForegroundSubmissionActive(submission)) {
         finishForegroundSubmission(submission);
         return;
       }
       const message = error?.message || String(error);
+      roundsTimeline.clearPendingRunStartPlaceholder();
       finishForegroundSubmission(submission);
       roundsTimeline.clearPendingRunStartPlaceholder();
       state.isGenerating = false;
@@ -385,7 +389,9 @@ export async function handleSend(options = {}) {
       return;
     }
   }
+  runSessionId = runSessionId || String(state.currentSessionId || "").trim();
   if (!runSessionId) {
+    roundsTimeline.clearPendingRunStartPlaceholder();
     finishForegroundSubmission(submission);
     state.isGenerating = false;
     if (els.sendBtn) els.sendBtn.disabled = false;
@@ -394,18 +400,24 @@ export async function handleSend(options = {}) {
     sysLog(t("composer.error.no_active_session"), "log-error");
     return;
   }
+  if (isDraftSend && !continueDetachedDraftRun) {
+    roundsTimeline.showPendingRunStartPlaceholder(
+      runSessionId,
+      promptPreviewText,
+      displayInputParts,
+    );
+  }
   clearPromptComposerStatus();
   const resolvedPrompt = await resolvePromptSlashText(text);
   const detachedSubmission = isForegroundSubmissionDetached(submission);
-  if (!isForegroundSubmissionActive(submission) && !detachedSubmission) {
+  const detachedRun = detachedSubmission || continueDetachedDraftRun;
+  if (!isForegroundSubmissionActive(submission) && !detachedRun) {
     finishForegroundSubmission(submission);
     return;
   }
   if (resolvedPrompt === null) {
+    roundsTimeline.clearPendingRunStartPlaceholder();
     finishForegroundSubmission(submission);
-    if (draftPlaceholderShown) {
-      roundsTimeline.clearPendingRunStartPlaceholder();
-    }
     restorePromptComposerAfterSendAbort();
     return;
   }
@@ -414,7 +426,7 @@ export async function handleSend(options = {}) {
     attachmentSnapshot,
   );
 
-  if (detachedSubmission) {
+  if (detachedRun) {
     try {
       await startIntentStream(promptPreviewText, runSessionId, null, {
         inputParts,
@@ -472,7 +484,8 @@ export async function handleSend(options = {}) {
         yolo: state.yolo,
         thinking: state.thinking,
         targetRoleId,
-        onRunCreated: (run) => {
+        detached: continueDetachedDraftRun,
+        onRunCreated: continueDetachedDraftRun ? null : (run) => {
           if (!isForegroundSubmissionActive(submission)) {
             return;
           }
@@ -484,7 +497,9 @@ export async function handleSend(options = {}) {
       },
     );
   } finally {
-    roundsTimeline.clearPendingRunStartPlaceholder();
+    if (!continueDetachedDraftRun) {
+      roundsTimeline.clearPendingRunStartPlaceholder();
+    }
     finishForegroundSubmission(submission);
   }
 }

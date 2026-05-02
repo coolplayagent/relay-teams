@@ -1419,6 +1419,21 @@ class SessionService:
                 "run_id": record.envelope.trace_id,
                 "created_at": record.created_at.isoformat(),
                 "updated_at": record.updated_at.isoformat(),
+                "spec_artifact_id": record.envelope.spec_artifact_id,
+                "spec_source_task_id": record.envelope.spec_source_task_id,
+                "spec_summary": (
+                    record.envelope.spec.summary if record.envelope.spec else ""
+                ),
+                "spec_strictness": (
+                    record.envelope.spec.strictness.value
+                    if record.envelope.spec
+                    else ""
+                ),
+                "evidence_bundle": (
+                    record.envelope.evidence_bundle.model_dump(mode="json")
+                    if record.envelope.evidence_bundle
+                    else None
+                ),
             }
             for record in records
             if record.envelope.parent_task_id is not None

@@ -13,6 +13,9 @@ import pytest
 from relay_teams.agents.orchestration import verification as verification_module
 from relay_teams.agents.orchestration.verification import verify_task
 from relay_teams.agents.tasks.enums import (
+    FormalVerificationLanguage,
+    FormalVerificationToolProfile,
+    TaskSpecStrictness,
     TaskStatus,
     VerificationEvidenceKind,
     VerificationEvidenceTarget,
@@ -20,11 +23,13 @@ from relay_teams.agents.tasks.enums import (
 )
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import (
+    FormalVerificationPlan,
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
     TaskEnvelope,
-    VerificationCommand,
     VerificationCheckResult,
+    VerificationCommand,
+    VerificationEvidenceBundle,
     VerificationEvidenceItem,
     VerificationEvidenceLink,
     VerificationPlan,
@@ -136,16 +141,20 @@ def test_verify_task_builds_structured_report(tmp_path: Path) -> None:
 
     assert result.passed is True
     assert result.report is not None
+    assert result.report.evidence_bundle is not None
     assert {check.layer for check in result.report.checks} == {
         VerificationLayer.STRUCTURE,
         VerificationLayer.BEHAVIOR,
         VerificationLayer.EVIDENCE,
         VerificationLayer.SEMANTIC,
     }
-    assert result.report.evidence_bundle is not None
     assert result.report.evidence_bundle.acceptance_links[0].satisfied is True
     assert result.report.evidence_bundle.expectation_links[0].satisfied is True
+    assert result.report.evidence_bundle.formal_verification_required is False
     assert result.report.semantic_results[0].passed is True
+    stored = task_repo.get(task.task_id)
+    assert stored.envelope.evidence_bundle is not None
+    assert stored.envelope.evidence_bundle.acceptance_links[0].satisfied is True
     assert result.report.unmet_items == ()
 
 
@@ -317,7 +326,7 @@ def test_verify_task_links_command_output_to_spec_evidence(
                     command=(
                         sys.executable,
                         "-c",
-                        "print('1 passed in 0.01s')",
+                        "print('pytest output: 1 passed in 0.01s')",
                     ),
                     timeout_seconds=5,
                 ),
@@ -344,7 +353,7 @@ def test_verify_task_links_command_output_to_spec_evidence(
     command_evidence = next(
         item
         for item in result.report.evidence_bundle.items
-        if item.output_excerpt == "1 passed in 0.01s"
+        if item.output_excerpt == "pytest output: 1 passed in 0.01s"
     )
     assert command_evidence.kind.value == "test_result"
     assert command_evidence.metrics[0].name == "tests_passed"
@@ -541,6 +550,306 @@ def test_verify_task_uses_rule_fallback_when_semantic_evaluator_fails(
     assert "rule fallback used" in semantic_result.reason
 
 
+def test_verify_task_merges_evidence_into_latest_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "verification_latest_envelope.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        title="Original title",
+        objective="Return evidence",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    def _mutating_verification_plan(
+        *,
+        task_id: str,
+        plan: VerificationPlan,
+        result: str,
+        event_bus: EventLog,
+        trace_id: str,
+        task_id_filter: str,
+        allowed_tools: tuple[str, ...],
+        tool_approval_policy: ToolApprovalPolicy,
+        workspace_root: Path | None,
+        semantic_evaluator: verification_module.SemanticVerificationEvaluator | None,
+        guardrail_report: verification_module.RuntimeGuardrailReport | None,
+        require_guardrail_report: bool,
+    ) -> verification_module._VerificationPlanRun:
+        _ = (
+            task_id,
+            plan,
+            result,
+            event_bus,
+            trace_id,
+            task_id_filter,
+            allowed_tools,
+            tool_approval_policy,
+            workspace_root,
+            semantic_evaluator,
+            guardrail_report,
+            require_guardrail_report,
+        )
+        latest = task_repo.get(task.task_id)
+        task_repo.update_envelope(
+            task.task_id,
+            latest.envelope.model_copy(update={"title": "Updated during verify"}),
+        )
+        return verification_module._VerificationPlanRun(
+            checks=(
+                VerificationCheckResult(
+                    layer=VerificationLayer.STRUCTURE,
+                    name="completed_status",
+                    passed=True,
+                ),
+            ),
+            evidence_bundle=VerificationEvidenceBundle(task_id=task.task_id),
+            semantic_results=(),
+        )
+
+    monkeypatch.setattr(
+        verification_module,
+        "_run_verification_plan",
+        _mutating_verification_plan,
+    )
+
+    result = verify_task(task_repo, event_log, task.task_id)
+
+    stored = task_repo.get(task.task_id)
+    assert result.passed is True
+    assert stored.envelope.title == "Updated during verify"
+    assert stored.envelope.evidence_bundle is not None
+
+
+def test_verify_task_runs_formal_verification_profile(tmp_path: Path) -> None:
+    db_path = tmp_path / "verification_formal.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    proof = workspace / "model.tla"
+    proof.write_text("---- MODULE model ----", encoding="utf-8")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return formal evidence",
+        verification=VerificationPlan(
+            strictness=TaskSpecStrictness.HIGH,
+            formal_checks=(
+                FormalVerificationPlan(
+                    spec_language=FormalVerificationLanguage.TLA_PLUS,
+                    tool_profile=FormalVerificationToolProfile.TLC,
+                    properties=("State invariant holds",),
+                    proof_artifacts=(Path("model.tla"),),
+                    replay_command=VerificationCommand(
+                        command=(sys.executable, "-c", "raise SystemExit(0)"),
+                        timeout_seconds=5,
+                    ),
+                ),
+            ),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    formal_checks = [
+        check
+        for check in result.report.checks
+        if check.layer == VerificationLayer.FORMAL
+    ]
+    assert len(formal_checks) == 2
+    assert result.report.evidence_bundle.formal_verification_required is True
+    assert result.report.evidence_bundle.formal_verification_passed is True
+
+
+def test_verify_task_marks_only_required_formal_plans_required(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_optional_formal.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    proof = workspace / "optional.tla"
+    proof.write_text("---- MODULE optional ----", encoding="utf-8")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-optional",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return optional formal evidence",
+        verification=VerificationPlan(
+            formal_checks=(
+                FormalVerificationPlan(
+                    spec_language=FormalVerificationLanguage.TLA_PLUS,
+                    tool_profile=FormalVerificationToolProfile.TLC,
+                    proof_artifacts=(Path("optional.tla"),),
+                    required=False,
+                ),
+            ),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    assert result.report.evidence_bundle.formal_verification_required is False
+    # Non-required formal checks are excluded from the pass/fail flag
+    assert result.report.evidence_bundle.formal_verification_passed is None
+
+
+def test_verify_task_rejects_approval_skipped_formal_replay(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_formal_approval.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-approval",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Replay formal proof",
+        verification=VerificationPlan(
+            formal_checks=(
+                FormalVerificationPlan(
+                    replay_command=VerificationCommand(
+                        command=(sys.executable, "-c", "raise SystemExit(0)"),
+                    ),
+                ),
+            ),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=ToolApprovalPolicy(),
+        workspace_root=workspace,
+    )
+
+    assert result.passed is False
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    replay_check = next(
+        check
+        for check in result.report.checks
+        if check.layer == VerificationLayer.FORMAL
+    )
+    assert replay_check.passed is False
+    assert "skipped until shell approval" in replay_check.details
+    assert result.report.evidence_bundle.formal_verification_required is True
+    assert result.report.evidence_bundle.formal_verification_passed is False
+
+
+def test_formal_verification_helpers_cover_failure_edges(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    counterexample = workspace / "counterexample.out"
+    counterexample.write_text("bad state", encoding="utf-8")
+    required_checks = verification_module._run_formal_plan_checks(
+        formal_plan=FormalVerificationPlan(required=True),
+        index=1,
+        allowed_tools=(),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+    artifact_no_workspace = verification_module._run_formal_artifact_check(
+        name="artifact:no-workspace",
+        path=Path("model.tla"),
+        workspace_root=None,
+    )
+    artifact_escape = verification_module._run_formal_artifact_check(
+        name="artifact:escape",
+        path=Path("../model.tla"),
+        workspace_root=workspace,
+    )
+    replay_denied = verification_module._run_formal_replay_check(
+        name="replay:denied",
+        command_check=VerificationCommand(command=(sys.executable, "-c", "")),
+        allowed_tools=(),
+        tool_approval_policy=ToolApprovalPolicy(),
+        workspace_root=workspace,
+    )
+    replay_approval = verification_module._run_formal_replay_check(
+        name="replay:approval",
+        command_check=VerificationCommand(command=(sys.executable, "-c", "")),
+        allowed_tools=("shell",),
+        tool_approval_policy=ToolApprovalPolicy(),
+        workspace_root=workspace,
+    )
+    replay_no_workspace = verification_module._run_formal_replay_check(
+        name="replay:no-workspace",
+        command_check=VerificationCommand(command=(sys.executable, "-c", "")),
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=None,
+    )
+    counter_no_workspace = verification_module._run_formal_counterexample_check(
+        name="counter:no-workspace",
+        path=Path("counterexample.out"),
+        workspace_root=None,
+    )
+    counter_escape = verification_module._run_formal_counterexample_check(
+        name="counter:escape",
+        path=Path("../counterexample.out"),
+        workspace_root=workspace,
+    )
+    counter_exists = verification_module._run_formal_counterexample_check(
+        name="counter:exists",
+        path=Path("counterexample.out"),
+        workspace_root=workspace,
+    )
+
+    assert required_checks[0].passed is False
+    assert "requires a replay command" in required_checks[0].details
+    assert "requires a resolved workspace" in artifact_no_workspace.details
+    assert "escapes the workspace" in artifact_escape.details
+    assert "not authorized" in replay_denied.details
+    assert replay_approval.passed is False
+    assert "skipped until shell approval" in replay_approval.details
+    assert "requires a resolved workspace" in replay_no_workspace.details
+    assert "requires a resolved workspace" in counter_no_workspace.details
+    assert "escapes the workspace" in counter_escape.details
+    assert counter_exists.passed is False
+    assert "counterexample artifact" in counter_exists.details
+
+
 def test_verify_task_required_file_rejects_directory(tmp_path: Path) -> None:
     db_path = tmp_path / "verification_required_file_directory.db"
     workspace = tmp_path / "workspace"
@@ -663,6 +972,31 @@ def test_verify_task_reports_incomplete_task(tmp_path: Path) -> None:
     assert result.report is not None
     assert result.details == ("Task not completed yet",)
     assert result.report.checks[0].name == "completed_status"
+
+
+def test_verify_task_clears_stale_evidence_for_incomplete_task(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_incomplete_stale_evidence.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return evidence",
+        verification=VerificationPlan(),
+        evidence_bundle=VerificationEvidenceBundle(task_id="task-1"),
+    )
+    _ = task_repo.create(task)
+
+    result = verify_task(task_repo, event_log, task.task_id)
+
+    stored = task_repo.get(task.task_id)
+    assert result.passed is False
+    assert result.report is not None
+    assert result.report.evidence_bundle is None
+    assert stored.envelope.evidence_bundle is None
 
 
 def test_verify_task_reports_failed_command(tmp_path: Path) -> None:

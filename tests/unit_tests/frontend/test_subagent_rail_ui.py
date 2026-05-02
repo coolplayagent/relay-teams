@@ -61,6 +61,11 @@ console.log(JSON.stringify({
             "run_id": "run-1",
             "created_at": "2026-03-13T00:01:10Z",
             "updated_at": "2026-03-13T00:01:40Z",
+            "spec_artifact_id": "",
+            "spec_source_task_id": "",
+            "spec_summary": "",
+            "spec_strictness": "",
+            "evidence_bundle": None,
         }
     ]
     assert payload["selectedRoleId"] == "writer"

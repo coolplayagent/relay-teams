@@ -4,6 +4,7 @@ __pycache__/
 .pytest-tmp/
 .venv/
 .tmp/
+tmp/
 *.egg-info/
 .idea/
 coverage.json

@@ -3,6 +3,7 @@ Create one or more run-scoped delegated task contracts.
 Usage:
 - Each task entry must include a clear `objective`; `title` is optional.
 - Use this tool to define work as a durable task contract.
+- For spec-driven work, pass `spec` with acceptance/evidence fields; use `spec_source_task_id` or `spec_artifact_id` to derive work from an upstream Designer/spec artifact. A task that depends on exactly one spec-bearing upstream task inherits that spec automatically, and new tasks receive their own spec artifact row.
 - Write objectives as stable outcomes and constraints, not as one-off execution prompts.
 - To create a dynamic DAG, set `role_id` and `orchestration_node_id` on each node and express edges with `depends_on_node_ids`.
 - A task with `role_id` is pre-bound and queued; ready nodes run automatically after the current Coordinator turn, respecting `depends_on_node_ids` and `depends_on_task_ids`.

@@ -11,9 +11,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Literal, NamedTuple
 
-from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.enums import TaskSpecStrictness, TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.models import (
+    FormalVerificationPlan,
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
     VerificationCheckResult,
@@ -73,6 +74,7 @@ class _VerificationPlanRun(NamedTuple):
     checks: tuple[VerificationCheckResult, ...]
     evidence_bundle: VerificationEvidenceBundle
     semantic_results: tuple[SemanticEvaluationResult, ...]
+    optional_formal_names: frozenset[str] = frozenset()
 
 
 class _BoundedOutputCapture:
@@ -124,7 +126,7 @@ def verify_task(
     require_guardrail_report: bool = False,
 ) -> VerificationResult:
     task = task_repo.get(task_id)
-    evidence_bundle: VerificationEvidenceBundle | None = None
+    evidence_bundle: VerificationEvidenceBundle | None
     semantic_results: tuple[SemanticEvaluationResult, ...] = ()
     if task.status != TaskStatus.COMPLETED or task.result is None:
         passed = False
@@ -138,6 +140,7 @@ def verify_task(
             ),
         ]
         event_type = EventType.VERIFICATION_FAILED
+        evidence_bundle = None
     else:
         plan_run = _run_verification_plan(
             task_id=task.envelope.task_id,
@@ -158,8 +161,28 @@ def verify_task(
             require_guardrail_report=require_guardrail_report,
         )
         checks = list(plan_run.checks)
-        evidence_bundle = plan_run.evidence_bundle
         semantic_results = plan_run.semantic_results
+        formal_checks = tuple(
+            check for check in checks if check.layer == VerificationLayer.FORMAL
+        )
+        required_formal_checks = tuple(
+            check
+            for check in formal_checks
+            if check.name not in plan_run.optional_formal_names
+        )
+        evidence_bundle = plan_run.evidence_bundle.model_copy(
+            update={
+                "spec_artifact_id": task.envelope.spec_artifact_id,
+                "spec_source_task_id": task.envelope.spec_source_task_id,
+                "formal_verification_required": any(
+                    formal_plan.required
+                    for formal_plan in task.envelope.verification.formal_checks
+                ),
+                "formal_verification_passed": None
+                if not required_formal_checks
+                else all(check.passed for check in required_formal_checks),
+            }
+        )
         if role is not None:
             checks.extend(
                 role_contract_verification_checks(
@@ -169,7 +192,11 @@ def verify_task(
                 )
             )
         missing = tuple(
-            check.name for check in checks if not check.passed and check.name
+            check.name
+            for check in checks
+            if not check.passed
+            and check.name
+            and check.name not in plan_run.optional_formal_names
         )
         passed = len(missing) == 0
         details = ("Verification report passed",) if passed else missing
@@ -199,6 +226,11 @@ def verify_task(
             task_id=task.envelope.task_id,
             payload_json=verification.model_dump_json(),
         )
+    )
+    latest_task = task_repo.get(task.envelope.task_id)
+    task_repo.update_envelope(
+        latest_task.envelope.task_id,
+        latest_task.envelope.model_copy(update={"evidence_bundle": evidence_bundle}),
     )
     return verification
 
@@ -248,6 +280,17 @@ def _run_verification_plan(
         required=require_guardrail_report,
     )
     checks.extend(guardrail_checks)
+    formal_checks, optional_formal_names = _run_formal_checks(
+        plan=plan,
+        allowed_tools=allowed_tools,
+        tool_approval_policy=tool_approval_policy,
+        workspace_root=workspace_root,
+    )
+    checks.extend(formal_checks)
+    evidence_items.extend(_evidence_items_from_checks(formal_checks))
+    strictness_checks = _run_strictness_checks(plan=plan)
+    checks.extend(strictness_checks)
+    evidence_items.extend(_evidence_items_from_checks(strictness_checks))
     (
         evidence_items_with_supports,
         acceptance_links,
@@ -278,6 +321,7 @@ def _run_verification_plan(
         checks=tuple(checks),
         evidence_bundle=evidence_bundle,
         semantic_results=semantic_results,
+        optional_formal_names=optional_formal_names,
     )
 
 
@@ -648,6 +692,225 @@ def _kill_process_and_wait(process: subprocess.Popen[bytes]) -> int:
     return process.wait()
 
 
+def _run_formal_checks(
+    *,
+    plan: VerificationPlan,
+    allowed_tools: tuple[str, ...],
+    tool_approval_policy: ToolApprovalPolicy,
+    workspace_root: Path | None,
+) -> tuple[list[VerificationCheckResult], frozenset[str]]:
+    checks: list[VerificationCheckResult] = []
+    optional_names: set[str] = set()
+    for index, formal_plan in enumerate(plan.formal_checks, start=1):
+        checks.extend(
+            _run_formal_plan_checks(
+                formal_plan=formal_plan,
+                index=index,
+                allowed_tools=allowed_tools,
+                tool_approval_policy=tool_approval_policy,
+                workspace_root=workspace_root,
+            )
+        )
+        if not formal_plan.required:
+            optional_names.update(check.name for check in checks[-1:] if check.name)
+    return checks, frozenset(optional_names)
+
+
+def _run_formal_plan_checks(
+    *,
+    formal_plan: FormalVerificationPlan,
+    index: int,
+    allowed_tools: tuple[str, ...],
+    tool_approval_policy: ToolApprovalPolicy,
+    workspace_root: Path | None,
+) -> list[VerificationCheckResult]:
+    checks: list[VerificationCheckResult] = []
+    prefix = (
+        "formal:"
+        f"{formal_plan.spec_language.value}:"
+        f"{formal_plan.tool_profile.value}:{index}"
+    )
+    if (
+        formal_plan.required
+        and formal_plan.replay_command is None
+        and not formal_plan.proof_artifacts
+    ):
+        checks.append(
+            VerificationCheckResult(
+                layer=VerificationLayer.FORMAL,
+                name=f"{prefix}:required_evidence",
+                passed=False,
+                details=(
+                    "Formal verification requires a replay command or proof artifact."
+                ),
+            )
+        )
+    for path in formal_plan.proof_artifacts:
+        checks.append(
+            _run_formal_artifact_check(
+                name=f"{prefix}:proof_artifact:{path}",
+                path=path,
+                workspace_root=workspace_root,
+            )
+        )
+    if formal_plan.replay_command is not None:
+        checks.append(
+            _run_formal_replay_check(
+                name=f"{prefix}:replay",
+                command_check=formal_plan.replay_command,
+                allowed_tools=allowed_tools,
+                tool_approval_policy=tool_approval_policy,
+                workspace_root=workspace_root,
+            )
+        )
+    if formal_plan.counterexample_path is not None:
+        checks.append(
+            _run_formal_counterexample_check(
+                name=f"{prefix}:counterexample:{formal_plan.counterexample_path}",
+                path=formal_plan.counterexample_path,
+                workspace_root=workspace_root,
+            )
+        )
+    return checks
+
+
+def _run_formal_artifact_check(
+    *,
+    name: str,
+    path: Path,
+    workspace_root: Path | None,
+) -> VerificationCheckResult:
+    if workspace_root is None and not path.is_absolute():
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details="Formal proof artifact verification requires a resolved workspace.",
+            evidence_path=path,
+        )
+    resolved_path = _resolve_verification_path(path, workspace_root=workspace_root)
+    if resolved_path is None:
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details="Formal proof artifact path escapes the workspace.",
+            evidence_path=path,
+        )
+    exists = resolved_path.is_file()
+    return VerificationCheckResult(
+        layer=VerificationLayer.FORMAL,
+        name=name,
+        passed=exists,
+        details=(
+            "Formal proof artifact exists."
+            if exists
+            else "Formal proof artifact missing or is not a file."
+        ),
+        evidence_path=resolved_path,
+    )
+
+
+def _run_formal_replay_check(
+    *,
+    name: str,
+    command_check: VerificationCommand,
+    allowed_tools: tuple[str, ...],
+    tool_approval_policy: ToolApprovalPolicy,
+    workspace_root: Path | None,
+) -> VerificationCheckResult:
+    decision = tool_approval_policy.evaluate("shell", allowed_tools=allowed_tools)
+    if decision.runtime_decision == ToolRuntimeDecision.DENY:
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details=decision.reason or "Formal replay requires shell authorization.",
+            command=command_check.command,
+        )
+    if decision.required:
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details="Formal replay was skipped until shell approval is granted.",
+            command=command_check.command,
+        )
+    if workspace_root is None:
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details="Formal replay requires a resolved workspace.",
+            command=command_check.command,
+        )
+    check = _run_command_check(command_check, workspace_root=workspace_root)
+    return check.model_copy(update={"layer": VerificationLayer.FORMAL, "name": name})
+
+
+def _run_formal_counterexample_check(
+    *,
+    name: str,
+    path: Path,
+    workspace_root: Path | None,
+) -> VerificationCheckResult:
+    if workspace_root is None and not path.is_absolute():
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details="Counterexample verification requires a resolved workspace.",
+            evidence_path=path,
+        )
+    resolved_path = _resolve_verification_path(path, workspace_root=workspace_root)
+    if resolved_path is None:
+        return VerificationCheckResult(
+            layer=VerificationLayer.FORMAL,
+            name=name,
+            passed=False,
+            details="Counterexample path escapes the workspace.",
+            evidence_path=path,
+        )
+    exists = resolved_path.exists()
+    return VerificationCheckResult(
+        layer=VerificationLayer.FORMAL,
+        name=name,
+        passed=not exists,
+        details=(
+            "No counterexample artifact was produced."
+            if not exists
+            else "Formal verification produced a counterexample artifact."
+        ),
+        evidence_path=resolved_path,
+    )
+
+
+def _run_strictness_checks(*, plan: VerificationPlan) -> list[VerificationCheckResult]:
+    if plan.strictness != TaskSpecStrictness.HIGH:
+        return []
+    has_hard_evidence = bool(
+        plan.command_checks
+        or plan.required_files
+        or plan.formal_checks
+        or plan.evidence_expectations
+    )
+    return [
+        VerificationCheckResult(
+            layer=VerificationLayer.SPEC,
+            name="strictness:high:evidence_required",
+            passed=has_hard_evidence,
+            details=(
+                "High strictness has structured verification evidence."
+                if has_hard_evidence
+                else (
+                    "High strictness requires verification commands, required files, "
+                    "evidence expectations, or formal verification evidence."
+                )
+            ),
+        )
+    ]
+
+
 def _task_result_evidence_item(result: str) -> VerificationEvidenceItem:
     return VerificationEvidenceItem(
         evidence_id="task_result",
@@ -684,6 +947,8 @@ def _evidence_items_from_checks(
 def _evidence_kind_from_check(
     check: VerificationCheckResult,
 ) -> VerificationEvidenceKind:
+    if check.layer == VerificationLayer.FORMAL:
+        return VerificationEvidenceKind.FORMAL_PROOF
     if check.layer == VerificationLayer.STRUCTURE and check.name.startswith(
         "required_file:"
     ):
@@ -807,7 +1072,10 @@ def _collect_formal_metrics(
     output: str,
     values: dict[str, int],
 ) -> None:
-    if _command_evidence_kind(check) != VerificationEvidenceKind.FORMAL_PROOF:
+    if (
+        check.layer != VerificationLayer.FORMAL
+        and _command_evidence_kind(check) != VerificationEvidenceKind.FORMAL_PROOF
+    ):
         return
     if check.passed or _text_mentions_any(
         output.casefold(),

@@ -30,7 +30,9 @@ from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     TaskRecord,
     TaskSpec,
+    TaskSpecArtifact,
     VerificationCommand,
+    VerificationEvidenceBundle,
     VerificationPlan,
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -129,9 +131,24 @@ class TaskOrchestrationService:
                     role_id=prepared.draft.role_id,
                 )
 
+        existing_records_by_task_id = {
+            record.envelope.task_id: record for record in existing_records
+        }
+        prepared_drafts_by_task_id = {
+            prepared.task_id: prepared for prepared in prepared_drafts
+        }
+        resolved_spec_bindings_by_task_id: dict[str, _ResolvedSpecBinding] = {}
         prepared_envelopes: list[tuple[_PreparedTaskDraft, TaskEnvelope]] = []
         for prepared in prepared_drafts:
             draft = prepared.draft
+            spec_binding = await self._resolve_draft_spec_binding(
+                task_id=prepared.task_id,
+                draft=draft,
+                dependency_task_ids=prepared.depends_on_task_ids,
+                existing_records_by_task_id=existing_records_by_task_id,
+                prepared_drafts_by_task_id=prepared_drafts_by_task_id,
+                resolved_spec_bindings_by_task_id=resolved_spec_bindings_by_task_id,
+            )
             envelope = TaskEnvelope(
                 task_id=prepared.task_id,
                 session_id=root.envelope.session_id,
@@ -140,8 +157,10 @@ class TaskOrchestrationService:
                 role_id=draft.role_id,
                 title=_resolved_title(draft.title, draft.objective),
                 objective=draft.objective,
-                verification=_verification_for_task_draft(draft),
-                spec=draft.spec,
+                verification=_verification_for_task_draft(draft, spec_binding.spec),
+                spec=spec_binding.spec,
+                spec_artifact_id=spec_binding.spec_artifact_id,
+                spec_source_task_id=spec_binding.spec_source_task_id,
                 lifecycle=draft.lifecycle,
                 orchestration_node_id=draft.orchestration_node_id,
                 depends_on_task_ids=prepared.depends_on_task_ids,
@@ -225,10 +244,20 @@ class TaskOrchestrationService:
                 else current.title or _resolved_title(None, next_objective)
             )
         )
+        resolved_update = await self._resolve_update_spec_binding(
+            current=current,
+            update=update,
+        )
         updated = await self._task_repo.update_envelope_async(
             task_id,
             current.model_copy(
-                update=_task_update_fields(update, next_objective, next_title),
+                update=_task_update_fields(
+                    resolved_update,
+                    next_objective,
+                    next_title,
+                    current=current,
+                    requested_update=update,
+                ),
             ),
         )
         return {"task": _task_projection(updated)}
@@ -686,6 +715,171 @@ class TaskOrchestrationService:
                 )
                 return await self._task_repo.get_async(refreshed.envelope.task_id)
 
+    async def _resolve_draft_spec_binding(
+        self,
+        *,
+        task_id: str,
+        draft: TaskDraft,
+        dependency_task_ids: tuple[str, ...],
+        existing_records_by_task_id: dict[str, TaskRecord],
+        prepared_drafts_by_task_id: dict[str, "_PreparedTaskDraft"],
+        resolved_spec_bindings_by_task_id: dict[str, "_ResolvedSpecBinding"],
+    ) -> "_ResolvedSpecBinding":
+        resolved_binding = resolved_spec_bindings_by_task_id.get(task_id)
+        if resolved_binding is not None:
+            return resolved_binding
+        spec = draft.spec
+        spec_artifact_id = draft.spec_artifact_id
+        spec_source_task_id = draft.spec_source_task_id
+        spec_source_task_id_requested = spec_source_task_id is not None
+        if spec_artifact_id is not None:
+            artifact = await self._task_repo.get_spec_artifact_async(spec_artifact_id)
+            if spec is None:
+                spec = artifact.spec
+            elif spec != artifact.spec:
+                raise ValueError("spec_artifact_id references a different task spec")
+            if spec_source_task_id is None:
+                spec_source_task_id = artifact.source_task_id or artifact.task_id
+            if artifact.task_id != task_id:
+                spec_artifact_id = None
+
+        if spec_source_task_id is not None and spec_source_task_id_requested:
+            source_binding = await self._spec_binding_for_source_task_async(
+                task_id=spec_source_task_id,
+                existing_records_by_task_id=existing_records_by_task_id,
+                prepared_drafts_by_task_id=prepared_drafts_by_task_id,
+                resolved_spec_bindings_by_task_id=resolved_spec_bindings_by_task_id,
+            )
+            if source_binding.spec is None:
+                raise ValueError(
+                    f"spec_source_task_id has no bound spec: {spec_source_task_id}"
+                )
+            if spec is None:
+                spec = source_binding.spec
+            if spec_artifact_id is None and source_binding.task_id == task_id:
+                spec_artifact_id = source_binding.spec_artifact_id
+
+        if spec is None and spec_source_task_id is None:
+            inherited = [
+                await self._spec_binding_for_source_task_async(
+                    task_id=dependency_task_id,
+                    existing_records_by_task_id=existing_records_by_task_id,
+                    prepared_drafts_by_task_id=prepared_drafts_by_task_id,
+                    resolved_spec_bindings_by_task_id=resolved_spec_bindings_by_task_id,
+                )
+                for dependency_task_id in dependency_task_ids
+            ]
+            inherited = [binding for binding in inherited if binding.spec is not None]
+            unique_specs = {
+                binding.spec.model_dump_json()
+                for binding in inherited
+                if binding.spec is not None
+            }
+            if len(unique_specs) == 1 and inherited:
+                source_binding = inherited[0]
+                spec = source_binding.spec
+                if source_binding.task_id == task_id:
+                    spec_artifact_id = source_binding.spec_artifact_id
+                spec_source_task_id = source_binding.task_id
+
+        resolved_binding = _ResolvedSpecBinding(
+            spec=spec,
+            spec_artifact_id=spec_artifact_id,
+            spec_source_task_id=spec_source_task_id,
+        )
+        resolved_spec_bindings_by_task_id[task_id] = resolved_binding
+        return resolved_binding
+
+    async def _resolve_update_spec_binding(
+        self,
+        *,
+        current: TaskEnvelope,
+        update: TaskUpdate,
+    ) -> TaskUpdate:
+        spec = update.spec
+        spec_artifact_id = update.spec_artifact_id
+        spec_source_task_id = update.spec_source_task_id
+        spec_source_task_id_requested = spec_source_task_id is not None
+        if spec_artifact_id is not None:
+            artifact = await self._task_repo.get_spec_artifact_async(spec_artifact_id)
+            if artifact.task_id != current.task_id:
+                raise ValueError("spec_artifact_id references a different task")
+            if spec is None:
+                spec = artifact.spec
+            elif spec != artifact.spec:
+                raise ValueError("spec_artifact_id references a different task spec")
+            if spec_source_task_id is None:
+                spec_source_task_id = artifact.source_task_id or artifact.task_id
+        if spec_source_task_id is not None and spec_source_task_id_requested:
+            source_record = await self._task_repo.get_async(spec_source_task_id)
+            source_spec = source_record.envelope.spec
+            if source_spec is None:
+                raise ValueError(
+                    f"spec_source_task_id has no bound spec: {spec_source_task_id}"
+                )
+            if spec is None:
+                spec = source_spec
+            if (
+                spec_artifact_id is None
+                and source_record.envelope.task_id == current.task_id
+            ):
+                spec_artifact_id = source_record.envelope.spec_artifact_id
+        if spec is None and (
+            spec_artifact_id is not None or spec_source_task_id is not None
+        ):
+            spec = current.spec
+        return update.model_copy(
+            update={
+                "spec": spec,
+                "spec_artifact_id": spec_artifact_id,
+                "spec_source_task_id": spec_source_task_id,
+            }
+        )
+
+    async def _spec_binding_for_source_task_async(
+        self,
+        *,
+        task_id: str,
+        existing_records_by_task_id: dict[str, TaskRecord],
+        prepared_drafts_by_task_id: dict[str, "_PreparedTaskDraft"],
+        resolved_spec_bindings_by_task_id: dict[str, "_ResolvedSpecBinding"],
+    ) -> "_SourceSpecBinding":
+        resolved_binding = resolved_spec_bindings_by_task_id.get(task_id)
+        if resolved_binding is not None:
+            return _SourceSpecBinding(
+                task_id=task_id,
+                spec=resolved_binding.spec,
+                spec_artifact_id=resolved_binding.spec_artifact_id,
+            )
+        record = existing_records_by_task_id.get(task_id)
+        if record is not None:
+            return _SourceSpecBinding(
+                task_id=task_id,
+                spec=record.envelope.spec,
+                spec_artifact_id=record.envelope.spec_artifact_id,
+            )
+        prepared = prepared_drafts_by_task_id.get(task_id)
+        if prepared is not None:
+            resolved_binding = await self._resolve_draft_spec_binding(
+                task_id=prepared.task_id,
+                draft=prepared.draft,
+                dependency_task_ids=prepared.depends_on_task_ids,
+                existing_records_by_task_id=existing_records_by_task_id,
+                prepared_drafts_by_task_id=prepared_drafts_by_task_id,
+                resolved_spec_bindings_by_task_id=resolved_spec_bindings_by_task_id,
+            )
+            return _SourceSpecBinding(
+                task_id=task_id,
+                spec=resolved_binding.spec,
+                spec_artifact_id=resolved_binding.spec_artifact_id,
+            )
+        source_record = await self._task_repo.get_async(task_id)
+        return _SourceSpecBinding(
+            task_id=task_id,
+            spec=source_record.envelope.spec,
+            spec_artifact_id=source_record.envelope.spec_artifact_id,
+        )
+
     async def _get_root_task_async(self, run_id: str) -> TaskRecord:
         for record in await self._task_repo.list_by_trace_async(run_id):
             if record.envelope.parent_task_id is None:
@@ -700,12 +894,60 @@ class TaskOrchestrationService:
             raise KeyError(f"Task {task_id} does not belong to run {run_id}")
         return record
 
+    async def get_task_spec_artifact_async(
+        self,
+        *,
+        task_id: str,
+    ) -> TaskSpecArtifact:
+        record = await self._task_repo.get_async(task_id)
+        if record.envelope.spec_artifact_id is not None:
+            return await self._task_repo.get_spec_artifact_async(
+                record.envelope.spec_artifact_id
+            )
+        return await self._task_repo.get_latest_spec_artifact_for_task_async(task_id)
+
+    async def get_task_evidence_bundle_async(
+        self,
+        *,
+        task_id: str,
+    ) -> VerificationEvidenceBundle:
+        record = await self._task_repo.get_async(task_id)
+        if record.envelope.evidence_bundle is None:
+            raise KeyError(f"No evidence bundle found for task_id: {task_id}")
+        return record.envelope.evidence_bundle
+
 
 class _PreparedTaskDraft:
     def __init__(self, *, task_id: str, draft: TaskDraft) -> None:
         self.task_id = task_id
         self.draft = draft
         self.depends_on_task_ids: tuple[str, ...] = ()
+
+
+class _ResolvedSpecBinding:
+    def __init__(
+        self,
+        *,
+        spec: TaskSpec | None,
+        spec_artifact_id: str | None,
+        spec_source_task_id: str | None,
+    ) -> None:
+        self.spec = spec
+        self.spec_artifact_id = spec_artifact_id
+        self.spec_source_task_id = spec_source_task_id
+
+
+class _SourceSpecBinding:
+    def __init__(
+        self,
+        *,
+        task_id: str,
+        spec: TaskSpec | None,
+        spec_artifact_id: str | None,
+    ) -> None:
+        self.task_id = task_id
+        self.spec = spec
+        self.spec_artifact_id = spec_artifact_id
 
 
 def _resolved_title(title: str | None, objective: str) -> str:
@@ -743,6 +985,15 @@ def _task_projection(record: TaskRecord) -> dict[str, JsonValue]:
     )
     if record.envelope.spec is not None:
         row["spec"] = cast(JsonValue, record.envelope.spec.model_dump(mode="json"))
+    if record.envelope.spec_artifact_id is not None:
+        row["spec_artifact_id"] = record.envelope.spec_artifact_id
+    if record.envelope.spec_source_task_id is not None:
+        row["spec_source_task_id"] = record.envelope.spec_source_task_id
+    if record.envelope.evidence_bundle is not None:
+        row["evidence_bundle"] = cast(
+            JsonValue,
+            record.envelope.evidence_bundle.model_dump(mode="json"),
+        )
     if record.envelope.handoff is not None:
         row["handoff"] = cast(
             JsonValue,
@@ -862,10 +1113,13 @@ def _unique_identifiers(values: list[str]) -> tuple[str, ...]:
     return tuple(unique_values)
 
 
-def _verification_for_task_draft(draft: TaskDraft) -> VerificationPlan:
+def _verification_for_task_draft(
+    draft: TaskDraft,
+    resolved_spec: TaskSpec | None = None,
+) -> VerificationPlan:
     if draft.verification is not None:
         return draft.verification
-    return _verification_for_task_spec(draft.spec)
+    return _verification_for_task_spec(resolved_spec)
 
 
 def _verification_for_task_spec(spec: TaskSpec | None) -> VerificationPlan:
@@ -879,6 +1133,10 @@ def _verification_for_task_spec(spec: TaskSpec | None) -> VerificationPlan:
             for command in spec.verification_commands
         ),
         evidence_expectations=spec.evidence_expectations,
+        strictness=spec.strictness,
+        formal_checks=()
+        if spec.formal_verification is None
+        else (spec.formal_verification,),
     )
 
 
@@ -888,6 +1146,8 @@ def _is_handoff_only_update(update: TaskUpdate) -> bool:
         and update.objective is None
         and update.title is None
         and update.spec is None
+        and update.spec_artifact_id is None
+        and update.spec_source_task_id is None
         and update.verification is None
         and update.lifecycle is None
     )
@@ -897,13 +1157,24 @@ def _task_update_fields(
     update: TaskUpdate,
     next_objective: str,
     next_title: str | None,
+    *,
+    current: TaskEnvelope,
+    requested_update: TaskUpdate,
 ) -> dict[str, object]:
     fields: dict[str, object] = {
         "objective": next_objective,
         "title": next_title,
     }
-    if update.spec is not None:
+    spec_changed = update.spec is not None and update.spec != current.spec
+    spec_requested = requested_update.spec is not None
+    should_store_spec = spec_requested or spec_changed
+    if should_store_spec and update.spec is not None:
         fields["spec"] = update.spec
+    if update.spec_artifact_id is not None:
+        fields["spec_artifact_id"] = update.spec_artifact_id
+    if update.spec_source_task_id is not None:
+        fields["spec_source_task_id"] = update.spec_source_task_id
+    if should_store_spec and update.spec is not None:
         if update.verification is None:
             fields["verification"] = _verification_for_task_spec(update.spec)
     if update.verification is not None:

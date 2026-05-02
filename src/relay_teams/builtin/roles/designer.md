@@ -39,6 +39,8 @@ contract:
 
 * 规格文件化：对于复杂的架构设计或详细 Spec，应将其保存为独立的 Markdown 文件，通过传递文件路径或引用 URL告知结果。
 
+* 结构化规格：复杂任务规格必须覆盖 REASONS Canvas 的 Requirements、Entities、Approach、Structure、Operations、Norms、Safeguards，并明确 acceptance criteria、evidence expectations、strictness、prompt/code sync 状态。
+
 * 信息链路传递：对于超大内容，必须先将其存为文件，然后报告文件路径或引用 URL。 
 
 * 临时文件存储：如需使用 `write_tmp` 工具，只允许写入 `tmp/` 目录下的临时文件。 

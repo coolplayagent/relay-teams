@@ -159,7 +159,8 @@ export async function ensureSessionForNewSessionDraft(options = {}) {
     const shouldCommit = typeof options.shouldCommit === 'function'
         ? options.shouldCommit
         : () => true;
-    const allowDetachedRun = options.allowDetachedRun === true;
+    const returnDetachedSessionId = options.allowDetachedRun === true
+        || options.returnDetachedSessionId === true;
 
     const workspaceId = String(state.pendingNewSessionWorkspaceId || '').trim();
     if (!workspaceId) {
@@ -181,7 +182,7 @@ export async function ensureSessionForNewSessionDraft(options = {}) {
     }
     if (shouldCommit() === false) {
         emitDetachedDraftSessionCreated(sessionId, workspaceId, created);
-        return allowDetachedRun ? sessionId : '';
+        return returnDetachedSessionId ? sessionId : '';
     }
 
     let record = created;
@@ -196,13 +197,13 @@ export async function ensureSessionForNewSessionDraft(options = {}) {
             });
             if (shouldCommit() === false) {
                 emitDetachedDraftSessionCreated(sessionId, workspaceId, record);
-                return allowDetachedRun ? sessionId : '';
+                return returnDetachedSessionId ? sessionId : '';
             }
         }
     } catch (error) {
         if (shouldCommit() === false) {
             emitDetachedDraftSessionCreated(sessionId, workspaceId, created);
-            return allowDetachedRun ? sessionId : '';
+            return returnDetachedSessionId ? sessionId : '';
         }
         state.currentWorkspaceId = workspaceId;
         state.currentSessionId = sessionId;
@@ -213,7 +214,7 @@ export async function ensureSessionForNewSessionDraft(options = {}) {
 
     if (shouldCommit() === false) {
         emitDetachedDraftSessionCreated(sessionId, workspaceId, record);
-        return allowDetachedRun ? sessionId : '';
+        return returnDetachedSessionId ? sessionId : '';
     }
     state.currentWorkspaceId = workspaceId;
     state.currentSessionId = sessionId;

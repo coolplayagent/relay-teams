@@ -1708,15 +1708,31 @@ body.is-resizing-rails .right-rail-resizer {
   border-top: 1px solid var(--border-color);
 }
 
+.agent-panel-summary-task-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
 .agent-panel-summary-task-title {
   font-size: 0.76rem;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.agent-panel-summary-task-meta {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .agent-panel-summary-task-state,
 .agent-panel-summary-empty {
   font-size: 0.7rem;
   color: var(--text-secondary);
+  flex: 0 0 auto;
 }
 
 .subagent-meta-reflection {

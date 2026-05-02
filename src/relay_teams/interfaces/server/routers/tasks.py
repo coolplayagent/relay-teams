@@ -11,7 +11,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
 from relay_teams.interfaces.server.deps import get_task_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
-from relay_teams.validation import RequiredIdentifierStr
+from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 from relay_teams.agents.tasks.models import (
     TaskHandoff,
@@ -36,6 +36,8 @@ class UpdateTaskRequest(BaseModel):
     objective: str | None = None
     title: str | None = None
     spec: TaskSpec | None = None
+    spec_artifact_id: OptionalIdentifierStr = None
+    spec_source_task_id: OptionalIdentifierStr = None
     verification: VerificationPlan | None = None
     lifecycle: TaskLifecyclePolicy | None = None
     handoff: TaskHandoff | None = None
@@ -106,6 +108,8 @@ async def update_task_by_id(
                 objective=req.objective,
                 title=req.title,
                 spec=req.spec,
+                spec_artifact_id=req.spec_artifact_id,
+                spec_source_task_id=req.spec_source_task_id,
                 verification=req.verification,
                 lifecycle=req.lifecycle,
                 handoff=req.handoff,
@@ -116,3 +120,31 @@ async def update_task_by_id(
             exc,
             mappings=((ValueError, 400),),
         ) from exc
+
+
+@router.get("/{task_id}/spec-artifact")
+async def get_task_spec_artifact(
+    task_id: RequiredIdentifierStr,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> dict[str, JsonValue]:
+    try:
+        artifact = await service.get_task_spec_artifact_async(task_id=task_id)
+    except KeyError as exc:
+        raise http_exception_for(
+            exc, key_error_detail="Spec artifact not found"
+        ) from exc
+    return artifact.model_dump(mode="json")
+
+
+@router.get("/{task_id}/evidence-bundle")
+async def get_task_evidence_bundle(
+    task_id: RequiredIdentifierStr,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> dict[str, JsonValue]:
+    try:
+        bundle = await service.get_task_evidence_bundle_async(task_id=task_id)
+    except KeyError as exc:
+        raise http_exception_for(
+            exc, key_error_detail="Evidence bundle not found"
+        ) from exc
+    return bundle.model_dump(mode="json")

@@ -524,9 +524,19 @@ class TaskPromptHarness(BaseModel):
         spec = task.spec
         if spec is not None:
             lines = ["## Task Spec"]
+            if task.spec_artifact_id is not None:
+                lines.append(f"- Spec Artifact ID: {task.spec_artifact_id}")
+            if task.spec_source_task_id is not None:
+                lines.append(f"- Spec Source Task ID: {task.spec_source_task_id}")
             if spec.summary:
                 lines.append(f"- Summary: {spec.summary}")
             lines.extend(_format_contract_items("Requirements", spec.requirements))
+            lines.extend(_format_contract_items("Entities", spec.entities))
+            lines.extend(_format_contract_items("Approach", spec.approach))
+            lines.extend(_format_contract_items("Structure", spec.structure))
+            lines.extend(_format_contract_items("Operations", spec.operations))
+            lines.extend(_format_contract_items("Norms", spec.norms))
+            lines.extend(_format_contract_items("Safeguards", spec.safeguards))
             lines.extend(_format_contract_items("Constraints", spec.constraints))
             lines.extend(
                 _format_contract_items(
@@ -548,6 +558,40 @@ class TaskPromptHarness(BaseModel):
                 )
             )
             lines.append(f"- Strictness: {spec.strictness.value}")
+            lines.append(f"- Prompt Artifact Version: {spec.prompt_artifact_version}")
+            lines.append(
+                f"- Prompt/Code Sync Status: {spec.prompt_code_sync_status.value}"
+            )
+            if spec.formal_verification is not None:
+                formal = spec.formal_verification
+                lines.append("- Formal Verification:")
+                lines.append(f"  - Spec Language: {formal.spec_language.value}")
+                lines.append(f"  - Tool Profile: {formal.tool_profile.value}")
+                lines.extend(
+                    _format_nested_contract_items(
+                        "Properties",
+                        formal.properties,
+                    )
+                )
+                lines.extend(
+                    _format_nested_contract_items(
+                        "Proof Artifacts",
+                        tuple(str(path) for path in formal.proof_artifacts),
+                    )
+                )
+                if formal.counterexample_path is not None:
+                    lines.append(
+                        f"  - Counterexample Path: {formal.counterexample_path}"
+                    )
+                if formal.replay_command is not None:
+                    lines.append(
+                        "  - Replay Command: " + " ".join(formal.replay_command.command)
+                    )
+            if spec.acceptance_criteria or spec.evidence_expectations:
+                lines.append(
+                    "- Completion Evidence: cite each acceptance criterion and "
+                    "evidence expectation in the final handoff."
+                )
             sections.append("\n".join(lines))
 
         lifecycle = task.lifecycle
@@ -574,3 +618,9 @@ def _format_contract_items(label: str, items: tuple[str, ...]) -> list[str]:
     if not items:
         return []
     return [f"- {label}:"] + [f"  - {item}" for item in items]
+
+
+def _format_nested_contract_items(label: str, items: tuple[str, ...]) -> list[str]:
+    if not items:
+        return []
+    return [f"  - {label}:"] + [f"    - {item}" for item in items]

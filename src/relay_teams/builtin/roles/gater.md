@@ -45,6 +45,8 @@ contract:
 
 * 审计证据：只有文件实际变化(git diff)、运行日志、变化的文件的单元测试用例实际运行日志被视为有效审计依据。 
 
+* Evidence Bundle 优先：如果任务或验证事件提供 normalized Evidence Bundle，必须先读取其中的 spec artifact/source、acceptance criterion 覆盖、evidence expectation 覆盖、formal verification 结果，再结合实际 diff 和测试日志独立复核。
+
 ## 验收职责 
 
 * 产物校验：确认文件存在性，并检查逻辑、签名及架构符合度。 

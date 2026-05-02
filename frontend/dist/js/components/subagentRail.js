@@ -350,6 +350,13 @@ function normalizeSessionTasks(payload) {
             run_id: String(item.run_id || ''),
             created_at: String(item.created_at || ''),
             updated_at: String(item.updated_at || item.created_at || ''),
+            spec_artifact_id: String(item.spec_artifact_id || ''),
+            spec_source_task_id: String(item.spec_source_task_id || ''),
+            spec_summary: String(item.spec_summary || ''),
+            spec_strictness: String(item.spec_strictness || ''),
+            evidence_bundle: item.evidence_bundle && typeof item.evidence_bundle === 'object'
+                ? item.evidence_bundle
+                : null,
         }));
 }
 

@@ -197,14 +197,51 @@ function renderPanelSummary(panelEl, instanceId, roleId) {
         return;
     }
 
-    tasksEl.innerHTML = tasks.map(task => `
+    tasksEl.innerHTML = tasks.map(task => renderTaskSummaryRow(task)).join('');
+}
+
+function renderTaskSummaryRow(task) {
+    const metaItems = [
+        taskSpecLabel(task),
+        evidenceBundleLabel(task),
+    ].filter(Boolean);
+    const metaHtml = metaItems.length > 0
+        ? `<div class="agent-panel-summary-task-meta">${metaItems.map(escapeHtml).join(' · ')}</div>`
+        : '';
+    return `
         <div class="agent-panel-summary-task-row">
-            <span class="agent-panel-summary-task-title">${escapeHtml(task.title || task.task_id || t('subagent.task'))}</span>
+            <div class="agent-panel-summary-task-main">
+                <span class="agent-panel-summary-task-title">${escapeHtml(task.title || task.task_id || t('subagent.task'))}</span>
+                ${metaHtml}
+            </div>
             <span class="agent-panel-summary-task-state is-${escapeAttribute(String(task.status || 'created'))}">
                 ${escapeHtml(humanizeStatus(task.status || 'created'))}
             </span>
         </div>
-    `).join('');
+    `;
+}
+
+function taskSpecLabel(task) {
+    const artifactId = String(task?.spec_artifact_id || '').trim();
+    const strictness = String(task?.spec_strictness || '').trim();
+    if (!artifactId && !strictness) return '';
+    const shortArtifact = artifactId.length > 16
+        ? `${artifactId.slice(0, 9)}...${artifactId.slice(-4)}`
+        : artifactId;
+    const parts = [shortArtifact || t('subagent.spec_bound')];
+    if (strictness) {
+        parts.push(strictness);
+    }
+    return `${t('subagent.spec')}: ${parts.join(' / ')}`;
+}
+
+function evidenceBundleLabel(task) {
+    const bundle = task?.evidence_bundle;
+    if (!bundle || typeof bundle !== 'object') return '';
+    const items = Array.isArray(bundle.items) ? bundle.items : [];
+    if (items.length === 0) return '';
+    const passed = items.filter(item => item?.passed === true).length;
+    return `${t('subagent.evidence')}: ${passed}/${items.length}`;
 }
 
 function humanizeStatus(value) {
