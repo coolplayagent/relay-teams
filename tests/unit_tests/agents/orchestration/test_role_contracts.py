@@ -258,6 +258,192 @@ def test_role_contract_verification_checks_cover_empty_lists_and_failures() -> N
     )
 
 
+def test_result_mentions_evidence_semantic_pattern_issue_url() -> None:
+    """Evidence expectations containing 'issue' should match GitHub issue URLs."""
+    role = _role(
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            ),
+        ),
+    )
+    record = TaskRecord(
+        envelope=_task(
+            verification=VerificationPlan(
+                evidence_expectations=("issue number",),
+            )
+        ),
+        status=TaskStatus.COMPLETED,
+    )
+    checks = role_contract_verification_checks(
+        role=role,
+        task=record,
+        result="Fixed in https://github.com/org/repo/issues/656",
+    )
+    assert _check(
+        checks, "contract_postcondition:result_mentions_evidence:issue number"
+    ).passed
+
+
+def test_result_mentions_evidence_semantic_pattern_issue_hash() -> None:
+    """Evidence expectations containing 'issue' should match #123 references."""
+    role = _role(
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            ),
+        ),
+    )
+    record = TaskRecord(
+        envelope=_task(
+            verification=VerificationPlan(
+                evidence_expectations=("issue number",),
+            )
+        ),
+        status=TaskStatus.COMPLETED,
+    )
+    checks = role_contract_verification_checks(
+        role=role,
+        task=record,
+        result="Fixed issue, see #123",
+    )
+    assert _check(
+        checks, "contract_postcondition:result_mentions_evidence:issue number"
+    ).passed
+
+
+def test_result_mentions_evidence_semantic_pattern_pr_url() -> None:
+    """Evidence expectations containing 'pr' should match GitHub PR URLs."""
+    role = _role(
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            ),
+        ),
+    )
+    record = TaskRecord(
+        envelope=_task(
+            verification=VerificationPlan(
+                evidence_expectations=("PR URL",),
+            )
+        ),
+        status=TaskStatus.COMPLETED,
+    )
+    checks = role_contract_verification_checks(
+        role=role,
+        task=record,
+        result="Created https://github.com/org/repo/pull/658",
+    )
+    assert _check(
+        checks, "contract_postcondition:result_mentions_evidence:PR URL"
+    ).passed
+
+
+def test_result_mentions_evidence_semantic_pattern_url() -> None:
+    """Evidence expectations containing 'url' should match any HTTP URL."""
+    role = _role(
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            ),
+        ),
+    )
+    record = TaskRecord(
+        envelope=_task(
+            verification=VerificationPlan(
+                evidence_expectations=("download url",),
+            )
+        ),
+        status=TaskStatus.COMPLETED,
+    )
+    checks = role_contract_verification_checks(
+        role=role,
+        task=record,
+        result="Available at https://example.com/file.zip",
+    )
+    assert _check(
+        checks, "contract_postcondition:result_mentions_evidence:download url"
+    ).passed
+
+
+def test_result_mentions_evidence_semantic_pattern_file_path() -> None:
+    """Evidence expectations containing 'file' should match path patterns."""
+    role = _role(
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            ),
+        ),
+    )
+    record = TaskRecord(
+        envelope=_task(
+            verification=VerificationPlan(
+                evidence_expectations=("file list",),
+            )
+        ),
+        status=TaskStatus.COMPLETED,
+    )
+    checks = role_contract_verification_checks(
+        role=role,
+        task=record,
+        result="Modified src/relay_teams/main.py",
+    )
+    assert _check(
+        checks, "contract_postcondition:result_mentions_evidence:file list"
+    ).passed
+
+
+def test_result_mentions_evidence_semantic_fallback_still_literal() -> None:
+    """Unrecognized expectations still use literal matching (backwards compat)."""
+    role = _role(
+        contract=RoleContract(
+            postconditions=(
+                RoleContractPostcondition(
+                    guarantee=(
+                        RoleContractPostconditionType.RESULT_MENTIONS_EVIDENCE_EXPECTATIONS
+                    )
+                ),
+            ),
+        ),
+    )
+    record = TaskRecord(
+        envelope=_task(
+            verification=VerificationPlan(
+                evidence_expectations=("pytest output",),
+            )
+        ),
+        status=TaskStatus.COMPLETED,
+    )
+    checks = role_contract_verification_checks(
+        role=role,
+        task=record,
+        result="All tests pass.",
+    )
+    assert not _check(
+        checks, "contract_postcondition:result_mentions_evidence:pytest output"
+    ).passed
+
+
 def _task(
     *,
     task_id: str = "task-1",

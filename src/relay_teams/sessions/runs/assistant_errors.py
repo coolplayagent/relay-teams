@@ -108,6 +108,12 @@ def build_assistant_error_message(
     recovery_guidance = _build_recovery_guidance_message(code, detail=detail)
     if recovery_guidance is not None:
         return recovery_guidance
+    if code == "verification_failed":
+        return _append_error_detail(
+            "The task verification did not pass. "
+            "Review the task spec and evidence expectations, then continue with corrected output.",
+            detail,
+        )
     if code == "incomplete_todos":
         return _append_error_detail(
             "The previous request could not be marked complete because "

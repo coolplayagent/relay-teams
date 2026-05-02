@@ -86,3 +86,26 @@ def test_build_assistant_error_message_uses_incomplete_todos_guidance() -> None:
     assert "Reconcile the persisted todo list" in message
     assert "Do not repeat already successful tool calls" in message
     assert "API or execution error" not in message
+
+
+def test_build_assistant_error_message_uses_verification_failed_guidance() -> None:
+    message = build_assistant_error_message(
+        error_code="verification_failed",
+        error_message="Contract check failed.",
+    )
+
+    assert "verification did not pass" in message
+    assert "Review the task spec and evidence expectations" in message
+    assert "Contract check failed" in message
+    assert "API or execution error" not in message
+
+
+def test_build_assistant_error_message_verification_failed_without_detail() -> None:
+    message = build_assistant_error_message(
+        error_code="verification_failed",
+        error_message=None,
+    )
+
+    assert "verification did not pass" in message
+    assert "Review the task spec and evidence expectations" in message
+    assert "API or execution error" not in message
