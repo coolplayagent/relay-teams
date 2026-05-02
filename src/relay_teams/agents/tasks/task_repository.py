@@ -693,7 +693,6 @@ class TaskRepository(SharedSqliteRepository):
             operation=lambda _conn: operation(),
         )
 
-<<<<<<< HEAD
     def get_spec_artifact(self, artifact_id: str) -> TaskSpecArtifact:
         with self._lock:
             row = self._conn.execute(
