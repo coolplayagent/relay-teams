@@ -822,7 +822,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         if descriptor is None:
             return result_payload
         if isinstance(result_payload, dict):
-            payload_map = cast(dict[str, JsonValue], result_payload)
+            payload_map = result_payload
             if isinstance(payload_map.get("computer"), dict):
                 return result_payload
             if "ok" in payload_map:
@@ -831,7 +831,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
                     descriptor=descriptor,
                     raw_result=payload_map.get("data"),
                 )
-                return cast(JsonValue, next_payload)
+                return next_payload
         return self._computer_payload_from_raw_result(
             descriptor=descriptor,
             raw_result=result_payload,
@@ -844,7 +844,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         raw_result: JsonValue | None,
     ) -> JsonValue:
         if isinstance(raw_result, dict):
-            raw_map = cast(dict[str, JsonValue], raw_result)
+            raw_map = raw_result
             if isinstance(raw_map.get("computer"), dict):
                 return raw_result
             content = _content_payload(raw_map.get("content"))
@@ -976,10 +976,10 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
         if isinstance(value, list):
-            entries = cast(list[object], value)
+            entries = value
             return [self._to_json_compatible(entry) for entry in entries]
         if isinstance(value, dict):
-            entries = cast(dict[object, object], value)
+            entries = value
             return {
                 str(key): self._to_json_compatible(entry)
                 for key, entry in entries.items()

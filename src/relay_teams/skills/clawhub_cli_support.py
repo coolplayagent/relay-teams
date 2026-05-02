@@ -33,7 +33,7 @@ _DEFAULT_INSTALL_TIMEOUT_SECONDS = 180.0
 _DEFAULT_BINARY_INSTALL_TIMEOUT_SECONDS = 180.0
 _INSTALLABLE_SKILL_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SEARCH_LINE_RE = re.compile(
-    r"^(?P<slug>\S+)(?:\s+(?P<version>v?\d[^\s]*))?\s{2,}"
+    r"^(?P<slug>\S+)(?:\s+(?P<version>v?\d\S*))?\s{2,}"
     r"(?P<title>.+?)\s+\((?P<score>-?\d+(?:\.\d+)?)\)\s*$"
 )
 

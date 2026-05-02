@@ -10,7 +10,8 @@ LOGGER = get_logger(__name__)
 
 
 class PrettyLogSink:
-    def record(self, event: MetricEvent) -> None:
+    @staticmethod
+    def record(event: MetricEvent) -> None:
         rendered_tags = ", ".join(
             f"{key}={value}" for key, value in event.tags.normalized_items()
         )

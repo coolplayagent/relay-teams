@@ -162,7 +162,8 @@ class PromptInstructionResolver:
             sources=tuple(loaded_sources),
         )
 
-    async def _fetch_url(self, url: str) -> str:
+    @staticmethod
+    async def _fetch_url(url: str) -> str:
         async with create_async_http_client(
             timeout_seconds=REMOTE_TIMEOUT_SECONDS,
             connect_timeout_seconds=REMOTE_TIMEOUT_SECONDS,
@@ -240,7 +241,8 @@ class PromptInstructionResolver:
                 result.append(candidate.resolve())
         return tuple(result)
 
-    def _first_existing_instruction_path(self, directory: Path) -> Path | None:
+    @staticmethod
+    def _first_existing_instruction_path(directory: Path) -> Path | None:
         for file_name in INSTRUCTION_FILE_CANDIDATES:
             candidate = directory / file_name
             if candidate.exists():

@@ -40,7 +40,7 @@ _SKILL_SCOPE_CONFIG = RetrievalScopeConfig(
     scope_kind=RetrievalScopeKind.SKILL,
     scope_id="skills",
 )
-_KEYWORD_SPLIT_PATTERN = re.compile(r"[^\w]+", re.UNICODE)
+_KEYWORD_SPLIT_PATTERN = re.compile(r"\W+", re.UNICODE)
 _DEFAULT_TOP_K = 8
 _DEFAULT_SEARCH_LIMIT = 24
 

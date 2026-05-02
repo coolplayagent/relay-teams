@@ -125,7 +125,7 @@ def _pick_directory_macos(start_dir: Path) -> str | None:
 
 def _pick_directory_linux(start_dir: Path) -> str | None:
     for picker in _LINUX_GTK_PICKERS:
-        command = shutil.which(picker)
+        command = shutil.which(str(picker))
         if command is None:
             continue
         return _run_picker_command(

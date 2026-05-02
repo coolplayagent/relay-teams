@@ -2303,7 +2303,7 @@ def load_binary_download_manifest(manifest_path: Path) -> BinaryDownloadManifest
         return BinaryDownloadManifest.model_validate_json(
             manifest_path.read_text(encoding="utf-8")
         )
-    except Exception:
+    except OSError:
         return None
 
 

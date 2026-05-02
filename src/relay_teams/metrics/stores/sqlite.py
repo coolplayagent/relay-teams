@@ -295,7 +295,8 @@ class SqliteMetricAggregateStore(SharedSqliteRepository):
             operation=lambda _: operation(),
         )
 
-    def _row_to_record(self, row: sqlite3.Row) -> MetricPointRecord:
+    @staticmethod
+    def _row_to_record(row: sqlite3.Row) -> MetricPointRecord:
         return MetricPointRecord(
             scope=MetricScope(str(row["scope"])),
             scope_id=str(row["scope_id"]),

@@ -7,11 +7,13 @@ from relay_teams.metrics.models import MetricEvent
 
 
 class MetricsSink(Protocol):
-    def record(self, event: MetricEvent) -> None:
+    @staticmethod
+    def record(event: MetricEvent) -> None:
         pass
 
 
 @runtime_checkable
 class AsyncMetricsSink(Protocol):
-    async def record_async(self, event: MetricEvent) -> None:
+    @staticmethod
+    async def record_async(event: MetricEvent) -> None:
         pass

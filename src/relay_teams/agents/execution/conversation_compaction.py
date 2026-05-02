@@ -80,7 +80,8 @@ class ConversationTokenEstimator:
     ) -> int:
         return sum(self.estimate_message_tokens(message) for message in history)
 
-    def estimate_message_tokens(self, message: ModelRequest | ModelResponse) -> int:
+    @staticmethod
+    def estimate_message_tokens(message: ModelRequest | ModelResponse) -> int:
         payload = ModelMessagesTypeAdapter.dump_json([message])
         serialized_size = len(payload)
         return max(

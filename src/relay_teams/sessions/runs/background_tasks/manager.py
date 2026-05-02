@@ -1458,10 +1458,12 @@ class BackgroundTaskManager:
             return BackgroundTaskStatus.COMPLETED
         return BackgroundTaskStatus.FAILED
 
-    async def _write_chars(self, runtime: _BackgroundTaskRuntime, chars: str) -> None:
+    @staticmethod
+    async def _write_chars(runtime: _BackgroundTaskRuntime, chars: str) -> None:
         await runtime.transport.write(chars)
 
-    async def _rollback_runtime(self, runtime: _BackgroundTaskRuntime) -> None:
+    @staticmethod
+    async def _rollback_runtime(runtime: _BackgroundTaskRuntime) -> None:
         with contextlib.suppress(Exception):
             if runtime.transport.returncode is None:
                 await runtime.transport.terminate()
@@ -1498,7 +1500,8 @@ class BackgroundTaskManager:
             except asyncio.TimeoutError:
                 return False
 
-    async def _mark_runtime_changed(self, runtime: _BackgroundTaskRuntime) -> None:
+    @staticmethod
+    async def _mark_runtime_changed(runtime: _BackgroundTaskRuntime) -> None:
         async with runtime.change_condition:
             runtime.change_version += 1
             runtime.change_condition.notify_all()

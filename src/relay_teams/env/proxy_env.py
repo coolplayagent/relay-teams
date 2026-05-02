@@ -647,7 +647,6 @@ def _compose_proxy_url_with_auth(
     if ":" in hostname and not hostname.startswith("["):
         hostname = f"[{hostname}]"
     port = f":{parsed.port}" if parsed.port is not None else ""
-    userinfo = username
     if password is not None:
         userinfo = f"{quote(username, safe='')}:{quote(password, safe='')}"
     else:

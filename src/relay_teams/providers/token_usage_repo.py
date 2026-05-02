@@ -815,7 +815,8 @@ class TokenUsageRepository(SharedSqliteRepository):
             return ""
         return value.strip()
 
-    def _coerce_non_negative_int(self, value: object) -> int:
+    @staticmethod
+    def _coerce_non_negative_int(value: object) -> int:
         if value is None:
             return 0
         if isinstance(value, bool):

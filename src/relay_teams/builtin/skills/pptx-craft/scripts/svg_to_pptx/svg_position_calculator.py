@@ -295,7 +295,8 @@ class BarChartCalculator:
 
         return results
 
-    def format_table(self, positions: List[BarPosition]) -> str:
+    @staticmethod
+    def format_table(positions: List[BarPosition]) -> str:
         """Format as table output"""
         lines = []
         lines.append("Index Label         Value       X        Y       Width    Height")
@@ -424,7 +425,8 @@ class PieChartCalculator:
 
         return results
 
-    def format_table(self, slices: List[PieSlice]) -> str:
+    @staticmethod
+    def format_table(slices: List[PieSlice]) -> str:
         """Format as table output"""
         lines = []
         lines.append(f"Center: ({self.cx}, {self.cy}) | Radius: {self.radius}")
@@ -561,7 +563,8 @@ class RadarChartCalculator:
 
         return grids
 
-    def format_table(self, points: List[RadarPoint]) -> str:
+    @staticmethod
+    def format_table(points: List[RadarPoint]) -> str:
         """Format as table output"""
         lines = []
         lines.append(f"Center: ({self.cx}, {self.cy}) | Radius: {self.radius}")
@@ -646,7 +649,8 @@ class LineChartCalculator:
 
         return results
 
-    def generate_path(self, points: List[DataPoint], closed: bool = False) -> str:
+    @staticmethod
+    def generate_path(points: List[DataPoint], closed: bool = False) -> str:
         """Generate SVG path d attribute"""
         if not points:
             return ""
@@ -849,7 +853,8 @@ class SVGPositionValidator:
 
         return results
 
-    def _extract_attribute(self, content: str, element_id: str, attr: str) -> Optional[float]:
+    @staticmethod
+    def _extract_attribute(content: str, element_id: str, attr: str) -> Optional[float]:
         """Extract attribute value from SVG content"""
         # Find element containing the ID
         pattern = rf'id="{element_id}"[^>]*{attr}="([^"]+)"'
@@ -868,7 +873,8 @@ class SVGPositionValidator:
 
         return None
 
-    def _guess_element_type(self, element_id: str) -> str:
+    @staticmethod
+    def _guess_element_type(element_id: str) -> str:
         """Guess element type based on ID"""
         id_lower = element_id.lower()
         if 'bar' in id_lower or 'rect' in id_lower:
@@ -883,7 +889,8 @@ class SVGPositionValidator:
             return 'text'
         return 'unknown'
 
-    def extract_all_positions(self, svg_content: str) -> Dict[str, Dict[str, float]]:
+    @staticmethod
+    def extract_all_positions(svg_content: str) -> Dict[str, Dict[str, float]]:
         """Extract position information of all elements in SVG"""
         positions = {}
 
@@ -911,7 +918,8 @@ class SVGPositionValidator:
 
         return positions
 
-    def format_results(self, results: List[ValidationResult]) -> str:
+    @staticmethod
+    def format_results(results: List[ValidationResult]) -> str:
         """Format validation results"""
         lines = []
         lines.append("=== SVG Position Validation Results ===")

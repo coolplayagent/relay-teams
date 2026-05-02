@@ -1033,9 +1033,7 @@ class EventPublishingService:
                         continue
                     result_payload = cast(
                         JsonValue,
-                        sanitize_task_status_payload(
-                            to_json_compatible(cast(object, part.content))
-                        ),
+                        sanitize_task_status_payload(to_json_compatible(part.content)),
                     )
                     result_payload = maybe_enrich_tool_result_payload(
                         tool_name=str(part.tool_name),
@@ -1132,7 +1130,8 @@ class EventPublishingService:
             ),
         )
 
-    def _to_json(self, obj: object) -> str:
+    @staticmethod
+    def _to_json(obj: object) -> str:
         try:
             return json.dumps(obj, ensure_ascii=False, default=str)
         except Exception:

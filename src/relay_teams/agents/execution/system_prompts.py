@@ -534,7 +534,7 @@ def _build_python_package_environment_lines() -> list[str]:
 @lru_cache(maxsize=None)
 def _resolve_package_tool_path(command_names: tuple[str, ...]) -> Path | None:
     for command_name in command_names:
-        resolved_path = shutil.which(command_name)
+        resolved_path = shutil.which(str(command_name))
         if resolved_path:
             return Path(resolved_path)
     return None
@@ -563,7 +563,7 @@ def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
     try:
         from relay_teams.env.github_config_service import GitHubConfigService
         from relay_teams.paths import get_app_config_dir
-    except Exception:
+    except ImportError:
         return False, None
 
     try:
@@ -581,7 +581,7 @@ def _get_clawhub_environment_status() -> tuple[bool, Path | None]:
     try:
         from relay_teams.env.clawhub_config_service import ClawHubConfigService
         from relay_teams.paths import get_app_config_dir
-    except Exception:
+    except ImportError:
         return False, None
 
     try:

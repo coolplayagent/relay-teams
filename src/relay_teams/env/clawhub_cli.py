@@ -74,7 +74,7 @@ def resolve_system_clawhub_path() -> Path | None:
 
 def resolve_npm_path() -> Path | None:
     for candidate in ("npm", "npm.cmd", "npm.exe"):
-        resolved = shutil.which(candidate)
+        resolved = shutil.which(str(candidate))
         if not resolved:
             continue
         path = Path(resolved)

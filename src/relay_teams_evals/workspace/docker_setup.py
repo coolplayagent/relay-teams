@@ -132,7 +132,7 @@ def _install_resource_stub() -> None:
 
 
 def _load_docker_module() -> _DockerModule:
-    return cast(_DockerModule, import_module("docker"))
+    return cast(_DockerModule, cast(object, import_module("docker")))
 
 
 def _load_dataset(
@@ -141,12 +141,14 @@ def _load_dataset(
     split: str,
     streaming: bool = False,
 ) -> Iterable[DatasetRow]:
-    datasets_module = cast(_DatasetsModule, import_module("datasets"))
+    datasets_module = cast(_DatasetsModule, cast(object, import_module("datasets")))
     return datasets_module.load_dataset(path, split=split, streaming=streaming)
 
 
 def _load_swebench_constants_module() -> _SWEConstantsModule:
-    return cast(_SWEConstantsModule, import_module("swebench.harness.constants"))
+    return cast(
+        _SWEConstantsModule, cast(object, import_module("swebench.harness.constants"))
+    )
 
 
 def _load_swebench_docker_build_module() -> _SWEDockerBuildModule:

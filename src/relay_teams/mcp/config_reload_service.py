@@ -50,7 +50,8 @@ class McpConfigReloadService:
                 )
             self._on_mcp_reloaded(mcp_registry)
 
-    def _clean_uv_tool_cache(self, specs: tuple[McpServerSpec, ...]) -> None:
+    @staticmethod
+    def _clean_uv_tool_cache(specs: tuple[McpServerSpec, ...]) -> None:
         grouped_commands: dict[tuple[str, ...], list[str]] = {}
         for spec in specs:
             argv = _resolve_uv_cache_clean_argv(spec)

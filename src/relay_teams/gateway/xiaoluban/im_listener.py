@@ -34,7 +34,8 @@ class XiaolubanImInboundHandler(Protocol):
     ) -> None:  # pragma: no cover
         pass
 
-    def get_im_callback_auth_token(self, account_id: str) -> str:
+    @staticmethod
+    def get_im_callback_auth_token(account_id: str) -> str:
         raise NotImplementedError  # pragma: no cover
 
 

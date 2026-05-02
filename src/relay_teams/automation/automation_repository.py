@@ -414,7 +414,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
             operation=operation,
         )
 
-    def _to_row(self, record: AutomationProjectRecord) -> Tuple[object, ...]:
+    @staticmethod
+    def _to_row(record: AutomationProjectRecord) -> Tuple[object, ...]:
         return (
             record.automation_project_id,
             record.name,
@@ -438,7 +439,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
             record.updated_at.isoformat(),
         )
 
-    def _to_record(self, row: sqlite3.Row) -> AutomationProjectRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> AutomationProjectRecord:
         automation_project_id = require_persisted_identifier(
             row["automation_project_id"],
             field_name="automation_project_id",

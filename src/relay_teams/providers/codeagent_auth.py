@@ -366,7 +366,8 @@ class CodeAgentTokenService:
             )
         return _build_polled_token_result(response)
 
-    def _cache_key(self, *, base_url: str, auth_config: CodeAgentAuthConfig) -> str:
+    @staticmethod
+    def _cache_key(*, base_url: str, auth_config: CodeAgentAuthConfig) -> str:
         cache_discriminator = (
             auth_config.secret_owner_id
             or auth_config.oauth_session_id
@@ -456,7 +457,8 @@ class CodeAgentTokenService:
             expires_at=datetime.now(UTC) + _CODEAGENT_TOKEN_TTL,
         )
 
-    def _should_refresh(self, token_result: CodeAgentOAuthTokenResult) -> bool:
+    @staticmethod
+    def _should_refresh(token_result: CodeAgentOAuthTokenResult) -> bool:
         return datetime.now(UTC) + _CODEAGENT_REFRESH_SKEW >= token_result.expires_at
 
     def _build_refresh_auth_config(

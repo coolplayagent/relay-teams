@@ -11,13 +11,15 @@ from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 
 @runtime_checkable
 class AsyncRunEventPublisher(Protocol):
-    async def publish_async(self, event: RunEvent) -> int | None:
+    @staticmethod
+    async def publish_async(event: RunEvent) -> int | None:
         pass
 
 
 @runtime_checkable
 class SyncRunEventPublisher(Protocol):
-    def publish(self, event: RunEvent) -> int | None:
+    @staticmethod
+    def publish(event: RunEvent) -> int | None:
         pass
 
 

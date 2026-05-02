@@ -1378,7 +1378,9 @@ def _parse_legacy_search_hit(block: str) -> WebSearchHit | None:
     def flush_current() -> None:
         nonlocal highlights, text, summary, current_label, current_lines
         if current_label == "highlights":
-            highlights = tuple(line for line in _normalize_text_lines(current_lines))
+            highlights = tuple(
+                text_line for text_line in _normalize_text_lines(current_lines)
+            )
         elif current_label == "text":
             text = _join_optional_text(current_lines)
         elif current_label == "summary":

@@ -757,7 +757,8 @@ class WorkspaceRepository(SharedSqliteRepository):
             ),
         )
 
-    def _to_mount_record(self, *, row: sqlite3.Row) -> WorkspaceMountRecord:
+    @staticmethod
+    def _to_mount_record(*, row: sqlite3.Row) -> WorkspaceMountRecord:
         provider = WorkspaceMountProvider(str(row["provider"]))
         provider_config_loaded = json.loads(str(row["provider_config_json"] or "{}"))
         if provider == WorkspaceMountProvider.LOCAL:

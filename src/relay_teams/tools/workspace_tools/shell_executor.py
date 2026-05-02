@@ -216,7 +216,7 @@ def _resolve_powershell_path() -> str:
         if resolved_env_path.is_file():
             return str(resolved_env_path)
     for command_name in ("pwsh", "powershell"):
-        resolved = shutil.which(command_name)
+        resolved = shutil.which(str(command_name))
         if resolved:
             return resolved
     raise FileNotFoundError(

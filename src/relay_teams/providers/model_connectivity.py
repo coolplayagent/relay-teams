@@ -2498,7 +2498,8 @@ class ModelConnectivityProbeService:
             else prompt_tokens + completion_tokens,
         )
 
-    def _extract_error_message(self, payload: object) -> str | None:
+    @staticmethod
+    def _extract_error_message(payload: object) -> str | None:
         if not isinstance(payload, dict):
             return None
         for key in ("message", "detail", "error_description", "error_msg"):
@@ -2783,7 +2784,8 @@ class ModelConnectivityProbeService:
             if self._is_valid_maas_model_id(normalized):
                 target.add(normalized)
 
-    def _is_valid_maas_model_id(self, model_id: str) -> bool:
+    @staticmethod
+    def _is_valid_maas_model_id(model_id: str) -> bool:
         if not model_id:
             return False
         if model_id.isdigit():
@@ -2916,7 +2918,8 @@ class ModelConnectivityProbeService:
         except ValueError:
             return self._event_stream_payload(response.text)
 
-    def _event_stream_payload(self, raw_text: str) -> object:
+    @staticmethod
+    def _event_stream_payload(raw_text: str) -> object:
         normalized = str(raw_text or "").strip()
         if not normalized:
             return _INVALID_RESPONSE_PAYLOAD
@@ -2940,11 +2943,13 @@ class ModelConnectivityProbeService:
                 continue
         return _INVALID_RESPONSE_PAYLOAD
 
-    def _is_event_stream_response(self, response: httpx.Response) -> bool:
+    @staticmethod
+    def _is_event_stream_response(response: httpx.Response) -> bool:
         content_type = response.headers.get("content-type", "")
         return "text/event-stream" in content_type.casefold()
 
-    def _http_error_code(self, status_code: int) -> str:
+    @staticmethod
+    def _http_error_code(status_code: int) -> str:
         if status_code in {401, 403}:
             return "auth_invalid"
         if status_code == 404:
@@ -2959,10 +2964,12 @@ class ModelConnectivityProbeService:
     def _is_codeagent_auth_invalid_error(error: CodeAgentOAuthError) -> bool:
         return error.auth_invalid
 
-    def _latency_ms(self, started: float) -> int:
+    @staticmethod
+    def _latency_ms(started: float) -> int:
         return max(0, int((perf_counter() - started) * 1000))
 
-    def _safe_int(self, value: object) -> int:
+    @staticmethod
+    def _safe_int(value: object) -> int:
         if isinstance(value, bool):
             return int(value)
         if isinstance(value, int):

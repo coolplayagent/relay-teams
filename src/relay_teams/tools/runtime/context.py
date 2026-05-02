@@ -89,13 +89,16 @@ class XiaolubanNotifyAccountLike(Protocol):
 
 @runtime_checkable
 class XiaolubanNotifyServiceLike(Protocol):
-    def list_accounts(self) -> tuple[XiaolubanNotifyAccountLike, ...]:
+    @staticmethod
+    def list_accounts() -> tuple[XiaolubanNotifyAccountLike, ...]:
         raise NotImplementedError  # pragma: no cover
 
-    def get_account(self, account_id: str) -> XiaolubanNotifyAccountLike:
+    @staticmethod
+    def get_account(account_id: str) -> XiaolubanNotifyAccountLike:
         raise NotImplementedError  # pragma: no cover
 
-    def has_usable_credentials(self, account_id: str) -> bool:
+    @staticmethod
+    def has_usable_credentials(account_id: str) -> bool:
         raise NotImplementedError  # pragma: no cover
 
     def send_notification_message(

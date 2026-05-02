@@ -362,7 +362,8 @@ class RoleLoader:
             system_prompt=body.strip(),
         )
 
-    def _split_front_matter(self, content: str) -> tuple[str, str]:
+    @staticmethod
+    def _split_front_matter(content: str) -> tuple[str, str]:
         content = content.lstrip("\ufeff")
         if not content.startswith("---"):
             raise ValueError("Role markdown must start with YAML front matter")

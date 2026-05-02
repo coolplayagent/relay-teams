@@ -404,7 +404,7 @@ def estimate_text_width(text: str, font_size: float, font_weight: str = '400') -
 
 def _xml_escape(text: str) -> str:
     """Escape XML special characters."""
-    return (text.replace('&', '&amp;')
+    return text.replace('&', '&amp;'
                 .replace('<', '&lt;')
                 .replace('>', '&gt;')
                 .replace('"', '&quot;'))

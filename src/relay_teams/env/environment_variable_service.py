@@ -320,11 +320,13 @@ class ProcessEnvironmentVariableBackend:
         _ = (scope, key, value, value_kind)
         raise PermissionError("System environment variables are read-only.")
 
-    def delete_value(self, scope: EnvironmentVariableScope, key: str) -> None:
+    @staticmethod
+    def delete_value(scope: EnvironmentVariableScope, key: str) -> None:
         _ = (scope, key)
         raise PermissionError("System environment variables are read-only.")
 
-    def broadcast_change(self) -> None:
+    @staticmethod
+    def broadcast_change() -> None:
         return None
 
 

@@ -995,7 +995,8 @@ class TaskRepository(SharedSqliteRepository):
         if artifact.spec != envelope.spec:
             raise ValueError("spec_artifact_id references a different task spec")
 
-    def _to_record(self, row: sqlite3.Row) -> TaskRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> TaskRecord:
         envelope_data = json.loads(str(row["envelope_json"]))
         return TaskRecord(
             envelope=TaskEnvelope.model_validate(envelope_data),

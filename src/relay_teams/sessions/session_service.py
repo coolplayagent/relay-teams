@@ -2391,7 +2391,8 @@ class SessionService:
             if self._run_runtime_repo.get(record.run_id) is not None
         )
 
-    def _is_runtime_publicly_recoverable(self, runtime: RunRuntimeRecord) -> bool:
+    @staticmethod
+    def _is_runtime_publicly_recoverable(runtime: RunRuntimeRecord) -> bool:
         return runtime.is_recoverable and runtime.status != RunRuntimeStatus.STOPPING
 
     @staticmethod

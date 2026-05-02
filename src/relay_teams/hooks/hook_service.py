@@ -68,7 +68,8 @@ _OBSERVE_ONLY_EVENTS = frozenset(
 
 
 class _RunInjectionManager(Protocol):
-    def is_active(self, run_id: str) -> bool:
+    @staticmethod
+    def is_active(run_id: str) -> bool:
         raise NotImplementedError
 
     def enqueue(

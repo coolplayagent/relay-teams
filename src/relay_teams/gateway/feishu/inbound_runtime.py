@@ -336,7 +336,8 @@ class FeishuInboundRuntime:
         normalized = str(resolved or "").strip()
         return normalized or None
 
-    def _build_run_intent_text(self, *, message: FeishuNormalizedMessage) -> str:
+    @staticmethod
+    def _build_run_intent_text(*, message: FeishuNormalizedMessage) -> str:
         if message.chat_type.strip().lower() != "group":
             return message.trigger_text
         sender_label = (

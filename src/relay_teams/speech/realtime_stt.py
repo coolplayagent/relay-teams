@@ -67,13 +67,16 @@ class RealtimeSttCandidateError(Exception):
 
 
 class RealtimeWebSocket(Protocol):
-    async def send(self, message: str | bytes) -> None:
+    @staticmethod
+    async def send(message: str | bytes) -> None:
         raise NotImplementedError
 
-    async def recv(self) -> str | bytes:
+    @staticmethod
+    async def recv() -> str | bytes:
         raise NotImplementedError
 
-    async def close(self) -> None:
+    @staticmethod
+    async def close() -> None:
         raise NotImplementedError
 
 

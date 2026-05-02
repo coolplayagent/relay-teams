@@ -929,7 +929,8 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
             operation=operation,
         )
 
-    def _to_row(self, record: AutomationRunDeliveryRecord) -> tuple[object, ...]:
+    @staticmethod
+    def _to_row(record: AutomationRunDeliveryRecord) -> tuple[object, ...]:
         return (
             record.automation_delivery_id,
             record.automation_project_id,
@@ -959,7 +960,8 @@ class AutomationDeliveryRepository(SharedSqliteRepository):
             record.updated_at.isoformat(),
         )
 
-    def _to_record(self, row: sqlite3.Row) -> AutomationRunDeliveryRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> AutomationRunDeliveryRecord:
         terminal_event_raw = str(row["terminal_event"] or "").strip()
         return AutomationRunDeliveryRecord(
             automation_delivery_id=str(row["automation_delivery_id"]),

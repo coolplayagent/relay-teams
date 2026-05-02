@@ -154,7 +154,7 @@ class _LoggingRuntime:
 class StructuredQueueHandler(QueueHandler):
     @override
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
-        prepared = cast(logging.LogRecord, copy.copy(record))
+        prepared = copy.copy(record)
         prepared.message = prepared.getMessage()
         prepared.msg = prepared.message
         prepared.args = None
@@ -487,10 +487,10 @@ def _snapshot_json_value(payload: JsonValue) -> JsonValue:
             for item_key, item_value in dict_payload.items()
         }
     if isinstance(payload, list):
-        list_payload = cast(list[JsonValue], payload)
+        list_payload = payload
         return [_snapshot_json_value(value) for value in list_payload]
     if isinstance(payload, tuple):
-        tuple_payload = cast(tuple[JsonValue, ...], payload)
+        tuple_payload = payload
         return [_snapshot_json_value(value) for value in tuple_payload]
     return payload
 
@@ -504,19 +504,19 @@ def _sanitize_json_value(
     if key is not None and _is_sensitive_key(key, settings):
         return settings.placeholder
     if isinstance(payload, dict):
-        dict_payload = cast(dict[object, object], payload)
+        dict_payload = payload
         return {
             str(item_key): _sanitize_json_value(item_value, key=str(item_key))
             for item_key, item_value in dict_payload.items()
         }
     if isinstance(payload, list):
-        list_payload = cast(list[object], payload)
+        list_payload = payload
         return [_sanitize_json_value(value) for value in list_payload]
     if isinstance(payload, tuple):
-        tuple_payload = cast(tuple[object, ...], payload)
+        tuple_payload = payload
         return [_sanitize_json_value(value) for value in tuple_payload]
     if payload is None or isinstance(payload, bool | int | float):
-        return cast(JsonValue, payload)
+        return payload
     return _truncate(_redact_string(str(payload), settings=settings))
 
 
@@ -799,9 +799,9 @@ def _build_error_payload(exc_info: LogExcInfo) -> dict[str, JsonValue]:
         exc_value = exc_info
         exc_tb = exc_info.__traceback__
     elif isinstance(exc_info, tuple):
-        exc_type = cast(type[BaseException] | None, exc_info[0])
-        exc_value = cast(BaseException | None, exc_info[1])
-        exc_tb = cast(TracebackType | None, exc_info[2])
+        exc_type = exc_info[0]
+        exc_value = exc_info[1]
+        exc_tb = exc_info[2]
     else:
         exc_type = None
         exc_value = None

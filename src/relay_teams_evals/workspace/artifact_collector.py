@@ -89,7 +89,8 @@ class ArtifactCollector:
             json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-    def _write_patch(self, artifact_dir: Path, result: EvalResult) -> None:
+    @staticmethod
+    def _write_patch(artifact_dir: Path, result: EvalResult) -> None:
         if result.generated_patch:
             path = artifact_dir / "patch.diff"
             path.write_text(result.generated_patch, encoding="utf-8")
@@ -100,12 +101,14 @@ class ArtifactCollector:
             raw_path = artifact_dir / "raw_patch.diff"
             raw_path.write_text(result.raw_generated_patch, encoding="utf-8")
 
-    def _write_agent_output(self, artifact_dir: Path, result: EvalResult) -> None:
+    @staticmethod
+    def _write_agent_output(artifact_dir: Path, result: EvalResult) -> None:
         if result.agent_output:
             path = artifact_dir / "agent_output.txt"
             path.write_text(result.agent_output, encoding="utf-8")
 
-    def _write_scorer_log(self, artifact_dir: Path, result: EvalResult) -> None:
+    @staticmethod
+    def _write_scorer_log(artifact_dir: Path, result: EvalResult) -> None:
         if result.scorer_log:
             path = artifact_dir / "scorer_log.txt"
             path.write_text(result.scorer_log, encoding="utf-8")

@@ -113,7 +113,8 @@ class SVGQualityChecker:
         self.results.append(result)
         return result
 
-    def _check_viewbox(self, content: str, result: Dict, expected_format: str = None):
+    @staticmethod
+    def _check_viewbox(content: str, result: Dict, expected_format: str = None):
         """Check viewBox attribute"""
         viewbox_match = re.search(r'viewBox="([^"]+)"', content)
 
@@ -136,7 +137,8 @@ class SVGQualityChecker:
                     f"viewBox mismatch: expected '{expected_viewbox}', got '{viewbox}'"
                 )
 
-    def _check_forbidden_elements(self, content: str, result: Dict):
+    @staticmethod
+    def _check_forbidden_elements(content: str, result: Dict):
         """Check forbidden elements (blocklist)"""
         content_lower = content.lower()
 
@@ -208,7 +210,8 @@ class SVGQualityChecker:
         if re.search(r'<image[^>]*\sopacity\s*=', content_lower):
             result['errors'].append("Detected forbidden <image opacity> (use overlay mask approach)")
 
-    def _check_fonts(self, content: str, result: Dict):
+    @staticmethod
+    def _check_fonts(content: str, result: Dict):
         """Check font usage"""
         # Find font-family declarations
         font_matches = re.findall(
@@ -231,7 +234,8 @@ class SVGQualityChecker:
                     )
                     break  # Only warn once
 
-    def _check_dimensions(self, content: str, result: Dict):
+    @staticmethod
+    def _check_dimensions(content: str, result: Dict):
         """Check width/height consistency with viewBox"""
         width_match = re.search(r'width="(\d+)"', content)
         height_match = re.search(r'height="(\d+)"', content)
@@ -252,7 +256,8 @@ class SVGQualityChecker:
                             f"({vb_width}x{vb_height})"
                         )
 
-    def _check_text_elements(self, content: str, result: Dict):
+    @staticmethod
+    def _check_text_elements(content: str, result: Dict):
         """Check text elements and wrapping methods"""
         # Count text and tspan elements
         text_count = content.count('<text')
@@ -268,7 +273,8 @@ class SVGQualityChecker:
                 f"Detected {len(text_matches)} potentially overly long single-line text(s) (consider using tspan for wrapping)"
             )
 
-    def _categorize_issue(self, error_msg: str) -> str:
+    @staticmethod
+    def _categorize_issue(error_msg: str) -> str:
         """Categorize issue type"""
         if 'viewBox' in error_msg:
             return 'viewBox issues'
@@ -335,7 +341,8 @@ class SVGQualityChecker:
 
         return self.results
 
-    def _print_result(self, result: Dict):
+    @staticmethod
+    def _print_result(result: Dict):
         """Print check result for a single file"""
         if result['passed']:
             if result['warnings']:

@@ -123,7 +123,8 @@ class EvalRunner:
             except Exception:
                 pass
 
-    def _is_retryable_infra_failure(self, error: _AttemptFailedError) -> bool:
+    @staticmethod
+    def _is_retryable_infra_failure(error: _AttemptFailedError) -> bool:
         cause = error.cause
         if error.stage == "prepare":
             if isinstance(cause, WorkspaceSetupError):

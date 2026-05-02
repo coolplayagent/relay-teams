@@ -259,7 +259,7 @@ def _load_specs_from_file(
 def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     raw = cast(object, loads(file_path.read_text(encoding="utf-8-sig")))
     if isinstance(raw, dict):
-        return cast(dict[str, JsonValue], raw)
+        return raw
     return {}
 
 
@@ -348,10 +348,10 @@ def _normalize_json_value(value: object) -> JsonValue:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     if isinstance(value, list):
-        items = cast(list[object], value)
+        items = value
         return [_normalize_json_value(item) for item in items]
     if isinstance(value, dict):
-        entries = cast(dict[object, object], value)
+        entries = value
         normalized: dict[str, JsonValue] = {}
         for key, item in entries.items():
             normalized[str(key)] = _normalize_json_value(item)

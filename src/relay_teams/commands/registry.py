@@ -20,9 +20,9 @@ from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
 _TEMPLATE_VARIABLES = {
-    "args": re.compile(r"\{\{\s*args\s*\}\}"),
-    "workspace_root": re.compile(r"\{\{\s*workspace_root\s*\}\}"),
-    "cwd": re.compile(r"\{\{\s*cwd\s*\}\}"),
+    "args": re.compile(r"\{\{\s*args\s*}}"),
+    "workspace_root": re.compile(r"\{\{\s*workspace_root\s*}}"),
+    "cwd": re.compile(r"\{\{\s*cwd\s*}}"),
 }
 _ARGUMENTS_PLACEHOLDER = "$ARGUMENTS"
 
