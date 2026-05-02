@@ -1806,3 +1806,158 @@ def test_evidence_linking_and_semantic_helper_edges() -> None:
         "the model check completed",
         ("model check",),
     )
+
+
+def test_verify_task_repeatability_passes_when_consistent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_repeatability_pass.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-repeat-pass",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return evidence",
+        verification=VerificationPlan(
+            strictness=TaskSpecStrictness.HIGH,
+            repeatability_runs=3,
+            command_checks=(
+                VerificationCommand(
+                    command=(
+                        sys.executable,
+                        "-c",
+                        "print('hello')",
+                    ),
+                    timeout_seconds=5,
+                ),
+            ),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=tmp_path,
+    )
+
+    assert result.report is not None
+    repeat_checks = [
+        c for c in result.report.checks if c.name.startswith("repeatability:")
+    ]
+    assert len(repeat_checks) == 1
+    if repeat_checks[0].passed:
+        assert "consistent results across" in repeat_checks[0].details
+
+
+def test_verify_task_repeatability_detects_inconsistent_output(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_repeatability_fail.db"
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    counter = tmp_path / "counter.txt"
+    counter.write_text("0", encoding="utf-8")
+    task = TaskEnvelope(
+        task_id="task-repeat-fail",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return evidence",
+        verification=VerificationPlan(
+            strictness=TaskSpecStrictness.HIGH,
+            repeatability_runs=2,
+            command_checks=(
+                VerificationCommand(
+                    command=(
+                        sys.executable,
+                        "-c",
+                        "from pathlib import Path; p=Path('counter.txt'); "
+                        "n=int(p.read_text())+1; p.write_text(str(n)); print(f'run {n}')",
+                    ),
+                    timeout_seconds=5,
+                ),
+            ),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=tmp_path,
+    )
+
+    assert result.passed is False
+    assert result.report is not None
+    repeat_checks = [
+        c for c in result.report.checks if c.name.startswith("repeatability:")
+    ]
+    assert len(repeat_checks) == 1
+    assert repeat_checks[0].passed is False
+    assert "inconsistent output" in repeat_checks[0].details
+
+
+def test_strip_ansi_removes_escape_sequences() -> None:
+    assert verification_module._strip_ansi("\x1b[32mgreen\x1b[0m") == "green"
+    assert verification_module._strip_ansi("plain text") == "plain text"
+
+
+def test_resolve_command_cwd_returns_workspace_when_no_cwd() -> None:
+    cmd = VerificationCommand(command=("echo", "hi"))
+    result = verification_module._resolve_command_cwd(cmd, workspace_root=Path("/ws"))
+    assert result == Path("/ws")
+
+
+def test_resolve_command_cwd_returns_none_when_no_cwd_and_no_workspace() -> None:
+    cmd = VerificationCommand(command=("echo", "hi"))
+    result = verification_module._resolve_command_cwd(cmd, workspace_root=None)
+    assert result is None
+
+
+def test_resolve_command_cwd_resolves_custom_cwd() -> None:
+    cmd = VerificationCommand(command=("echo", "hi"), cwd=Path("subdir"))
+    result = verification_module._resolve_command_cwd(cmd, workspace_root=Path("/ws"))
+    assert result == Path("/ws/subdir")
+
+
+def test_wrap_cross_evaluation_evaluator_returns_none_when_no_evaluator() -> None:
+    result = verification_module._wrap_cross_evaluation_evaluator(
+        semantic_evaluator=None,
+        cross_evaluation_models=("model-a",),
+    )
+    assert result is None
+
+
+def test_wrap_cross_evaluation_evaluator_returns_original_when_no_models() -> None:
+    def dummy_evaluator(_req: SemanticEvaluationRequest) -> SemanticEvaluationResult:
+        return SemanticEvaluationResult(
+            criterion="x", passed=True, confidence=1.0, evaluator="rule"
+        )
+
+    result = verification_module._wrap_cross_evaluation_evaluator(
+        semantic_evaluator=dummy_evaluator,
+        cross_evaluation_models=(),
+    )
+    assert result is dummy_evaluator
+
+
+def test_strictness_checks_include_repeatability_info() -> None:
+    checks = verification_module._run_strictness_checks(
+        plan=VerificationPlan(
+            strictness=TaskSpecStrictness.HIGH,
+            repeatability_runs=3,
+        )
+    )
+    names = [c.name for c in checks]
+    assert "strictness:high:repeatability_configured" in names
+    repeat_check = next(c for c in checks if "repeatability" in c.name)
+    assert "3 run(s)" in repeat_check.details
