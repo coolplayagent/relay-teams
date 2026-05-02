@@ -697,7 +697,8 @@ class SessionRepository(SharedSqliteRepository):
             operation=lambda _conn: operation(),
         )
 
-    def _to_record(self, row: sqlite3.Row) -> SessionRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> SessionRecord:
         session_id = require_persisted_identifier(
             row["session_id"],
             field_name="session_id",

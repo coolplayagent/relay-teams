@@ -547,7 +547,8 @@ class FailureHandlingService:
             ),
         }
 
-    def exception_chain(self, error: BaseException) -> tuple[BaseException, ...]:
+    @staticmethod
+    def exception_chain(error: BaseException) -> tuple[BaseException, ...]:
         chain: list[BaseException] = []
         seen_ids: set[int] = set()
         current: BaseException | None = error
@@ -562,14 +563,16 @@ class FailureHandlingService:
             current = current.__context__
         return tuple(chain)
 
-    def is_proxy_auth_failure(self, chain: Sequence[BaseException]) -> bool:
+    @staticmethod
+    def is_proxy_auth_failure(chain: Sequence[BaseException]) -> bool:
         for error in chain:
             message = str(error).strip().lower()
             if "407 proxy authentication required" in message:
                 return True
         return False
 
-    def is_connect_timeout(self, chain: Sequence[BaseException]) -> bool:
+    @staticmethod
+    def is_connect_timeout(chain: Sequence[BaseException]) -> bool:
         for error in chain:
             if error.__class__.__name__ == "ConnectTimeout":
                 return True
@@ -637,7 +640,8 @@ class FailureHandlingService:
                 values[name] = value
         return values
 
-    def header_value(self, headers: object, name: str) -> str:
+    @staticmethod
+    def header_value(headers: object, name: str) -> str:
         raw_value: object | None = None
         if isinstance(headers, dict):
             raw_value = headers.get(name)
@@ -695,7 +699,8 @@ class FailureHandlingService:
             blockers.append("messages_already_committed")
         return tuple(blockers)
 
-    def extract_text(self, response: object) -> str:
+    @staticmethod
+    def extract_text(response: object) -> str:
         parts = getattr(response, "parts", None)
         if isinstance(parts, list):
             texts: list[str] = []

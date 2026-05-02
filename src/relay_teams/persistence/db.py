@@ -40,7 +40,8 @@ class BlockingSqliteCursor(Protocol):
     def rowcount(self) -> int:
         raise NotImplementedError
 
-    def fetchall(self) -> list[sqlite3.Row]:
+    @staticmethod
+    def fetchall() -> list[sqlite3.Row]:
         raise NotImplementedError
 
 
@@ -52,10 +53,12 @@ class BlockingSqliteConnection(Protocol):
     ) -> BlockingSqliteCursor:
         raise NotImplementedError
 
-    def commit(self) -> None:
+    @staticmethod
+    def commit() -> None:
         raise NotImplementedError
 
-    def rollback(self) -> None:
+    @staticmethod
+    def rollback() -> None:
         raise NotImplementedError
 
 

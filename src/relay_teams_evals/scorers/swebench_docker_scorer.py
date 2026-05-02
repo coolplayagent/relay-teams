@@ -62,11 +62,13 @@ class _SWEBenchTestSpecModule(Protocol):
 class _ResourceModule(types.ModuleType):
     RLIMIT_NOFILE: int
 
-    def getrlimit(self, resource: int) -> tuple[int, int]:
+    @staticmethod
+    def getrlimit(resource: int) -> tuple[int, int]:
         _ = resource
         return (0, 0)
 
-    def setrlimit(self, resource: int, limits: tuple[int, int]) -> None:
+    @staticmethod
+    def setrlimit(resource: int, limits: tuple[int, int]) -> None:
         _ = (resource, limits)
 
 

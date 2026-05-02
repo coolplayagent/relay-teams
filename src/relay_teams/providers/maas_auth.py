@@ -170,12 +170,14 @@ class MaaSTokenService:
             self._tokens[cache_key] = record
             return record.auth_context
 
-    def _cache_key(self, auth_config: MaaSAuthConfig) -> str:
+    @staticmethod
+    def _cache_key(auth_config: MaaSAuthConfig) -> str:
         password = auth_config.password or ""
         raw = "\0".join((auth_config.username, password))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def _should_refresh(self, record: _MaaSTokenRecord) -> bool:
+    @staticmethod
+    def _should_refresh(record: _MaaSTokenRecord) -> bool:
         return datetime.now(UTC) + _MAAS_REFRESH_SKEW >= record.expires_at
 
     def _login_sync(

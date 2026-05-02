@@ -1554,7 +1554,7 @@ class ModelConfigManager:
 def _load_json_object(file_path: Path) -> dict[str, JsonValue]:
     try:
         raw = cast(object, loads(file_path.read_text("utf-8")))
-    except Exception:
+    except OSError:
         return {}
     if isinstance(raw, dict):
         return raw

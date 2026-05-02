@@ -76,7 +76,8 @@ class FeishuTriggerSecretStore:
             owner_id=trigger_id.strip(),
         )
 
-    def can_persist_secrets(self) -> bool:
+    @staticmethod
+    def can_persist_secrets() -> bool:
         return True
 
     def _migrate_legacy_storage(self, config_dir: Path, trigger_id: str) -> None:

@@ -375,7 +375,8 @@ class ExternalAgentConfigService:
             )
         return tuple(next_bindings)
 
-    def _normalize_agent(self, config: ExternalAgentConfig) -> ExternalAgentConfig:
+    @staticmethod
+    def _normalize_agent(config: ExternalAgentConfig) -> ExternalAgentConfig:
         agent_id = _normalize_required_text(config.agent_id, "agent_id")
         name = _normalize_required_text(config.name, "name")
         description = str(config.description or "").strip()

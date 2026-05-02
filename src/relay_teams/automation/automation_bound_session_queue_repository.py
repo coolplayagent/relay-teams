@@ -898,7 +898,8 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
             operation=operation,
         )
 
-    def _to_row(self, record: AutomationBoundSessionQueueRecord) -> tuple[object, ...]:
+    @staticmethod
+    def _to_row(record: AutomationBoundSessionQueueRecord) -> tuple[object, ...]:
         return (
             record.automation_queue_id,
             record.automation_project_id,
@@ -926,7 +927,8 @@ class AutomationBoundSessionQueueRepository(SharedSqliteRepository):
             _to_iso(record.completed_at),
         )
 
-    def _to_record(self, row: sqlite3.Row) -> AutomationBoundSessionQueueRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> AutomationBoundSessionQueueRecord:
         return AutomationBoundSessionQueueRecord(
             automation_queue_id=str(row["automation_queue_id"]),
             automation_project_id=str(row["automation_project_id"]),

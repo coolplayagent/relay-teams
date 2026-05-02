@@ -105,7 +105,8 @@ def _report_payload(report: EvalReport) -> dict[str, object]:
 
 
 class EvalReporter:
-    def print_summary(self, report: EvalReport) -> None:
+    @staticmethod
+    def print_summary(report: EvalReport) -> None:
         hr = _hr(_COL_WIDTHS)
         typer.echo(f"\nDataset : {report.dataset}")
         typer.echo(f"Scorer  : {report.scorer_name}")
@@ -157,14 +158,16 @@ class EvalReporter:
             typer.echo(_line(_row(result), _COL_WIDTHS))
         typer.echo(hr)
 
-    def write_json(self, report: EvalReport, path: Path) -> None:
+    @staticmethod
+    def write_json(report: EvalReport, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = _report_payload(report)
         path.write_text(
             json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-    def write_html(self, report: EvalReport, path: Path) -> None:
+    @staticmethod
+    def write_html(report: EvalReport, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         rows_html = ""
         for r in report.results:

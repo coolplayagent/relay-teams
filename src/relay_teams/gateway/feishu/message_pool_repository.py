@@ -1135,7 +1135,8 @@ class FeishuMessagePoolRepository(SharedSqliteRepository):
 
         return await self._run_async_read(operation)
 
-    def _row_to_record(self, row: sqlite3.Row) -> FeishuMessagePoolRecord:
+    @staticmethod
+    def _row_to_record(row: sqlite3.Row) -> FeishuMessagePoolRecord:
         message_pool_id = require_persisted_identifier(
             row["message_pool_id"],
             field_name="message_pool_id",

@@ -124,7 +124,8 @@ class ClawHubSkillService:
             ) from exc
         return resolved_path
 
-    def _build_summary(self, skill_dir: Path) -> ClawHubSkillSummary:
+    @staticmethod
+    def _build_summary(skill_dir: Path) -> ClawHubSkillSummary:
         skill_id = skill_dir.name
         manifest_path = skill_dir / "SKILL.md"
         try:

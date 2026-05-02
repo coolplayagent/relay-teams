@@ -329,10 +329,10 @@ def _tool_args_from_preview(value: str) -> dict[str, JsonValue] | str:
         return {}
     try:
         decoded = json.loads(text)
-    except Exception:
+    except ValueError:
         return text
     if isinstance(decoded, dict):
-        return cast(dict[str, JsonValue], decoded)
+        return decoded
     return text
 
 
@@ -1488,7 +1488,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 continue
             if not isinstance(payload, dict):
                 continue
-            payload_map = cast(dict[str, JsonValue], payload)
+            payload_map = payload
             if not self._tool_result_event_matches_request_scope(
                 event=cast(dict[str, JsonValue], event),
                 payload=payload_map,
@@ -1498,7 +1498,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             result = payload.get("result")
             if not isinstance(result, dict):
                 continue
-            if not self._is_superseded_tool_result(cast(dict[str, JsonValue], result)):
+            if not self._is_superseded_tool_result(result):
                 continue
             tool_call_id = str(payload.get("tool_call_id") or "").strip()
             if tool_call_id:

@@ -171,7 +171,8 @@ class RoleMemoryRepository(SharedSqliteRepository):
     def _table_info(self, table_name: str) -> list[sqlite3.Row]:
         return self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
 
-    def _has_role_memories_schema(self, columns: list[sqlite3.Row]) -> bool:
+    @staticmethod
+    def _has_role_memories_schema(columns: list[sqlite3.Row]) -> bool:
         column_names = [str(column["name"]) for column in columns]
         pk_columns = [
             str(column["name"])

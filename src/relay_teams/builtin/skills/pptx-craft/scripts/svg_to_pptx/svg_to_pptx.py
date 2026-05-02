@@ -169,7 +169,7 @@ def get_viewbox_dimensions(svg_path: Path) -> Optional[Tuple[int, int]]:
             return None
 
         return int(round(width)), int(round(height))
-    except Exception:
+    except (IndexError, OSError, TypeError, ValueError):
         return None
 
 
@@ -185,8 +185,8 @@ def detect_format_from_svg(svg_path: Path) -> Optional[str]:
             for fmt_key, fmt_info in CANVAS_FORMATS.items():
                 if fmt_info['viewbox'] == viewbox:
                     return fmt_key
-    except Exception:
-        pass
+    except OSError:
+        return None
     return None
 
 
@@ -330,7 +330,8 @@ def find_notes_files(project_path: Path, svg_files: List[Path] = None) -> dict:
             # Match by filename (overrides backward compatible format)
             if stem in svg_stems_mapping:
                 notes[stem] = content
-        except Exception:
+        except (OSError, TypeError, ValueError):
+            # Invalid file content or format, skip
             pass
 
     return notes

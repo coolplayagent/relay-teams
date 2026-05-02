@@ -961,7 +961,6 @@ class PromptHistoryService:
         *,
         request: LLMRequest,
     ) -> str:
-        intent_text = ""
         try:
             intent_text = self._run_intent_repo.get(
                 request.run_id,
@@ -1561,10 +1560,12 @@ class PromptHistoryService:
             actual_part=actual_part,
         )
 
-    def extract_user_prompt_text(self, message: ModelRequest) -> str | None:
+    @staticmethod
+    def extract_user_prompt_text(message: ModelRequest) -> str | None:
         return extract_user_prompt_text(message)
 
-    def request_has_prompt_content(self, request: LLMRequest) -> bool:
+    @staticmethod
+    def request_has_prompt_content(request: LLMRequest) -> bool:
         return request_has_prompt_content(request)
 
     def current_request_prompt_content(

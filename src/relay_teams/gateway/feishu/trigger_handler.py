@@ -252,7 +252,7 @@ def _parse_json_object(raw_body: str) -> dict[str, JsonValue]:
         raise ValueError("Feishu event body must be a JSON object") from exc
     if not isinstance(parsed, dict):
         raise ValueError("Feishu event body must be a JSON object")
-    return cast(dict[str, JsonValue], parsed)
+    return parsed
 
 
 def _normalize_sdk_message(event: P2ImMessageReceiveV1) -> FeishuNormalizedMessage:

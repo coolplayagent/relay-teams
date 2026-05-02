@@ -127,7 +127,8 @@ class AgentToolEventStreamContext(Protocol):
 
 
 class StreamableToolCallNode(Protocol):
-    def stream(self, ctx: object) -> AgentToolEventStreamContext:
+    @staticmethod
+    def stream(ctx: object) -> AgentToolEventStreamContext:
         raise NotImplementedError  # pragma: no cover
 
 
@@ -165,7 +166,8 @@ class CoordinationAgent(Protocol):
 
 
 class AutoHarnessRuntimeService(Protocol):
-    def consume_tools_dirty(self, *, run_id: str, instance_id: str) -> tuple[str, ...]:
+    @staticmethod
+    def consume_tools_dirty(*, run_id: str, instance_id: str) -> tuple[str, ...]:
         raise NotImplementedError
 
 
@@ -1638,12 +1640,14 @@ def _messages_include_final_answer(
 
 
 class _SpecCheckpointTaskRepository(Protocol):
-    async def get_async(self, task_id: str) -> TaskRecord:
+    @staticmethod
+    async def get_async(task_id: str) -> TaskRecord:
         raise NotImplementedError  # pragma: no cover
 
 
 class _SpecCheckpointRoleRegistry(Protocol):
-    def is_coordinator_role(self, role_id: str) -> bool:
+    @staticmethod
+    def is_coordinator_role(role_id: str) -> bool:
         raise NotImplementedError  # pragma: no cover
 
 

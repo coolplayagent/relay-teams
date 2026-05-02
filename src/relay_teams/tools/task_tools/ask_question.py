@@ -359,7 +359,6 @@ async def _resolve_closed_question(
     repo: UserQuestionRepository,
     question_id: str,
 ) -> UserQuestionRequestRecord:
-    resolved_record = None
     try:
         resolved_record = await repo.resolve_async(
             question_id=question_id,

@@ -389,7 +389,8 @@ class SkillsDirectory:
         with self._lock:
             return self._skills.get(name.strip())
 
-    def _split_front_matter(self, content: str) -> tuple[str, str]:
+    @staticmethod
+    def _split_front_matter(content: str) -> tuple[str, str]:
         if not content.startswith("---"):
             raise ValueError("SKILL.md must start with YAML front matter")
 

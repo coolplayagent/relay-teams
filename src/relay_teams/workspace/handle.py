@@ -111,7 +111,8 @@ class WorkspaceHandle(BaseModel):
                 return mount
         return None
 
-    def _normalize_raw_path(self, raw_path: str) -> str:
+    @staticmethod
+    def _normalize_raw_path(raw_path: str) -> str:
         import re
         import sys
 
@@ -164,7 +165,8 @@ class WorkspaceHandle(BaseModel):
             f"resolved={resolved_candidate}, allowed_roots=[{allowed_roots_text}]"
         )
 
-    def _parse_mount_prefix(self, raw_path: str) -> tuple[str | None, str]:
+    @staticmethod
+    def _parse_mount_prefix(raw_path: str) -> tuple[str | None, str]:
         if ":/" not in raw_path:
             return None, raw_path
         mount_name, logical_path = raw_path.split(":/", maxsplit=1)
@@ -208,7 +210,8 @@ class WorkspaceHandle(BaseModel):
             for raw_path in raw_paths
         )
 
-    def _resolve_local_relative_root(self, root_path: Path, relative_path: str) -> Path:
+    @staticmethod
+    def _resolve_local_relative_root(root_path: Path, relative_path: str) -> Path:
         candidate = (root_path / relative_path).resolve()
         resolved_root = root_path.resolve()
         if candidate != resolved_root and resolved_root not in candidate.parents:
@@ -217,7 +220,8 @@ class WorkspaceHandle(BaseModel):
             )
         return candidate
 
-    def _resolve_remote_path(self, mount: WorkspaceMountRecord, raw_path: str) -> str:
+    @staticmethod
+    def _resolve_remote_path(mount: WorkspaceMountRecord, raw_path: str) -> str:
         if mount.provider != WorkspaceMountProvider.SSH:
             raise ValueError(f"Workspace mount is not ssh: {mount.mount_name}")
         provider_config = mount.provider_config

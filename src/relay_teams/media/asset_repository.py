@@ -275,7 +275,8 @@ class MediaAssetRepository(SharedSqliteRepository):
             operation=operation,
         )
 
-    def _to_record(self, row: sqlite3.Row) -> MediaAssetRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> MediaAssetRecord:
         return MediaAssetRecord(
             asset_id=str(row["asset_id"]),
             session_id=str(row["session_id"]),

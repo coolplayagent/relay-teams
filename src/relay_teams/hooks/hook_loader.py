@@ -79,13 +79,16 @@ class _HookRoleEntry(Protocol):
 
 
 class _HookRoleRegistry(Protocol):
-    def get(self, role_id: str) -> object:
+    @staticmethod
+    def get(role_id: str) -> object:
         raise NotImplementedError
 
-    def list_roles(self) -> tuple[_HookRoleEntry, ...]:
+    @staticmethod
+    def list_roles() -> tuple[_HookRoleEntry, ...]:
         raise NotImplementedError
 
-    def list_subagent_roles(self) -> tuple[_HookRoleEntry, ...]:
+    @staticmethod
+    def list_subagent_roles() -> tuple[_HookRoleEntry, ...]:
         raise NotImplementedError
 
 

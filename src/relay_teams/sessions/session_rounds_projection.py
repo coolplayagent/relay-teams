@@ -1350,7 +1350,7 @@ def _parse_event_payload(payload_json: object) -> dict[str, object]:
         return {}
     try:
         decoded = json.loads(payload_json)
-    except Exception:
+    except ValueError:
         return {}
     if not isinstance(decoded, dict):
         return {}

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import cast
 
 from pydantic import JsonValue
 
@@ -58,7 +57,7 @@ class ToolResultStateService:
         sanitized = sanitize_task_status_payload(normalized)
         if not isinstance(sanitized, dict):
             return None
-        return cast(dict[str, JsonValue], sanitized)
+        return sanitized
 
     def visible_tool_result_from_envelope(
         self,
@@ -66,7 +65,7 @@ class ToolResultStateService:
     ) -> dict[str, JsonValue] | None:
         raw_visible_result = result_envelope.get("visible_result")
         if isinstance(raw_visible_result, dict):
-            return cast(dict[str, JsonValue], raw_visible_result)
+            return raw_visible_result
         return result_envelope
 
     def tool_result_event_was_published(

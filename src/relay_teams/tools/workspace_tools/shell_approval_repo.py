@@ -314,7 +314,8 @@ class ShellApprovalRepository(SharedSqliteRepository):
 
         return await self._run_async_read(operation)
 
-    def _row_to_record(self, row: sqlite3.Row) -> ShellApprovalGrant:
+    @staticmethod
+    def _row_to_record(row: sqlite3.Row) -> ShellApprovalGrant:
         created_at = parse_persisted_datetime_or_none(row["created_at"])
         updated_at = parse_persisted_datetime_or_none(row["updated_at"])
         if created_at is None or updated_at is None:

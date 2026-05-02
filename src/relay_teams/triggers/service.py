@@ -159,7 +159,7 @@ class GitHubTriggerService:
             ),
             status=(
                 GitHubTriggerAccountStatus.ENABLED
-                if payload.enabled
+                if payload.enabled is True
                 else GitHubTriggerAccountStatus.DISABLED
             ),
             token_configured=token is not None,
@@ -224,7 +224,7 @@ class GitHubTriggerService:
                 ),
                 "status": (
                     GitHubTriggerAccountStatus.ENABLED
-                    if payload.enabled is True
+                    if payload.enabled
                     else (
                         GitHubTriggerAccountStatus.DISABLED
                         if payload.enabled is False

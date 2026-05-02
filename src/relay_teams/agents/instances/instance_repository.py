@@ -686,7 +686,8 @@ class AgentInstanceRepository(SharedSqliteRepository):
             operation=lambda _conn: operation(),
         )
 
-    def _to_record(self, row: sqlite3.Row) -> AgentRuntimeRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> AgentRuntimeRecord:
         return AgentRuntimeRecord(
             run_id=str(row["run_id"]),
             trace_id=str(row["trace_id"]),

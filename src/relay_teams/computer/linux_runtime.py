@@ -627,7 +627,8 @@ class LinuxDesktopRuntime:
             self._sleep(_POLL_INTERVAL_SECONDS)
         return None
 
-    def _window_matches(self, window: ComputerWindow, query: str) -> bool:
+    @staticmethod
+    def _window_matches(window: ComputerWindow, query: str) -> bool:
         normalized_query = query.casefold()
         return (
             normalized_query in window.title.casefold()
@@ -739,19 +740,22 @@ class LinuxDesktopRuntime:
         wayland_display = self._env("WAYLAND_DISPLAY").strip()
         return bool(display or wayland_display)
 
-    def _derive_app_name(self, *, wm_class: str, title: str) -> str:
+    @staticmethod
+    def _derive_app_name(*, wm_class: str, title: str) -> str:
         class_name = wm_class.split(".", 1)[0].replace("-", " ").strip()
         if class_name:
             return class_name
         return title.strip() or wm_class
 
-    def _normalize_window_id(self, value: str) -> int:
+    @staticmethod
+    def _normalize_window_id(value: str) -> int:
         normalized = value.strip().casefold()
         if normalized.startswith("0x"):
             return int(normalized, 16)
         return int(normalized)
 
-    def _normalize_shortcut(self, shortcut: str) -> str:
+    @staticmethod
+    def _normalize_shortcut(shortcut: str) -> str:
         normalized = shortcut.strip()
         if not normalized:
             raise ValueError("shortcut is required")
@@ -788,20 +792,25 @@ class LinuxDesktopRuntime:
             raise ValueError("shortcut is required")
         return "+".join(normalized_parts)
 
-    def _which(self, name: str) -> str | None:
+    @staticmethod
+    def _which(name: str) -> str | None:
         return shutil.which(name)
 
-    def _env(self, name: str) -> str:
+    @staticmethod
+    def _env(name: str) -> str:
         return os.environ.get(name, "")
 
-    def _build_launch_environment(self) -> dict[str, str]:
+    @staticmethod
+    def _build_launch_environment() -> dict[str, str]:
         env = dict(os.environ)
         env.setdefault("GDK_BACKEND", "x11")
         env.setdefault("QT_QPA_PLATFORM", "xcb")
         return env
 
-    def _sleep(self, seconds: float) -> None:
+    @staticmethod
+    def _sleep(seconds: float) -> None:
         time.sleep(seconds)
 
-    def _time_monotonic(self) -> float:
+    @staticmethod
+    def _time_monotonic() -> float:
         return time.monotonic()

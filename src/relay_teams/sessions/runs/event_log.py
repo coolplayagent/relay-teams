@@ -728,7 +728,8 @@ class EventLog(SharedSqliteRepository):
             operation=lambda _conn: operation(),
         )
 
-    def _row_to_dict(self, row: sqlite3.Row) -> dict[str, JsonValue]:
+    @staticmethod
+    def _row_to_dict(row: sqlite3.Row) -> dict[str, JsonValue]:
         result: dict[str, JsonValue] = {
             "event_type": str(row["event_type"]),
             "trace_id": str(row["trace_id"]),

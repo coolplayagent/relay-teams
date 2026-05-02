@@ -50,7 +50,8 @@ class WeChatSecretStore:
             field_name=_FIELD_NAME,
         )
 
-    def can_persist_token(self) -> bool:
+    @staticmethod
+    def can_persist_token() -> bool:
         return True
 
     def _migrate_legacy_keyring(self, config_dir: Path, account_id: str) -> str | None:

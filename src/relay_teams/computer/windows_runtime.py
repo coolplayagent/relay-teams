@@ -822,7 +822,8 @@ class WindowsDesktopRuntime:
             )
         return tuple(windows)
 
-    def _build_list_windows_script(self) -> str:
+    @staticmethod
+    def _build_list_windows_script() -> str:
         return "\n".join(
             [
                 "Add-Type @'",
@@ -956,7 +957,8 @@ class WindowsDesktopRuntime:
                 candidate_queries.append(token_path.stem)
         return self._normalize_match_queries(*candidate_queries)
 
-    def _launch_match_token(self, command: list[str]) -> str | None:
+    @staticmethod
+    def _launch_match_token(command: list[str]) -> str | None:
         if not command:
             return None
         if (
@@ -970,7 +972,8 @@ class WindowsDesktopRuntime:
             return command[4]
         return command[0]
 
-    def _normalize_match_queries(self, *queries: str) -> tuple[str, ...]:
+    @staticmethod
+    def _normalize_match_queries(*queries: str) -> tuple[str, ...]:
         normalized_queries: list[str] = []
         seen_queries: set[str] = set()
         for query in queries:
@@ -1009,7 +1012,8 @@ class WindowsDesktopRuntime:
     ) -> bool:
         return any(self._window_matches(window, query) for query in queries)
 
-    def _window_matches(self, window: ComputerWindow, query: str) -> bool:
+    @staticmethod
+    def _window_matches(window: ComputerWindow, query: str) -> bool:
         normalized_query = query.casefold()
         return (
             normalized_query in window.title.casefold()
@@ -1048,7 +1052,8 @@ class WindowsDesktopRuntime:
             extra={"window_id": window_id},
         )
 
-    def _parse_window_id(self, window_id: str) -> wintypes.HWND:
+    @staticmethod
+    def _parse_window_id(window_id: str) -> wintypes.HWND:
         normalized = window_id.strip()
         if not normalized:
             raise ValueError("window_id is required")
@@ -1058,13 +1063,15 @@ class WindowsDesktopRuntime:
             raise ValueError(f"Unsupported window_id: {window_id}") from exc
         return wintypes.HWND(handle_value)
 
-    def _handle_value(self, handle: wintypes.HWND | int | None) -> int:
+    @staticmethod
+    def _handle_value(handle: wintypes.HWND | int | None) -> int:
         raw_value = getattr(handle, "value", handle)
         if raw_value is None:
             return 0
         return int(raw_value)
 
-    def _resolve_launch_command(self, app_name: str) -> list[str]:
+    @staticmethod
+    def _resolve_launch_command(app_name: str) -> list[str]:
         normalized = app_name.strip()
         if not normalized:
             raise ValueError("app_name is required")
@@ -1186,7 +1193,8 @@ class WindowsDesktopRuntime:
                 )
         self._send_inputs(inputs)
 
-    def _unicode_scan_codes(self, text: str) -> tuple[int, ...]:
+    @staticmethod
+    def _unicode_scan_codes(text: str) -> tuple[int, ...]:
         encoded = text.encode("utf-16-le")
         scan_codes: list[int] = []
         for index in range(0, len(encoded), 2):
@@ -1245,7 +1253,8 @@ class WindowsDesktopRuntime:
             raise ValueError("shortcut must include a non-modifier key")
         return tuple(modifier_keys), tuple(normal_keys)
 
-    def _resolve_virtual_key(self, token: str) -> int:
+    @staticmethod
+    def _resolve_virtual_key(token: str) -> int:
         lowered = token.casefold()
         named_key = _NAMED_VKEYS.get(lowered)
         if named_key is not None:
@@ -1350,7 +1359,8 @@ class WindowsDesktopRuntime:
         user32.mouse_event.restype = None
         user32.mouse_event(flags, 0, 0, data, 0)
 
-    def _load_user32(self) -> ctypes.WinDLL:
+    @staticmethod
+    def _load_user32() -> ctypes.WinDLL:
         try:
             return ctypes.WinDLL("user32", use_last_error=True)
         except OSError as exc:
@@ -1410,7 +1420,8 @@ class WindowsDesktopRuntime:
             raise RuntimeError(f"Windows desktop PowerShell command failed: {details}")
         return completed.stdout or ""
 
-    def _resolve_powershell_executable(self) -> str:
+    @staticmethod
+    def _resolve_powershell_executable() -> str:
         powershell = shutil.which("powershell")
         if powershell is not None:
             return powershell
@@ -1419,25 +1430,31 @@ class WindowsDesktopRuntime:
             return pwsh
         raise RuntimeError("Windows desktop runtime requires PowerShell.")
 
-    def _powershell_literal(self, value: str) -> str:
+    @staticmethod
+    def _powershell_literal(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
-    def _read_json_text(self, payload: dict[object, object], key: str) -> str:
+    @staticmethod
+    def _read_json_text(payload: dict[object, object], key: str) -> str:
         value = payload.get(key)
         return value.strip() if isinstance(value, str) else ""
 
-    def _read_json_bool(self, payload: dict[object, object], key: str) -> bool:
+    @staticmethod
+    def _read_json_bool(payload: dict[object, object], key: str) -> bool:
         value = payload.get(key)
         return value is True
 
-    def _read_json_int(self, payload: object, key: str) -> int | None:
+    @staticmethod
+    def _read_json_int(payload: object, key: str) -> int | None:
         if not isinstance(payload, dict):
             return None
         value = payload.get(key)
         return value if isinstance(value, int) else None
 
-    def _sleep(self, seconds: float) -> None:
+    @staticmethod
+    def _sleep(seconds: float) -> None:
         time.sleep(seconds)
 
-    def _time_monotonic(self) -> float:
+    @staticmethod
+    def _time_monotonic() -> float:
         return time.monotonic()

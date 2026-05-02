@@ -203,7 +203,6 @@ class SshProfileRepository(SharedSqliteRepository):
     async def save_async(
         self, *, ssh_profile_id: str, config: SshProfileStoredConfig
     ) -> SshProfileRecord:
-        existing = None
         try:
             existing = await self.get_async(ssh_profile_id)
         except KeyError:
@@ -318,7 +317,8 @@ class SshProfileRepository(SharedSqliteRepository):
 
         return await self._run_async_read(operation)
 
-    def _to_record(self, row: sqlite3.Row) -> SshProfileRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> SshProfileRecord:
         ssh_profile_id = require_persisted_identifier(
             row["ssh_profile_id"],
             field_name="ssh_profile_id",

@@ -1909,7 +1909,7 @@ def _role(msg: ModelMessage) -> str:
 def _sanitize_message_json(message_json: str) -> str:
     try:
         parsed = json.loads(message_json)
-    except Exception:
+    except ValueError:
         return message_json
     sanitized = sanitize_task_status_payload(parsed)
     return json.dumps(sanitized, ensure_ascii=False)
@@ -1918,7 +1918,7 @@ def _sanitize_message_json(message_json: str) -> str:
 def _load_message_list(message_json: str) -> list[object]:
     try:
         parsed = json.loads(_sanitize_message_json(message_json))
-    except Exception:
+    except ValueError:
         return []
     return parsed if isinstance(parsed, list) else []
 

@@ -49,7 +49,8 @@ class OrchestrationSettingsService:
             default_preset_id=config.default_orchestration_preset_id or None,
         )
 
-    def default_session_mode(self) -> SessionMode:
+    @staticmethod
+    def default_session_mode() -> SessionMode:
         return SessionMode.NORMAL
 
     def default_orchestration_preset_id(self) -> str | None:

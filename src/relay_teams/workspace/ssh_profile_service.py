@@ -606,7 +606,8 @@ class SshProfileService:
         )
         return env
 
-    def _write_askpass_script(self, temp_root: Path) -> Path:
+    @staticmethod
+    def _write_askpass_script(temp_root: Path) -> Path:
         if os.name == "nt":
             askpass_path = temp_root / "askpass.cmd"
             askpass_path.write_text(
@@ -805,7 +806,8 @@ class SshProfileService:
             encoding="utf-8",
         )
 
-    def _filesystem_mount_signature_path(self, local_root: Path) -> Path:
+    @staticmethod
+    def _filesystem_mount_signature_path(local_root: Path) -> Path:
         signature_name = f".{local_root.name or 'root'}.sshfs.json"
         return local_root.parent / signature_name
 

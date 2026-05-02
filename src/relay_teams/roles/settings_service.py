@@ -269,7 +269,8 @@ class RoleSettingsService:
             content=content,
         )
 
-    def _normalize_draft(self, draft: RoleDocumentDraft) -> RoleDocumentDraft:
+    @staticmethod
+    def _normalize_draft(draft: RoleDocumentDraft) -> RoleDocumentDraft:
         normalized_role_id = draft.role_id.strip()
         return draft.model_copy(
             update={
@@ -291,7 +292,8 @@ class RoleSettingsService:
             }
         )
 
-    def _serialize_role_document(self, draft: RoleDocumentDraft) -> str:
+    @staticmethod
+    def _serialize_role_document(draft: RoleDocumentDraft) -> str:
         front_matter: dict[str, object] = {
             "role_id": draft.role_id,
             "name": draft.name,

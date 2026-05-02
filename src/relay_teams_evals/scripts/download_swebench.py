@@ -37,7 +37,7 @@ def _load_dataset(
     split: str,
     streaming: bool = False,
 ) -> Iterable[DatasetRow]:
-    datasets_module = cast(_DatasetsModule, import_module("datasets"))
+    datasets_module = cast(_DatasetsModule, cast(object, import_module("datasets")))
     return datasets_module.load_dataset(path, split=split, streaming=streaming)
 
 

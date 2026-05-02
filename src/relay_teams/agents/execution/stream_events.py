@@ -27,7 +27,8 @@ LOGGER = get_logger(__name__)
 
 
 class StreamEventService:
-    def looks_like_tool_args_parse_failure(self, message: str) -> bool:
+    @staticmethod
+    def looks_like_tool_args_parse_failure(message: str) -> bool:
         lowered = message.strip().lower()
         if not lowered:
             return False

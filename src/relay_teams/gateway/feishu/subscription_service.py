@@ -499,18 +499,18 @@ class _FeishuWsController:
     def _build_client(self) -> WsClientLike:
         lark = import_lark_module("lark_oapi")
         dispatcher_module = import_lark_module("lark_oapi.event.dispatcher_handler")
-        EventDispatcherHandler = dispatcher_module.EventDispatcherHandler
+        event_dispatcher_handler = dispatcher_module.event_dispatcher_handler
 
         ws_client_module = import_lark_ws_client_module()
-        WsClient = ws_client_module.Client
+        ws_client = ws_client_module.Client
 
         environment = self._runtime_config.environment
 
         def _on_message(event: P2ImMessageReceiveV1) -> None:
             json_module = import_lark_module("lark_oapi.core.json")
-            JSON = json_module.JSON
+            json_obj = json_module.json_obj
 
-            raw_body = JSON.marshal(event) or "{}"
+            raw_body = json_obj.marshal(event) or "{}"
             result = self._event_handler.handle_sdk_event(
                 trigger_id=self._runtime_config.trigger_id,
                 event=event,
@@ -521,14 +521,14 @@ class _FeishuWsController:
             _log_processing_result(result)
 
         dispatcher = (
-            EventDispatcherHandler.builder(
+            event_dispatcher_handler.builder(
                 environment.encrypt_key or "",
                 environment.verification_token or "",
             )
             .register_p2_im_message_receive_v1(_on_message)
             .build()
         )
-        return WsClient(
+        return ws_client(
             environment.app_id,
             environment.app_secret,
             log_level=lark.LogLevel.INFO,
@@ -682,7 +682,8 @@ class _FeishuWsController:
             client._configure(endpoint_data.ClientConfig)
         return endpoint_data.URL
 
-    def _create_feishu_http_client(self) -> httpx.Client:
+    @staticmethod
+    def _create_feishu_http_client() -> httpx.Client:
         return create_runtime_sync_http_client()
 
 

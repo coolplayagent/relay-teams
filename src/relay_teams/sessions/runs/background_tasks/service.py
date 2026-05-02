@@ -127,13 +127,16 @@ class _BackgroundTaskRunController(Protocol):
     ) -> None:
         pass
 
-    def unregister_run_task(self, run_id: str) -> None:
+    @staticmethod
+    def unregister_run_task(run_id: str) -> None:
         pass
 
-    def request_run_stop(self, run_id: str) -> bool:
+    @staticmethod
+    def request_run_stop(run_id: str) -> bool:
         raise NotImplementedError
 
-    def is_run_stop_requested(self, run_id: str) -> bool:
+    @staticmethod
+    def is_run_stop_requested(run_id: str) -> bool:
         raise NotImplementedError
 
 
@@ -149,10 +152,12 @@ class _BackgroundTaskRunRuntimeRepository(Protocol):
     ) -> object:
         raise NotImplementedError
 
-    def get(self, run_id: str) -> object | None:
+    @staticmethod
+    def get(run_id: str) -> object | None:
         raise NotImplementedError
 
-    def update(self, run_id: str, **changes: object) -> object:
+    @staticmethod
+    def update(run_id: str, **changes: object) -> object:
         raise NotImplementedError
 
 
@@ -173,15 +178,18 @@ class _BackgroundTaskAgentRepository(Protocol):
     ) -> None:
         pass
 
-    def mark_status(self, instance_id: str, status: InstanceStatus) -> None:
+    @staticmethod
+    def mark_status(instance_id: str, status: InstanceStatus) -> None:
         pass
 
 
 class _BackgroundTaskTaskRepository(Protocol):
-    def get(self, task_id: str) -> object:
+    @staticmethod
+    def get(task_id: str) -> object:
         raise NotImplementedError
 
-    def create(self, envelope: TaskEnvelope) -> object:
+    @staticmethod
+    def create(envelope: TaskEnvelope) -> object:
         raise NotImplementedError
 
     def update_status(
@@ -204,7 +212,8 @@ class _BackgroundTaskIntentRepository(Protocol):
     ) -> IntentInput:
         raise NotImplementedError
 
-    def upsert(self, *, run_id: str, session_id: str, intent: IntentInput) -> None:
+    @staticmethod
+    def upsert(*, run_id: str, session_id: str, intent: IntentInput) -> None:
         pass
 
 
@@ -1481,7 +1490,8 @@ class BackgroundTaskService:
             )
         )
 
-    def _should_notify_completion(self, record: BackgroundTaskRecord) -> bool:
+    @staticmethod
+    def _should_notify_completion(record: BackgroundTaskRecord) -> bool:
         return (
             record.execution_mode == "background"
             and not record.is_active

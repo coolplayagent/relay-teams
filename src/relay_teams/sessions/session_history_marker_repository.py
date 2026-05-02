@@ -391,7 +391,7 @@ class SessionHistoryMarkerRepository(SharedSqliteRepository):
 def _load_metadata(raw_value: str) -> dict[str, str]:
     try:
         parsed = json.loads(raw_value)
-    except Exception:
+    except ValueError:
         return {}
     if not isinstance(parsed, dict):
         return {}

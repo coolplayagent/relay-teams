@@ -355,7 +355,8 @@ class LocalhostRunTunnelService:
                 if process is self._process:
                     self._refresh_process_state_locked(return_code=return_code)
 
-    def _iter_output_lines(self, stdout: IO[str]) -> Iterator[str]:
+    @staticmethod
+    def _iter_output_lines(stdout: IO[str]) -> Iterator[str]:
         for line in stdout:
             yield line.rstrip("\n")
 

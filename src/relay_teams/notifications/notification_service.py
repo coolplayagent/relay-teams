@@ -32,7 +32,8 @@ _NOTIFICATION_HOOK_ACTIVE: ContextVar[bool] = ContextVar(
 
 
 class NotificationDispatcher(Protocol):
-    def dispatch(self, request: NotificationRequest) -> None:
+    @staticmethod
+    def dispatch(request: NotificationRequest) -> None:
         raise NotImplementedError
 
 
@@ -47,7 +48,8 @@ class NotificationHookService(Protocol):
 
 
 class NotificationInjectionManager(Protocol):
-    def is_active(self, run_id: str) -> bool:
+    @staticmethod
+    def is_active(run_id: str) -> bool:
         raise NotImplementedError
 
     def enqueue(

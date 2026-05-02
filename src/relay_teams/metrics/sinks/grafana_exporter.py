@@ -7,6 +7,7 @@ from relay_teams.metrics.models import MetricEvent
 class GrafanaExporterSink:
     """Placeholder sink for external Grafana-oriented exporters."""
 
-    def record(self, event: MetricEvent) -> None:
+    @staticmethod
+    def record(event: MetricEvent) -> None:
         _ = event
         return None

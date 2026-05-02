@@ -265,7 +265,8 @@ class TemporaryRoleRepository(SharedSqliteRepository):
             operation=lambda _conn: operation(),
         )
 
-    def _to_record(self, row: sqlite3.Row) -> TemporaryRoleRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> TemporaryRoleRecord:
         return TemporaryRoleRecord(
             run_id=str(row["run_id"]),
             session_id=str(row["session_id"]),

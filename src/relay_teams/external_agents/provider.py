@@ -294,7 +294,6 @@ class ExternalAcpSessionManager:
                     ),
                 ),
             )
-            output = ""
             try:
                 output = await self._prompt_until_output(
                     agent_id=agent_id,
@@ -1695,7 +1694,7 @@ def _annotate_external_computer_tool_result(
     if descriptor is None:
         return tool_result
     if isinstance(tool_result, dict):
-        result_map = cast(dict[str, JsonValue], tool_result)
+        result_map = tool_result
         if isinstance(result_map.get("computer"), dict):
             return tool_result
         content = result_map.get("content")
@@ -1733,7 +1732,7 @@ def _annotate_external_computer_tool_result(
             }
             or None,
         )
-        return cast(JsonValue, payload)
+        return payload
     return cast(
         JsonValue,
         build_computer_tool_payload(

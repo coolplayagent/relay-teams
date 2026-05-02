@@ -198,13 +198,15 @@ class _AsyncRunRuntimeRepository(Protocol):
     ) -> object:
         pass
 
-    async def update_async(self, run_id: str, **changes: object) -> object:
+    @staticmethod
+    async def update_async(run_id: str, **changes: object) -> object:
         pass
 
 
 @runtime_checkable
 class _RuntimeToolsAgentRepository(Protocol):
-    async def get_instance_async(self, instance_id: str) -> AgentRuntimeRecord:
+    @staticmethod
+    async def get_instance_async(instance_id: str) -> AgentRuntimeRecord:
         raise NotImplementedError
 
 
@@ -3402,7 +3404,8 @@ def _runtime_snapshot_entries(
 class _RequiresApprovalPolicy(Protocol):
     timeout_seconds: float
 
-    def requires_approval(self, tool_name: str) -> bool:
+    @staticmethod
+    def requires_approval(tool_name: str) -> bool:
         raise NotImplementedError
 
 

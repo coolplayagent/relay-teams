@@ -617,7 +617,8 @@ class AutomationBoundSessionQueueService:
         )
         return next_record, True
 
-    def _should_auto_resume(self, runtime: RunRuntimeRecord) -> bool:
+    @staticmethod
+    def _should_auto_resume(runtime: RunRuntimeRecord) -> bool:
         if runtime.phase != RunRuntimePhase.AWAITING_RECOVERY:
             return False
         return runtime.status in {

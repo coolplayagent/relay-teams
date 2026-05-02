@@ -860,7 +860,8 @@ class WeChatInboundQueueRepository(SharedSqliteRepository):
             operation=operation,
         )
 
-    def _to_record(self, row: sqlite3.Row) -> WeChatInboundQueueRecord:
+    @staticmethod
+    def _to_record(row: sqlite3.Row) -> WeChatInboundQueueRecord:
         return WeChatInboundQueueRecord(
             inbound_queue_id=str(row["inbound_queue_id"]),
             account_id=str(row["account_id"]),

@@ -357,7 +357,7 @@ def _parse_payload(payload_json: str) -> dict[str, object]:
         return {}
     try:
         decoded = json.loads(payload_json)
-    except Exception:
+    except ValueError:
         return {}
     if not isinstance(decoded, dict):
         return {}

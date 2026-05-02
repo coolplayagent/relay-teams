@@ -16,7 +16,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import IO, Callable, Protocol, cast
+from typing import IO, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -110,7 +110,7 @@ _POWERSHELL_CMDLET_PATTERN = re.compile(
     _POWERSHELL_STATEMENT_PREFIX + r"(?P<cmdlet>[A-Za-z]+-[A-Za-z][\w-]*)\b"
 )
 _POWERSHELL_ENV_PATTERN = re.compile(
-    _POWERSHELL_STATEMENT_PREFIX + r"\$env:[A-Za-z_][\w]*"
+    _POWERSHELL_STATEMENT_PREFIX + r"\$env:[A-Za-z_]\w*"
 )
 _POWERSHELL_MEMBER_PATTERN = re.compile(
     _POWERSHELL_STATEMENT_PREFIX + r"\[[A-Za-z_][A-Za-z0-9_\.\[\]]*\]::"
@@ -185,7 +185,7 @@ class _ThreadedProcessWriter:
     async def drain(self) -> None:
         payload = self._take_pending()
         if not payload:
-            return None
+            return
         await asyncio.to_thread(self._write_and_flush, payload)
 
     def close(self) -> None:
@@ -428,7 +428,7 @@ def _resolve_powershell_path() -> str:
         if resolved_env_path.is_file():
             return str(resolved_env_path)
     for command_name in ("pwsh", "powershell"):
-        resolved = shutil.which(command_name)
+        resolved = shutil.which(str(command_name))
         if resolved:
             return resolved
     raise FileNotFoundError(
@@ -854,7 +854,7 @@ def _create_threaded_subprocess(
 
 
 def _read_pipe_chunk(pipe: IO[bytes], size: int) -> bytes:
-    read1 = cast(Callable[[int], bytes] | None, getattr(pipe, "read1", None))
+    read1 = getattr(pipe, "read1", None)
     if read1 is not None:
         return read1(size)
     return pipe.read(size)

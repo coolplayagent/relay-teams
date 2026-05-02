@@ -50,7 +50,8 @@ class LlmFallbackDecision(BaseModel):
 
 
 class DisabledLlmFallbackMiddleware:
-    def has_enabled_policy(self, config: ModelEndpointConfig) -> bool:
+    @staticmethod
+    def has_enabled_policy(config: ModelEndpointConfig) -> bool:
         _ = config
         return False
 

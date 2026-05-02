@@ -198,7 +198,8 @@ class ToolRegistry:
             for name in sorted(self._unavailable_tools.keys())
         )
 
-    def _deduplicate_names(self, names: tuple[str, ...]) -> tuple[str, ...]:
+    @staticmethod
+    def _deduplicate_names(names: tuple[str, ...]) -> tuple[str, ...]:
         deduplicated: list[str] = []
         seen: set[str] = set()
         for name in names:

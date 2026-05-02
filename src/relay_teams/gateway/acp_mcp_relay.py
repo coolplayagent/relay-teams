@@ -333,7 +333,8 @@ class AcpMcpRelay:
             del self._session_toolsets[cache_key]
         self._session_specs[session_id] = {spec.server_id: spec for spec in specs}
 
-    def session_scope(self, session_id: str) -> contextlib.AbstractContextManager[None]:
+    @staticmethod
+    def session_scope(session_id: str) -> contextlib.AbstractContextManager[None]:
         return _GatewaySessionScope(session_id)
 
     def current_session_server_names(self) -> tuple[str, ...]:

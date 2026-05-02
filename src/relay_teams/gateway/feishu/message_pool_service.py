@@ -963,7 +963,7 @@ def _build_terminal_reply(
                 output = _extract_terminal_output(payload)
                 terminal_error = _extract_terminal_error(payload)
             break
-    except Exception:
+    except ValueError:
         output = ""
         terminal_error = ""
     if runtime_status == RunRuntimeStatus.COMPLETED:
@@ -1042,6 +1042,6 @@ def _latest_pause_event(
                 if isinstance(raw_message, str) and raw_message.strip():
                     error_message = raw_message.strip()
             return event_id, error_message
-    except Exception:
+    except ValueError:
         return None, None
     return None, None
