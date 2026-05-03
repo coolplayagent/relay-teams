@@ -308,5 +308,5 @@ def get_hook_service(request: Request) -> HookService:
 
 
 def get_spec_artifact_diff_service(request: Request) -> SpecArtifactDiffService:
-    task_repo: TaskRepository = get_container(request).task_service._task_repo
+    task_repo: TaskRepository = get_container(request).task_service.task_repo
     return SpecArtifactDiffService(task_repo)

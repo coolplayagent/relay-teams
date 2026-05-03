@@ -37,6 +37,7 @@ from relay_teams.agents.execution.spec_checkpoint import (
     build_spec_checkpoint_decision,
 )
 from relay_teams.agents.tasks.models import TaskRecord
+from relay_teams.agents.tasks.task_repository import TaskRepository as _TaskRepo
 from relay_teams.logger import (
     close_model_stream,
     get_logger,
@@ -66,6 +67,7 @@ from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.agents.execution.recovery_flow import FallbackAttemptState
+from relay_teams.agents.execution.spec_drift_evaluator import evaluate_spec_drift
 from relay_teams.workspace import build_conversation_id
 
 LOGGER = get_logger(__name__)
@@ -788,12 +790,21 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     },
                 )
 
+                task_repo = self._task_repo
                 task_record_for_policy: TaskRecord | None = None
                 try:
-                    task_repo = self._task_repo
                     task_record_for_policy = await task_repo.get_async(request.task_id)
                 except KeyError:
-                    task_record_for_policy = None
+                    log_event(
+                        LOGGER,
+                        logging.DEBUG,
+                        event="spec_checkpoint.task_record_not_found",
+                        message="No task record found; policy evaluation will be skipped",
+                        payload={
+                            "task_id": request.task_id,
+                            "run_id": request.run_id,
+                        },
+                    )
                 policy = (
                     task_record_for_policy.envelope.lifecycle.spec_checkpoint
                     if task_record_for_policy is not None
@@ -1761,9 +1772,6 @@ async def _evaluate_checkpoint_drift(
     if artifact_id is None:
         return
     policy = envelope.lifecycle.spec_checkpoint
-
-    from relay_teams.agents.execution.spec_drift_evaluator import evaluate_spec_drift
-    from relay_teams.agents.tasks.task_repository import TaskRepository as _TaskRepo
 
     try:
         typed_repo = task_repo if isinstance(task_repo, _TaskRepo) else None

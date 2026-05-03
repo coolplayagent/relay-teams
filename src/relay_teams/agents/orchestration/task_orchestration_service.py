@@ -90,6 +90,10 @@ class TaskOrchestrationService:
         self._assignment_lock_ref_counts: dict[tuple[str, str], int] = {}
         self._assignment_locks_guard = asyncio.Lock()
 
+    @property
+    def task_repo(self) -> TaskRepository:
+        return self._task_repo
+
     async def create_tasks(
         self,
         *,
