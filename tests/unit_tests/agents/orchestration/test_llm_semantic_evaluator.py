@@ -178,3 +178,37 @@ def test_llm_semantic_evaluator_success_path_from_thread(
     assert result.confidence == 0.95
     assert result.criterion == "test criterion"
     assert result.evaluator == "llm"
+
+
+@pytest.mark.asyncio
+async def test_llm_semantic_evaluator_from_running_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import relay_teams.agents.orchestration.llm_semantic_evaluator as mod
+
+    config = ModelEndpointConfig(
+        model="test-model",
+        base_url="http://localhost:11434/v1",
+        api_key="key",
+    )
+
+    def resolver() -> tuple[ModelEndpointConfig | None, str | None]:
+        return config, "profile-1"
+
+    fake_output = _LlmEvaluationOutput(
+        verdict="PASS", confidence=0.88, reason="From thread pool"
+    )
+
+    async def fake_streaming(**kwargs: object) -> _LlmEvaluationOutput:
+        return fake_output
+
+    monkeypatch.setattr(mod, "_run_evaluator_streaming", fake_streaming)
+
+    evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
+    request = SemanticEvaluationRequest(
+        task_id="t1", criterion="pool criterion", result_excerpt="result text"
+    )
+    result = await asyncio.to_thread(evaluator, request)
+    assert result.passed is True
+    assert result.confidence == 0.88
+    assert result.evaluator == "llm"

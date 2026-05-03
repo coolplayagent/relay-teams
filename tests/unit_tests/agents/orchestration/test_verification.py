@@ -1961,3 +1961,22 @@ def test_strictness_checks_include_repeatability_info() -> None:
     assert "strictness:high:repeatability_configured" in names
     repeat_check = next(c for c in checks if "repeatability" in c.name)
     assert "3 run(s)" in repeat_check.details
+
+
+def test_wrap_cross_evaluation_evaluator_wraps_with_multi_model() -> None:
+    from relay_teams.agents.orchestration.multi_model_evaluator import (
+        MultiModelSemanticEvaluator,
+    )
+
+    def dummy_evaluator(_req: SemanticEvaluationRequest) -> SemanticEvaluationResult:
+        return SemanticEvaluationResult(
+            criterion="x", passed=True, confidence=1.0, evaluator="llm"
+        )
+
+    result = verification_module._wrap_cross_evaluation_evaluator(
+        semantic_evaluator=dummy_evaluator,
+        cross_evaluation_models=("model-a", "model-b"),
+    )
+    assert result is not None
+    assert result is not dummy_evaluator
+    assert isinstance(result, MultiModelSemanticEvaluator)
