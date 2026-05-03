@@ -61,5 +61,18 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
 
     funcargs = pyfuncitem.funcargs
     test_args = {name: funcargs[name] for name in pyfuncitem._fixtureinfo.argnames}
-    asyncio.run(test_function(**test_args))
+
+    async def _run_test_with_sqlite_cleanup() -> None:
+        try:
+            await test_function(**test_args)
+        finally:
+            await _close_live_sqlite_repos_in_current_loop()
+
+    asyncio.run(_run_test_with_sqlite_cleanup())
     return True
+
+
+async def _close_live_sqlite_repos_in_current_loop() -> None:
+    from relay_teams.persistence import close_live_sqlite_repositories_async
+
+    await close_live_sqlite_repositories_async()
