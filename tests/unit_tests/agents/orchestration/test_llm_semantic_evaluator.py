@@ -6,16 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import relay_teams.agents.orchestration.llm_semantic_evaluator as _llm_semantic_evaluator_mod
-
-from relay_teams.agents.orchestration.llm_semantic_evaluator import (
-    LlmSemanticEvaluator,
-    _LlmEvaluationOutput,
-    _build_semantic_evaluation_prompt,
-    _passed_label,
-    _run_evaluator_streaming,
-    _to_semantic_result,
-)
+import relay_teams.agents.orchestration.llm_semantic_evaluator as _mod
 from relay_teams.agents.tasks.enums import VerificationEvidenceKind
 from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
@@ -25,16 +16,16 @@ from relay_teams.providers.model_config import ModelEndpointConfig
 
 
 def test_passed_label() -> None:
-    assert _passed_label(True) == "PASS"
-    assert _passed_label(False) == "FAIL"
-    assert _passed_label(None) == "N/A"
+    assert _mod._passed_label(True) == "PASS"
+    assert _mod._passed_label(False) == "FAIL"
+    assert _mod._passed_label(None) == "N/A"
 
 
 def test_to_semantic_result_pass() -> None:
-    output = _LlmEvaluationOutput(
+    output = _mod._LlmEvaluationOutput(
         verdict="PASS", confidence=0.85, reason="Looks good", evidence_ids=("ev1",)
     )
-    result = _to_semantic_result(output, "criterion-a")
+    result = _mod._to_semantic_result(output, "criterion-a")
     assert result.passed is True
     assert result.confidence == 0.85
     assert result.criterion == "criterion-a"
@@ -43,18 +34,18 @@ def test_to_semantic_result_pass() -> None:
 
 
 def test_to_semantic_result_fail() -> None:
-    output = _LlmEvaluationOutput(
+    output = _mod._LlmEvaluationOutput(
         verdict="FAIL", confidence=0.3, reason="Missing evidence"
     )
-    result = _to_semantic_result(output, "criterion-b")
+    result = _mod._to_semantic_result(output, "criterion-b")
     assert result.passed is False
 
 
 def test_to_semantic_result_clamps_confidence() -> None:
-    high = _LlmEvaluationOutput(verdict="PASS", confidence=1.5, reason="ok")
-    assert _to_semantic_result(high, "x").confidence == 1.0
-    low = _LlmEvaluationOutput(verdict="PASS", confidence=-0.5, reason="ok")
-    assert _to_semantic_result(low, "x").confidence == 0.0
+    high = _mod._LlmEvaluationOutput(verdict="PASS", confidence=1.5, reason="ok")
+    assert _mod._to_semantic_result(high, "x").confidence == 1.0
+    low = _mod._LlmEvaluationOutput(verdict="PASS", confidence=-0.5, reason="ok")
+    assert _mod._to_semantic_result(low, "x").confidence == 0.0
 
 
 def test_build_semantic_evaluation_prompt_includes_criterion() -> None:
@@ -63,7 +54,7 @@ def test_build_semantic_evaluation_prompt_includes_criterion() -> None:
         criterion="all tests pass",
         result_excerpt="tests pass",
     )
-    prompt = _build_semantic_evaluation_prompt(request)
+    prompt = _mod._build_semantic_evaluation_prompt(request)
     assert "all tests pass" in prompt
     assert "Result Excerpt" in prompt
 
@@ -81,7 +72,7 @@ def test_build_semantic_evaluation_prompt_includes_evidence() -> None:
         result_excerpt="done",
         evidence=(item,),
     )
-    prompt = _build_semantic_evaluation_prompt(request)
+    prompt = _mod._build_semantic_evaluation_prompt(request)
     assert "[ev1] (PASS)" in prompt
     assert "1 test passed" in prompt
 
@@ -92,7 +83,7 @@ def test_build_semantic_evaluation_prompt_truncates_long_excerpt() -> None:
         criterion="c",
         result_excerpt="x" * 3000,
     )
-    prompt = _build_semantic_evaluation_prompt(request)
+    prompt = _mod._build_semantic_evaluation_prompt(request)
     assert "[truncated]" in prompt
 
 
@@ -110,7 +101,7 @@ def test_build_semantic_evaluation_prompt_includes_output_excerpt() -> None:
         result_excerpt="done",
         evidence=(item,),
     )
-    prompt = _build_semantic_evaluation_prompt(request)
+    prompt = _mod._build_semantic_evaluation_prompt(request)
     assert "Output: stdout: hello world" in prompt
 
 
@@ -118,7 +109,7 @@ def test_llm_semantic_evaluator_raises_on_missing_config() -> None:
     def resolver() -> tuple[ModelEndpointConfig | None, str | None]:
         return None, None
 
-    evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
+    evaluator = _mod.LlmSemanticEvaluator(resolve_model_config=resolver)
     request = SemanticEvaluationRequest(
         task_id="t1", criterion="test", result_excerpt="output"
     )
@@ -145,7 +136,7 @@ def test_run_evaluator_streaming_raises_on_null_result() -> None:
     agent.iter = MagicMock(return_value=FakeRun())
 
     with pytest.raises(RuntimeError, match="did not produce a result"):
-        asyncio.run(_run_evaluator_streaming(agent=agent, prompt="test"))
+        asyncio.run(_mod._run_evaluator_streaming(agent=agent, prompt="test"))
 
 
 def test_llm_semantic_evaluator_success_path_from_thread(
@@ -160,18 +151,16 @@ def test_llm_semantic_evaluator_success_path_from_thread(
     def resolver() -> tuple[ModelEndpointConfig | None, str | None]:
         return config, "profile-1"
 
-    fake_output = _LlmEvaluationOutput(
+    fake_output = _mod._LlmEvaluationOutput(
         verdict="PASS", confidence=0.95, reason="Looks good"
     )
 
-    async def fake_streaming(**kwargs: object) -> _LlmEvaluationOutput:
+    async def fake_streaming(**kwargs: object) -> _mod._LlmEvaluationOutput:
         return fake_output
 
-    monkeypatch.setattr(
-        _llm_semantic_evaluator_mod, "_run_evaluator_streaming", fake_streaming
-    )
+    monkeypatch.setattr(_mod, "_run_evaluator_streaming", fake_streaming)
 
-    evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
+    evaluator = _mod.LlmSemanticEvaluator(resolve_model_config=resolver)
     request = SemanticEvaluationRequest(
         task_id="t1", criterion="test criterion", result_excerpt="result text"
     )
@@ -195,18 +184,16 @@ async def test_llm_semantic_evaluator_from_running_loop(
     def resolver() -> tuple[ModelEndpointConfig | None, str | None]:
         return config, "profile-1"
 
-    fake_output = _LlmEvaluationOutput(
+    fake_output = _mod._LlmEvaluationOutput(
         verdict="PASS", confidence=0.88, reason="From thread pool"
     )
 
-    async def fake_streaming(**kwargs: object) -> _LlmEvaluationOutput:
+    async def fake_streaming(**kwargs: object) -> _mod._LlmEvaluationOutput:
         return fake_output
 
-    monkeypatch.setattr(
-        _llm_semantic_evaluator_mod, "_run_evaluator_streaming", fake_streaming
-    )
+    monkeypatch.setattr(_mod, "_run_evaluator_streaming", fake_streaming)
 
-    evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
+    evaluator = _mod.LlmSemanticEvaluator(resolve_model_config=resolver)
     request = SemanticEvaluationRequest(
         task_id="t1", criterion="pool criterion", result_excerpt="result text"
     )
