@@ -144,3 +144,37 @@ def test_run_evaluator_streaming_raises_on_null_result() -> None:
 
     with pytest.raises(RuntimeError, match="did not produce a result"):
         asyncio.run(_run_evaluator_streaming(agent=agent, prompt="test"))
+
+
+def test_llm_semantic_evaluator_success_path_from_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import relay_teams.agents.orchestration.llm_semantic_evaluator as mod
+
+    config = ModelEndpointConfig(
+        model="test-model",
+        base_url="http://localhost:11434/v1",
+        api_key="key",
+    )
+
+    def resolver() -> tuple[ModelEndpointConfig | None, str | None]:
+        return config, "profile-1"
+
+    fake_output = _LlmEvaluationOutput(
+        verdict="PASS", confidence=0.95, reason="Looks good"
+    )
+
+    async def fake_streaming(**kwargs: object) -> _LlmEvaluationOutput:
+        return fake_output
+
+    monkeypatch.setattr(mod, "_run_evaluator_streaming", fake_streaming)
+
+    evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
+    request = SemanticEvaluationRequest(
+        task_id="t1", criterion="test criterion", result_excerpt="result text"
+    )
+    result = evaluator(request)
+    assert result.passed is True
+    assert result.confidence == 0.95
+    assert result.criterion == "test criterion"
+    assert result.evaluator == "llm"
