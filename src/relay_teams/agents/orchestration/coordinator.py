@@ -114,11 +114,12 @@ def _format_verification_failure(verification: VerificationResult) -> str:
     failed_checks = [c for c in checks if not c.passed]
     total = len(checks)
 
-    lines: list[str] = []
-    lines.append("Verification failed.")
     passed_count = len(passed_checks)
     failed_count = len(failed_checks)
-    lines.append(f"{total} check(s): {passed_count} passed, {failed_count} failed.")
+    lines: list[str] = [
+        "Verification failed.",
+        f"{total} check(s): {passed_count} passed, {failed_count} failed.",
+    ]
 
     if failed_checks:
         lines.append("")
