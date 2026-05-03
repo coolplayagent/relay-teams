@@ -1,0 +1,5 @@
+Upgrade an enabled AutoHarness generated role tool with a new implementation version.
+
+Provide the same `tool_name` as the existing tool along with updated `description`, `input_schema`, `behavior`, and `test_cases`. The runtime will generate a new implementation, validate and test it, then atomically replace the old version. The version number is incremented automatically.
+
+This action always requires approval because it changes role tool implementations.

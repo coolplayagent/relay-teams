@@ -29,6 +29,8 @@ tools:
   - websearch
   - auto_harness_synthesize_tool
   - auto_harness_enable_tool
+  - auto_harness_disable_tool
+  - auto_harness_upgrade_tool
 contract:
   postconditions:
     - guarantee: result_mentions_acceptance_criteria

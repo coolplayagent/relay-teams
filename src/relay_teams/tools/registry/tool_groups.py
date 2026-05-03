@@ -107,7 +107,12 @@ DEFAULT_TOOL_GROUPS: tuple[ToolGroupDefinition, ...] = (
         group_id="auto-harness",
         name="AutoHarness",
         description="Generated utility tool synthesis and role capability enablement.",
-        tools=("auto_harness_synthesize_tool", "auto_harness_enable_tool"),
+        tools=(
+            "auto_harness_synthesize_tool",
+            "auto_harness_enable_tool",
+            "auto_harness_disable_tool",
+            "auto_harness_upgrade_tool",
+        ),
     ),
 )
 

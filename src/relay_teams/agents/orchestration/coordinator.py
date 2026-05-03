@@ -26,7 +26,10 @@ from relay_teams.agents.orchestration.role_contracts import (
 )
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
-from relay_teams.agents.orchestration.verification import verify_task
+from relay_teams.agents.orchestration.verification import (
+    SemanticVerificationEvaluator,
+    verify_task,
+)
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.providers.provider_contracts import LLMProvider
@@ -133,6 +136,7 @@ class CoordinatorGraph(BaseModel):
     gate_manager: GateManager = Field(default_factory=GateManager)
     run_event_hub: RunEventHub | None = None
     hook_service: HookService | None = None
+    semantic_evaluator: SemanticVerificationEvaluator | None = None
 
     async def run(
         self,
@@ -1782,6 +1786,7 @@ class CoordinatorGraph(BaseModel):
             allowed_tools=allowed_tools,
             tool_approval_policy=tool_approval_policy,
             workspace_root=workspace_root,
+            semantic_evaluator=self.semantic_evaluator,
             role=role,
             require_guardrail_report=True,
         )

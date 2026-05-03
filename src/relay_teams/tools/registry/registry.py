@@ -99,6 +99,9 @@ class ToolRegistry:
             resolved.append(self._tools[name])
         return tuple(resolved)
 
+    def get_tool_register(self, name: str) -> ToolRegister | None:
+        return self._tools.get(name)
+
     def validate_known(self, names: tuple[str, ...]) -> None:
         _ = self.resolve_known(names)
 

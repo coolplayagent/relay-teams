@@ -79,3 +79,9 @@ class FormalVerificationToolProfile(str, Enum):
     COQ = "coq"
     ISABELLE = "isabelle"
     CUSTOM = "custom"
+
+
+class EvaluationAggregation(str, Enum):
+    MAJORITY = "majority"
+    UNANIMOUS = "unanimous"
+    WEIGHTED = "weighted"

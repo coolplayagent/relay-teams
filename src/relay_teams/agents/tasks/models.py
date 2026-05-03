@@ -139,6 +139,8 @@ class VerificationPlan(BaseModel):
     evidence_expectations: tuple[str, ...] = ()
     strictness: TaskSpecStrictness = TaskSpecStrictness.LOW
     formal_checks: tuple[FormalVerificationPlan, ...] = ()
+    repeatability_runs: int = Field(default=1, ge=1, le=5)
+    cross_evaluation_models: tuple[str, ...] = ()
 
     @field_validator("checklist", mode="before")
     @classmethod
@@ -215,6 +217,7 @@ class SpecCheckpointPolicy(BaseModel):
     refresh_interval_messages: int = Field(default=48, ge=1, le=5000)
     refresh_interval_history_tokens: int = Field(default=8000, ge=1, le=1_000_000)
     max_summary_chars: int = Field(default=6000, ge=500, le=50_000)
+    include_reasons: bool = True
 
 
 class TaskLifecyclePolicy(BaseModel):
@@ -371,6 +374,7 @@ class VerificationReport(BaseModel):
     unmet_items: tuple[str, ...] = ()
     evidence_bundle: VerificationEvidenceBundle | None = None
     semantic_results: tuple[SemanticEvaluationResult, ...] = ()
+    repeatability_results: tuple[VerificationCheckResult, ...] = ()
     generated_at: datetime = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc)
     )

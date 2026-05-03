@@ -81,6 +81,28 @@ def get_task_service(request: Request) -> TaskOrchestrationService:
     return get_container(request).task_service
 
 
+def get_llm_evaluator(request: Request) -> object:
+    from relay_teams.agents.orchestration.llm_evaluator import LLMEvaluator
+    from relay_teams.roles.role_models import RoleDefinition
+
+    container = get_container(request)
+    model_config = container.resolve_reflection_model_config()
+    model = model_config.model if model_config is not None else "gpt-4o"
+    profile_name = container.resolve_reflection_model_profile_name()
+    provider = container.create_provider(
+        RoleDefinition(
+            role_id="llm-evaluator",
+            name="LLM Evaluator",
+            description="LLM evaluator for spec quality assessment",
+            version="1",
+            system_prompt="internal",
+            model_profile=profile_name or "default",
+        ),
+        None,
+    )
+    return LLMEvaluator(provider=provider, model=model)
+
+
 def get_audit_service(request: Request) -> AuditService:
     return get_container(request).audit_service
 
