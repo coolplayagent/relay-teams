@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import MagicMock
+
+import pytest
+
 from relay_teams.agents.orchestration.llm_semantic_evaluator import (
+    LlmSemanticEvaluator,
     _LlmEvaluationOutput,
     _build_semantic_evaluation_prompt,
     _passed_label,
+    _run_evaluator_streaming,
     _to_semantic_result,
 )
 from relay_teams.agents.tasks.enums import VerificationEvidenceKind
@@ -12,6 +19,7 @@ from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
     VerificationEvidenceItem,
 )
+from relay_teams.providers.model_config import ModelEndpointConfig
 
 
 def test_passed_label() -> None:
@@ -84,3 +92,55 @@ def test_build_semantic_evaluation_prompt_truncates_long_excerpt() -> None:
     )
     prompt = _build_semantic_evaluation_prompt(request)
     assert "[truncated]" in prompt
+
+
+def test_build_semantic_evaluation_prompt_includes_output_excerpt() -> None:
+    item = VerificationEvidenceItem(
+        evidence_id="ev2",
+        kind=VerificationEvidenceKind.COMMAND,
+        summary="command ran",
+        passed=True,
+        output_excerpt="stdout: hello world",
+    )
+    request = SemanticEvaluationRequest(
+        task_id="t2",
+        criterion="runs correctly",
+        result_excerpt="done",
+        evidence=(item,),
+    )
+    prompt = _build_semantic_evaluation_prompt(request)
+    assert "Output: stdout: hello world" in prompt
+
+
+def test_llm_semantic_evaluator_raises_on_missing_config() -> None:
+    def resolver() -> tuple[ModelEndpointConfig | None, str | None]:
+        return None, None
+
+    evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
+    request = SemanticEvaluationRequest(
+        task_id="t1", criterion="test", result_excerpt="output"
+    )
+    with pytest.raises(RuntimeError, match="could not resolve model configuration"):
+        evaluator(request)
+
+
+def test_run_evaluator_streaming_raises_on_null_result() -> None:
+    agent = MagicMock()
+
+    class FakeRun:
+        result = None
+
+        async def __aenter__(self) -> FakeRun:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            pass
+
+        async def __aiter__(self) -> object:
+            return
+            yield
+
+    agent.iter = MagicMock(return_value=FakeRun())
+
+    with pytest.raises(RuntimeError, match="did not produce a result"):
+        asyncio.run(_run_evaluator_streaming(agent=agent, prompt="test"))
