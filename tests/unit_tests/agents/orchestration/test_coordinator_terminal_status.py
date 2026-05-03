@@ -69,6 +69,15 @@ from relay_teams.hooks import (
     TaskCreatedInput,
 )
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
+from relay_teams.agents.orchestration.coordinator import (
+    _clean_check_display_name,
+    _format_verification_failure,
+)
+from relay_teams.agents.tasks.enums import VerificationLayer
+from relay_teams.agents.tasks.models import (
+    VerificationCheckResult,
+    VerificationReport,
+)
 
 
 class _RecordingTaskExecutionService:
@@ -117,6 +126,89 @@ class _FailingTaskExecutionService:
             error_code="node_failed",
             error_message=error_message,
         )
+
+
+def test_clean_check_display_name_strips_uuid_prefix() -> None:
+    name = "c6d16534-7273-4ce0-b4a4-e4b58338d28f:contract_postcondition:result_mentions_acceptance:item"
+    assert (
+        _clean_check_display_name(name)
+        == "contract_postcondition:result_mentions_acceptance:item"
+    )
+
+
+def test_clean_check_display_name_preserves_name_without_uuid() -> None:
+    name = "contract_postcondition:result_mentions_evidence:pytest output"
+    assert _clean_check_display_name(name) == name
+
+
+def test_format_verification_failure_without_report() -> None:
+    verification = VerificationResult(
+        task_id="task-1",
+        passed=False,
+        details=("Task not completed yet",),
+    )
+    message = _format_verification_failure(verification)
+    assert "Verification failed." in message
+    assert "Task not completed yet" in message
+    assert "Review the task spec" in message
+
+
+def test_format_verification_failure_without_report_no_details() -> None:
+    verification = VerificationResult(
+        task_id="task-1",
+        passed=False,
+        details=(),
+    )
+    message = _format_verification_failure(verification)
+    assert "Verification failed." in message
+    assert "Review the task spec" in message
+
+
+def test_format_verification_failure_with_report_groups_checks() -> None:
+    checks = (
+        VerificationCheckResult(
+            layer=VerificationLayer.CONTRACT,
+            name="contract_postcondition:result_mentions_acceptance:file exists",
+            passed=True,
+            details="Acceptance item was cited in the result.",
+        ),
+        VerificationCheckResult(
+            layer=VerificationLayer.CONTRACT,
+            name="contract_postcondition:result_mentions_evidence:pytest output",
+            passed=False,
+            details="Evidence item was not cited in the result.",
+        ),
+        VerificationCheckResult(
+            layer=VerificationLayer.CONTRACT,
+            name=(
+                "c6d16534-7273-4ce0-b4a4-e4b58338d28f:"
+                "contract_postcondition:result_mentions_acceptance:word count"
+            ),
+            passed=False,
+            details="Acceptance item was not cited in the result.",
+        ),
+    )
+    report = VerificationReport(
+        task_id="task-1",
+        passed=False,
+        checks=checks,
+        unmet_items=(checks[1].name, checks[2].name),
+    )
+    verification = VerificationResult(
+        task_id="task-1",
+        passed=False,
+        details=(checks[1].name, checks[2].name),
+        report=report,
+    )
+    message = _format_verification_failure(verification)
+    assert "3 check(s): 1 passed, 2 failed." in message
+    assert "[PASS]" in message
+    assert "[FAIL]" in message
+    assert "result_mentions_acceptance:file exists" in message
+    assert "contract_postcondition:result_mentions_evidence:pytest output" in message
+    assert "contract_postcondition:result_mentions_acceptance:word count" in message
+    assert "c6d16534-7273-4ce0-b4a4-e4b58338d28f:" not in message
+    assert "Review the task spec" in message
 
 
 class _FailingRunIntentRepository(RunIntentRepository):
