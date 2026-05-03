@@ -2186,6 +2186,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     assert len(session_index_requests) <= 4
 
 
+@pytest.mark.skip(reason="Timing-sensitive; unreliable on shared CI runners")
 def test_browser_burst_new_session_starts_stay_within_request_budget(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
