@@ -328,9 +328,11 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
                 anthropic_settings["max_tokens"] = max_tokens
             if request.thinking.enabled and request.thinking.effort is not None:
                 anthropic_settings["thinking"] = request.thinking.effort
-            anthropic_settings = apply_anthropic_cache_markers(
-                system_prompt, anthropic_settings
+            updated = apply_anthropic_cache_markers(
+                system_prompt, dict(anthropic_settings)
             )
+            if "extra_body" in updated:
+                anthropic_settings["extra_body"] = updated["extra_body"]
             return anthropic_settings
         openai_settings: OpenAIChatModelSettings = {
             "openai_continuous_usage_stats": True,
