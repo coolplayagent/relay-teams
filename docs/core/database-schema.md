@@ -268,6 +268,62 @@ Notes:
 
 ---
 
+### 2.3.2 `spec_checkpoint_evaluations`
+
+```sql
+CREATE TABLE IF NOT EXISTS spec_checkpoint_evaluations (
+    evaluation_id   TEXT PRIMARY KEY,
+    task_id         TEXT NOT NULL,
+    artifact_id     TEXT NOT NULL,
+    session_id      TEXT NOT NULL,
+    trace_id        TEXT NOT NULL,
+    checkpoint_seq  INTEGER NOT NULL,
+    evaluator       TEXT NOT NULL DEFAULT 'llm',
+    fallback        INTEGER NOT NULL DEFAULT 0,
+    overall_score   REAL NOT NULL,
+    scores_json     TEXT NOT NULL,
+    summary         TEXT NOT NULL DEFAULT '',
+    drift_detected  INTEGER NOT NULL DEFAULT 0,
+    drift_detail    TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_spec_checkpoint_evaluations_task
+    ON spec_checkpoint_evaluations(task_id, checkpoint_seq);
+
+CREATE INDEX IF NOT EXISTS idx_spec_checkpoint_evaluations_artifact
+    ON spec_checkpoint_evaluations(artifact_id);
+```
+
+Purpose: stores LLM drift-detection evaluation results produced when spec checkpoints are rendered with `auto_evaluate_drift` enabled in `SpecCheckpointPolicy`. Each row represents one evaluation of a spec checkpoint against its task spec.
+
+Column descriptions:
+- `evaluation_id`: primary key, generated as `speval-{uuid}`.
+- `task_id`: reference to the evaluated task. Indexed for efficient per-task queries.
+- `artifact_id`: the `TaskSpecArtifact.artifact_id` that was current when the checkpoint was rendered.
+- `session_id`: session in which the evaluation occurred.
+- `trace_id`: trace identifier for observability correlation.
+- `checkpoint_seq`: corresponds to the `sequence` field in `SpecCheckpointDecision`. Indexed alongside `task_id` for sequence-ordered retrieval.
+- `evaluator`: evaluator type identifier (default `'llm'`).
+- `fallback`: boolean as integer (0/1). Set to 1 when the evaluation used rule-based fallback due to LLM failure or timeout.
+- `overall_score`: composite score across all evaluation dimensions (range 0.0-5.0).
+- `scores_json`: serialized `list[LLMEvaluationScore]` from the evaluator result, containing per-dimension scores with reasoning.
+- `summary`: human-readable evaluation summary text.
+- `drift_detected`: boolean as integer (0/1). Set to 1 when `overall_score` falls below the configured `drift_score_threshold` or when the evaluator summary contains drift indicators.
+- `drift_detail`: structured JSON string describing which dimensions flagged drift, for frontend consumption.
+- `created_at`: ISO 8601 timestamp of evaluation creation.
+
+Relationships:
+- Each row references a `task_spec_artifacts` row via `artifact_id`.
+- Each row references a `tasks` row via `task_id`.
+- Deleting a task or session removes its associated evaluation rows.
+
+Notes:
+- No schema migration is required for existing tables. The `task_spec_artifacts` table already stores all data needed for diff computation via its `version` column.
+- Evaluation records are non-blocking: failures set `fallback=1` and persist a degraded result rather than raising errors.
+
+---
+
 ### 2.4 `shared_state`
 
 ```sql

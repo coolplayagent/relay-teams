@@ -5,7 +5,7 @@ import logging
 from copy import deepcopy
 from collections.abc import AsyncIterator, Sequence
 from json import dumps, loads
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from pydantic_ai._agent_graph import CallToolsNode, ModelRequestNode
 from pydantic import JsonValue
@@ -37,6 +37,7 @@ from relay_teams.agents.execution.spec_checkpoint import (
     build_spec_checkpoint_decision,
 )
 from relay_teams.agents.tasks.models import TaskRecord
+from relay_teams.agents.tasks.task_repository import TaskRepository as _TaskRepo
 from relay_teams.logger import (
     close_model_stream,
     get_logger,
@@ -66,6 +67,7 @@ from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.agents.execution.recovery_flow import FallbackAttemptState
+from relay_teams.agents.execution.spec_drift_evaluator import evaluate_spec_drift
 from relay_teams.workspace import build_conversation_id
 
 LOGGER = get_logger(__name__)
@@ -787,6 +789,36 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                         "reason": decision.reason,
                     },
                 )
+
+                task_repo = self._task_repo
+                task_record_for_policy: TaskRecord | None = None
+                try:
+                    task_record_for_policy = await task_repo.get_async(request.task_id)
+                except KeyError:
+                    log_event(
+                        LOGGER,
+                        logging.DEBUG,
+                        event="spec_checkpoint.task_record_not_found",
+                        message="No task record found; policy evaluation will be skipped",
+                        payload={
+                            "task_id": request.task_id,
+                            "run_id": request.run_id,
+                        },
+                    )
+                policy = (
+                    task_record_for_policy.envelope.lifecycle.spec_checkpoint
+                    if task_record_for_policy is not None
+                    else None
+                )
+
+                if policy is not None and policy.auto_evaluate_drift:
+                    await _evaluate_checkpoint_drift(
+                        task_repo=self._task_repo,
+                        task_record=task_record_for_policy,
+                        request=request,
+                        decision=decision,
+                        run_event_hub=self._run_event_hub,
+                    )
                 (
                     prepared_prompt,
                     history,
@@ -1644,6 +1676,10 @@ class _SpecCheckpointTaskRepository(Protocol):
     async def get_async(task_id: str) -> TaskRecord:
         raise NotImplementedError  # pragma: no cover
 
+    @staticmethod
+    async def get_spec_artifact_async(artifact_id: str) -> Any:
+        raise NotImplementedError  # pragma: no cover
+
 
 class _SpecCheckpointRoleRegistry(Protocol):
     @staticmethod
@@ -1669,10 +1705,21 @@ async def _build_spec_checkpoint_decision_async(
         task_record = await task_repo.get_async(request.task_id)
     except KeyError:
         return SpecCheckpointDecision()
+
+    current_artifact_version: int | None = None
+    artifact_id = task_record.envelope.spec_artifact_id
+    if artifact_id is not None:
+        try:
+            artifact = await task_repo.get_spec_artifact_async(artifact_id)
+            current_artifact_version = artifact.version
+        except (KeyError, AttributeError):
+            current_artifact_version = None
+
     return build_spec_checkpoint_decision(
         task=task_record.envelope,
         role_id=request.role_id,
         history=history,
+        current_artifact_version=current_artifact_version,
     )
 
 
@@ -1705,3 +1752,75 @@ def _spec_checkpoint_event_payload(
         "messages_since_last_checkpoint": decision.messages_since_last_checkpoint,
         "history_tokens_since_last_checkpoint": history_tokens_since_last_checkpoint,
     }
+
+
+async def _evaluate_checkpoint_drift(
+    *,
+    task_repo: Any,
+    task_record: TaskRecord | None,
+    request: LLMRequest,
+    decision: SpecCheckpointDecision,
+    run_event_hub: Any,
+) -> None:
+    if task_record is None:
+        return
+    envelope = task_record.envelope
+    spec = envelope.spec
+    if spec is None:
+        return
+    artifact_id = envelope.spec_artifact_id
+    if artifact_id is None:
+        return
+    policy = envelope.lifecycle.spec_checkpoint
+
+    try:
+        typed_repo = task_repo if isinstance(task_repo, _TaskRepo) else None
+        if typed_repo is None:
+            return
+
+        evaluator_llm = getattr(request, "llm_evaluator", None)
+        if evaluator_llm is None:
+            return
+
+        evaluation = await evaluate_spec_drift(
+            spec=spec,
+            task_id=request.task_id,
+            artifact_id=artifact_id,
+            session_id=request.session_id,
+            trace_id=request.trace_id,
+            checkpoint_seq=decision.sequence,
+            evaluator=evaluator_llm,
+            drift_score_threshold=policy.drift_score_threshold,
+        )
+        await typed_repo.save_spec_checkpoint_evaluation_async(evaluation)
+
+        await publish_run_event_async(
+            run_event_hub,
+            RunEvent(
+                session_id=request.session_id,
+                run_id=request.run_id,
+                trace_id=request.trace_id,
+                task_id=request.task_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                event_type=RunEventType.SPEC_CHECKPOINT_EVALUATED,
+                payload_json=dumps(
+                    {
+                        "evaluation_id": evaluation.evaluation_id,
+                        "task_id": evaluation.task_id,
+                        "checkpoint_seq": evaluation.checkpoint_seq,
+                        "overall_score": evaluation.overall_score,
+                        "drift_detected": evaluation.drift_detected,
+                        "fallback": evaluation.fallback,
+                    }
+                ),
+            ),
+        )
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="spec_checkpoint.drift_evaluation_error",
+            message="Drift evaluation failed during checkpoint injection",
+            payload={"error": str(exc), "task_id": request.task_id},
+        )

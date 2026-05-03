@@ -33,6 +33,7 @@
     <link rel="stylesheet" href="/css/components/new-session-draft-cards.css" />
     <link rel="stylesheet" href="/css/components/new-session-draft-aside.css" />
     <link rel="stylesheet" href="/css/components/highlight.css" />
+    <link rel="stylesheet" href="/css/components/spec-lineage.css" />
   </head>
 
   <body>
@@ -322,6 +323,36 @@
               </div>
             </div>
             <div id="project-view-content" class="project-view-content"></div>
+          </section>
+          <section id="spec-lineage-view" class="spec-lineage-view" style="display: none">
+            <div class="spec-lineage-toolbar">
+              <div class="spec-lineage-toolbar-copy">
+                <h3 id="spec-lineage-title">Spec Lineage</h3>
+                <p id="spec-lineage-summary"></p>
+              </div>
+              <div class="spec-lineage-toolbar-actions">
+                <button
+                  id="spec-lineage-reload"
+                  class="secondary-btn"
+                  type="button"
+                >Reload</button>
+                <button
+                  id="spec-lineage-back-btn"
+                  class="icon-btn"
+                  type="button"
+                  title="Back"
+                  aria-label="Back"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" class="icon" aria-hidden="true">
+                    <path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="spec-lineage-body">
+              <div id="spec-lineage-timeline"></div>
+              <div id="spec-lineage-diff"></div>
+            </div>
           </section>
           <div id="chat-container" class="chat-container">
             <!-- Coordinator chat messages -->

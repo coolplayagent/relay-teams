@@ -69,6 +69,9 @@ async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> N
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
 
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
+
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
             assert role_id == "Crafter"
@@ -103,6 +106,9 @@ async def test_spec_checkpoint_decision_skips_coordinator_roles() -> None:
         async def get_async(self, task_id: str) -> TaskRecord:
             raise AssertionError(task_id)
 
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
+
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
             assert role_id == "Coordinator"
@@ -126,6 +132,9 @@ async def test_spec_checkpoint_decision_ignores_missing_task_record() -> None:
         async def get_async(self, task_id: str) -> TaskRecord:
             assert task_id == "missing-task"
             raise KeyError(task_id)
+
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
 
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
@@ -240,6 +249,9 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
         async def get_async(self, task_id: str) -> TaskRecord:
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
+
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
 
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
@@ -901,6 +913,9 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
 
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
+
     class _SpecCheckpointMessageRepo(_FakeMessageRepo):
         async def append_system_prompt_if_missing_async(
             self,
@@ -1191,3 +1206,100 @@ def test_consume_auto_harness_dirty_tools_returns_pending_runtime_refresh() -> N
         )
         == ()
     )
+
+
+class TestEvaluateCheckpointDrift:
+    @pytest.mark.asyncio
+    async def test_returns_early_when_task_record_is_none(self) -> None:
+        from unittest.mock import MagicMock
+
+        from relay_teams.agents.execution.session_runtime import (
+            _evaluate_checkpoint_drift,
+        )
+
+        await _evaluate_checkpoint_drift(
+            task_repo=MagicMock(),
+            task_record=None,
+            request=MagicMock(),
+            decision=MagicMock(),
+            run_event_hub=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_early_when_spec_is_none(self) -> None:
+        from unittest.mock import MagicMock
+        from relay_teams.agents.execution.session_runtime import (
+            _evaluate_checkpoint_drift,
+        )
+
+        task_record = MagicMock()
+        task_record.envelope.spec = None
+        await _evaluate_checkpoint_drift(
+            task_repo=MagicMock(),
+            task_record=task_record,
+            request=MagicMock(),
+            decision=MagicMock(),
+            run_event_hub=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_early_when_artifact_id_is_none(self) -> None:
+        from unittest.mock import MagicMock
+
+        from relay_teams.agents.execution.session_runtime import (
+            _evaluate_checkpoint_drift,
+        )
+
+        task_record = MagicMock()
+        task_record.envelope.spec = MagicMock()
+        task_record.envelope.spec_artifact_id = None
+        await _evaluate_checkpoint_drift(
+            task_repo=MagicMock(),
+            task_record=task_record,
+            request=MagicMock(),
+            decision=MagicMock(),
+            run_event_hub=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_early_when_repo_is_not_task_repository(self) -> None:
+        from unittest.mock import MagicMock
+
+        from relay_teams.agents.execution.session_runtime import (
+            _evaluate_checkpoint_drift,
+        )
+
+        task_record = MagicMock()
+        task_record.envelope.spec = MagicMock()
+        task_record.envelope.spec_artifact_id = "art-1"
+        task_record.envelope.lifecycle.spec_checkpoint.drift_score_threshold = 5.0
+        await _evaluate_checkpoint_drift(
+            task_repo="not_a_repo",  # not a TaskRepository
+            task_record=task_record,
+            request=MagicMock(),
+            decision=MagicMock(),
+            run_event_hub=MagicMock(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_early_when_no_llm_evaluator(self) -> None:
+        from unittest.mock import MagicMock
+
+        from relay_teams.agents.execution.session_runtime import (
+            _evaluate_checkpoint_drift,
+        )
+        from relay_teams.agents.tasks.task_repository import TaskRepository
+
+        repo = MagicMock(spec=TaskRepository)
+        task_record = MagicMock()
+        task_record.envelope.spec = MagicMock()
+        task_record.envelope.spec_artifact_id = "art-1"
+        task_record.envelope.lifecycle.spec_checkpoint.drift_score_threshold = 5.0
+        request = MagicMock(spec=[])
+        await _evaluate_checkpoint_drift(
+            task_repo=repo,
+            task_record=task_record,
+            request=request,
+            decision=MagicMock(),
+            run_event_hub=MagicMock(),
+        )

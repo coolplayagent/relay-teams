@@ -382,6 +382,35 @@ def test_render_spec_has_content_with_all_canvas_fields() -> None:
         )
 
 
+def test_render_includes_version_change_section() -> None:
+    spec = TaskSpec(
+        summary="Test",
+        requirements=("req-1",),
+        strictness=TaskSpecStrictness.MEDIUM,
+    )
+    task = _task(spec=spec)
+    version_change = (1, 2, "2 fields changed: Summary, Requirements")
+    content = _render(task, version_change=version_change)
+
+    assert "### Spec Version Change" in content
+    assert "- Previous Version: 1" in content
+    assert "- Current Version: 2" in content
+    assert "- Diff Summary: 2 fields changed: Summary, Requirements" in content
+
+
+def test_render_no_version_change_section_when_none() -> None:
+    spec = TaskSpec(
+        summary="Test",
+        requirements=("req-1",),
+        strictness=TaskSpecStrictness.MEDIUM,
+    )
+    task = _task(spec=spec)
+    content = _render(task, version_change=None)
+
+    assert "### Spec Version Change" not in content
+    assert "Previous Version" not in content
+
+
 def _section_start_index(lines: list[str], prefix: str) -> int:
     for idx, line in enumerate(lines):
         if line == prefix:
@@ -392,6 +421,7 @@ def _section_start_index(lines: list[str], prefix: str) -> int:
 def _render(
     task: TaskEnvelope,
     policy: SpecCheckpointPolicy | None = None,
+    version_change: tuple[int, int, str] | None = None,
 ) -> str:
     resolved_policy = policy or task.lifecycle.spec_checkpoint
     return render_spec_checkpoint(
@@ -403,6 +433,7 @@ def _render(
         tool_calls_since_checkpoint=0,
         messages_since_checkpoint=1,
         tokens_since_checkpoint=12,
+        version_change=version_change,
     )
 
 

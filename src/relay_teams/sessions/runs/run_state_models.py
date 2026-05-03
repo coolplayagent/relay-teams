@@ -105,6 +105,7 @@ _CHECKPOINT_EVENT_TYPES = {
     RunEventType.USER_QUESTION_ANSWERED,
     RunEventType.TOOL_RESULT,
     RunEventType.SPEC_CHECKPOINT_APPLIED,
+    RunEventType.SPEC_CHECKPOINT_EVALUATED,
     RunEventType.SUBAGENT_STOPPED,
     RunEventType.SUBAGENT_RESUMED,
     RunEventType.RUN_STOPPED,
@@ -199,6 +200,7 @@ def apply_run_event_to_state(
         RunEventType.THINKING_FINISHED,
         RunEventType.MODEL_STEP_FINISHED,
         RunEventType.SPEC_CHECKPOINT_APPLIED,
+        RunEventType.SPEC_CHECKPOINT_EVALUATED,
     }:
         if status not in _TERMINAL_STATES and status != _STOPPED_STATE:
             status = RunStateStatus.RUNNING

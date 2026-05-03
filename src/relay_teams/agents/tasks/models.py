@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import shlex
 import sys
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -218,6 +218,9 @@ class SpecCheckpointPolicy(BaseModel):
     refresh_interval_history_tokens: int = Field(default=8000, ge=1, le=1_000_000)
     max_summary_chars: int = Field(default=6000, ge=500, le=50_000)
     include_reasons: bool = True
+    refresh_on_version_change: bool = False
+    auto_evaluate_drift: bool = False
+    drift_score_threshold: float = Field(default=3.0, ge=1.0, le=5.0)
 
 
 class TaskLifecyclePolicy(BaseModel):
@@ -451,3 +454,62 @@ class VerificationResult(BaseModel):
     passed: bool
     details: tuple[str, ...]
     report: VerificationReport | None = None
+
+
+class SpecArtifactDiffFieldChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field_name: str = Field(min_length=1)
+    field_label: str = Field(min_length=1)
+    change_type: Literal["added", "removed", "modified", "unchanged"]
+    old_value: str | None = None
+    new_value: str | None = None
+    old_items: tuple[str, ...] = ()
+    new_items: tuple[str, ...] = ()
+    added_items: tuple[str, ...] = ()
+    removed_items: tuple[str, ...] = ()
+
+
+class SpecArtifactDiffResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: RequiredIdentifierStr
+    from_artifact_id: RequiredIdentifierStr
+    to_artifact_id: RequiredIdentifierStr
+    from_version: int = Field(ge=1)
+    to_version: int = Field(ge=1)
+    field_changes: tuple[SpecArtifactDiffFieldChange, ...] = ()
+    has_changes: bool
+    summary: str = ""
+
+
+class SpecArtifactVersionSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: RequiredIdentifierStr
+    task_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    trace_id: RequiredIdentifierStr
+    source_task_id: OptionalIdentifierStr = None
+    version: int = Field(ge=1)
+    created_at: datetime
+    updated_at: datetime
+
+
+class SpecCheckpointEvaluation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evaluation_id: RequiredIdentifierStr
+    task_id: RequiredIdentifierStr
+    artifact_id: RequiredIdentifierStr
+    session_id: RequiredIdentifierStr
+    trace_id: RequiredIdentifierStr
+    checkpoint_seq: int = Field(ge=0)
+    evaluator: str = Field(default="llm", min_length=1)
+    fallback: bool = False
+    overall_score: float = Field(ge=0.0, le=5.0)
+    scores_json: str = "[]"
+    summary: str = ""
+    drift_detected: bool = False
+    drift_detail: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))

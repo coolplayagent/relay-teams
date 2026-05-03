@@ -14,7 +14,11 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskDraft, TaskUpdate
-from relay_teams.interfaces.server.deps import get_llm_evaluator, get_task_service
+from relay_teams.interfaces.server.deps import (
+    get_llm_evaluator,
+    get_task_service,
+    get_spec_artifact_diff_service,
+)
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -23,7 +27,11 @@ from relay_teams.agents.tasks.models import (
     TaskLifecyclePolicy,
     TaskRecord,
     TaskSpec,
+    SpecArtifactVersionSummary,
     VerificationPlan,
+)
+from relay_teams.agents.tasks.spec_artifact_diff_service import (
+    SpecArtifactDiffService,
 )
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
@@ -191,3 +199,89 @@ async def evaluate_task_spec(
         task_result=req.task_result,
     )
     return await evaluator.evaluate_spec_quality(eval_request)
+
+
+@router.get("/{task_id}/spec-artifacts")
+async def list_spec_artifacts(
+    task_id: RequiredIdentifierStr,
+    response_format: str = "summary",
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> dict[str, JsonValue]:
+    try:
+        artifacts = await service.list_task_spec_artifacts_async(task_id=task_id)
+    except KeyError as exc:
+        raise http_exception_for(exc, key_error_detail="Task not found") from exc
+    if response_format == "full":
+        return {
+            "task_id": task_id,
+            "versions": [artifact.model_dump(mode="json") for artifact in artifacts],  # type: ignore[dict-item]
+        }
+    summaries = [
+        SpecArtifactVersionSummary(
+            artifact_id=a.artifact_id,
+            task_id=a.task_id,
+            session_id=a.session_id,
+            trace_id=a.trace_id,
+            source_task_id=a.source_task_id,
+            version=a.version,
+            created_at=a.created_at,
+            updated_at=a.updated_at,
+        ).model_dump(mode="json")
+        for a in artifacts
+    ]
+    return {"task_id": task_id, "versions": summaries}  # type: ignore[dict-item]
+
+
+@router.get("/{task_id}/spec-artifacts/{version}/diff")
+async def get_spec_artifact_diff(
+    task_id: RequiredIdentifierStr,
+    version: int,
+    from_version: int | None = None,
+    service: TaskOrchestrationService = Depends(get_task_service),
+    diff_service: SpecArtifactDiffService = Depends(get_spec_artifact_diff_service),
+) -> dict[str, JsonValue]:
+    if version < 1:
+        raise http_exception_for(
+            ValueError("version must be >= 1"),
+            mappings=((ValueError, 400),),
+        )
+    try:
+        await service.get_task_async(task_id=task_id)
+    except KeyError as exc:
+        raise http_exception_for(exc, key_error_detail="Task not found") from exc
+    resolved_from = from_version if from_version is not None else version - 1
+    if resolved_from < 1:
+        raise http_exception_for(
+            ValueError(
+                "Cannot compute diff for version 1 without explicit from_version"
+            ),
+            mappings=((ValueError, 400),),
+        )
+    try:
+        result = await diff_service.compute_diff_async(
+            task_id=task_id,
+            from_version=resolved_from,
+            to_version=version,
+        )
+    except KeyError as exc:
+        raise http_exception_for(exc) from exc
+    return result.model_dump(mode="json")
+
+
+@router.get("/{task_id}/spec-checkpoint-evaluations")
+async def list_spec_checkpoint_evaluations(
+    task_id: RequiredIdentifierStr,
+    checkpoint_seq: int | None = None,
+    service: TaskOrchestrationService = Depends(get_task_service),
+) -> dict[str, JsonValue]:
+    try:
+        evaluations = await service.list_spec_checkpoint_evaluations_async(
+            task_id=task_id,
+            checkpoint_seq=checkpoint_seq,
+        )
+    except KeyError as exc:
+        raise http_exception_for(exc, key_error_detail="Task not found") from exc
+    return {
+        "task_id": task_id,
+        "evaluations": [e.model_dump(mode="json") for e in evaluations],  # type: ignore[dict-item]
+    }

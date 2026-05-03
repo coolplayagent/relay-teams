@@ -26,6 +26,7 @@ from relay_teams.agents.orchestration.role_contracts import (
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.ids import new_task_id
 from relay_teams.agents.tasks.models import (
+    SpecCheckpointEvaluation,
     TaskLifecyclePolicy,
     TaskEnvelope,
     TaskRecord,
@@ -88,6 +89,10 @@ class TaskOrchestrationService:
         self._assignment_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._assignment_lock_ref_counts: dict[tuple[str, str], int] = {}
         self._assignment_locks_guard = asyncio.Lock()
+
+    @property
+    def task_repo(self) -> TaskRepository:
+        return self._task_repo
 
     async def create_tasks(
         self,
@@ -915,6 +920,25 @@ class TaskOrchestrationService:
         if record.envelope.evidence_bundle is None:
             raise KeyError(f"No evidence bundle found for task_id: {task_id}")
         return record.envelope.evidence_bundle
+
+    async def list_task_spec_artifacts_async(
+        self,
+        *,
+        task_id: str,
+    ) -> tuple[TaskSpecArtifact, ...]:
+        await self._task_repo.get_async(task_id)
+        return await self._task_repo.list_spec_artifacts_by_task_async(task_id)
+
+    async def list_spec_checkpoint_evaluations_async(
+        self,
+        *,
+        task_id: str,
+        checkpoint_seq: int | None = None,
+    ) -> tuple[SpecCheckpointEvaluation, ...]:
+        await self._task_repo.get_async(task_id)
+        return await self._task_repo.list_spec_checkpoint_evaluations_async(
+            task_id, checkpoint_seq
+        )
 
 
 class _PreparedTaskDraft:

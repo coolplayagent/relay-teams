@@ -10,6 +10,7 @@ import aiosqlite
 from relay_teams.agents.tasks.ids import new_task_spec_artifact_id
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.models import (
+    SpecCheckpointEvaluation,
     TaskEnvelope,
     TaskRecord,
     TaskSpec,
@@ -85,6 +86,34 @@ class TaskRepository(SharedSqliteRepository):
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_task_spec_artifacts_trace ON task_spec_artifacts(trace_id, updated_at)"
             )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS spec_checkpoint_evaluations (
+                    evaluation_id   TEXT PRIMARY KEY,
+                    task_id         TEXT NOT NULL,
+                    artifact_id     TEXT NOT NULL,
+                    session_id      TEXT NOT NULL,
+                    trace_id        TEXT NOT NULL,
+                    checkpoint_seq  INTEGER NOT NULL,
+                    evaluator       TEXT NOT NULL DEFAULT 'llm',
+                    fallback        INTEGER NOT NULL DEFAULT 0,
+                    overall_score   REAL NOT NULL,
+                    scores_json     TEXT NOT NULL,
+                    summary         TEXT NOT NULL DEFAULT '',
+                    drift_detected  INTEGER NOT NULL DEFAULT 0,
+                    drift_detail    TEXT NOT NULL DEFAULT '',
+                    created_at      TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spec_checkpoint_evaluations_task "
+                "ON spec_checkpoint_evaluations(task_id, checkpoint_seq)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spec_checkpoint_evaluations_artifact "
+                "ON spec_checkpoint_evaluations(artifact_id)"
+            )
 
         self._run_write(
             operation_name="init_tables",
@@ -143,6 +172,34 @@ class TaskRepository(SharedSqliteRepository):
             )
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_task_spec_artifacts_trace ON task_spec_artifacts(trace_id, updated_at)"
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS spec_checkpoint_evaluations (
+                    evaluation_id   TEXT PRIMARY KEY,
+                    task_id         TEXT NOT NULL,
+                    artifact_id     TEXT NOT NULL,
+                    session_id      TEXT NOT NULL,
+                    trace_id        TEXT NOT NULL,
+                    checkpoint_seq  INTEGER NOT NULL,
+                    evaluator       TEXT NOT NULL DEFAULT 'llm',
+                    fallback        INTEGER NOT NULL DEFAULT 0,
+                    overall_score   REAL NOT NULL,
+                    scores_json     TEXT NOT NULL,
+                    summary         TEXT NOT NULL DEFAULT '',
+                    drift_detected  INTEGER NOT NULL DEFAULT 0,
+                    drift_detail    TEXT NOT NULL DEFAULT '',
+                    created_at      TEXT NOT NULL
+                )
+                """
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spec_checkpoint_evaluations_task "
+                "ON spec_checkpoint_evaluations(task_id, checkpoint_seq)"
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_spec_checkpoint_evaluations_artifact "
+                "ON spec_checkpoint_evaluations(artifact_id)"
             )
 
         await self._run_async_write(
@@ -779,6 +836,96 @@ class TaskRepository(SharedSqliteRepository):
         )
         return tuple(self._to_spec_artifact(row) for row in rows)
 
+    async def get_spec_artifact_by_version_async(
+        self,
+        task_id: str,
+        version: int,
+    ) -> TaskSpecArtifact:
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                """
+                SELECT * FROM task_spec_artifacts
+                WHERE task_id=? AND version=?
+                """,
+                (task_id, version),
+            )
+        )
+        if row is None:
+            raise KeyError(
+                f"No spec artifact found for task_id={task_id} version={version}"
+            )
+        return self._to_spec_artifact(row)
+
+    async def save_spec_checkpoint_evaluation_async(
+        self,
+        evaluation: SpecCheckpointEvaluation,
+    ) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO spec_checkpoint_evaluations(
+                    evaluation_id, task_id, artifact_id, session_id, trace_id,
+                    checkpoint_seq, evaluator, fallback, overall_score, scores_json,
+                    summary, drift_detected, drift_detail, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation.evaluation_id,
+                    evaluation.task_id,
+                    evaluation.artifact_id,
+                    evaluation.session_id,
+                    evaluation.trace_id,
+                    evaluation.checkpoint_seq,
+                    evaluation.evaluator,
+                    1 if evaluation.fallback else 0,
+                    evaluation.overall_score,
+                    evaluation.scores_json,
+                    evaluation.summary,
+                    1 if evaluation.drift_detected else 0,
+                    evaluation.drift_detail,
+                    evaluation.created_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="save_spec_checkpoint_evaluation_async",
+            operation=lambda _conn: operation(),
+        )
+
+    async def list_spec_checkpoint_evaluations_async(
+        self,
+        task_id: str,
+        checkpoint_seq: int | None = None,
+    ) -> tuple[SpecCheckpointEvaluation, ...]:
+        if checkpoint_seq is not None:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT * FROM spec_checkpoint_evaluations
+                    WHERE task_id=? AND checkpoint_seq=?
+                    ORDER BY created_at ASC
+                    """,
+                    (task_id, checkpoint_seq),
+                )
+            )
+        else:
+            rows = await self._run_async_read(
+                lambda conn: async_fetchall(
+                    conn,
+                    """
+                    SELECT * FROM spec_checkpoint_evaluations
+                    WHERE task_id=?
+                    ORDER BY created_at ASC
+                    """,
+                    (task_id,),
+                )
+            )
+        return tuple(self._to_spec_checkpoint_evaluation(row) for row in rows)
+
     def _prepare_envelope_for_storage(
         self,
         envelope: TaskEnvelope,
@@ -1024,4 +1171,25 @@ class TaskRepository(SharedSqliteRepository):
             version=int(row["version"]),
             created_at=datetime.fromisoformat(str(row["created_at"])),
             updated_at=datetime.fromisoformat(str(row["updated_at"])),
+        )
+
+    @staticmethod
+    def _to_spec_checkpoint_evaluation(
+        row: sqlite3.Row,
+    ) -> SpecCheckpointEvaluation:
+        return SpecCheckpointEvaluation(
+            evaluation_id=str(row["evaluation_id"]),
+            task_id=str(row["task_id"]),
+            artifact_id=str(row["artifact_id"]),
+            session_id=str(row["session_id"]),
+            trace_id=str(row["trace_id"]),
+            checkpoint_seq=int(row["checkpoint_seq"]),
+            evaluator=str(row["evaluator"]),
+            fallback=bool(int(row["fallback"])),
+            overall_score=float(row["overall_score"]),
+            scores_json=str(row["scores_json"]),
+            summary=str(row["summary"]),
+            drift_detected=bool(int(row["drift_detected"])),
+            drift_detail=str(row["drift_detail"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
         )
