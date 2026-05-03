@@ -237,4 +237,3 @@ class TestArtifactRowToEntryCoverage:
 
 
 # appended coverage tests
-
