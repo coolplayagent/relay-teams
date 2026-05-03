@@ -582,6 +582,7 @@ def test_verify_task_merges_evidence_into_latest_envelope(
         semantic_evaluator: verification_module.SemanticVerificationEvaluator | None,
         guardrail_report: verification_module.RuntimeGuardrailReport | None,
         require_guardrail_report: bool,
+        llm_provider: verification_module.LLMProvider | None = None,
     ) -> verification_module._VerificationPlanRun:
         _ = (
             task_id,
@@ -596,6 +597,7 @@ def test_verify_task_merges_evidence_into_latest_envelope(
             semantic_evaluator,
             guardrail_report,
             require_guardrail_report,
+            llm_provider,
         )
         latest = task_repo.get(task.task_id)
         task_repo.update_envelope(

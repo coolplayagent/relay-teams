@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
+from relay_teams.agents.tasks.enums import TaskSpecStrictness
 
 GUARDRAIL_STATE_KEY = "runtime_guardrails"
 GUARDRAIL_REPORT_KEY = "runtime_guardrail_report"
@@ -322,6 +323,36 @@ def evaluate_in_execution_guardrails(
         if finding is not None:
             findings.append(finding)
     return RuntimeGuardrailEvaluation(findings=tuple(findings))
+
+
+def adjust_finding_for_strictness(
+    finding: RuntimeGuardrailFinding,
+    strictness: TaskSpecStrictness,
+) -> RuntimeGuardrailFinding:
+    """Adjust a guardrail finding's action based on task spec strictness.
+
+    HIGH: WARN becomes DENY (stricter enforcement).
+    LOW: DENY becomes WARN (more lenient).
+    MEDIUM: unchanged.
+    """
+    if strictness == TaskSpecStrictness.HIGH:
+        if finding.action == RuntimeGuardrailAction.WARN:
+            return finding.model_copy(update={"action": RuntimeGuardrailAction.DENY})
+    elif strictness == TaskSpecStrictness.LOW:
+        if finding.action == RuntimeGuardrailAction.DENY:
+            return finding.model_copy(update={"action": RuntimeGuardrailAction.WARN})
+    return finding
+
+
+def adjust_evaluation_for_strictness(
+    evaluation: RuntimeGuardrailEvaluation,
+    strictness: TaskSpecStrictness,
+) -> RuntimeGuardrailEvaluation:
+    """Adjust all findings in an evaluation based on strictness level."""
+    adjusted = tuple(
+        adjust_finding_for_strictness(f, strictness) for f in evaluation.findings
+    )
+    return RuntimeGuardrailEvaluation(findings=adjusted)
 
 
 async def record_runtime_guardrail_tool_call_async(

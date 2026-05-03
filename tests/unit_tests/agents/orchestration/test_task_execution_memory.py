@@ -10,6 +10,9 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.todo_models import TodoItem, TodoSnapshot, TodoStatus
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agents.orchestration.harnesses.execution_harness import (
+    ExecutionHarness,
+)
 from relay_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
@@ -100,7 +103,7 @@ def test_record_memory_if_needed_does_not_fail_completed_task_on_store_error() -
         verification=VerificationPlan(checklist=("non_empty_response",)),
     )
 
-    service._record_memory_if_needed(
+    service._execution_harness().record_memory_if_needed(
         role_id="writer",
         workspace_id="workspace-1",
         task=task,
@@ -167,7 +170,7 @@ def test_mark_runtime_idle_after_success_preserves_other_running_lane(
         )
     )
 
-    service._mark_runtime_idle_after_success(
+    service._execution_harness().mark_runtime_idle_after_success(
         run_id="run-1",
         completed_task_id=completed_task.task_id,
     )
@@ -245,7 +248,7 @@ def test_mark_runtime_idle_after_success_restores_paused_lane(
         )
     )
 
-    service._mark_runtime_idle_after_success(
+    service._execution_harness().mark_runtime_idle_after_success(
         run_id="run-1",
         completed_task_id=completed_task.task_id,
     )
@@ -330,7 +333,7 @@ def test_mark_runtime_idle_after_success_prefers_subagent_over_coordinator(
         )
     )
 
-    service._mark_runtime_idle_after_success(
+    service._execution_harness().mark_runtime_idle_after_success(
         run_id="run-1",
         completed_task_id=completed_task.task_id,
     )
@@ -399,7 +402,7 @@ def test_mark_runtime_after_terminal_failure_promotes_other_running_lane(
         )
     )
 
-    service._mark_runtime_after_terminal_task_update(
+    service._execution_harness().mark_runtime_after_terminal_task_update(
         run_id="run-1",
         terminal_task_id=failed_task.task_id,
         status=RunRuntimeStatus.FAILED,
@@ -468,7 +471,7 @@ def test_complete_with_assistant_error_persists_failure_state(
         )
     )
 
-    result = service._complete_with_assistant_error(
+    result = service._execution_harness().complete_with_assistant_error(
         task=task,
         instance_id="inst-1",
         role_id="writer",
@@ -552,7 +555,7 @@ async def test_promote_paused_runtime_lane_async_restores_paused_lane(
         )
     )
 
-    promoted = await service._promote_paused_runtime_lane_async(
+    promoted = await service._execution_harness().promote_paused_runtime_lane_async(
         run_id="run-1",
         terminal_task_id=completed_task.task_id,
         last_error=None,
@@ -601,12 +604,12 @@ def test_prompt_tool_and_state_compatibility_helpers(
     )
     task = _task_envelope(task_id="task-1")
 
-    snapshot = service._shared_state_snapshot(
+    snapshot = service._execution_harness().shared_state_snapshot(
         session_id="session-1",
         role_id="writer",
         conversation_id="conversation-1",
     )
-    tool_entry = TaskExecutionService._tool_entry_from_definition(
+    tool_entry = ExecutionHarness.tool_entry_from_definition(
         source="local",
         name="read_file",
         description="Read a file",
@@ -615,14 +618,14 @@ def test_prompt_tool_and_state_compatibility_helpers(
         sequential=False,
         parameters_json_schema={"type": "object"},
     )
-    user_prompt, skill_instructions = service._build_user_prompt(
+    user_prompt, skill_instructions = service._execution_harness().build_user_prompt(
         role=role,
         objective="Draft summary",
         shared_state_snapshot=snapshot,
         conversation_context=None,
         orchestration_prompt="",
     )
-    prompt_skill_instructions = TaskExecutionService._to_prompt_skill_instructions(
+    prompt_skill_instructions = ExecutionHarness.to_prompt_skill_instructions(
         (
             SkillInstructionEntry(
                 name="search",
@@ -630,7 +633,7 @@ def test_prompt_tool_and_state_compatibility_helpers(
             ),
         )
     )
-    merged_prompt = TaskExecutionService._merge_provider_prompt_content(
+    merged_prompt = ExecutionHarness.merge_provider_prompt_content(
         provider_content="Original prompt",
         user_prompt_text="Draft summary\n\n## Skill Candidates\n- search",
     )
@@ -639,22 +642,22 @@ def test_prompt_tool_and_state_compatibility_helpers(
     assert ("role-key", '"role-value"') in snapshot
     assert tool_entry.name == "read_file"
     assert tool_entry.parameters_json_schema == {"type": "object"}
-    assert TaskExecutionService._normalize_tool_kind("output") == "output"
-    assert TaskExecutionService._normalize_tool_kind("external") == "external"
-    assert TaskExecutionService._normalize_tool_kind("unapproved") == "unapproved"
-    assert TaskExecutionService._normalize_tool_kind("custom-kind") == "function"
+    assert ExecutionHarness.normalize_tool_kind("output") == "output"
+    assert ExecutionHarness.normalize_tool_kind("external") == "external"
+    assert ExecutionHarness.normalize_tool_kind("unapproved") == "unapproved"
+    assert ExecutionHarness.normalize_tool_kind("custom-kind") == "function"
     assert "Draft summary" in user_prompt
     assert skill_instructions == ()
     assert prompt_skill_instructions[0].name == "search"
     assert (
-        TaskExecutionService._user_prompt_skill_appendix(
+        ExecutionHarness.user_prompt_skill_appendix(
             "Draft summary\n\n## Skill Candidates\n- search"
         )
         == "## Skill Candidates\n- search"
     )
     assert merged_prompt == "Original prompt\n\n## Skill Candidates\n- search"
     assert (
-        TaskExecutionService._resolve_turn_objective(
+        ExecutionHarness.resolve_turn_objective(
             task=task,
             user_prompt_override=" Override objective ",
         )
@@ -691,7 +694,7 @@ def test_resolve_turn_objective_appends_task_contract_sections() -> None:
         }
     )
 
-    objective = TaskExecutionService._resolve_turn_objective(
+    objective = ExecutionHarness.resolve_turn_objective(
         task=task,
         user_prompt_override=None,
     )
@@ -730,7 +733,7 @@ def test_completion_guard_wrappers_default_to_no_issue() -> None:
         reminder_service=None,
     )
     task = _task_envelope(task_id="task-1", parent_task_id=None)
-    decision = service._evaluate_completion_guard(
+    decision = service._execution_harness().evaluate_completion_guard(
         task=task,
         instance_id="inst-1",
         role_id="writer",
@@ -738,7 +741,7 @@ def test_completion_guard_wrappers_default_to_no_issue() -> None:
         conversation_id="conversation-1",
         output_text="done",
     )
-    thinking = service._thinking_for_run("missing-run")
+    thinking = service._execution_harness().thinking_for_run("missing-run")
 
     assert decision.issue is False
     assert thinking.enabled is False

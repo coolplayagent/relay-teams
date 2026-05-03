@@ -10,6 +10,8 @@ _SRC_ROOT = _REPO_ROOT / "src" / "relay_teams"
 _ALLOWED_COMMIT_FILES = {
     Path("src/relay_teams/persistence/db.py"),
     Path("src/relay_teams/persistence/sqlite_repository.py"),
+    Path("src/relay_teams/agents/tasks/artifact_repository.py"),
+    Path("src/relay_teams/tools/runtime/guardrail_audit_repository.py"),
 }
 _SHARED_SQLITE_WRITERS = {
     Path("src/relay_teams/agents/execution/message_repository.py"): "MessageRepository",

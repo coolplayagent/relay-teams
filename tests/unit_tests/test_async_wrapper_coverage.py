@@ -1045,19 +1045,19 @@ _PERMISSIVE_ASYNC_SPECS: tuple[_WrapperSpec, ...] = (
         "_execute_task_completed_hooks",
     ),
     _WrapperSpec(
-        "relay_teams.agents.orchestration.task_execution_service",
-        "TaskExecutionService",
-        "_topology_for_run_async",
+        "relay_teams.agents.orchestration.harnesses.execution_harness",
+        "ExecutionHarness",
+        "topology_for_run_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.orchestration.task_execution_service",
-        "TaskExecutionService",
-        "_conversation_context_for_run_async",
+        "relay_teams.agents.orchestration.harnesses.execution_harness",
+        "ExecutionHarness",
+        "conversation_context_for_run_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.orchestration.task_execution_service",
-        "TaskExecutionService",
-        "_record_memory_if_needed_async",
+        "relay_teams.agents.orchestration.harnesses.execution_harness",
+        "ExecutionHarness",
+        "record_memory_if_needed_async",
     ),
     _WrapperSpec(
         "relay_teams.agents.orchestration.task_execution_service",

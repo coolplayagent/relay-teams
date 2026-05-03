@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from relay_teams.agents.tasks.enums import (
     FormalVerificationLanguage,
     FormalVerificationToolProfile,
+    TaskArtifactPhase,
     TaskSpecStrictness,
     TaskSpecSyncStatus,
     TaskStatus,
@@ -497,6 +498,51 @@ class SpecArtifactVersionSummary(BaseModel):
     version: int = Field(ge=1)
     created_at: datetime
     updated_at: datetime
+
+
+class TaskArtifactEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entry_id: RequiredIdentifierStr
+    phase: TaskArtifactPhase = TaskArtifactPhase.EXECUTION
+    timestamp: str = ""
+    role_id: str = ""
+    instance_id: str = ""
+    event_type: str = Field(min_length=1)
+    description: str = ""
+    payload_json: str = "{}"
+    linked_evidence_ids: tuple[str, ...] = ()
+
+    @field_validator("linked_evidence_ids", mode="before")
+    @classmethod
+    def _normalize_linked_evidence(cls, value: object) -> tuple[str, ...]:
+        return _normalize_text_tuple(value, field_name="linked evidence ids")
+
+
+class TaskArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: RequiredIdentifierStr
+    spec_artifact_id: str = ""
+    entries: list[TaskArtifactEntry] = Field(default_factory=list)
+    evidence_bundle: VerificationEvidenceBundle | None = None
+    summary: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class TaskArtifactSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: RequiredIdentifierStr
+    spec_artifact_id: str = ""
+    total_entries: int
+    phase_counts: dict[str, int] = Field(default_factory=dict)
+    evidence_item_count: int = 0
+    has_verification_bundle: bool = False
+    has_summary: bool = False
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class SpecCheckpointEvaluation(BaseModel):

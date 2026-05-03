@@ -2335,7 +2335,72 @@ Internal dispatch rules:
 - If the target role defines a `contract`, dispatch fails before execution when
   role preconditions or capability invariants are not satisfied. Automatic DAG
   scheduling applies the same checks to ready delegated tasks and marks the task
-  failed with `role_contract_preconditions_failed` when the contract is violated.
+   failed with `role_contract_preconditions_failed` when the contract is violated.
+
+### `GET /runs/{run_id}/tasks/{task_id}/artifact`
+
+Returns the full `TaskArtifact` for a task, including all entries and the summary.
+
+Path parameters:
+- `run_id`: run identifier (for URL consistency)
+- `task_id`: task identifier
+
+Response fields (`TaskArtifact`):
+- `task_id`
+- `spec_artifact_id`: linked spec artifact
+- `entries`: list of `TaskArtifactEntry` objects
+- `summary`: `TaskArtifactSummary` with `task_id`, `summary` text, `entry_count`, `created_at`, `updated_at`
+- `evidence_bundle_json`
+
+Status codes:
+- `200`: artifact found
+- `404`: no artifact exists for the given task
+
+### `GET /runs/{run_id}/tasks/{task_id}/artifact/entries`
+
+Returns individual entries within a task artifact, with optional filtering.
+
+Path parameters:
+- `run_id`: run identifier (for URL consistency)
+- `task_id`: task identifier
+
+Query parameters:
+- `phase`: optional filter by `TaskArtifactPhase` (`spec`, `execution`, `verification`, `delivery`)
+- `event_type`: optional filter by event type string
+- `limit`: page size (default 100, range 1-500)
+- `offset`: page offset (default 0, minimum 0)
+
+Response fields:
+- `task_id`: the task identifier
+- `items`: list of `TaskArtifactEntry` objects, each with `entry_id`, `phase`, `timestamp`, `role_id`, `instance_id`, `event_type`, `description`, `payload_json`
+- `total`: total matching entries
+- `next_offset`: offset for the next page, or `null` if no more entries
+
+Status codes:
+- `200`: entries returned (may be empty)
+
+### `GET /runs/{run_id}/tasks/{task_id}/artifact/summary`
+
+Returns the summary entry of a task artifact.
+
+Path parameters:
+- `run_id`: run identifier (for URL consistency)
+- `task_id`: task identifier
+
+Response fields (`TaskArtifactSummary`):
+- `task_id`
+- `spec_artifact_id`: linked spec artifact
+- `total_entries`: number of entries in the artifact
+- `phase_counts`: dict mapping phase names to entry counts
+- `evidence_item_count`: number of evidence items
+- `has_verification_bundle`: whether a verification bundle exists
+- `has_summary`: whether a summary has been written
+- `created_at`: ISO 8601 timestamp
+- `updated_at`: ISO 8601 timestamp
+
+Status codes:
+- `200`: summary found
+- `404`: no artifact exists for the given task
 
 ## Role APIs
 
@@ -3445,3 +3510,27 @@ Returns sessions generated for one automation project.
 `GET /sessions` and `GET /sessions/{session_id}` now also include:
 - `project_kind`: `workspace` or `automation`
 - `project_id`: workspace id or automation project id used by the sidebar grouping logic
+
+## Guardrail Audit API
+
+### `GET /guardrails/audit`
+
+Lists guardrail audit records for compliance and debugging.
+
+Query fields:
+- `run_id`: optional exact-match filter.
+- `task_id`: optional exact-match filter.
+- `role_id`: optional exact-match filter.
+- `layer`: optional filter by guardrail layer (`PRE_EXECUTION`, `IN_EXECUTION`, `POST_EXECUTION`).
+- `action`: optional filter by action (`DENY`, `WARN`, `ALLOW`, `REMASk`).
+- `triggered_only`: optional boolean, default `false`. When `true`, only returns records where a guard rule triggered.
+- `since`, `until`: optional ISO 8601 timestamp filters on `evaluated_at`.
+- `limit`: page size from `1` to `500`, default `100`.
+- `offset`: default `0`.
+
+Response fields:
+- `items[]`: array of guardrail audit record objects.
+- `total`: total number of matching records.
+- `next_offset`: offset for the next page, or `null` if no more results.
+
+Router: `src/relay_teams/interfaces/server/routers/guardrails_router.py`

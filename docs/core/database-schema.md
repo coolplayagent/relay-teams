@@ -1479,3 +1479,111 @@ Purpose: lets one session belong to either a regular workspace project or an aut
 Notes:
 - Existing rows are backfilled as `project_kind='workspace'` and `project_id=workspace_id`.
 - Automation-generated sessions keep `workspace_id='automation-system'` internally, but project grouping uses `project_kind='automation'` and the automation project id.
+
+---
+
+### 2.N `guardrail_audit`
+
+```sql
+CREATE TABLE IF NOT EXISTS guardrail_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    run_id TEXT NOT NULL DEFAULT '',
+    task_id TEXT NOT NULL DEFAULT '',
+    instance_id TEXT NOT NULL DEFAULT '',
+    role_id TEXT NOT NULL DEFAULT '',
+    tool_name TEXT NOT NULL DEFAULT '',
+    layer TEXT NOT NULL,
+    rule_type TEXT NOT NULL,
+    rule_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    triggered INTEGER NOT NULL DEFAULT 0,
+    original_text_excerpt TEXT NOT NULL DEFAULT '',
+    modified_text_excerpt TEXT NOT NULL DEFAULT '',
+    triggered_rule_names TEXT NOT NULL DEFAULT '[]',
+    strictness TEXT NOT NULL DEFAULT 'medium',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    evaluated_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_guardrail_audit_run_id
+    ON guardrail_audit(run_id);
+CREATE INDEX IF NOT EXISTS idx_guardrail_audit_task_id
+    ON guardrail_audit(task_id);
+CREATE INDEX IF NOT EXISTS idx_guardrail_audit_role_id
+    ON guardrail_audit(role_id);
+CREATE INDEX IF NOT EXISTS idx_guardrail_audit_evaluated_at
+    ON guardrail_audit(evaluated_at);
+```
+
+Purpose: persistent audit trail for every runtime guardrail evaluation. Each row records the context (run, task, role, tool), the guard rule that was evaluated, whether it triggered, and excerpts of the original/modified text.
+
+Notes:
+- `layer`, `rule_type`, and `action` store enum values from the runtime guardrail system.
+- `triggered_rule_names` is a JSON array of rule IDs that fired for this evaluation.
+- `strictness` mirrors the task spec strictness level at the time of evaluation.
+- `metadata_json` stores additional structured context (finding counts, details).
+- Records are append-only; no updates or deletes are expected.
+- Repository: `src/relay_teams/tools/runtime/guardrail_audit_repository.py`
+
+---
+
+### 2.N+1 `task_artifacts`
+
+```sql
+CREATE TABLE IF NOT EXISTS task_artifacts (
+    task_id TEXT NOT NULL PRIMARY KEY,
+    spec_artifact_id TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    evidence_bundle_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+```
+
+Purpose: unified task artifact container that aggregates all execution, verification, and delivery evidence for a single task.
+
+Notes:
+- One row per task, keyed by `task_id`.
+- `spec_artifact_id` links back to the originating spec artifact.
+- `evidence_bundle_json` stores the full `VerificationEvidenceBundle` as JSON.
+- `summary` is a human-readable summary of the artifact contents.
+- Repository: `src/relay_teams/agents/tasks/artifact_repository.py`
+
+---
+
+### 2.N+2 `task_artifact_entries`
+
+```sql
+CREATE TABLE IF NOT EXISTS task_artifact_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    role_id TEXT NOT NULL DEFAULT '',
+    instance_id TEXT NOT NULL DEFAULT '',
+    event_type TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    linked_evidence_ids TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifact_entries_task_id
+    ON task_artifact_entries(task_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_entries_phase
+    ON task_artifact_entries(phase);
+CREATE INDEX IF NOT EXISTS idx_artifact_entries_event_type
+    ON task_artifact_entries(event_type);
+```
+
+Purpose: individual entries within a task artifact, recording events across spec, execution, verification, and delivery phases.
+
+Notes:
+- `phase` is one of: `spec`, `execution`, `verification`, `delivery`.
+- `entry_id` is a unique identifier for each entry within the artifact.
+- `linked_evidence_ids` is a JSON array of evidence item IDs from the parent artifact's evidence bundle.
+- Entries are append-only; ordered by `id` for chronological replay.
+- Repository: `src/relay_teams/agents/tasks/artifact_repository.py`
