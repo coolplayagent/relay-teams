@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from json import dumps
 from pathlib import Path
 from typing import Callable
@@ -86,6 +87,60 @@ from relay_teams.tools.runtime.guardrails import (
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 
 LOGGER = get_logger(__name__)
+
+_TASK_ID_PREFIX_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:"
+)
+
+
+def _clean_check_display_name(name: str) -> str:
+    return _TASK_ID_PREFIX_RE.sub("", name)
+
+
+def _format_verification_failure(verification: VerificationResult) -> str:
+    report = verification.report
+    if report is None:
+        detail_text = "; ".join(verification.details) if verification.details else ""
+        header = "Verification failed."
+        detail_line = f"\n{detail_text}" if detail_text else ""
+        return (
+            f"{header}{detail_line}\n\n"
+            "Review the task spec and evidence expectations, "
+            "then continue with corrected output."
+        )
+
+    checks = report.checks
+    passed_checks = [c for c in checks if c.passed]
+    failed_checks = [c for c in checks if not c.passed]
+    total = len(checks)
+
+    lines: list[str] = []
+    lines.append("Verification failed.")
+    passed_count = len(passed_checks)
+    failed_count = len(failed_checks)
+    lines.append(f"{total} check(s): {passed_count} passed, {failed_count} failed.")
+
+    if failed_checks:
+        lines.append("")
+        lines.append("Failed:")
+        for check in failed_checks:
+            display = _clean_check_display_name(check.name)
+            detail = f" -- {check.details}" if check.details else ""
+            lines.append(f"  [FAIL] {display}{detail}")
+
+    if passed_checks:
+        lines.append("")
+        lines.append("Passed:")
+        for check in passed_checks:
+            display = _clean_check_display_name(check.name)
+            lines.append(f"  [PASS] {display}")
+
+    lines.append("")
+    lines.append(
+        "Review the task spec and evidence expectations, "
+        "then continue with corrected output."
+    )
+    return "\n".join(lines)
 
 
 class CoordinatorRunResult(BaseModel):
@@ -1994,10 +2049,7 @@ class CoordinatorGraph(BaseModel):
             else (output.strip() if output.strip() else "Verification failed")
         )
         current = await self.task_repo.get_async(root_task.task_id)
-        assistant_message = build_assistant_error_message(
-            error_code="verification_failed",
-            error_message=failure_message,
-        )
+        assistant_message = _format_verification_failure(verification)
         await self.task_repo.update_status_async(
             root_task.task_id,
             TaskStatus.COMPLETED,
