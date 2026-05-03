@@ -69,6 +69,9 @@ async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> N
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
 
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
+
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
             assert role_id == "Crafter"
@@ -103,6 +106,9 @@ async def test_spec_checkpoint_decision_skips_coordinator_roles() -> None:
         async def get_async(self, task_id: str) -> TaskRecord:
             raise AssertionError(task_id)
 
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
+
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
             assert role_id == "Coordinator"
@@ -126,6 +132,9 @@ async def test_spec_checkpoint_decision_ignores_missing_task_record() -> None:
         async def get_async(self, task_id: str) -> TaskRecord:
             assert task_id == "missing-task"
             raise KeyError(task_id)
+
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
 
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
@@ -240,6 +249,9 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
         async def get_async(self, task_id: str) -> TaskRecord:
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
+
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
 
     class _RoleRegistry:
         def is_coordinator_role(self, role_id: str) -> bool:
@@ -900,6 +912,9 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
         async def get_async(self, task_id: str) -> TaskRecord:
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
+
+        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+            raise AssertionError(artifact_id)
 
     class _SpecCheckpointMessageRepo(_FakeMessageRepo):
         async def append_system_prompt_if_missing_async(

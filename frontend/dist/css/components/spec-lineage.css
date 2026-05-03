@@ -1,0 +1,598 @@
+/* spec-lineage.css - Spec artifact lineage visualization styles */
+
+.spec-lineage-view {
+    display: block;
+    padding: 1.35rem;
+    overflow: auto;
+    height: 100%;
+    background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 24%),
+        var(--bg-surface);
+}
+
+.spec-lineage-toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 1.25rem;
+}
+
+.spec-lineage-toolbar-copy h3 {
+    margin: 0;
+    font-size: 1.35rem;
+}
+
+.spec-lineage-toolbar-copy p {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.spec-lineage-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Layout: timeline left, diff right */
+.spec-lineage-body {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 1.25rem;
+    min-height: 0;
+    flex: 1;
+}
+
+@media (max-width: 860px) {
+    .spec-lineage-body {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Timeline */
+.spec-lineage-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+    padding-left: 0;
+}
+
+.spec-lineage-timeline-heading {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.75rem;
+    padding-left: 0.25rem;
+}
+
+.spec-lineage-node {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.55rem 0.65rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background 0.15s ease;
+    user-select: none;
+}
+
+.spec-lineage-node:hover {
+    background: var(--bg-hover);
+}
+
+.spec-lineage-node.selected {
+    background: color-mix(in srgb, var(--primary) 14%, var(--bg-surface));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.spec-lineage-node + .spec-lineage-node::before {
+    content: '';
+    position: absolute;
+    top: -0.45rem;
+    left: 1.05rem;
+    width: 2px;
+    height: 0.45rem;
+    background: var(--border-color);
+    border-radius: 1px;
+}
+
+/* Version dot */
+.spec-lineage-dot {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    background: var(--bg-surface);
+    margin-top: 0.25rem;
+    position: relative;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.spec-lineage-node.selected .spec-lineage-dot {
+    border-color: var(--primary);
+    background: var(--primary);
+}
+
+.spec-lineage-node:hover .spec-lineage-dot {
+    border-color: var(--primary-hover);
+}
+
+/* Drift indicator inside dot */
+.spec-lineage-dot.drift-none {
+    border-color: var(--success);
+}
+.spec-lineage-dot.drift-none::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: var(--success);
+}
+
+.spec-lineage-dot.drift-low {
+    border-color: var(--warning);
+}
+.spec-lineage-dot.drift-low::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: var(--warning);
+}
+
+.spec-lineage-dot.drift-high {
+    border-color: var(--danger);
+}
+.spec-lineage-dot.drift-high::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: var(--danger);
+}
+
+.spec-lineage-node.selected .spec-lineage-dot.drift-none,
+.spec-lineage-node.selected .spec-lineage-dot.drift-low,
+.spec-lineage-node.selected .spec-lineage-dot.drift-high {
+    border-color: var(--primary);
+    background: var(--primary);
+}
+
+.spec-lineage-node-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.spec-lineage-version-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+
+.spec-lineage-version-time {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.1rem;
+}
+
+.spec-lineage-version-summary {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-top: 0.2rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+/* Empty state */
+.spec-lineage-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+    text-align: center;
+    grid-column: 1 / -1;
+}
+
+.spec-lineage-empty-icon {
+    width: 48px;
+    height: 48px;
+    opacity: 0.35;
+}
+
+.spec-lineage-empty p {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+/* Loading spinner */
+.spec-lineage-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    grid-column: 1 / -1;
+}
+
+/* Diff viewer panel */
+.spec-diff-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    min-height: 0;
+}
+
+.spec-diff-header {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-surface-muted) 60%, transparent);
+}
+
+.spec-diff-header h4 {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-primary);
+}
+
+.spec-diff-header p {
+    margin: 0.2rem 0 0;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+}
+
+.spec-diff-body {
+    padding: 0.75rem 1rem;
+    overflow: auto;
+    flex: 1;
+}
+
+/* Diff field rows */
+.spec-diff-field {
+    margin-bottom: 0.65rem;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.spec-diff-field-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.65rem;
+    cursor: pointer;
+    background: color-mix(in srgb, var(--bg-surface-muted) 40%, transparent);
+    transition: background 0.12s ease;
+    user-select: none;
+}
+
+.spec-diff-field-header:hover {
+    background: var(--bg-hover);
+}
+
+.spec-diff-change-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 4.5rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    line-height: 1.5;
+}
+
+.spec-diff-change-badge.added {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    color: var(--success);
+}
+
+.spec-diff-change-badge.removed {
+    background: color-mix(in srgb, var(--danger) 18%, transparent);
+    color: var(--danger);
+}
+
+.spec-diff-change-badge.modified {
+    background: color-mix(in srgb, var(--warning) 18%, transparent);
+    color: var(--warning);
+}
+
+.spec-diff-change-badge.unchanged {
+    background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
+    color: var(--text-secondary);
+}
+
+.spec-diff-field-name {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.spec-diff-field-expand-icon {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    color: var(--text-secondary);
+    transition: transform 0.15s ease;
+}
+
+.spec-diff-field.expanded .spec-diff-field-expand-icon {
+    transform: rotate(180deg);
+}
+
+.spec-diff-field-detail {
+    display: none;
+    padding: 0.55rem 0.75rem 0.65rem;
+    border-top: 1px solid var(--border-color);
+    font-size: 0.8rem;
+    line-height: 1.55;
+}
+
+.spec-diff-field.expanded .spec-diff-field-detail {
+    display: block;
+}
+
+.spec-diff-old-value,
+.spec-diff-new-value {
+    padding: 0.3rem 0.5rem;
+    border-radius: var(--radius-sm);
+    margin-bottom: 0.25rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+}
+
+.spec-diff-old-value {
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    border-left: 3px solid var(--danger);
+    color: var(--text-secondary);
+}
+
+.spec-diff-new-value {
+    background: color-mix(in srgb, var(--success) 10%, transparent);
+    border-left: 3px solid var(--success);
+    color: var(--text-primary);
+}
+
+.spec-diff-items-header {
+    font-weight: 600;
+    font-size: 0.78rem;
+    margin-bottom: 0.25rem;
+    color: var(--text-secondary);
+}
+
+.spec-diff-added-items {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.4rem;
+}
+
+.spec-diff-added-items li {
+    padding: 0.15rem 0.4rem;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--success) 10%, transparent);
+    color: var(--success);
+    margin-bottom: 0.15rem;
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+}
+
+.spec-diff-removed-items {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.spec-diff-removed-items li {
+    padding: 0.15rem 0.4rem;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+    color: var(--danger);
+    margin-bottom: 0.15rem;
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    text-decoration: line-through;
+}
+
+/* No changes indicator */
+.spec-diff-no-changes {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+}
+
+.spec-diff-no-selection {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 1rem;
+    color: var(--text-secondary);
+    text-align: center;
+    min-height: 200px;
+}
+
+.spec-diff-no-selection p {
+    margin: 0;
+    font-size: 0.85rem;
+}
+
+/* Evaluation panel */
+.spec-eval-panel {
+    margin-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.75rem;
+}
+
+.spec-eval-heading {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.65rem;
+}
+
+.spec-eval-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--bg-surface-muted) 50%, transparent);
+    border: 1px solid var(--border-color);
+    margin-bottom: 0.5rem;
+}
+
+.spec-eval-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.spec-eval-score-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.4rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.spec-eval-score-badge.good {
+    background: color-mix(in srgb, var(--success) 20%, transparent);
+    color: var(--success);
+}
+
+.spec-eval-score-badge.warn {
+    background: color-mix(in srgb, var(--warning) 20%, transparent);
+    color: var(--warning);
+}
+
+.spec-eval-score-badge.bad {
+    background: color-mix(in srgb, var(--danger) 20%, transparent);
+    color: var(--danger);
+}
+
+.spec-eval-drift-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.spec-eval-drift-badge.clean {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+    color: var(--success);
+}
+
+.spec-eval-drift-badge.drift {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
+}
+
+.spec-eval-meta {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+.spec-eval-summary {
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    line-height: 1.45;
+}
+
+/* Score bar chart */
+.spec-eval-scores {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.spec-eval-score-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.72rem;
+}
+
+.spec-eval-score-dim {
+    min-width: 7rem;
+    color: var(--text-secondary);
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.spec-eval-score-bar-track {
+    flex: 1;
+    height: 6px;
+    background: color-mix(in srgb, var(--border-color) 50%, transparent);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.spec-eval-score-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.spec-eval-score-bar-fill.good {
+    background: var(--success);
+}
+
+.spec-eval-score-bar-fill.warn {
+    background: var(--warning);
+}
+
+.spec-eval-score-bar-fill.bad {
+    background: var(--danger);
+}
+
+.spec-eval-score-numeric {
+    min-width: 1.5rem;
+    text-align: right;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Placeholder panel when no diff viewer selected */
+.spec-diff-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    min-height: 300px;
+    border: 1px dashed var(--border-color);
+    border-radius: var(--radius-lg);
+    background: color-mix(in srgb, var(--bg-surface-muted) 30%, transparent);
+}

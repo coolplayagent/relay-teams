@@ -48,6 +48,7 @@ class RunEventType(str, Enum):
     TOOL_INPUT_VALIDATION_FAILED = "tool_input_validation_failed"
     TOOL_RESULT = "tool_result"
     SPEC_CHECKPOINT_APPLIED = "spec_checkpoint_applied"
+    SPEC_CHECKPOINT_EVALUATED = "spec_checkpoint_evaluated"
     INJECTION_ENQUEUED = "injection_enqueued"
     INJECTION_APPLIED = "injection_applied"
     TOOL_APPROVAL_REQUESTED = "tool_approval_requested"

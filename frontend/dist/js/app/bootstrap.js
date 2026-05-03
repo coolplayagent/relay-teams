@@ -4,6 +4,7 @@
  */
 import { initSettings, openSettings, initAppearanceOnStartup } from "../components/settings.js";
 import { initializeProjectView } from "../components/projectView.js";
+import { initializeSpecLineage, openSpecLineage, getTaskIdFromUrl } from "../components/specLineage.js";
 import { openNewSessionDraft } from "../components/newSessionDraft.js";
 import { initializeContextIndicators } from "../components/contextIndicators.js";
 import { initializeSessionTokenUsage } from "../components/sessionTokenUsage.js";
@@ -127,6 +128,7 @@ export async function initApp(selectSession, selectSubagentSession, handleSend) 
   initializeImagePreview();
   initializeVoiceInput();
   initializeProjectView();
+  initializeSpecLineage();
   setupEventBindings(handleSend);
   initAppearanceOnStartup();
   initSettings();
@@ -160,5 +162,11 @@ export async function initApp(selectSession, selectSubagentSession, handleSend) 
     }
   } else {
     openNewSessionDraft("");
+  }
+
+  // Auto-open spec lineage if task_id is in the URL
+  const urlTaskId = getTaskIdFromUrl();
+  if (urlTaskId) {
+    openSpecLineage(urlTaskId);
   }
 }

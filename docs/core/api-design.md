@@ -2069,6 +2069,216 @@ Response fields:
 
 Evidence items include `evidence_id`, `kind`, `summary`, `source`, `passed`, optional `path`, optional `command`, optional tool identifiers, parsed `metrics`, supported target text, and a short `output_excerpt`. Evidence links identify the target text, matching evidence item ids, satisfaction state, and reason.
 
+### `GET /tasks/{task_id}/spec-artifacts`
+
+Lists all spec artifact versions for a task in ascending version order. Supports lightweight summaries for version listings and full artifacts for detailed inspection.
+
+Path parameters:
+- `task_id`: task identifier (required)
+
+Query parameters:
+- `format`: `"summary"` (default) or `"full"`. Summary mode omits the `spec` payload from each artifact. Full mode returns the complete `TaskSpecArtifact` model dump including `spec`.
+
+Response (format=summary):
+- `task_id`: task identifier
+- `versions[]`: list of `SpecArtifactVersionSummary` objects
+  - `artifact_id`
+  - `task_id`
+  - `session_id`
+  - `trace_id`
+  - `source_task_id` (nullable)
+  - `version`: integer (>= 1)
+  - `created_at`: ISO 8601 timestamp
+  - `updated_at`: ISO 8601 timestamp
+
+Response (format=full):
+- `task_id`: task identifier
+- `versions[]`: list of full `TaskSpecArtifact` objects (including `spec`)
+
+Status codes:
+- `200`: success
+- `404`: task not found
+
+Example request:
+```
+GET /api/tasks/task-123/spec-artifacts?format=summary
+```
+
+Example response (format=summary):
+```json
+{
+  "task_id": "task-123",
+  "versions": [
+    {
+      "artifact_id": "spec-aaa",
+      "task_id": "task-123",
+      "session_id": "sess-1",
+      "trace_id": "trace-1",
+      "source_task_id": null,
+      "version": 1,
+      "created_at": "2026-05-02T10:00:00Z",
+      "updated_at": "2026-05-02T10:00:00Z"
+    },
+    {
+      "artifact_id": "spec-bbb",
+      "task_id": "task-123",
+      "session_id": "sess-1",
+      "trace_id": "trace-2",
+      "source_task_id": null,
+      "version": 2,
+      "created_at": "2026-05-02T11:00:00Z",
+      "updated_at": "2026-05-02T11:00:00Z"
+    }
+  ]
+}
+```
+
+### `GET /tasks/{task_id}/spec-artifacts/{version}/diff`
+
+Computes and returns the field-level diff between two spec artifact versions. By default, diffs the given version against its predecessor (version - 1). An explicit `from_version` query parameter allows comparing any two versions.
+
+Path parameters:
+- `task_id`: task identifier (required)
+- `version`: target version integer, >= 2 (required)
+
+Query parameters:
+- `from_version`: optional integer >= 1. If omitted, defaults to `version - 1`.
+
+Response fields (`SpecArtifactDiffResult`):
+- `task_id`: task identifier
+- `from_artifact_id`: artifact identifier for the source version
+- `to_artifact_id`: artifact identifier for the target version
+- `from_version`: integer
+- `to_version`: integer
+- `has_changes`: boolean
+- `summary`: human-readable change summary string
+- `field_changes[]`: list of `SpecArtifactDiffFieldChange` objects
+  - `field_name`: model field name
+  - `field_label`: human-readable display name
+  - `change_type`: `"added"`, `"removed"`, `"modified"`, or `"unchanged"`
+  - `old_value`: string or null (for scalar fields)
+  - `new_value`: string or null (for scalar fields)
+  - `old_items[]`: string list (for tuple/list fields)
+  - `new_items[]`: string list (for tuple/list fields)
+  - `added_items[]`: items present in new but not old
+  - `removed_items[]`: items present in old but not new
+
+Status codes:
+- `200`: success
+- `400`: version is 1 and no explicit `from_version` provided
+- `404`: task or version not found
+- `422`: invalid path parameters
+
+Example request:
+```
+GET /api/tasks/task-123/spec-artifacts/2/diff
+```
+
+Example response:
+```json
+{
+  "task_id": "task-123",
+  "from_artifact_id": "spec-aaa",
+  "to_artifact_id": "spec-bbb",
+  "from_version": 1,
+  "to_version": 2,
+  "has_changes": true,
+  "summary": "3 fields changed: requirements (+2 items), constraints (+1 item, -1 item), summary (modified)",
+  "field_changes": [
+    {
+      "field_name": "requirements",
+      "field_label": "Requirements",
+      "change_type": "modified",
+      "old_value": null,
+      "new_value": null,
+      "old_items": ["req-A", "req-B"],
+      "new_items": ["req-A", "req-B", "req-C", "req-D"],
+      "added_items": ["req-C", "req-D"],
+      "removed_items": []
+    },
+    {
+      "field_name": "summary",
+      "field_label": "Summary",
+      "change_type": "modified",
+      "old_value": "Build feature X",
+      "new_value": "Build feature X with error handling",
+      "old_items": [],
+      "new_items": [],
+      "added_items": [],
+      "removed_items": []
+    }
+  ]
+}
+```
+
+### `GET /tasks/{task_id}/spec-checkpoint-evaluations`
+
+Lists drift-detection evaluation results produced when spec checkpoints are rendered with `auto_evaluate_drift` enabled.
+
+Path parameters:
+- `task_id`: task identifier (required)
+
+Query parameters:
+- `checkpoint_seq`: optional integer to filter evaluations by checkpoint sequence number
+
+Response fields:
+- `task_id`: task identifier
+- `evaluations[]`: list of `SpecCheckpointEvaluation` objects
+  - `evaluation_id`: identifier (format `speval-{uuid}`)
+  - `task_id`: task identifier
+  - `artifact_id`: spec artifact that was current when the checkpoint was rendered
+  - `session_id`: session identifier
+  - `trace_id`: trace identifier
+  - `checkpoint_seq`: integer, corresponds to the checkpoint sequence
+  - `evaluator`: evaluator type (default `"llm"`)
+  - `fallback`: boolean, true if the evaluation used rule-based fallback due to LLM failure
+  - `overall_score`: float (0.0-5.0), composite score across all dimensions
+  - `scores[]`: list of per-dimension score objects
+    - `dimension`: evaluation dimension name
+    - `score`: integer score
+    - `reasoning`: evaluator explanation text
+  - `summary`: evaluation summary text
+  - `drift_detected`: boolean, true when `overall_score < drift_score_threshold`
+  - `drift_detail`: structured JSON string describing which dimensions flagged drift
+  - `created_at`: ISO 8601 timestamp
+
+Status codes:
+- `200`: success (returns empty list if no evaluations exist)
+- `404`: task not found
+
+Example request:
+```
+GET /api/tasks/task-123/spec-checkpoint-evaluations
+```
+
+Example response:
+```json
+{
+  "task_id": "task-123",
+  "evaluations": [
+    {
+      "evaluation_id": "speval-xxx",
+      "task_id": "task-123",
+      "artifact_id": "spec-bbb",
+      "session_id": "sess-1",
+      "trace_id": "trace-1",
+      "checkpoint_seq": 3,
+      "evaluator": "llm",
+      "fallback": false,
+      "overall_score": 4.2,
+      "scores": [
+        {"dimension": "completeness", "score": 4, "reasoning": "All requirements addressed"},
+        {"dimension": "clarity", "score": 5, "reasoning": "Clear and unambiguous"}
+      ],
+      "summary": "Spec remains consistent with initial requirements.",
+      "drift_detected": false,
+      "drift_detail": "",
+      "created_at": "2026-05-02T11:00:00Z"
+    }
+  ]
+}
+```
+
 #### Task Spec Shape
 
 `TaskSpec` is the durable spec contract embedded in task envelopes and spec artifacts.
@@ -2095,6 +2305,21 @@ Formal verification plans support:
 - `counterexample_path`
 - `replay_command`
 - `required`
+
+#### SpecCheckpointPolicy Shape
+
+`SpecCheckpointPolicy` controls spec checkpoint injection behavior during task execution.
+
+Fields:
+- `enabled`: boolean (default `true`)
+- `refresh_interval_tool_calls`: integer, tool call count threshold (default 12, range 1-1000)
+- `refresh_interval_messages`: integer, message count threshold (default 48, range 1-5000)
+- `refresh_interval_history_tokens`: integer, token count threshold (default 8000, range 1-1,000,000)
+- `max_summary_chars`: integer, maximum rendered checkpoint length (default 6000, range 500-50,000)
+- `include_reasons`: boolean, include REASONS Canvas section (default `true`)
+- `refresh_on_version_change`: boolean, trigger immediate checkpoint when spec artifact version increments (default `false`)
+- `auto_evaluate_drift`: boolean, run LLM drift evaluator after each checkpoint injection (default `false`)
+- `drift_score_threshold`: float, overall score threshold below which drift is flagged (default 3.0, range 1.0-5.0)
 
 There is no public manual dispatch endpoint for delegated tasks.
 

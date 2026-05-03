@@ -44,6 +44,7 @@ def build_spec_checkpoint_decision(
     task: TaskEnvelope,
     role_id: str,
     history: Sequence[ModelRequest | ModelResponse],
+    current_artifact_version: int | None = None,
 ) -> SpecCheckpointDecision:
     policy = task.lifecycle.spec_checkpoint
     spec = task.spec
@@ -60,12 +61,34 @@ def build_spec_checkpoint_decision(
     tokens_since_checkpoint = ConversationTokenEstimator().estimate_history_tokens(
         history_since_checkpoint
     )
+
+    version_change_info: tuple[int, int, str] | None = None
+    version_reason = ""
+
+    if (
+        policy.refresh_on_version_change
+        and current_artifact_version is not None
+        and spec.prompt_artifact_version > current_artifact_version
+    ):
+        version_reason = "spec_version_changed"
+        version_change_info = (
+            current_artifact_version,
+            spec.prompt_artifact_version,
+            f"Spec version changed from {current_artifact_version} to {spec.prompt_artifact_version}",
+        )
+
     reason = spec_checkpoint_reason(
         policy=policy,
         tool_calls_since_checkpoint=tool_calls_since_checkpoint,
         messages_since_checkpoint=messages_since_checkpoint,
         tokens_since_checkpoint=tokens_since_checkpoint,
     )
+
+    if version_reason and not reason:
+        reason = version_reason
+    elif version_reason and reason:
+        reason = f"{version_reason}, {reason}"
+
     if not reason:
         return SpecCheckpointDecision(
             tool_calls_since_last_checkpoint=tool_calls_since_checkpoint,
@@ -85,6 +108,7 @@ def build_spec_checkpoint_decision(
             tool_calls_since_checkpoint=tool_calls_since_checkpoint,
             messages_since_checkpoint=messages_since_checkpoint,
             tokens_since_checkpoint=tokens_since_checkpoint,
+            version_change=version_change_info,
         ),
         sequence=sequence,
         reason=reason,
@@ -140,6 +164,7 @@ def render_spec_checkpoint(
     tool_calls_since_checkpoint: int,
     messages_since_checkpoint: int,
     tokens_since_checkpoint: int,
+    version_change: tuple[int, int, str] | None = None,
 ) -> str:
     spec = task.spec
     if spec is None:
@@ -218,6 +243,13 @@ def render_spec_checkpoint(
                 tokens_since_checkpoint,
             )
         )
+    if version_change is not None:
+        old_ver, new_ver, diff_summary = version_change
+        lines.append("")
+        lines.append("### Spec Version Change")
+        lines.append(f"- Previous Version: {old_ver}")
+        lines.append(f"- Current Version: {new_ver}")
+        lines.append(f"- Diff Summary: {diff_summary}")
     return _clip_checkpoint_text(
         "\n".join(lines).strip(),
         max_chars=policy.max_summary_chars,

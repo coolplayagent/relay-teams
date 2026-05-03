@@ -11,6 +11,10 @@ from relay_teams.agents.orchestration.settings_service import (
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from relay_teams.agents.tasks.spec_artifact_diff_service import (
+    SpecArtifactDiffService,
+)
+from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.automation.automation_service import AutomationService
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
@@ -301,3 +305,9 @@ def get_github_trigger_service(request: Request) -> GitHubTriggerService:
 
 def get_hook_service(request: Request) -> HookService:
     return get_container(request).hook_service
+
+
+def get_spec_artifact_diff_service(request: Request) -> SpecArtifactDiffService:
+    task_service = get_container(request).task_service
+    task_repo: TaskRepository = task_service._task_repo
+    return SpecArtifactDiffService(task_repo)
