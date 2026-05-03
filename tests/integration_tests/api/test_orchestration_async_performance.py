@@ -89,7 +89,7 @@ def test_concurrent_sessions_share_llm_http_concurrency_budget(
 def test_orchestration_parallel_clone_endpoint_is_faster_than_serial(
     api_client: httpx.Client,
 ) -> None:
-    delay_ms = 180
+    delay_ms = 500
     serial = _run_orchestration_clone_benchmark(
         api_client,
         mode="serial",

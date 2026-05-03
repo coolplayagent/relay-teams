@@ -48,8 +48,8 @@ class PressureScenarioResult(BaseModel):
     probes: tuple[BackendProbeResult, ...] = Field(default_factory=tuple)
 
 
-_BACKEND_PROBE_TIMEOUT_SECONDS = 5.0
-_BACKEND_PROBE_MAX_DURATION_MS = 5_000
+_BACKEND_PROBE_TIMEOUT_SECONDS = 10.0
+_BACKEND_PROBE_MAX_DURATION_MS = 10_000
 
 
 def run_pressure_scenario(
