@@ -169,8 +169,8 @@
 | 字段 | 内容 |
 |------|------|
 | **来源研究点** | #15 Runtime Guardrails（AgentDoG 诊断框架、ILION 确定性预执行安全门、Proof-of-Guardrail），#12 国际 AI 安全报告的多维度安全框架 |
-| **当前状态** | 安全机制分散且有限：工具审批（`runtime/approval`）仅作用于单个工具调用级别；角色禁区约束依赖 LLM 对 system_prompt 的遵从（无强制力）；人机审批门（Human Gate）需要显式开启且是全手动操作。没有统一的、贯穿任务全生命周期的运行时安全层 |
-| **借鉴建议** | 构建"三层运行时护栏"架构：(1) **预执行层**（ILION 风格）——在 LLM 调用工具前，以确定性规则检查意图是否在角色权限范围内，不依赖 LLM 判断；(2) **执行中监控层**（AgentDoG 风格）——对工具调用的参数和输出进行实时校验，标记异常模式（如超出预期频率的文件删除、异常大的写入等）；(3) **后验证层**（Proof-of-Guardrail 风格）——任务完成后自动生成"安全合规报告"作为 Gater 验收的必要输入。三层护栏的热点规则可配置，不同角色/任务类型加载不同规则集 |
+| **当前状态** | **基础框架已落地（2026-05-03）**。`RuntimeGuardrailPolicy`（`tools/runtime/guardrails.py`，873 行）已实现完整的三层运行时护栏架构：**预执行层**（`RuntimeGuardrailLayer.PRE_EXECUTION`）确定性拦截、**执行中监控层**（`IN_EXECUTION`）实时校验、**后验证层**（`POST_VALIDATION`）合规报告观察。六种规则类型（`RuntimeGuardrailRuleType`）、三种动作类型（`RuntimeGuardrailAction`：`ALLOW`/`WARN`/`DENY`）、三种状态枚举（`RuntimeGuardrailStatus`：`PASSED`/`WARNING`/`BLOCKED`）均已落地。仍需增强：(a) 热点规则自动生成 (b) 安全审计集成 (c) 差异化规则集加载 |
+| **借鉴建议** | 基础架构已落地，三层护栏模型、六种规则类型（`TOOL_ALLOWLIST`/`TOOL_DENYLIST`/`INPUT_SIZE`/`OUTPUT_SIZE`/`CALL_FREQUENCY`/`SHELL_DESTRUCTIVE_PATTERN`）、三种动作（`ALLOW`/`WARN`/`DENY`）和观察记录机制均已实现。后续应聚焦于：(a) 从 `RoleContract.invariants` 自动派生护栏规则；(b) 将护栏报告持久化到 `security_audit_events` 支持审计查询；(c) 为 `strictness=HIGH` 任务自动增强规则集 |
 | **预期价值** | 从"依赖 LLM 自律"升级为"确定性安全门 + LLM 自律"的双重防护；为用户（尤其企业用户）提供可审计的安全日志；降低越权操作风险 |
 | **优先级** | **高** |
 
@@ -368,31 +368,66 @@
 ## 附录：实施依赖关系图
 
 ```
-Phase 1（基础加固，4-6 周）
-├── AO-1: TaskExecutionService Harness 解构 ← 前置：无
-├── AO-3: 编排参数可配置化 ← 前置：无
-├── EP-4: 任务超时自动处理 ← 前置：无
-└── SG-2: 角色边界强制执行 ← 前置：无
+Phase 1（基础加固，4-6 周）                                              ✅ 已完成
+├── AO-1: TaskExecutionService Harness 解构 ← ✅ 已完成闭环（2026-04-29）
+├── AO-3: 编排参数可配置化 ← ✅ 已完成闭环（2026-04-30）
+├── EP-4: 任务超时自动处理 ← ✅ timeout/heartbeat 已落地，wake/orphan 待补
+├── SG-2: 角色边界强制执行 ← ✅ 基础已落地（2026-05-01）
+└── OP-7: Bounded Agent / Tool Diet 静态校验 ← 未启动
 
-Phase 2（质量与安全核心，6-8 周）
-├── SP-1: 形式化规格嵌入 ← 依赖 AO-1 完成拆解后更易实现
-├── FE-5: 验证引擎升级 ← 依赖 SP-1 的 spec_document 字段
-├── SG-1: 三层运行时护栏 ← 依赖 SG-2 的强制执行机制
-├── EP-1: Context Engineering ← 前置：无（可并行）
-└── SP-2: RoleContract ← 依赖 SP-1 验证闭环建立后
+Phase 2（质量与安全核心，6-8 周）                                    ⬡ 大部分完成
+├── SP-1: 形式化规格嵌入 ← ✅ 已完成闭环（2026-05-02），六大缺口全闭合
+├── OP-12: Structured Prompt Artifact ← ✅ 已被 SP-1 的 REASONS Canvas + spec artifact 覆盖
+├── OP-13: Lightweight Formal Verification ← ✅ 已被 SP-1 的 FormalVerificationPlan 覆盖
+├── FE-5: 验证引擎升级 ← ✅ 八层验证管线已闭环（2026-05-02）
+├── SG-1: 三层运行时护栏 ← ✅ 基础框架已落地（2026-05-03），自动规则派生待增强
+├── EP-1: Context Engineering ← ⬡ 部分落地（compaction 已有，Provider-native caching 待接入）
+├── SP-2: RoleContract ← ✅ 已完成闭环（2026-05-01）
+├── OP-3: 递增式 Task Artifact / Evidence ← ⬡ 部分完成（Evidence Bundle 已落地，Task Artifact 容器待建）
+└── OP-9: Harness 控制面与 Sandbox 计算面 ← 未启动
 
-Phase 3（编排与通信进化，6-8 周）
-├── RP-1/A2A: Agent间直接通信 ← 前置：Phase 1-2 稳定
-├── AO-2: DAG 编排引擎 ← 依赖 AO-1 解构 + RP-1 通信机制
-├── FE-1: Memory Bank ← 前置：无（可并行）
-└── EP-2: Benchmark 体系 ← 依赖 SP-1/FE-5 的验证能力
+Phase 3（编排与通信进化，6-8 周）                                   ⬡ 部分启动
+├── RP-1/A2A: Agent间直接通信 ← 未启动
+├── AO-2: DAG 编排引擎 ← ✅ 已完成闭环（2026-04-30）
+├── FE-1: Memory Bank ← 未启动
+├── FE-3: MCP + A2A 双协议栈 ← ⬡ MCP 已有，A2A 未实现
+├── EP-2: Benchmark 体系 ← 未启动
+├── OP-11: Task Board as State Machine ← 未启动（Automation/Triggers 基础设施已就绪）
+├── OP-1: DB-backed Wake Queue ← 未启动（Monitor 事件驱动基础设施已就绪）
+├── OP-2: Atomic Claim / blocker 自动推进 ← 未启动
+└── OP-4: Provider-native runtime config ← 未启动
 
-Phase 4（差异化特性，按需启动）
-├── FE-2: AutoHarness 工具合成
-├── RP-2: Self-Evolving Agent
-├── FE-6: 对比实验框架
-└── EP-3: Agentic SDLC 全流程
+Phase 4（差异化特性，按需启动）                                     ⬡ 部分已完成
+├── FE-2: AutoHarness 工具合成 ← ✅ 已落地首版（2026-04-29）
+├── OP-5: 预算硬停与 Token 经济学 ← 未启动
+├── OP-6: Multi-Provider 互评与漂移检测 ← 未启动
+├── OP-8: 跨 Provider 治理包与 A2A 五元组 ← 未启动
+├── OP-10: Failure-mode driven MVH eval loop ← 未启动
+├── RP-2: Self-Evolving Agent ← 未启动
+├── FE-6: 对比实验框架 ← 未启动
+├── RP-3: Swarming 模式 ← 未启动
+├── RP-4: Agent 能力分级标注 ← 未启动
+├── AO-4: 同步/异步路径统一 ← ✅ 已完成闭环（2026-05-01）
+├── SP-3: Spec-Checkpoint 抗退化 ← ✅ 已全部落地（2026-05-03），增强项 E1-E4 完成
+├── SG-3: 审计追踪增强 ← 未启动
+├── SG-4: AI 风险评估框架 ← 未启动
+├── FE-4: 优先级调度与资源感知 ← 未启动
+└── EP-3: Agentic SDLC 全流程 ← 未启动
 ```
+
+---
+
+### 事件驱动基础设施：Monitor 子系统
+
+relay-teams 已构建完整的 Monitor 事件归一化与订阅管理模块（`monitors/`），核心组件如下：
+
+- **`MonitorEventEnvelope`**（`monitors/models.py`）：统一事件信封，包含 `source_kind`、`event_name`、`body_text`、`attributes`、`dedupe_key` 等字段，为所有下游事件消费提供标准化接口
+- **`MonitorRule`**（`monitors/models.py`）：完整匹配规则，支持 `event_names`、`text_patterns_any`、`attribute_equals`、`attribute_in`、`cooldown`、`max_triggers`、`auto_stop`、`case_sensitive` 等匹配维度
+- **`MonitorActionType`**（`monitors/models.py`）：四种动作类型枚举 — `WAKE_INSTANCE` / `WAKE_COORDINATOR` / `START_FOLLOWUP_RUN` / `EMIT_NOTIFICATION`
+- **`MonitorSubscriptionRecord`**（`monitors/models.py`）：订阅生命周期管理，含 `active`/`stopped` 状态、`trigger_count`、`last_triggered_at` 等审计字段
+- **`MonitorService.emit()`**：核心评估方法，执行规则匹配、触发审计记录和动作调度
+
+Monitor 与 Triggers（`triggers/`）和 Automation（`automation/`）协同组成完整的事件驱动链路：Triggers 从外部系统（GitHub webhook 等）摄入事件 -> Monitors 归一化并匹配订阅规则 -> 执行动作（唤醒实例/后续运行/通知）-> Automation 提供计划驱动的触发模式。三者构成了 OP-11 "Task Board as State Machine" 和 OP-1 "Wake Queue" 的基础设施前身。
 
 ---
 
