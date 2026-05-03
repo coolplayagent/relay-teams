@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import relay_teams.agents.orchestration.llm_semantic_evaluator as _llm_semantic_evaluator_mod
+
 from relay_teams.agents.orchestration.llm_semantic_evaluator import (
     LlmSemanticEvaluator,
     _LlmEvaluationOutput,
@@ -149,8 +151,6 @@ def test_run_evaluator_streaming_raises_on_null_result() -> None:
 def test_llm_semantic_evaluator_success_path_from_thread(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import relay_teams.agents.orchestration.llm_semantic_evaluator as mod
-
     config = ModelEndpointConfig(
         model="test-model",
         base_url="http://localhost:11434/v1",
@@ -167,7 +167,9 @@ def test_llm_semantic_evaluator_success_path_from_thread(
     async def fake_streaming(**kwargs: object) -> _LlmEvaluationOutput:
         return fake_output
 
-    monkeypatch.setattr(mod, "_run_evaluator_streaming", fake_streaming)
+    monkeypatch.setattr(
+        _llm_semantic_evaluator_mod, "_run_evaluator_streaming", fake_streaming
+    )
 
     evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
     request = SemanticEvaluationRequest(
@@ -184,8 +186,6 @@ def test_llm_semantic_evaluator_success_path_from_thread(
 async def test_llm_semantic_evaluator_from_running_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import relay_teams.agents.orchestration.llm_semantic_evaluator as mod
-
     config = ModelEndpointConfig(
         model="test-model",
         base_url="http://localhost:11434/v1",
@@ -202,7 +202,9 @@ async def test_llm_semantic_evaluator_from_running_loop(
     async def fake_streaming(**kwargs: object) -> _LlmEvaluationOutput:
         return fake_output
 
-    monkeypatch.setattr(mod, "_run_evaluator_streaming", fake_streaming)
+    monkeypatch.setattr(
+        _llm_semantic_evaluator_mod, "_run_evaluator_streaming", fake_streaming
+    )
 
     evaluator = LlmSemanticEvaluator(resolve_model_config=resolver)
     request = SemanticEvaluationRequest(

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.interfaces.server.deps import get_container
@@ -71,7 +71,7 @@ def _get_auto_harness_service(request: object) -> object:
 
 @router.get("/tools", response_model=list[GeneratedToolSummary])
 async def list_generated_tools(
-    request: object,
+    request: Request,
 ) -> list[GeneratedToolSummary]:
     from relay_teams.tools.generated_tools import AutoHarnessService
 
@@ -83,7 +83,7 @@ async def list_generated_tools(
 @router.get("/tools/{tool_name}", response_model=GeneratedToolDetail)
 async def get_generated_tool(
     tool_name: str,
-    request: object,
+    request: Request,
 ) -> GeneratedToolDetail:
     from relay_teams.tools.generated_tools import AutoHarnessService
 
