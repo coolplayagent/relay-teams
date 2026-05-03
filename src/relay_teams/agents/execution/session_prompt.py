@@ -8,9 +8,7 @@ from typing import cast
 from pydantic import JsonValue
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 
-from relay_teams.providers.prompt_caching import (
-    should_enable_prompt_caching_for_anthropic,
-)
+from relay_teams.providers.prompt_caching import apply_anthropic_cache_markers
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.messages import (
@@ -330,20 +328,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
                 anthropic_settings["max_tokens"] = max_tokens
             if request.thinking.enabled and request.thinking.effort is not None:
                 anthropic_settings["thinking"] = request.thinking.effort
-            if should_enable_prompt_caching_for_anthropic(system_prompt):
-                existing_extra = anthropic_settings.get("extra_body")
-                if isinstance(existing_extra, dict):
-                    extra_body = dict(existing_extra)
-                else:
-                    extra_body: dict[str, object] = {}
-                beta_list = extra_body.get("anthropic_beta")
-                if isinstance(beta_list, list):
-                    if "prompt-caching-2024-07-31" not in beta_list:
-                        beta_list.append("prompt-caching-2024-07-31")
-                else:
-                    beta_list = ["prompt-caching-2024-07-31"]
-                extra_body["anthropic_beta"] = beta_list
-                anthropic_settings["extra_body"] = extra_body
+            anthropic_settings = apply_anthropic_cache_markers(
+                system_prompt, anthropic_settings
+            )
             return anthropic_settings
         openai_settings: OpenAIChatModelSettings = {
             "openai_continuous_usage_stats": True,
