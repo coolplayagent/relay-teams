@@ -44,7 +44,8 @@ class TestListSpecArtifactsEndpoint:
             task_id="t1", response_format="summary", service=svc
         )
         assert result["task_id"] == "t1"
-        assert len(result["versions"]) == 2
+        versions = result["versions"]
+        assert isinstance(versions, list) and len(versions) == 2
 
     @pytest.mark.asyncio
     async def test_returns_full_format(self) -> None:
@@ -56,7 +57,8 @@ class TestListSpecArtifactsEndpoint:
             task_id="t1", response_format="full", service=svc
         )
         assert result["task_id"] == "t1"
-        assert len(result["versions"]) == 1
+        versions = result["versions"]
+        assert isinstance(versions, list) and len(versions) == 1
 
     @pytest.mark.asyncio
     async def test_task_not_found_raises_404(self) -> None:
@@ -132,7 +134,7 @@ class TestGetSpecArtifactDiffEndpoint:
                 has_changes=True,
                 from_version=1,
                 to_version=2,
-                field_changes=[],
+                field_changes=(),
             )
         )
         result = await get_spec_artifact_diff(
