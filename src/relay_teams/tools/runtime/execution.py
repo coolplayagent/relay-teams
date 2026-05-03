@@ -54,6 +54,7 @@ from relay_teams.roles.runtime_tools import (
     runtime_denied_tools_for_role,
     runtime_tools_for_role,
 )
+from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_stream import publish_run_event_async
 from relay_teams.sessions.runs.run_models import RunEvent
@@ -319,6 +320,42 @@ async def execute_tool(
         meta: dict[str, JsonValue] = {}
         effective_tool_input = dict(args_summary if tool_input is None else tool_input)
         _raise_if_stopped(ctx)
+        role_contract_error = _apply_role_contract_check(ctx=ctx, tool_name=tool_name)
+        if role_contract_error is not None:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            meta["duration_ms"] = elapsed_ms
+            meta["approval_status"] = "denied_by_policy"
+            meta["runtime_policy_decision"] = "deny"
+            meta["role_id"] = ctx.deps.role_id
+            meta["tool_name"] = tool_name
+            envelope = _visible_envelope(
+                ok=False,
+                error=role_contract_error,
+                meta=meta,
+            )
+            await _observe_tool_result_reminders_async(
+                ctx=ctx,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                envelope=envelope,
+            )
+            await _persist_and_publish_tool_result_async(
+                ctx=ctx,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                args_summary=args_summary,
+                visible_envelope=envelope,
+                internal_data=None,
+                runtime_meta=meta,
+                execution_status=ToolExecutionStatus.FAILED,
+            )
+            await _record_tool_metrics_async(
+                ctx=ctx,
+                tool_name=tool_name,
+                duration_ms=elapsed_ms,
+                success=False,
+            )
+            return envelope
         requested_force_approval = force_approval
         hook_force_approval = False
         (
@@ -1980,6 +2017,51 @@ def _coerce_float(value: JsonValue) -> float:
         if stripped:
             return float(stripped)
     raise ValueError(f"Cannot coerce tool argument to float: {value!r}")
+
+
+def _apply_role_contract_check(
+    *,
+    ctx: ToolContext,
+    tool_name: str,
+) -> ToolError | None:
+    role: RoleDefinition | None = None
+    resolver = getattr(ctx.deps, "runtime_role_resolver", None)
+    if resolver is not None:
+        try:
+            role = resolver.get_effective_role(run_id=None, role_id=ctx.deps.role_id)
+        except (KeyError, ValueError, RuntimeError):
+            role = None
+    if role is None:
+        role_registry = getattr(ctx.deps, "role_registry", None)
+        if role_registry is None:
+            return None
+        try:
+            role = role_registry.get(ctx.deps.role_id)
+        except (KeyError, ValueError):
+            return None
+    if role is None:
+        return None
+    denied_tools = runtime_denied_tools_for_role(role)
+    if not denied_tools or tool_name not in denied_tools:
+        return None
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="tool.role_contract.denied",
+        message="Tool call denied by role contract",
+        payload={
+            "role_id": ctx.deps.role_id,
+            "tool_name": tool_name,
+        },
+    )
+    return ToolError(
+        type="tool_policy_denied",
+        message=(
+            f"Tool '{tool_name}' is denied for role "
+            f"'{ctx.deps.role_id}' by role contract invariant"
+        ),
+        retryable=False,
+    )
 
 
 def _raise_if_stopped(ctx: ToolContext) -> None:

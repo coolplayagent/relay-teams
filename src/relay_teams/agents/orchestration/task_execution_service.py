@@ -37,10 +37,12 @@ from relay_teams.agents.orchestration.harnesses.prompt_harness import (
     ProviderUserPromptContent,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
-from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction
+from relay_teams.agents.tasks.agent_wakeup_repository import AgentWakeupRepository
+from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction, WakeupStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, TaskHandoff
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
 from relay_teams.hooks import HookService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
@@ -124,6 +126,7 @@ class TaskExecutionService(BaseModel):
     hook_service: HookService | None = None
     todo_service: TodoService | None = None
     reminder_service: SystemReminderService | None = None
+    wakeup_repo: AgentWakeupRepository | None = None
 
     async def execute(
         self,
@@ -902,6 +905,37 @@ class TaskExecutionService(BaseModel):
                 "runtime_phase": runtime_phase.value,
             },
         )
+        if timeout_action == TaskTimeoutAction.RETRY:
+            lifecycle = task.lifecycle
+            retry_attempt = task.retry_attempt
+            max_attempts = lifecycle.max_retry_attempts
+            if retry_attempt < max_attempts and self.wakeup_repo is not None:
+                now = datetime.now(tz=timezone.utc)
+                entry = AgentWakeupEntry(
+                    wakeup_id=f"wk_{task.task_id}_{retry_attempt + 1}",
+                    task_id=task.task_id,
+                    trace_id=task.trace_id,
+                    session_id=task.session_id,
+                    coalesce_key=f"{task.task_id}:retry",
+                    timeout_action=TaskTimeoutAction.RETRY,
+                    timeout_seconds=lifecycle.timeout_seconds or 0.0,
+                    attempt=retry_attempt + 1,
+                    max_attempts=max_attempts,
+                    status=WakeupStatus.PENDING,
+                    enqueued_at=now,
+                )
+                await self.wakeup_repo.enqueue_async(entry)
+                log_event(
+                    LOGGER,
+                    logging.INFO,
+                    event="task.execution.timeout_retry_enqueued",
+                    message="Retry wakeup enqueued for timed-out task",
+                    payload={
+                        "task_id": task.task_id,
+                        "attempt": retry_attempt + 1,
+                        "max_attempts": max_attempts,
+                    },
+                )
         if paused_timeout:
             raise RecoverableRunPauseError(
                 RecoverableRunPausePayload(

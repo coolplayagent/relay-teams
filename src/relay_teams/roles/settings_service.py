@@ -28,6 +28,10 @@ from relay_teams.plugins.plugin_models import PluginComponentSource
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.roles.memory_models import default_memory_profile
+from relay_teams.roles.tool_diet_policy import ToolDietPolicy
+from relay_teams.roles.tool_diet_validation import (
+    validate_tool_diet,
+)
 from relay_teams.roles.role_contracts import (
     RoleContract,
     RoleContractInvariant,
@@ -52,6 +56,7 @@ class RoleSettingsService:
         on_roles_reloaded: Callable[[RoleRegistry], None],
         reload_skill_registry: Callable[[], SkillRegistry] | None = None,
         plugin_sources: tuple[PluginComponentSource, ...] = (),
+        tool_diet_policy: ToolDietPolicy | None = None,
     ) -> None:
         self._roles_dir: Path = roles_dir
         self._builtin_roles_dir: Path = builtin_roles_dir
@@ -63,6 +68,7 @@ class RoleSettingsService:
         self._reload_skill_registry = reload_skill_registry
         self._get_external_agent_service = get_external_agent_service
         self._on_roles_reloaded: Callable[[RoleRegistry], None] = on_roles_reloaded
+        self._tool_diet_policy = tool_diet_policy or ToolDietPolicy()
 
     def replace_plugin_sources(
         self,
@@ -129,6 +135,14 @@ class RoleSettingsService:
                 }
             )
         )
+        diet_report = validate_tool_diet(
+            policy=self._tool_diet_policy,
+            tool_count=len(canonical_role.tools),
+            objective=canonical_role.system_prompt,
+            role_id=normalized.role_id,
+            verification_acceptance_criteria_count=self._tool_diet_policy.min_verification_fields,
+        )
+        diet_warnings = tuple(f for f in diet_report.findings)
         return RoleValidationResult(
             valid=True,
             role=self._record_from_definition(
@@ -138,6 +152,7 @@ class RoleSettingsService:
                 source_role_id=normalized.source_role_id,
                 source=RoleConfigSource.APP,
             ),
+            diet_warnings=diet_warnings,
         )
 
     def save_role_document(

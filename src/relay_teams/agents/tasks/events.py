@@ -19,6 +19,9 @@ class EventType(str, Enum):
     INSTANCE_RECYCLED = "instance_recycled"
     VERIFICATION_PASSED = "verification_passed"
     VERIFICATION_FAILED = "verification_failed"
+    WAKEUP_ENQUEUED = "wakeup_enqueued"
+    WAKEUP_DISPATCHED = "wakeup_dispatched"
+    ORPHAN_RECOVERED = "orphan_recovered"
 
 
 class EventEnvelope(BaseModel):
