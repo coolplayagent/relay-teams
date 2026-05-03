@@ -204,14 +204,14 @@ async def evaluate_task_spec(
 @router.get("/{task_id}/spec-artifacts")
 async def list_spec_artifacts(
     task_id: RequiredIdentifierStr,
-    format: str = "summary",
+    response_format: str = "summary",
     service: TaskOrchestrationService = Depends(get_task_service),
 ) -> dict[str, JsonValue]:
     try:
         artifacts = await service.list_task_spec_artifacts_async(task_id=task_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Task not found") from exc
-    if format == "full":
+    if response_format == "full":
         return {
             "task_id": task_id,
             "versions": [artifact.model_dump(mode="json") for artifact in artifacts],  # type: ignore[dict-item]

@@ -788,15 +788,17 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     },
                 )
 
-                policy = None
                 task_record_for_policy: TaskRecord | None = None
                 try:
                     task_repo = self._task_repo
                     task_record_for_policy = await task_repo.get_async(request.task_id)
                 except KeyError:
                     task_record_for_policy = None
-                if task_record_for_policy is not None:
-                    policy = task_record_for_policy.envelope.lifecycle.spec_checkpoint
+                policy = (
+                    task_record_for_policy.envelope.lifecycle.spec_checkpoint
+                    if task_record_for_policy is not None
+                    else None
+                )
 
                 if policy is not None and policy.auto_evaluate_drift:
                     await _evaluate_checkpoint_drift(

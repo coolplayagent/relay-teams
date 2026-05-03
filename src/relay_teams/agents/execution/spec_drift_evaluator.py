@@ -5,13 +5,11 @@ import json
 import logging
 from uuid import uuid4
 
-from relay_teams.agents.orchestration.llm_evaluator import (
-    LLMEvaluator,
-    _fallback_evaluation_result,
-)
+from relay_teams.agents.orchestration.llm_evaluator import LLMEvaluator
 from relay_teams.agents.orchestration.llm_evaluator_models import (
     LLMEvaluationRequest,
     LLMEvaluationResult,
+    LLMEvaluationScore,
 )
 from relay_teams.agents.tasks.models import (
     SpecCheckpointEvaluation,
@@ -57,7 +55,20 @@ async def evaluate_spec_drift(
             message="Drift evaluation failed, using fallback",
             payload={"error": str(exc), "task_id": task_id},
         )
-        result = _fallback_evaluation_result()
+        result = LLMEvaluationResult(
+            scores=[
+                LLMEvaluationScore(
+                    dimension="completeness",
+                    score=3,
+                    reasoning="LLM evaluation unavailable; using neutral fallback.",
+                ),
+            ],
+            overall_score=3.0,
+            summary="LLM evaluation failed; fallback to rule-based assessment.",
+            recommendations=[
+                "Manual review recommended due to LLM evaluation failure.",
+            ],
+        )
         fallback = True
 
     drift_detected = result.overall_score < drift_score_threshold
