@@ -206,7 +206,11 @@ class ExecutionHarness(BaseModel):
                 session_mode = intent.session_mode.value
                 run_kind = intent.run_kind
             except KeyError:
-                pass
+                LOGGER.debug(
+                    "Missing run intent for trace_id=%s session_id=%s; using defaults",
+                    task.trace_id,
+                    task.session_id,
+                )
         if task.parent_task_id is not None:
             session_mode = "normal"
             run_kind = RunKind.CONVERSATION

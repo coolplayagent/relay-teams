@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from relay_teams.agents.tasks.enums import TaskArtifactPhase
+from relay_teams.logger import get_logger
 from relay_teams.agents.tasks.models import (
     TaskArtifact,
     TaskArtifactEntry,
@@ -104,7 +105,9 @@ class TaskArtifactRepository:
                         eb_json
                     )
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    get_logger(__name__).debug(
+                        "Malformed evidence_bundle_json tolerated; falling back to None"
+                    )
 
             return TaskArtifact(
                 task_id=artifact_row["task_id"],
