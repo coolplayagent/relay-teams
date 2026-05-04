@@ -2,19 +2,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from collections.abc import Callable
-from typing import Annotated, ParamSpec, TypeVar
+from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from urllib.parse import unquote
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from relay_teams.interfaces.server.async_call import (
-    RouteWorkClass,
-    call_maybe_async,
-    call_route_work,
-)
 from relay_teams.validation import require_force_delete
 from relay_teams.interfaces.server.deps import get_workspace_service
 from relay_teams.interfaces.server.write_models import DeleteRequest
@@ -32,24 +26,6 @@ from relay_teams.workspace import (
 )
 
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
-ParamT = ParamSpec("ParamT")
-ResultT = TypeVar("ResultT")
-
-
-async def _call_workspace_file_work(
-    operation: str,
-    function: Callable[ParamT, ResultT],
-    /,
-    *args: ParamT.args,
-    **kwargs: ParamT.kwargs,
-) -> ResultT:
-    return await call_route_work(
-        RouteWorkClass.FILE_MEDIA,
-        operation,
-        function,
-        *args,
-        **kwargs,
-    )
 
 
 class CreateWorkspaceRequest(BaseModel):
@@ -101,16 +77,12 @@ async def create_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-
-        def _create_workspace() -> WorkspaceRecord:
-            return service.create_workspace(
-                workspace_id=req.workspace_id,
-                root_path=Path(req.root_path) if req.root_path is not None else None,
-                mounts=req.mounts,
-                default_mount_name=req.default_mount_name,
-            )
-
-        return await call_maybe_async(_create_workspace)
+        return await service.create_workspace_async(
+            workspace_id=req.workspace_id,
+            root_path=Path(req.root_path) if req.root_path is not None else None,
+            mounts=req.mounts,
+            default_mount_name=req.default_mount_name,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -120,6 +92,8 @@ async def pick_workspace(
     req: PickWorkspaceRequest | None = None,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> PickWorkspaceResponse:
+    import asyncio
+
     def _pick_workspace_for_request() -> WorkspaceRecord | None:
         if req is not None and req.root_path is not None:
             selected_root = Path(req.root_path)
@@ -130,7 +104,7 @@ async def pick_workspace(
         return service.create_workspace_for_root(root_path=selected_root)
 
     try:
-        workspace = await call_maybe_async(_pick_workspace_for_request)
+        workspace = await asyncio.to_thread(_pick_workspace_for_request)
         if workspace is None:
             return PickWorkspaceResponse(workspace=None)
     except ValueError as exc:
@@ -144,7 +118,7 @@ async def pick_workspace(
 async def list_workspaces(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> list[WorkspaceRecord]:
-    records = await call_maybe_async(service.list_workspaces)
+    records = await service.list_workspaces_async()
     return list(records)
 
 
@@ -154,7 +128,7 @@ async def get_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return await call_maybe_async(service.get_workspace, workspace_id)
+        return await service.get_workspace_async(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
 
@@ -166,8 +140,7 @@ async def update_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return await call_maybe_async(
-            service.update_workspace,
+        return await service.update_workspace_async(
             workspace_id,
             mounts=req.mounts,
             default_mount_name=req.default_mount_name,
@@ -185,14 +158,7 @@ async def open_workspace_root(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> dict[str, str]:
     try:
-        if mount is None:
-            _ = await call_maybe_async(service.open_workspace_root, workspace_id)
-        else:
-            _ = await call_maybe_async(
-                service.open_workspace_root,
-                workspace_id,
-                mount_name=mount,
-            )
+        _ = await service.open_workspace_root_async(workspace_id, mount_name=mount)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
@@ -208,11 +174,7 @@ async def get_workspace_snapshot(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceSnapshot:
     try:
-        return await _call_workspace_file_work(
-            "workspaces.snapshot",
-            service.get_workspace_snapshot,
-            workspace_id,
-        )
+        return await service.get_workspace_snapshot_async(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except ValueError as exc:
@@ -227,16 +189,7 @@ async def get_workspace_tree_listing(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceTreeListing:
     try:
-        if mount is None:
-            return await _call_workspace_file_work(
-                "workspaces.tree",
-                service.get_workspace_tree_listing,
-                workspace_id,
-                directory_path=path,
-            )
-        return await _call_workspace_file_work(
-            "workspaces.tree",
-            service.get_workspace_tree_listing,
+        return await service.get_workspace_tree_listing_async(
             workspace_id,
             directory_path=path,
             mount_name=mount,
@@ -256,9 +209,7 @@ async def search_workspace_paths(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceSearchResponse:
     try:
-        return await _call_workspace_file_work(
-            "workspaces.search",
-            service.search_workspace_paths,
+        return await service.search_workspace_paths_async(
             workspace_id,
             query=query,
             limit=limit,
@@ -277,15 +228,7 @@ async def get_workspace_diffs(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceDiffListing:
     try:
-        if mount is None:
-            return await _call_workspace_file_work(
-                "workspaces.diffs",
-                service.get_workspace_diffs,
-                workspace_id,
-            )
-        return await _call_workspace_file_work(
-            "workspaces.diffs",
-            service.get_workspace_diffs,
+        return await service.get_workspace_diffs_async(
             workspace_id,
             mount_name=mount,
         )
@@ -303,16 +246,7 @@ async def get_workspace_diff_file(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceDiffFile:
     try:
-        if mount is None:
-            return await _call_workspace_file_work(
-                "workspaces.diff",
-                service.get_workspace_diff_file,
-                workspace_id,
-                path=unquote(path),
-            )
-        return await _call_workspace_file_work(
-            "workspaces.diff",
-            service.get_workspace_diff_file,
+        return await service.get_workspace_diff_file_async(
             workspace_id,
             path=unquote(path),
             mount_name=mount,
@@ -331,21 +265,14 @@ async def get_workspace_preview_file(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> FileResponse:
     try:
-        if mount is None:
-            resolved_path, media_type = await _call_workspace_file_work(
-                "workspaces.preview_file",
-                service.get_workspace_image_preview_file,
-                workspace_id,
-                path=unquote(path),
-            )
-        else:
-            resolved_path, media_type = await _call_workspace_file_work(
-                "workspaces.preview_file",
-                service.get_workspace_image_preview_file,
-                workspace_id,
-                path=unquote(path),
-                mount_name=mount,
-            )
+        (
+            resolved_path,
+            media_type,
+        ) = await service.get_workspace_image_preview_file_async(
+            workspace_id,
+            path=unquote(path),
+            mount_name=mount,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workspace not found") from exc
     except FileNotFoundError as exc:
@@ -376,8 +303,7 @@ async def delete_workspace(
                 message="Cannot remove workspace directory without force",
             )
 
-        await call_maybe_async(
-            service.delete_workspace_with_options,
+        await service.delete_workspace_with_options_async(
             workspace_id=workspace_id,
             remove_directory=should_remove_directory,
         )
@@ -397,8 +323,7 @@ async def fork_workspace(
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> WorkspaceRecord:
     try:
-        return await call_maybe_async(
-            service.fork_workspace,
+        return await service.fork_workspace_async(
             source_workspace_id=workspace_id,
             name=req.name,
             start_ref=req.start_ref,

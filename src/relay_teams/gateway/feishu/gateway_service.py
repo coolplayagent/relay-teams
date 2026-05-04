@@ -35,6 +35,7 @@ from relay_teams.sessions.external_session_binding_repository import (
 )
 from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.workspace import WorkspaceService
+import asyncio
 
 LOGGER = get_logger(__name__)
 
@@ -90,8 +91,16 @@ class FeishuGatewayService:
             for account in self._repository.list_accounts()
         )
 
+    async def list_accounts_async(self) -> tuple[FeishuGatewayAccountRecord, ...]:
+
+        return await asyncio.to_thread(self.list_accounts)
+
     def get_account(self, account_id: str) -> FeishuGatewayAccountRecord:
         return self.attach_secret_status(self._repository.get_account(account_id))
+
+    async def get_account_async(self, account_id: str) -> FeishuGatewayAccountRecord:
+
+        return await asyncio.to_thread(self.get_account, account_id)
 
     def create_account(
         self,
@@ -120,6 +129,13 @@ class FeishuGatewayService:
             require_app_secret=True,
         )
         return self.get_account(created.account_id)
+
+    async def create_account_async(
+        self,
+        request: FeishuGatewayAccountCreateInput,
+    ) -> FeishuGatewayAccountRecord:
+
+        return await asyncio.to_thread(self.create_account, request)
 
     def update_account(
         self,
@@ -159,6 +175,14 @@ class FeishuGatewayService:
             self.clear_bindings(stored.account_id)
         return self.get_account(stored.account_id)
 
+    async def update_account_async(
+        self,
+        account_id: str,
+        request: FeishuGatewayAccountUpdateInput,
+    ) -> FeishuGatewayAccountRecord:
+
+        return await asyncio.to_thread(self.update_account, account_id, request)
+
     def set_account_enabled(
         self,
         account_id: str,
@@ -180,6 +204,12 @@ class FeishuGatewayService:
         _ = self._repository.update_account(updated)
         return self.get_account(account_id)
 
+    async def set_account_enabled_async(
+        self, account_id: str, enabled: bool
+    ) -> FeishuGatewayAccountRecord:
+
+        return await asyncio.to_thread(self.set_account_enabled, account_id, enabled)
+
     def delete_account(self, account_id: str, *, force: bool = False) -> None:
         _ = self._repository.get_account(account_id)
         if any(
@@ -195,6 +225,12 @@ class FeishuGatewayService:
         self.clear_bindings(account_id)
         self.delete_secret_config(account_id)
         self._repository.delete_account(account_id)
+
+    async def delete_account_async(
+        self, account_id: str, *, force: bool = False
+    ) -> None:
+
+        return await asyncio.to_thread(self.delete_account, account_id, force=force)
 
     def attach_secret_status(
         self,

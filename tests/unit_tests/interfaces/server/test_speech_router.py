@@ -33,6 +33,12 @@ class _FakeSpeechConfigService:
             raise ValueError("bad profile")
         self.saved_config = config
 
+    async def get_config_payload_async(self) -> dict[str, object]:
+        return self.get_config_payload()
+
+    async def save_config_async(self, config: SpeechConfigUpdate) -> None:
+        self.save_config(config)
+
 
 class _FakeRealtimeSttProxyService:
     def __init__(self) -> None:

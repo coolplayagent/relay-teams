@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -78,6 +77,32 @@ class _FakeMetricsService:
             ),
         )
 
+    async def get_overview_async(
+        self,
+        *,
+        scope: MetricScope,
+        scope_id: str,
+        time_window_minutes: int,
+    ) -> ObservabilityOverview:
+        return self.get_overview(
+            scope=scope,
+            scope_id=scope_id,
+            time_window_minutes=time_window_minutes,
+        )
+
+    async def get_breakdowns_async(
+        self,
+        *,
+        scope: MetricScope,
+        scope_id: str,
+        time_window_minutes: int,
+    ) -> ObservabilityBreakdown:
+        return self.get_breakdowns(
+            scope=scope,
+            scope_id=scope_id,
+            time_window_minutes=time_window_minutes,
+        )
+
 
 def _create_client() -> TestClient:
     app = FastAPI()
@@ -117,19 +142,7 @@ def test_observability_breakdowns_route_requires_scope_id() -> None:
     assert response.json() == {"detail": "scope_id is required"}
 
 
-def test_observability_routes_offload_sync_service_calls(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(observability, "call_maybe_async", fake_to_thread)
+def test_observability_routes_use_native_async() -> None:
     client = _create_client()
 
     overview = client.get(
@@ -141,23 +154,3 @@ def test_observability_routes_offload_sync_service_calls(monkeypatch) -> None:
 
     assert overview.status_code == 200
     assert breakdowns.status_code == 200
-    assert calls == [
-        (
-            "get_overview",
-            (),
-            {
-                "scope": MetricScope.SESSION,
-                "scope_id": "session-1",
-                "time_window_minutes": 60,
-            },
-        ),
-        (
-            "get_breakdowns",
-            (),
-            {
-                "scope": MetricScope.GLOBAL,
-                "scope_id": "",
-                "time_window_minutes": 60,
-            },
-        ),
-    ]

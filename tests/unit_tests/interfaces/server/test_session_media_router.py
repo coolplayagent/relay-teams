@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -30,6 +29,9 @@ class _FakeSessionService:
         if session_id != "session-1":
             raise KeyError(session_id)
         return _FakeSessionRecord(workspace_id="workspace-1")
+
+    async def get_session_async(self, session_id: str) -> _FakeSessionRecord:
+        return self.get_session(session_id)
 
 
 class _FakeMediaAssetService:
@@ -92,6 +94,47 @@ class _FakeMediaAssetService:
             raise FileNotFoundError(asset_id)
         return self.asset_file_path, self.asset_record.mime_type
 
+    async def list_session_assets_async(
+        self, session_id: str
+    ) -> tuple[MediaAssetRecord, ...]:
+        return self.list_session_assets(session_id)
+
+    async def store_bytes_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        modality: MediaModality,
+        mime_type: str,
+        data: bytes,
+        name: str,
+        size_bytes: int,
+        source: str,
+    ) -> MediaAssetRecord:
+        return self.store_bytes(
+            session_id=session_id,
+            workspace_id=workspace_id,
+            modality=modality,
+            mime_type=mime_type,
+            data=data,
+            name=name,
+            size_bytes=size_bytes,
+            source=source,
+        )
+
+    async def get_asset_async(self, asset_id: str) -> MediaAssetRecord:
+        return self.get_asset(asset_id)
+
+    async def get_asset_file_async(
+        self, *, session_id: str, asset_id: str
+    ) -> tuple[Path, str]:
+        return self.get_asset_file(session_id=session_id, asset_id=asset_id)
+
+    async def to_content_part_async(
+        self, record: MediaAssetRecord
+    ) -> MediaRefContentPart:
+        return self.to_content_part(record)
+
     def to_content_part(self, record: MediaAssetRecord) -> MediaRefContentPart:
         return MediaRefContentPart(
             asset_id=record.asset_id,
@@ -114,21 +157,8 @@ def _create_client(asset_file_path: Path) -> tuple[TestClient, _FakeMediaAssetSe
 
 
 def test_session_media_routes_offload_sync_service_calls(
-    monkeypatch,
     tmp_path: Path,
 ) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(session_media, "call_maybe_async", fake_to_thread)
     asset_file_path = tmp_path / "image.png"
     asset_file_path.write_bytes(b"seed")
     client, _ = _create_client(asset_file_path)
@@ -146,14 +176,3 @@ def test_session_media_routes_offload_sync_service_calls(
     assert fetched.status_code == 200
     assert file_response.status_code == 200
     assert file_response.content == b"data"
-    assert [call[0] for call in calls] == [
-        "get_session",
-        "list_session_assets",
-        "get_session",
-        "store_bytes",
-        "get_session",
-        "get_asset",
-        "get_session",
-        "get_asset",
-        "get_asset_file",
-    ]

@@ -81,6 +81,7 @@ from relay_teams.triggers.repository import (
     TriggerRuleNameConflictError,
 )
 from relay_teams.triggers.secret_store import GitHubTriggerSecretStore
+import asyncio
 
 LOGGER = get_logger(__name__)
 _GITHUB_DELIVERY_HEADER = "x-github-delivery"
@@ -848,6 +849,124 @@ class GitHubTriggerService:
         for dispatch in self._repository.list_open_dispatches():
             progress = self._reconcile_dispatch(dispatch) or progress
         return progress
+
+    # --- async wrappers for router calls ---
+
+    async def list_accounts_async(self) -> tuple[GitHubTriggerAccountRecord, ...]:
+
+        return await asyncio.to_thread(self.list_accounts)
+
+    async def create_account_async(
+        self, req: GitHubTriggerAccountCreateInput
+    ) -> GitHubTriggerAccountRecord:
+
+        return await asyncio.to_thread(self.create_account, req)
+
+    async def update_account_async(
+        self, account_id: str, req: GitHubTriggerAccountUpdateInput
+    ) -> GitHubTriggerAccountRecord:
+
+        return await asyncio.to_thread(self.update_account, account_id, req)
+
+    async def delete_account_async(self, account_id: str) -> None:
+
+        return await asyncio.to_thread(self.delete_account, account_id)
+
+    async def enable_account_async(self, account_id: str) -> GitHubTriggerAccountRecord:
+
+        return await asyncio.to_thread(self.enable_account, account_id)
+
+    async def disable_account_async(
+        self, account_id: str
+    ) -> GitHubTriggerAccountRecord:
+
+        return await asyncio.to_thread(self.disable_account, account_id)
+
+    async def list_repo_subscriptions_async(
+        self,
+    ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
+
+        return await asyncio.to_thread(self.list_repo_subscriptions)
+
+    async def list_available_repositories_async(
+        self, account_id: str, *, query: str | None = None
+    ) -> tuple[GitHubAvailableRepositoryRecord, ...]:
+
+        return await asyncio.to_thread(
+            self.list_available_repositories, account_id, query=query
+        )
+
+    async def create_repo_subscription_async(
+        self, req: GitHubRepoSubscriptionCreateInput
+    ) -> GitHubRepoSubscriptionRecord:
+
+        return await asyncio.to_thread(self.create_repo_subscription, req)
+
+    async def update_repo_subscription_async(
+        self, repo_subscription_id: str, req: GitHubRepoSubscriptionUpdateInput
+    ) -> GitHubRepoSubscriptionRecord:
+
+        return await asyncio.to_thread(
+            self.update_repo_subscription, repo_subscription_id, req
+        )
+
+    async def delete_repo_subscription_async(self, repo_subscription_id: str) -> None:
+
+        return await asyncio.to_thread(
+            self.delete_repo_subscription, repo_subscription_id
+        )
+
+    async def enable_repo_subscription_async(
+        self, repo_subscription_id: str
+    ) -> GitHubRepoSubscriptionRecord:
+
+        return await asyncio.to_thread(
+            self.enable_repo_subscription, repo_subscription_id
+        )
+
+    async def disable_repo_subscription_async(
+        self, repo_subscription_id: str
+    ) -> GitHubRepoSubscriptionRecord:
+
+        return await asyncio.to_thread(
+            self.disable_repo_subscription, repo_subscription_id
+        )
+
+    async def list_rules_async(self) -> tuple[TriggerRuleRecord, ...]:
+
+        return await asyncio.to_thread(self.list_rules)
+
+    async def create_rule_async(
+        self, payload: TriggerRuleCreateInput
+    ) -> TriggerRuleRecord:
+
+        return await asyncio.to_thread(self.create_rule, payload)
+
+    async def update_rule_async(
+        self, trigger_rule_id: str, req: TriggerRuleUpdateInput
+    ) -> TriggerRuleRecord:
+
+        return await asyncio.to_thread(self.update_rule, trigger_rule_id, req)
+
+    async def delete_rule_async(self, trigger_rule_id: str) -> None:
+
+        return await asyncio.to_thread(self.delete_rule, trigger_rule_id)
+
+    async def enable_rule_async(self, trigger_rule_id: str) -> TriggerRuleRecord:
+
+        return await asyncio.to_thread(self.enable_rule, trigger_rule_id)
+
+    async def disable_rule_async(self, trigger_rule_id: str) -> TriggerRuleRecord:
+
+        return await asyncio.to_thread(self.disable_rule, trigger_rule_id)
+
+    async def handle_inbound_github_delivery_async(
+        self, *, headers: dict[str, str], body: bytes
+    ) -> dict[str, JsonValue]:
+
+        return await asyncio.to_thread(
+            self.handle_inbound_github_delivery, headers=headers, body=body
+        )
 
     def _evaluate_delivery(
         self,

@@ -155,6 +155,10 @@ class FeishuSubscriptionService:
         if isinstance(self._runner_factory, ShutdownableRunnerFactory):
             self._runner_factory.shutdown()
 
+    async def reload_async(self) -> None:
+
+        await asyncio.to_thread(self.reload)
+
     def reload(self) -> None:
         with self._lock:
             runtime_configs = self._runtime_config_lookup.list_enabled_runtime_configs()

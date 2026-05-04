@@ -91,6 +91,8 @@ from relay_teams.workspace import (
     build_instance_session_scope_id,
 )
 
+import asyncio
+
 if TYPE_CHECKING:
     from relay_teams.agents.execution.subagent_reflection import (
         SubagentReflectionService,
@@ -454,6 +456,11 @@ class SessionService:
         self._session_repo.update_metadata(session_id, next_metadata)
         self._invalidate_list_sessions_cache()
 
+    async def update_session_async(
+        self, session_id: str, patch: SessionMetadataPatch
+    ) -> None:
+        await asyncio.to_thread(self.update_session, session_id, patch)
+
     def sync_session_metadata(
         self,
         session_id: str,
@@ -647,6 +654,22 @@ class SessionService:
         self._invalidate_list_sessions_cache()
         return self.get_session(session_id)
 
+    async def update_session_topology_async(
+        self,
+        session_id: str,
+        *,
+        session_mode: SessionMode,
+        normal_root_role_id: str | None,
+        orchestration_preset_id: str | None,
+    ) -> SessionRecord:
+        return await asyncio.to_thread(
+            self.update_session_topology,
+            session_id,
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+
     def rebind_session_workspace(
         self,
         session_id: str,
@@ -807,6 +830,17 @@ class SessionService:
                 shutil.rmtree(session_dir, ignore_errors=True)
         self._invalidate_list_sessions_cache()
 
+    async def delete_session_async(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        await asyncio.to_thread(
+            self.delete_session, session_id, force=force, cascade=cascade
+        )
+
     def _has_dependent_session_data(
         self,
         session_id: str,
@@ -913,6 +947,13 @@ class SessionService:
         self._token_usage_repo.delete_by_run(agent.run_id)
         self._invalidate_list_sessions_cache()
 
+    async def delete_normal_mode_subagent_async(
+        self, session_id: str, instance_id: str
+    ) -> None:
+        await asyncio.to_thread(
+            self.delete_normal_mode_subagent, session_id, instance_id
+        )
+
     def _delete_background_task_logs(
         self,
         *,
@@ -943,6 +984,13 @@ class SessionService:
     def get_session(self, session_id: str) -> SessionRecord:
         return self._with_terminal_run_projection(
             self._with_auto_session_title(self._session_repo.get(session_id))
+        )
+
+    async def get_session_async(self, session_id: str) -> SessionRecord:
+        return self._with_terminal_run_projection(
+            self._with_auto_session_title(
+                await self._session_repo.get_async(session_id)
+            )
         )
 
     def _list_subagent_background_tasks(
@@ -1083,6 +1131,10 @@ class SessionService:
         self._list_sessions_cache = (monotonic(), result)
         return result
 
+    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
+
+        return await asyncio.to_thread(self.list_sessions)
+
     def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
         _ = self._session_repo.get(session_id)
         runtimes = self._run_runtime_repo.list_by_session(session_id)
@@ -1107,27 +1159,7 @@ class SessionService:
         self._invalidate_list_sessions_cache()
 
     async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
-        _ = await self._session_repo.get_async(session_id)
-        runtimes = await self._run_runtime_repo.list_by_session_async(session_id)
-        background_tasks = (
-            await self._background_task_repository.list_by_session_async(session_id)
-            if self._background_task_repository is not None
-            else ()
-        )
-        latest_terminal = self._latest_terminal_run_from_preloaded(
-            runtimes,
-            self._subagent_run_ids_from_records(
-                runtimes=runtimes,
-                background_tasks=background_tasks,
-            ),
-        )
-        if latest_terminal is None:
-            return
-        await self._session_repo.mark_terminal_run_viewed_async(
-            session_id,
-            latest_terminal.run_id,
-        )
-        self._invalidate_list_sessions_cache()
+        await asyncio.to_thread(self.mark_latest_terminal_run_viewed, session_id)
 
     def list_sessions_by_workspace(
         self, workspace_id: str
@@ -1204,6 +1236,11 @@ class SessionService:
             for record in records
         )
 
+    async def list_normal_mode_subagents_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return await asyncio.to_thread(self.list_normal_mode_subagents, session_id)
+
     async def stream_normal_mode_subagent_events(
         self,
         session_id: str,
@@ -1279,6 +1316,11 @@ class SessionService:
             for role_id in sorted(latest_by_role.keys())
         )
 
+    async def list_agents_in_session_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return await asyncio.to_thread(self.list_agents_in_session, session_id)
+
     def get_agent_reflection(
         self,
         session_id: str,
@@ -1286,6 +1328,15 @@ class SessionService:
     ) -> dict[str, object]:
         agent = self._require_session_agent(session_id, instance_id)
         return self._reflection_projection(agent)
+
+    async def get_agent_reflection_async(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(
+            self.get_agent_reflection, session_id, instance_id
+        )
 
     async def refresh_subagent_reflection(
         self,
@@ -1326,6 +1377,17 @@ class SessionService:
             source="manual_edit",
         )
 
+    async def update_agent_reflection_async(
+        self,
+        session_id: str,
+        instance_id: str,
+        *,
+        summary: str,
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(
+            self.update_agent_reflection, session_id, instance_id, summary=summary
+        )
+
     def delete_agent_reflection(
         self,
         session_id: str,
@@ -1339,6 +1401,15 @@ class SessionService:
             workspace_id=agent.workspace_id,
         )
         return self._reflection_projection(agent, source="manual_delete")
+
+    async def delete_agent_reflection_async(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(
+            self.delete_agent_reflection, session_id, instance_id
+        )
 
     def get_agent_messages(
         self, session_id: str, instance_id: str
@@ -1370,11 +1441,19 @@ class SessionService:
             markers=markers,
         )
 
+    async def get_agent_messages_async(
+        self, session_id: str, instance_id: str
+    ) -> list[dict[str, object]]:
+        return await asyncio.to_thread(self.get_agent_messages, session_id, instance_id)
+
     def get_global_events(self, session_id: str) -> list[dict[str, object]]:
         if self._event_log is None:
             return []
         events = self._event_log.list_by_session(session_id)
         return cast(list[dict[str, object]], list(events))
+
+    async def get_global_events_async(self, session_id: str) -> list[dict[str, object]]:
+        return await asyncio.to_thread(self.get_global_events, session_id)
 
     def _get_round_projection_events(self, session_id: str) -> list[dict[str, object]]:
         if self._event_log is None:
@@ -1404,6 +1483,11 @@ class SessionService:
             list[dict[str, object]],
             self._message_repo.get_messages_by_session(session_id),
         )
+
+    async def get_session_messages_async(
+        self, session_id: str
+    ) -> list[dict[str, object]]:
+        return await asyncio.to_thread(self.get_session_messages, session_id)
 
     def get_session_tasks(self, session_id: str) -> list[dict[str, object]]:
         records = self._task_repo.list_by_session(session_id)
@@ -1438,6 +1522,9 @@ class SessionService:
             for record in records
             if record.envelope.parent_task_id is not None
         ]
+
+    async def get_session_tasks_async(self, session_id: str) -> list[dict[str, object]]:
+        return await asyncio.to_thread(self.get_session_tasks, session_id)
 
     def build_session_rounds(
         self,
@@ -1701,6 +1788,25 @@ class SessionService:
         page["items"] = resolved_items
         return page
 
+    async def get_session_rounds_async(
+        self,
+        session_id: str,
+        *,
+        limit: int = 8,
+        cursor_run_id: str | None = None,
+        timeline: bool = False,
+        summary: bool = False,
+    ) -> dict[str, object]:
+
+        return await asyncio.to_thread(
+            self.get_session_rounds,
+            session_id,
+            limit=limit,
+            cursor_run_id=cursor_run_id,
+            timeline=timeline,
+            summary=summary,
+        )
+
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
         safe_run_id = str(run_id or "").strip()
         timeline_item = next(
@@ -1723,6 +1829,10 @@ class SessionService:
                 "compaction_marker_before"
             )
         return round_item
+
+    async def get_round_async(self, session_id: str, run_id: str) -> dict[str, object]:
+
+        return await asyncio.to_thread(self.get_round, session_id, run_id)
 
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
         _ = self._session_repo.get(session_id)
@@ -1818,11 +1928,27 @@ class SessionService:
             "round_snapshot": round_snapshot,
         }
 
+    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+
+        return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
+
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
         return self._token_usage_repo.get_by_run(run_id)
 
     def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage:
         return self._token_usage_repo.get_by_session(session_id)
+
+    async def get_token_usage_by_run_async(self, run_id: str) -> RunTokenUsage:
+
+        return await asyncio.to_thread(self._token_usage_repo.get_by_run, run_id)
+
+    async def get_token_usage_by_session_async(
+        self, session_id: str
+    ) -> SessionTokenUsage:
+
+        return await asyncio.to_thread(
+            self._token_usage_repo.get_by_session, session_id
+        )
 
     def clear_session_messages(self, session_id: str) -> int:
         _ = self._session_repo.get(session_id)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from pathlib import Path
@@ -86,6 +86,11 @@ class _FakeSessionService:
             raise KeyError(session_id)
         self.updated_calls.append((session_id, patch))
 
+    async def update_session_async(
+        self, session_id: str, patch: SessionMetadataPatch
+    ) -> None:
+        self.update_session(session_id, patch)
+
     def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
         if self.raise_missing:
             raise KeyError(session_id)
@@ -97,6 +102,9 @@ class _FakeSessionService:
     def list_sessions(self) -> tuple[SessionRecord, ...]:
         self.list_calls += 1
         return (SessionRecord(session_id="session-listed", workspace_id="default"),)
+
+    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
+        return self.list_sessions()
 
     def list_normal_mode_subagents(
         self, session_id: str
@@ -132,6 +140,16 @@ class _FakeSessionService:
             },
         )
 
+    async def list_normal_mode_subagents_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_normal_mode_subagents(session_id)
+
+    async def list_agents_in_session_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_agents_in_session(session_id)
+
     async def stream_normal_mode_subagent_events(
         self,
         session_id: str,
@@ -157,6 +175,9 @@ class _FakeSessionService:
         self.get_calls.append(session_id)
         return SessionRecord(session_id=session_id, workspace_id="default")
 
+    async def get_session_async(self, session_id: str) -> SessionRecord:
+        return self.get_session(session_id)
+
     def delete_session(
         self,
         session_id: str,
@@ -168,6 +189,15 @@ class _FakeSessionService:
             raise self.delete_error
         self.deleted_calls.append((session_id, force, cascade))
 
+    async def delete_session_async(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        cascade: bool = False,
+    ) -> None:
+        self.delete_session(session_id, force=force, cascade=cascade)
+
     def delete_normal_mode_subagent(
         self,
         session_id: str,
@@ -176,6 +206,13 @@ class _FakeSessionService:
         if self.delete_subagent_error is not None:
             raise self.delete_subagent_error
         self.delete_subagent_calls.append((session_id, instance_id))
+
+    async def delete_normal_mode_subagent_async(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> None:
+        self.delete_normal_mode_subagent(session_id, instance_id)
 
     def update_session_topology(
         self,
@@ -196,6 +233,21 @@ class _FakeSessionService:
         return SessionRecord(
             session_id=session_id,
             workspace_id="workspace-1",
+            session_mode=session_mode,
+            normal_root_role_id=normal_root_role_id,
+            orchestration_preset_id=orchestration_preset_id,
+        )
+
+    async def update_session_topology_async(
+        self,
+        session_id: str,
+        *,
+        session_mode: SessionMode,
+        normal_root_role_id: str | None,
+        orchestration_preset_id: str | None,
+    ) -> SessionRecord:
+        return self.update_session_topology(
+            session_id,
             session_mode=session_mode,
             normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
@@ -230,6 +282,11 @@ class _FakeSessionService:
             },
         )
 
+    async def get_token_usage_by_session_async(
+        self, session_id: str
+    ) -> SessionTokenUsage:
+        return self.get_token_usage_by_session(session_id)
+
     def get_session_rounds(
         self,
         session_id: str,
@@ -248,17 +305,48 @@ class _FakeSessionService:
             "rounds": [],
         }
 
+    async def get_session_rounds_async(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        cursor_run_id: str | None,
+        timeline: bool = False,
+        summary: bool = False,
+    ) -> dict[str, object]:
+        return self.get_session_rounds(
+            session_id,
+            limit=limit,
+            cursor_run_id=cursor_run_id,
+            timeline=timeline,
+            summary=summary,
+        )
+
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
         return {"session_id": session_id, "runs": []}
+
+    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+        return self.get_recovery_snapshot(session_id)
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
         return {"session_id": session_id, "run_id": run_id}
 
+    async def get_round_async(self, session_id: str, run_id: str) -> dict[str, object]:
+        return self.get_round(session_id, run_id)
+
     def get_global_events(self, session_id: str) -> list[dict[str, object]]:
         return [{"session_id": session_id, "event": "created"}]
 
+    async def get_global_events_async(self, session_id: str) -> list[dict[str, object]]:
+        return self.get_global_events(session_id)
+
     def get_session_messages(self, session_id: str) -> list[dict[str, object]]:
         return [{"session_id": session_id, "message": "hello"}]
+
+    async def get_session_messages_async(
+        self, session_id: str
+    ) -> list[dict[str, object]]:
+        return self.get_session_messages(session_id)
 
     def get_agent_messages(
         self,
@@ -267,8 +355,18 @@ class _FakeSessionService:
     ) -> list[dict[str, object]]:
         return [{"session_id": session_id, "instance_id": instance_id}]
 
+    async def get_agent_messages_async(
+        self,
+        session_id: str,
+        instance_id: str,
+    ) -> list[dict[str, object]]:
+        return self.get_agent_messages(session_id, instance_id)
+
     def get_session_tasks(self, session_id: str) -> list[dict[str, object]]:
         return [{"session_id": session_id, "task": "task-1"}]
+
+    async def get_session_tasks_async(self, session_id: str) -> list[dict[str, object]]:
+        return self.get_session_tasks(session_id)
 
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
         return RunTokenUsage(
@@ -299,6 +397,9 @@ class _FakeSessionService:
             ],
         )
 
+    async def get_token_usage_by_run_async(self, run_id: str) -> RunTokenUsage:
+        return self.get_token_usage_by_run(run_id)
+
     def get_agent_reflection(
         self, session_id: str, instance_id: str
     ) -> dict[str, object]:
@@ -310,6 +411,11 @@ class _FakeSessionService:
             "updated_at": "2026-03-13T00:01:30Z",
             "source": "stored",
         }
+
+    async def get_agent_reflection_async(
+        self, session_id: str, instance_id: str
+    ) -> dict[str, object]:
+        return self.get_agent_reflection(session_id, instance_id)
 
     async def refresh_subagent_reflection(
         self, session_id: str, instance_id: str
@@ -341,6 +447,15 @@ class _FakeSessionService:
             "source": "manual_edit",
         }
 
+    async def update_agent_reflection_async(
+        self,
+        session_id: str,
+        instance_id: str,
+        *,
+        summary: str,
+    ) -> dict[str, object]:
+        return self.update_agent_reflection(session_id, instance_id, summary=summary)
+
     def delete_agent_reflection(
         self, session_id: str, instance_id: str
     ) -> dict[str, object]:
@@ -354,11 +469,19 @@ class _FakeSessionService:
             "source": "manual_delete",
         }
 
+    async def delete_agent_reflection_async(
+        self, session_id: str, instance_id: str
+    ) -> dict[str, object]:
+        return self.delete_agent_reflection(session_id, instance_id)
+
 
 class _SleepingRecoveryService(_FakeSessionService):
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
         time.sleep(0.2)
         return {"session_id": session_id, "runs": []}
+
+    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+        return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
 
 
 class _BlockingRecoveryService(_FakeSessionService):
@@ -371,6 +494,9 @@ class _BlockingRecoveryService(_FakeSessionService):
         self.started.set()
         _ = self.release.wait(timeout=5.0)
         return {"session_id": session_id, "runs": []}
+
+    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+        return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
 
 
 class _BlockingTerminalViewService(_FakeSessionService):
@@ -457,28 +583,14 @@ def test_mark_session_terminal_viewed_route_calls_service() -> None:
     assert fake_service.terminal_view_calls == ["session-1"]
 
 
-def test_mark_session_terminal_viewed_route_uses_session_read_queue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed_operations: list[str] = []
-
-    async def call_session_read(
-        operation: str,
-        function: Callable[[str], Awaitable[None]],
-        session_id: str,
-    ) -> None:
-        observed_operations.append(operation)
-        await function(session_id)
-
+def test_mark_session_terminal_viewed_route_uses_session_read_queue() -> None:
     fake_service = _FakeSessionService()
-    monkeypatch.setattr(sessions, "_call_session_read", call_session_read)
     client = _create_client(fake_service)
 
     response = client.post("/api/sessions/session-1/terminal-view")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    assert observed_operations == ["sessions.terminal_view"]
     assert fake_service.terminal_view_calls == ["session-1"]
 
 

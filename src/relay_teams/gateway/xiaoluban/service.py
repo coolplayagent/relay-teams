@@ -60,6 +60,7 @@ from relay_teams.sessions.runs.terminal_payload import (
 )
 from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.validation import require_force_delete
+import asyncio
 
 LOGGER = get_logger(__name__)
 _IM_REPLY_POLL_INTERVAL_SECONDS = 2.0
@@ -111,8 +112,16 @@ class XiaolubanGatewayService:
             self._with_secret_status(item) for item in self._repository.list_accounts()
         )
 
+    async def list_accounts_async(self) -> Tuple[XiaolubanAccountRecord, ...]:
+
+        return await asyncio.to_thread(self.list_accounts)
+
     def get_account(self, account_id: str) -> XiaolubanAccountRecord:
         return self._with_secret_status(self._repository.get_account(account_id))
+
+    async def get_account_async(self, account_id: str) -> XiaolubanAccountRecord:
+
+        return await asyncio.to_thread(self.get_account, account_id)
 
     def create_account(
         self,
@@ -153,6 +162,13 @@ class XiaolubanGatewayService:
         )
         saved = self._repository.upsert_account(record)
         return self._with_secret_status(saved)
+
+    async def create_account_async(
+        self,
+        request: XiaolubanAccountCreateInput,
+    ) -> XiaolubanAccountRecord:
+
+        return await asyncio.to_thread(self.create_account, request)
 
     def update_account(
         self,
@@ -212,6 +228,14 @@ class XiaolubanGatewayService:
         saved = self._repository.upsert_account(updated)
         return self._with_secret_status(saved)
 
+    async def update_account_async(
+        self,
+        account_id: str,
+        request: XiaolubanAccountUpdateInput,
+    ) -> XiaolubanAccountRecord:
+
+        return await asyncio.to_thread(self.update_account, account_id, request)
+
     def prepare_account_id(self) -> str:
         for _index in range(100):
             account_id = f"xlb_{uuid4().hex[:12]}"
@@ -221,11 +245,19 @@ class XiaolubanGatewayService:
                 return account_id
         raise RuntimeError("xiaoluban_account_id_generation_failed")
 
+    async def prepare_account_id_async(self) -> str:
+
+        return await asyncio.to_thread(self.prepare_account_id)
+
     def reveal_token(self, account_id: str) -> XiaolubanTokenRevealResponse:
         _ = self._repository.get_account(account_id)
         return XiaolubanTokenRevealResponse(
             token=self._secret_store.get_token(self._config_dir, account_id)
         )
+
+    async def reveal_token_async(self, account_id: str) -> XiaolubanTokenRevealResponse:
+
+        return await asyncio.to_thread(self.reveal_token, account_id)
 
     def update_im_config(
         self,
@@ -251,6 +283,14 @@ class XiaolubanGatewayService:
             )
         )
         return self._with_secret_status(saved)
+
+    async def update_im_config_async(
+        self,
+        account_id: str,
+        request: XiaolubanImConfigUpdateInput,
+    ) -> XiaolubanAccountRecord:
+
+        return await asyncio.to_thread(self.update_im_config, account_id, request)
 
     def handle_im_inbound(
         self,
@@ -319,6 +359,12 @@ class XiaolubanGatewayService:
             XiaolubanAccountUpdateInput(enabled=enabled),
         )
 
+    async def set_account_enabled_async(
+        self, account_id: str, enabled: bool
+    ) -> XiaolubanAccountRecord:
+
+        return await asyncio.to_thread(self.set_account_enabled, account_id, enabled)
+
     def delete_account(self, account_id: str, *, force: bool = False) -> None:
         account = self._repository.get_account(account_id)
         if account.status == XiaolubanAccountStatus.ENABLED:
@@ -328,6 +374,12 @@ class XiaolubanGatewayService:
             )
         self._secret_store.delete_token(self._config_dir, account_id)
         self._repository.delete_account(account_id)
+
+    async def delete_account_async(
+        self, account_id: str, *, force: bool = False
+    ) -> None:
+
+        return await asyncio.to_thread(self.delete_account, account_id, force=force)
 
     def send_text_message(
         self,
@@ -443,6 +495,10 @@ class XiaolubanGatewayService:
             raise RuntimeError("missing_xiaoluban_token")
         return token
 
+    async def get_im_callback_auth_token_async(self, account_id: str) -> str:
+
+        return await asyncio.to_thread(self.get_im_callback_auth_token, account_id)
+
     def _with_secret_status(
         self,
         account: XiaolubanAccountRecord,
@@ -487,6 +543,10 @@ class XiaolubanGatewayService:
 
     def validate_im_workspace(self, workspace_id: str) -> None:
         self._validate_im_workspace(workspace_id)
+
+    async def validate_im_workspace_async(self, workspace_id: str) -> None:
+
+        return await asyncio.to_thread(self.validate_im_workspace, workspace_id)
 
     def _validate_im_workspace(self, workspace_id: str) -> None:
         if self._workspace_lookup is None:

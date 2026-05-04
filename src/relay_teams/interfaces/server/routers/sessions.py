@@ -4,17 +4,12 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
-from typing import ParamSpec, TypeVar
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from relay_teams.interfaces.server.async_call import (
-    call_maybe_async,
-    call_maybe_async_in_session_read_thread,
-)
+
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
@@ -35,23 +30,6 @@ logger = get_logger(__name__)
 
 SESSION_RECOVERY_TIMEOUT_SECONDS = 8.0
 SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS = 2.0
-ParamT = ParamSpec("ParamT")
-ResultT = TypeVar("ResultT")
-
-
-async def _call_session_read(
-    operation: str,
-    function: Callable[ParamT, ResultT | Awaitable[ResultT]],
-    /,
-    *args: ParamT.args,
-    **kwargs: ParamT.kwargs,
-) -> ResultT:
-    return await call_maybe_async_in_session_read_thread(
-        operation,
-        function,
-        *args,
-        **kwargs,
-    )
 
 
 class CreateSessionRequest(BaseModel):
@@ -103,10 +81,7 @@ async def create_session(
 async def list_sessions(
     service: SessionService = Depends(get_session_service),
 ) -> list[SessionRecord]:
-    def _list_sessions() -> tuple[SessionRecord, ...]:
-        return service.list_sessions()
-
-    records = await _call_session_read("sessions.list", _list_sessions)
+    records = await service.list_sessions_async()
     return list(records)
 
 
@@ -116,7 +91,7 @@ async def get_session(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-        return await _call_session_read("sessions.get", service.get_session, session_id)
+        return await service.get_session_async(session_id)
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -128,7 +103,7 @@ async def update_session(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.update_session, session_id, req)
+        await service.update_session_async(session_id, req)
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
@@ -142,11 +117,7 @@ async def mark_session_terminal_viewed(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     marker_task = asyncio.create_task(
-        _call_session_read(
-            "sessions.terminal_view",
-            service.mark_latest_terminal_run_viewed_async,
-            session_id,
-        )
+        service.mark_latest_terminal_run_viewed_async(session_id)
     )
     try:
         await asyncio.wait_for(
@@ -224,16 +195,12 @@ async def update_session_topology(
     service: SessionService = Depends(get_session_service),
 ) -> SessionRecord:
     try:
-
-        def _update_session_topology() -> SessionRecord:
-            return service.update_session_topology(
-                session_id,
-                session_mode=req.session_mode,
-                normal_root_role_id=req.normal_root_role_id,
-                orchestration_preset_id=req.orchestration_preset_id,
-            )
-
-        return await call_maybe_async(_update_session_topology)
+        return await service.update_session_topology_async(
+            session_id,
+            session_mode=req.session_mode,
+            normal_root_role_id=req.normal_root_role_id,
+            orchestration_preset_id=req.orchestration_preset_id,
+        )
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
     except SystemRolesUnavailableError as exc:
@@ -254,15 +221,11 @@ async def delete_session(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-
-        def _delete_session() -> None:
-            service.delete_session(
-                session_id,
-                force=req.force if req is not None else False,
-                cascade=req.cascade if req is not None else False,
-            )
-
-        await call_maybe_async(_delete_session)
+        await service.delete_session_async(
+            session_id,
+            force=req.force if req is not None else False,
+            cascade=req.cascade if req is not None else False,
+        )
         return {"status": "ok"}
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
@@ -279,16 +242,13 @@ async def get_session_rounds(
     summary: bool = False,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    def _get_session_rounds() -> dict[str, object]:
-        return service.get_session_rounds(
-            session_id,
-            limit=limit,
-            cursor_run_id=cursor_run_id,
-            timeline=timeline,
-            summary=summary,
-        )
-
-    return await _call_session_read("sessions.rounds", _get_session_rounds)
+    return await service.get_session_rounds_async(
+        session_id,
+        limit=limit,
+        cursor_run_id=cursor_run_id,
+        timeline=timeline,
+        summary=summary,
+    )
 
 
 @router.get("/{session_id}/recovery")
@@ -298,11 +258,7 @@ async def get_session_recovery(
 ) -> dict[str, object]:
     try:
         return await asyncio.wait_for(
-            _call_session_read(
-                "sessions.recovery",
-                service.get_recovery_snapshot,
-                session_id,
-            ),
+            service.get_recovery_snapshot_async(session_id),
             timeout=SESSION_RECOVERY_TIMEOUT_SECONDS,
         )
     except KeyError as exc:
@@ -331,12 +287,7 @@ async def get_round(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await _call_session_read(
-            "sessions.round",
-            service.get_round,
-            session_id,
-            run_id,
-        )
+        return await service.get_round_async(session_id, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -347,11 +298,7 @@ async def list_session_agents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        agents = await _call_session_read(
-            "sessions.agents",
-            service.list_agents_in_session,
-            session_id,
-        )
+        agents = await service.list_agents_in_session_async(session_id)
         return list(agents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
@@ -363,11 +310,7 @@ async def list_session_subagents(
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
     try:
-        subagents = await _call_session_read(
-            "sessions.subagents",
-            service.list_normal_mode_subagents,
-            session_id,
-        )
+        subagents = await service.list_normal_mode_subagents_async(session_id)
         return list(subagents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
@@ -436,11 +379,7 @@ async def delete_session_subagent(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(
-            service.delete_normal_mode_subagent,
-            session_id,
-            instance_id,
-        )
+        await service.delete_normal_mode_subagent_async(session_id, instance_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Subagent not found") from exc
@@ -455,12 +394,7 @@ async def get_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await _call_session_read(
-            "sessions.agent_reflection",
-            service.get_agent_reflection,
-            session_id,
-            instance_id,
-        )
+        return await service.get_agent_reflection_async(session_id, instance_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
 
@@ -487,15 +421,11 @@ async def update_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-
-        def _update_agent_reflection() -> dict[str, object]:
-            return service.update_agent_reflection(
-                session_id,
-                instance_id,
-                summary=req.summary,
-            )
-
-        return await call_maybe_async(_update_agent_reflection)
+        return await service.update_agent_reflection_async(
+            session_id,
+            instance_id,
+            summary=req.summary,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -509,11 +439,7 @@ async def delete_agent_reflection(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     try:
-        return await call_maybe_async(
-            service.delete_agent_reflection,
-            session_id,
-            instance_id,
-        )
+        return await service.delete_agent_reflection_async(session_id, instance_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent not found") from exc
     except RuntimeError as exc:
@@ -525,11 +451,7 @@ async def get_session_events(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await _call_session_read(
-        "sessions.events",
-        service.get_global_events,
-        session_id,
-    )
+    return await service.get_global_events_async(session_id)
 
 
 @router.get("/{session_id}/messages")
@@ -537,11 +459,7 @@ async def get_session_messages(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await _call_session_read(
-        "sessions.messages",
-        service.get_session_messages,
-        session_id,
-    )
+    return await service.get_session_messages_async(session_id)
 
 
 @router.get("/{session_id}/agents/{instance_id}/messages")
@@ -550,12 +468,7 @@ async def get_agent_messages(
     instance_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await _call_session_read(
-        "sessions.agent_messages",
-        service.get_agent_messages,
-        session_id,
-        instance_id,
-    )
+    return await service.get_agent_messages_async(session_id, instance_id)
 
 
 @router.get("/{session_id}/tasks")
@@ -563,11 +476,7 @@ async def get_session_tasks(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> list[dict[str, object]]:
-    return await _call_session_read(
-        "sessions.tasks",
-        service.get_session_tasks,
-        session_id,
-    )
+    return await service.get_session_tasks_async(session_id)
 
 
 @router.get("/{session_id}/token-usage")
@@ -575,11 +484,7 @@ async def get_session_token_usage(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
-    summary = await _call_session_read(
-        "sessions.token_usage",
-        service.get_token_usage_by_session,
-        session_id,
-    )
+    summary = await service.get_token_usage_by_session_async(session_id)
     return {
         "session_id": summary.session_id,
         "total_input_tokens": summary.total_input_tokens,
@@ -616,11 +521,7 @@ async def get_run_token_usage(
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, object]:
     _ = session_id
-    usage = await _call_session_read(
-        "sessions.run_token_usage",
-        service.get_token_usage_by_run,
-        run_id,
-    )
+    usage = await service.get_token_usage_by_run_async(run_id)
     return {
         "run_id": usage.run_id,
         "total_input_tokens": usage.total_input_tokens,

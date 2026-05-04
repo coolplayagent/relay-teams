@@ -39,6 +39,8 @@ from relay_teams.roles.role_contracts import (
     role_contract_invariant_failures,
 )
 
+import asyncio
+
 if TYPE_CHECKING:
     from relay_teams.external_agents import ExternalAgentConfigService
 
@@ -238,6 +240,34 @@ class RoleSettingsService:
             "valid": True,
             "loaded_count": len(registry.list_roles()),
         }
+
+    async def list_role_documents_async(self) -> tuple[RoleDocumentSummary, ...]:
+
+        return await asyncio.to_thread(self.list_role_documents)
+
+    async def get_role_document_async(self, role_id: str) -> RoleDocumentRecord:
+
+        return await asyncio.to_thread(self.get_role_document, role_id)
+
+    async def save_role_document_async(
+        self, role_id: str, draft: RoleDocumentDraft
+    ) -> RoleDocumentRecord:
+
+        return await asyncio.to_thread(self.save_role_document, role_id, draft)
+
+    async def delete_role_document_async(self, role_id: str) -> None:
+
+        return await asyncio.to_thread(self.delete_role_document, role_id)
+
+    async def validate_all_roles_async(self) -> dict[str, int | bool]:
+
+        return await asyncio.to_thread(self.validate_all_roles)
+
+    async def validate_role_document_async(
+        self, draft: RoleDocumentDraft
+    ) -> RoleValidationResult:
+
+        return await asyncio.to_thread(self.validate_role_document, draft)
 
     def _summary_from_definition(
         self,

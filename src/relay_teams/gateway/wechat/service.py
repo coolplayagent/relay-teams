@@ -163,6 +163,10 @@ class WeChatGatewayService:
         for account_id in sorted(desired):
             self._start_account_worker(account_id)
 
+    async def reload_async(self) -> None:
+
+        return await asyncio.to_thread(self.reload)
+
     def list_accounts(self) -> tuple[WeChatAccountRecord, ...]:
         accounts = []
         for account in self._repository.list_accounts():
@@ -179,6 +183,10 @@ class WeChatGatewayService:
                 )
             )
         return tuple(accounts)
+
+    async def list_accounts_async(self) -> tuple[WeChatAccountRecord, ...]:
+
+        return await asyncio.to_thread(self.list_accounts)
 
     def start_login(self, request: WeChatLoginStartRequest) -> WeChatLoginStartResponse:
         base_url = request.base_url or DEFAULT_WECHAT_BASE_URL
@@ -200,6 +208,12 @@ class WeChatGatewayService:
             qr_code_url=session.qr_code_url,
             message="Scan the QR code with WeChat to connect the account.",
         )
+
+    async def start_login_async(
+        self, request: WeChatLoginStartRequest
+    ) -> WeChatLoginStartResponse:
+
+        return await asyncio.to_thread(self.start_login, request)
 
     def wait_login(self, request: WeChatLoginWaitRequest) -> WeChatLoginWaitResponse:
         login_session = self._login_sessions.get(request.session_key)
@@ -275,6 +289,12 @@ class WeChatGatewayService:
             message="WeChat account connected.",
         )
 
+    async def wait_login_async(
+        self, request: WeChatLoginWaitRequest
+    ) -> WeChatLoginWaitResponse:
+
+        return await asyncio.to_thread(self.wait_login, request)
+
     def update_account(
         self,
         account_id: str,
@@ -332,6 +352,14 @@ class WeChatGatewayService:
         self.reload()
         return self._merge_status(saved)
 
+    async def update_account_async(
+        self,
+        account_id: str,
+        request: WeChatAccountUpdateInput,
+    ) -> WeChatAccountRecord:
+
+        return await asyncio.to_thread(self.update_account, account_id, request)
+
     def set_account_enabled(
         self, account_id: str, enabled: bool
     ) -> WeChatAccountRecord:
@@ -339,6 +367,12 @@ class WeChatGatewayService:
             account_id,
             WeChatAccountUpdateInput(enabled=enabled),
         )
+
+    async def set_account_enabled_async(
+        self, account_id: str, enabled: bool
+    ) -> WeChatAccountRecord:
+
+        return await asyncio.to_thread(self.set_account_enabled, account_id, enabled)
 
     def delete_account(self, account_id: str, *, force: bool = False) -> None:
         account = self._repository.get_account(account_id)
@@ -350,6 +384,12 @@ class WeChatGatewayService:
         self._stop_account_worker(account_id)
         self._secret_store.delete_bot_token(self._config_dir, account_id)
         self._repository.delete_account(account_id)
+
+    async def delete_account_async(
+        self, account_id: str, *, force: bool = False
+    ) -> None:
+
+        return await asyncio.to_thread(self.delete_account, account_id, force=force)
 
     def _exists(self, account_id: str) -> bool:
         try:

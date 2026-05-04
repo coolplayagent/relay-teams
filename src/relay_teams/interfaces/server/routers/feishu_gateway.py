@@ -5,7 +5,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.gateway.feishu.errors import FeishuAccountNameConflictError
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
 from relay_teams.gateway.feishu.models import (
@@ -29,7 +28,7 @@ router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 async def list_feishu_accounts(
     service: Annotated[FeishuGatewayService, Depends(get_feishu_gateway_service)],
 ) -> list[FeishuGatewayAccountRecord]:
-    accounts = await call_maybe_async(service.list_accounts)
+    accounts = await service.list_accounts_async()
     return list(accounts)
 
 
@@ -43,13 +42,9 @@ async def create_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-
-        def _create_feishu_account() -> FeishuGatewayAccountRecord:
-            created = service.create_account(req)
-            subscription_service.reload()
-            return created
-
-        return await call_maybe_async(_create_feishu_account)
+        created = await service.create_account_async(req)
+        await subscription_service.reload_async()
+        return created
     except (FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -68,6 +63,7 @@ async def update_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
+        import asyncio
 
         def _update_feishu_account() -> FeishuGatewayAccountRecord:
             existing = service.get_account(account_id)
@@ -80,7 +76,7 @@ async def update_feishu_account(
                 subscription_service.reload()
             return updated
 
-        return await call_maybe_async(_update_feishu_account)
+        return await asyncio.to_thread(_update_feishu_account)
     except (KeyError, FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -98,13 +94,9 @@ async def enable_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-
-        def _enable_feishu_account() -> FeishuGatewayAccountRecord:
-            updated = service.set_account_enabled(account_id, True)
-            subscription_service.reload()
-            return updated
-
-        return await call_maybe_async(_enable_feishu_account)
+        updated = await service.set_account_enabled_async(account_id, True)
+        await subscription_service.reload_async()
+        return updated
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -124,13 +116,9 @@ async def disable_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-
-        def _disable_feishu_account() -> FeishuGatewayAccountRecord:
-            updated = service.set_account_enabled(account_id, False)
-            subscription_service.reload()
-            return updated
-
-        return await call_maybe_async(_disable_feishu_account)
+        updated = await service.set_account_enabled_async(account_id, False)
+        await subscription_service.reload_async()
+        return updated
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -146,15 +134,11 @@ async def delete_feishu_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-
-        def _delete_feishu_account() -> None:
-            service.delete_account(
-                account_id,
-                force=req.force if req is not None else False,
-            )
-            subscription_service.reload()
-
-        await call_maybe_async(_delete_feishu_account)
+        await service.delete_account_async(
+            account_id,
+            force=req.force if req is not None else False,
+        )
+        await subscription_service.reload_async()
         return {"status": "ok"}
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
@@ -170,5 +154,5 @@ async def reload_feishu_gateway(
         Depends(get_feishu_subscription_service),
     ],
 ) -> dict[str, str]:
-    await call_maybe_async(subscription_service.reload)
+    await subscription_service.reload_async()
     return {"status": "ok"}

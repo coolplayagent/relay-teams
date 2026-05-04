@@ -16,6 +16,8 @@ from relay_teams.speech.models import (
     SpeechConfigUpdate,
 )
 
+import asyncio
+
 LOGGER = get_logger(__name__)
 
 
@@ -107,6 +109,14 @@ class SpeechConfigService:
                 "error": str(error),
             },
         )
+
+    async def get_config_payload_async(self) -> dict[str, JsonValue]:
+
+        return await asyncio.to_thread(self.get_config_payload)
+
+    async def save_config_async(self, config: SpeechConfigUpdate) -> SpeechConfig:
+
+        return await asyncio.to_thread(self.save_config, config)
 
 
 def is_supported_realtime_stt_model(model_name: str) -> bool:
