@@ -453,3 +453,42 @@ async def test_async_spec_artifact_accessors_and_reuse_edges(tmp_path: Path) -> 
     assert fetched.spec.summary == "v1"
     assert latest.artifact_id == artifact_id
     assert tuple(artifact.artifact_id for artifact in artifacts) == (artifact_id,)
+
+
+@pytest.mark.asyncio
+async def test_list_running_async_returns_only_running(tmp_path: Path) -> None:
+    repo = TaskRepository(tmp_path / "task_repo_list_running.db")
+
+    try:
+        await repo.create_async(
+            TaskEnvelope(
+                task_id="task-running",
+                session_id="session-1",
+                parent_task_id=None,
+                trace_id="run-1",
+                objective="running task",
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+            )
+        )
+        await repo.update_status_async(
+            "task-running", TaskStatus.RUNNING, assigned_instance_id="inst-1"
+        )
+        await repo.create_async(
+            TaskEnvelope(
+                task_id="task-completed",
+                session_id="session-1",
+                parent_task_id=None,
+                trace_id="run-1",
+                objective="completed task",
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+            )
+        )
+        await repo.update_status_async("task-completed", TaskStatus.COMPLETED)
+
+        running = await repo.list_running_async()
+    finally:
+        await repo.close_async()
+
+    task_ids = tuple(r.envelope.task_id for r in running)
+    assert "task-running" in task_ids
+    assert "task-completed" not in task_ids

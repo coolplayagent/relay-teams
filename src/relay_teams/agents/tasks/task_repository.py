@@ -593,6 +593,16 @@ class TaskRepository(SharedSqliteRepository):
             ).fetchall()
         return tuple(self._to_record(row) for row in rows)
 
+    async def list_running_async(self) -> tuple[TaskRecord, ...]:
+        rows = await self._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT * FROM tasks WHERE status=? ORDER BY updated_at ASC",
+                (TaskStatus.RUNNING.value,),
+            )
+        )
+        return tuple(self._to_record(row) for row in rows)
+
     async def list_all_async(self) -> tuple[TaskRecord, ...]:
         rows = await self._run_async_read(
             lambda conn: async_fetchall(

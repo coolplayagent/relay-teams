@@ -85,3 +85,10 @@ class EvaluationAggregation(str, Enum):
     MAJORITY = "majority"
     UNANIMOUS = "unanimous"
     WEIGHTED = "weighted"
+
+
+class WakeupStatus(str, Enum):
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    COMPLETED = "completed"
+    EXPIRED = "expired"

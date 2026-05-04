@@ -52,6 +52,10 @@ class _FailingRoleResolver:
         _ = (run_id, role_id)
         raise RuntimeError("role unavailable")
 
+    def get_effective_role(self, *, run_id: str | None, role_id: str) -> object:
+        _ = (run_id, role_id)
+        raise RuntimeError("role unavailable")
+
 
 class _RuntimeToolsAgentRepo:
     def __init__(self, runtime_tools_json: str) -> None:

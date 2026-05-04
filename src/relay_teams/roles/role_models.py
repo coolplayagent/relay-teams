@@ -11,6 +11,7 @@ from relay_teams.hooks.hook_models import HooksConfig
 from relay_teams.media import MediaModality
 from relay_teams.providers.model_config import ModelCapabilities
 from relay_teams.roles.role_contracts import RoleContract
+from relay_teams.roles.tool_diet_policy import ToolDietFinding
 from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
@@ -94,6 +95,7 @@ class RoleValidationResult(BaseModel):
 
     valid: bool
     role: RoleDocumentRecord
+    diet_warnings: tuple[ToolDietFinding, ...] = ()
 
 
 class NormalModeRoleOption(BaseModel):

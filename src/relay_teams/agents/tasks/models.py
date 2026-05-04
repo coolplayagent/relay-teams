@@ -230,6 +230,8 @@ class TaskLifecyclePolicy(BaseModel):
     heartbeat_interval_seconds: float | None = Field(default=None, gt=0.0, le=3600.0)
     on_timeout: TaskTimeoutAction = TaskTimeoutAction.FAIL
     spec_checkpoint: SpecCheckpointPolicy = Field(default_factory=SpecCheckpointPolicy)
+    max_retry_attempts: int = Field(default=3, ge=1, le=10)
+    stale_silence_multiplier: float = Field(default=3.0, gt=1.0, le=10.0)
 
     @field_validator("spec_checkpoint", mode="before")
     @classmethod
@@ -417,6 +419,7 @@ class TaskEnvelope(BaseModel):
     handoff: TaskHandoff | None = None
     orchestration_node_id: OptionalIdentifierStr = None
     depends_on_task_ids: tuple[str, ...] = ()
+    retry_attempt: int = Field(default=0, ge=0)
 
     @field_validator("skills", mode="before")
     @classmethod
