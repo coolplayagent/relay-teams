@@ -112,3 +112,25 @@ class TestAgentWakeupRepository:
         pending_t1 = await repo.list_pending_for_task_async("t1")
         assert len(pending_t1) == 1
         assert pending_t1[0].task_id == "t1"
+
+    @pytest.mark.asyncio
+    async def test_reopen_existing_db(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test_reopen.db"
+            repo1 = AgentWakeupRepository(db_path)
+            entry = _make_entry()
+            await repo1.enqueue_async(entry)
+
+            repo2 = AgentWakeupRepository(db_path)
+            count = await repo2.count_pending_async()
+            assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_claim_next_pending_returns_none_when_empty(
+        self,
+        repo: AgentWakeupRepository,
+    ) -> None:
+        result = await repo.claim_next_pending_async()
+        assert result is None

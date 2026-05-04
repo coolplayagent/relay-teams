@@ -136,3 +136,108 @@ class TestWakeupDispatcher:
         )
         await dispatcher._dispatch_one_async()
         task_repo.get_async.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_expires_entry_when_task_not_found(
+        self,
+        wakeup_repo: AgentWakeupRepository,
+    ) -> None:
+        entry = _make_entry()
+        await wakeup_repo.enqueue_async(entry)
+
+        task_repo = AsyncMock()
+        task_repo.get_async = AsyncMock(side_effect=KeyError("not found"))
+        exec_service = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+
+        dispatcher = WakeupDispatcher(
+            wakeup_repo=wakeup_repo,
+            task_repo=task_repo,
+            task_execution_service=exec_service,
+            event_log=event_log,
+        )
+        await dispatcher._dispatch_one_async()
+
+        exec_service.execute.assert_not_called()
+        assert await wakeup_repo.count_pending_async() == 0
+
+    @pytest.mark.asyncio
+    async def test_dispatch_handles_execution_exception(
+        self,
+        wakeup_repo: AgentWakeupRepository,
+    ) -> None:
+        entry = _make_entry()
+        await wakeup_repo.enqueue_async(entry)
+
+        task_repo = AsyncMock()
+        task_repo.get_async = AsyncMock(
+            return_value=_make_task_record(status=TaskStatus.TIMEOUT)
+        )
+        exec_service = AsyncMock()
+        exec_service.execute = AsyncMock(side_effect=RuntimeError("execution failed"))
+        event_log = AsyncMock(spec=EventLog)
+
+        dispatcher = WakeupDispatcher(
+            wakeup_repo=wakeup_repo,
+            task_repo=task_repo,
+            task_execution_service=exec_service,
+            event_log=event_log,
+        )
+        await dispatcher._dispatch_one_async()
+
+        exec_service.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_stop_lifecycle(self) -> None:
+        task_repo = AsyncMock()
+        exec_service = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+        wakeup_repo_mock = AsyncMock()
+
+        dispatcher = WakeupDispatcher(
+            wakeup_repo=wakeup_repo_mock,
+            task_repo=task_repo,
+            task_execution_service=exec_service,
+            event_log=event_log,
+            poll_interval_seconds=600,
+        )
+        await dispatcher.start()
+        assert dispatcher._background_task is not None
+        await dispatcher.stop()
+        assert dispatcher._background_task is None
+
+    @pytest.mark.asyncio
+    async def test_start_idempotent(self) -> None:
+        task_repo = AsyncMock()
+        exec_service = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+        wakeup_repo_mock = AsyncMock()
+
+        dispatcher = WakeupDispatcher(
+            wakeup_repo=wakeup_repo_mock,
+            task_repo=task_repo,
+            task_execution_service=exec_service,
+            event_log=event_log,
+            poll_interval_seconds=600,
+        )
+        await dispatcher.start()
+        first_task = dispatcher._background_task
+        await dispatcher.start()
+        assert dispatcher._background_task is first_task
+        await dispatcher.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_noop_when_not_started(self) -> None:
+        task_repo = AsyncMock()
+        exec_service = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+        wakeup_repo_mock = AsyncMock()
+
+        dispatcher = WakeupDispatcher(
+            wakeup_repo=wakeup_repo_mock,
+            task_repo=task_repo,
+            task_execution_service=exec_service,
+            event_log=event_log,
+        )
+        await dispatcher.stop()
+        assert dispatcher._background_task is None

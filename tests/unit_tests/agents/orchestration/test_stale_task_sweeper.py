@@ -154,3 +154,113 @@ class TestStaleTaskSweeper:
         await sweeper._sweep_once_async()
 
         assert task_repo.update_status_async.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_sweep_skips_task_without_heartbeat(
+        self,
+        wakeup_repo: AgentWakeupRepository,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc)
+        envelope = TaskEnvelope(
+            task_id="task_no_hb",
+            session_id="sess1",
+            trace_id="trace1",
+            role_id="Crafter",
+            objective="No heartbeat",
+            retry_attempt=0,
+            lifecycle=TaskLifecyclePolicy(
+                heartbeat_interval_seconds=None,
+                on_timeout=TaskTimeoutAction.RETRY,
+                max_retry_attempts=3,
+            ),
+            verification=VerificationPlan(),
+        )
+        record = TaskRecord(
+            envelope=envelope,
+            status=TaskStatus.RUNNING,
+            created_at=now,
+            updated_at=now - timedelta(seconds=200),
+        )
+        task_repo = AsyncMock()
+        task_repo.list_running_async = AsyncMock(return_value=(record,))
+        task_repo.update_status_async = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+
+        sweeper = StaleTaskSweeper(
+            task_repo=task_repo,
+            wakeup_repo=wakeup_repo,
+            event_log=event_log,
+        )
+        await sweeper._sweep_once_async()
+
+        task_repo.update_status_async.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sweep_handles_list_exception(
+        self,
+        wakeup_repo: AgentWakeupRepository,
+    ) -> None:
+        task_repo = AsyncMock()
+        task_repo.list_running_async = AsyncMock(side_effect=RuntimeError("db error"))
+        task_repo.update_status_async = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+
+        sweeper = StaleTaskSweeper(
+            task_repo=task_repo,
+            wakeup_repo=wakeup_repo,
+            event_log=event_log,
+        )
+        await sweeper._sweep_once_async()
+
+        task_repo.update_status_async.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_stop_lifecycle(self) -> None:
+        task_repo = AsyncMock()
+        task_repo.list_running_async = AsyncMock(return_value=())
+        event_log = AsyncMock(spec=EventLog)
+        wakeup_repo_mock = AsyncMock()
+
+        sweeper = StaleTaskSweeper(
+            task_repo=task_repo,
+            wakeup_repo=wakeup_repo_mock,
+            event_log=event_log,
+            sweep_interval_seconds=600,
+        )
+        await sweeper.start()
+        assert sweeper._background_task is not None
+        await sweeper.stop()
+        assert sweeper._background_task is None
+
+    @pytest.mark.asyncio
+    async def test_start_idempotent(self) -> None:
+        task_repo = AsyncMock()
+        task_repo.list_running_async = AsyncMock(return_value=())
+        event_log = AsyncMock(spec=EventLog)
+        wakeup_repo_mock = AsyncMock()
+
+        sweeper = StaleTaskSweeper(
+            task_repo=task_repo,
+            wakeup_repo=wakeup_repo_mock,
+            event_log=event_log,
+            sweep_interval_seconds=600,
+        )
+        await sweeper.start()
+        first_task = sweeper._background_task
+        await sweeper.start()
+        assert sweeper._background_task is first_task
+        await sweeper.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_noop_when_not_started(self) -> None:
+        task_repo = AsyncMock()
+        event_log = AsyncMock(spec=EventLog)
+        wakeup_repo_mock = AsyncMock()
+
+        sweeper = StaleTaskSweeper(
+            task_repo=task_repo,
+            wakeup_repo=wakeup_repo_mock,
+            event_log=event_log,
+        )
+        await sweeper.stop()
+        assert sweeper._background_task is None
