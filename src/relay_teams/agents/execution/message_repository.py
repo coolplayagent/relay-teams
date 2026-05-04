@@ -941,7 +941,6 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
-        from pydantic_ai.messages import ModelRequest, UserPromptPart
 
         _ = (session_id, trace_id, workspace_id, agent_role_id)
         target_key = user_prompt_content_key(content)
@@ -1091,7 +1090,6 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
-        from pydantic_ai.messages import ModelRequest, UserPromptPart
 
         target_key = user_prompt_content_key(content)
         target_text = user_prompt_content_to_text(content)
@@ -1254,7 +1252,6 @@ class MessageRepository(SharedSqliteRepository):
         conversation_id: str | None = None,
         agent_role_id: str | None = None,
     ) -> bool:
-        from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
         target = str(content or "").strip()
         if not target:
@@ -1897,7 +1894,6 @@ def _project_single_message_row(
 
 
 def _role(msg: ModelMessage) -> str:
-    from pydantic_ai.messages import ModelRequest, ModelResponse
 
     if isinstance(msg, ModelRequest):
         return "user"
@@ -2062,7 +2058,6 @@ def _history_ends_with_user_prompt(
     history: Sequence[ModelMessage],
     content_key: str,
 ) -> bool:
-    from pydantic_ai.messages import ModelRequest, UserPromptPart
 
     target = str(content_key or "").strip()
     if not target or not history:
@@ -2081,7 +2076,6 @@ def _history_ends_with_user_prompt(
 
 
 def _task_history_has_response(rows: Sequence[sqlite3.Row]) -> bool:
-    from pydantic_ai.messages import ModelResponse
 
     for row in rows:
         messages = ModelMessagesTypeAdapter.validate_json(
@@ -2093,7 +2087,6 @@ def _task_history_has_response(rows: Sequence[sqlite3.Row]) -> bool:
 
 
 def _row_is_user_prompt_only(row: sqlite3.Row) -> bool:
-    from pydantic_ai.messages import ModelRequest, UserPromptPart
 
     messages = ModelMessagesTypeAdapter.validate_json(
         _sanitize_message_json(str(row["message_json"]))
@@ -2111,7 +2104,6 @@ def _history_ends_with_system_prompt(
     history: Sequence[ModelMessage],
     content: str,
 ) -> bool:
-    from pydantic_ai.messages import ModelRequest, SystemPromptPart
 
     target = str(content or "").strip()
     if not target or not history:

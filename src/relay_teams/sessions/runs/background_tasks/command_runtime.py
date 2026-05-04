@@ -28,6 +28,9 @@ from relay_teams.net.github_cli import (
     resolve_existing_gh_path,
 )
 
+from relay_teams.env import build_clawhub_cli_env
+from relay_teams.env.clawhub_config_service import ClawHubConfigService
+
 WINDOWS_GIT_BASH_CANDIDATES = (
     Path(r"C:\Program Files\Git\bin\bash.exe"),
     Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
@@ -693,9 +696,6 @@ def _load_github_cli_env() -> dict[str, str]:
 
 
 def _load_clawhub_cli_env() -> dict[str, str]:
-    from relay_teams.env import build_clawhub_cli_env
-    from relay_teams.env.clawhub_config_service import ClawHubConfigService
-
     config = ClawHubConfigService(config_dir=get_app_config_dir()).get_clawhub_config()
     return build_clawhub_cli_env(config.token)
 

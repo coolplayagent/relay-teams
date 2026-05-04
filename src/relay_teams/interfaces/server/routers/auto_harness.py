@@ -11,6 +11,8 @@ from relay_teams.tools.generated_tools import (
     GeneratedToolStatus,
 )
 
+from relay_teams.tools.generated_tools import AutoHarnessService
+
 router = APIRouter(prefix="/auto-harness", tags=["AutoHarness"])
 
 
@@ -73,8 +75,6 @@ def _get_auto_harness_service(request: object) -> object:
 async def list_generated_tools(
     request: Request,
 ) -> list[GeneratedToolSummary]:
-    from relay_teams.tools.generated_tools import AutoHarnessService
-
     service: AutoHarnessService = _get_auto_harness_service(request)  # type: ignore[assignment]
     records = service.list_records()
     return [_record_to_summary(record) for record in records]
@@ -85,8 +85,6 @@ async def get_generated_tool(
     tool_name: str,
     request: Request,
 ) -> GeneratedToolDetail:
-    from relay_teams.tools.generated_tools import AutoHarnessService
-
     service: AutoHarnessService = _get_auto_harness_service(request)  # type: ignore[assignment]
     try:
         record = service.load_record(tool_name)

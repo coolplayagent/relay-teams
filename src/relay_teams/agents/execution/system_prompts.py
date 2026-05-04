@@ -58,6 +58,9 @@ from relay_teams.workspace import (
     WorkspaceSshMountConfig,
 )
 from relay_teams.workspace.ssh_profile_service import SshProfileService
+from relay_teams.env.github_config_service import GitHubConfigService
+from relay_teams.env.clawhub_config_service import ClawHubConfigService
+from relay_teams.paths import get_app_config_dir
 
 LOGGER = get_logger(__name__)
 
@@ -561,12 +564,6 @@ def _format_package_tool_status(tool_path: Path | None) -> str:
 
 def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
     try:
-        from relay_teams.env.github_config_service import GitHubConfigService
-        from relay_teams.paths import get_app_config_dir
-    except ImportError:
-        return False, None
-
-    try:
         token_configured = GitHubConfigService(
             config_dir=get_app_config_dir()
         ).has_configured_token_reference()
@@ -578,12 +575,6 @@ def _get_github_cli_environment_status() -> tuple[bool, Path | None]:
 
 
 def _get_clawhub_environment_status() -> tuple[bool, Path | None]:
-    try:
-        from relay_teams.env.clawhub_config_service import ClawHubConfigService
-        from relay_teams.paths import get_app_config_dir
-    except ImportError:
-        return False, None
-
     try:
         token_configured = ClawHubConfigService(
             config_dir=get_app_config_dir()

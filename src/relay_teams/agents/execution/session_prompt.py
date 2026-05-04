@@ -10,6 +10,7 @@ from pydantic_ai.models.anthropic import AnthropicModelSettings
 
 from relay_teams.providers.prompt_caching import (
     apply_anthropic_cache_markers,
+    should_enable_prompt_caching_for_openai,
 )
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.settings import ModelSettings
@@ -346,10 +347,6 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         if request.thinking.enabled and request.thinking.effort is not None:
             openai_settings["openai_reasoning_effort"] = request.thinking.effort
         # EP-1a: Apply OpenAI prompt caching markers when supported.
-        from relay_teams.providers.prompt_caching import (
-            should_enable_prompt_caching_for_openai,
-        )
-
         model_name = getattr(self._config, "model", "") or ""
         if should_enable_prompt_caching_for_openai(model_name, system_prompt):
             existing_extra = openai_settings.get("extra_body")

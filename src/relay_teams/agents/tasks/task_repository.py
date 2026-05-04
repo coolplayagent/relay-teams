@@ -19,6 +19,8 @@ from relay_teams.agents.tasks.models import (
 from relay_teams.persistence import async_fetchall, async_fetchone
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
+from datetime import timedelta
+
 _SQLITE_SAFE_VARIABLE_LIMIT = 900
 
 
@@ -611,8 +613,6 @@ class TaskRepository(SharedSqliteRepository):
         lease_duration_seconds: float,
     ) -> bool:
         """Atomically set lease fields if task is ASSIGNED or CREATED."""
-        from datetime import timedelta
-
         now = datetime.now(tz=timezone.utc)
         expires_at = now + timedelta(seconds=lease_duration_seconds)
 

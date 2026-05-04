@@ -65,6 +65,8 @@ from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
 
+from relay_teams.agents.instances.enums import InstanceStatus
+
 LOGGER = get_logger(__name__)
 
 
@@ -306,8 +308,6 @@ class ExecutionHarness(BaseModel):
         instance_record: AgentRuntimeRecord,
     ) -> None:
         """Post-LLM result handling: hooks, status, events, memory."""
-        from relay_teams.agents.instances.enums import InstanceStatus
-
         persistence = self._full_persistence_harness()
         await persistence.execute_task_completed_hooks(
             task=task,

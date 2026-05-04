@@ -25,6 +25,8 @@ from relay_teams.workspace import (
     pick_workspace_directory,
 )
 
+import asyncio
+
 router = APIRouter(prefix="/workspaces", tags=["Workspaces"])
 
 
@@ -92,8 +94,6 @@ async def pick_workspace(
     req: PickWorkspaceRequest | None = None,
     service: WorkspaceService = Depends(get_workspace_service),
 ) -> PickWorkspaceResponse:
-    import asyncio
-
     def _pick_workspace_for_request() -> WorkspaceRecord | None:
         if req is not None and req.root_path is not None:
             selected_root = Path(req.root_path)

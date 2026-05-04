@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import (
@@ -363,8 +364,6 @@ def _format_reasons_canvas(
     """Format the REASONS section for spec checkpoint rendering (FE-5 FE5-14)."""
     if not trigger_reason:
         return []
-    from datetime import datetime, timezone
-
     timestamp = datetime.now(tz=timezone.utc).isoformat()
     changed_fields: list[str] = []
     if tool_calls > 0:

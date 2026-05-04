@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import platform
 import shutil
 import subprocess
 import tarfile
@@ -53,8 +54,6 @@ _SYSTEM_ALIASES = {
 
 
 def _get_platform_key() -> str:
-    import platform
-
     raw_arch = platform.machine().strip().lower()
     raw_system = platform.system().strip().lower()
 

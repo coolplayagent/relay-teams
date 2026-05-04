@@ -44,6 +44,8 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.tools.registry import ToolRegistry, list_default_tool_groups
 from relay_teams.validation import RequiredIdentifierStr
 
+import asyncio
+
 router = APIRouter(prefix="/roles", tags=["Roles"])
 _CAPABILITY_WILDCARD = "*"
 
@@ -70,8 +72,6 @@ async def get_role_config_options(
     ),
 ) -> RoleConfigOptions:
     try:
-        import asyncio
-
         return await asyncio.to_thread(
             _build_role_config_options,
             role_registry=role_registry,

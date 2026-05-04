@@ -66,6 +66,10 @@ from relay_teams.triggers import GitHubTriggerService
 from relay_teams.workspace import SshProfileService, WorkspaceManager, WorkspaceService
 
 
+from relay_teams.agents.orchestration.llm_evaluator import LLMEvaluator
+from relay_teams.roles.role_models import RoleDefinition
+
+
 def get_container(request: Request) -> ServerContainer:
     return request.app.state.container
 
@@ -87,9 +91,6 @@ def get_task_service(request: Request) -> TaskOrchestrationService:
 
 
 def get_llm_evaluator(request: Request) -> object:
-    from relay_teams.agents.orchestration.llm_evaluator import LLMEvaluator
-    from relay_teams.roles.role_models import RoleDefinition
-
     container = get_container(request)
     model_config = container.resolve_reflection_model_config()
     model = model_config.model if model_config is not None else "gpt-4o"

@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.providers.provider_contracts import LLMProvider
+import asyncio
+import concurrent.futures
+
+from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 
 
 def run_verification_llm_call(
@@ -15,22 +18,17 @@ def run_verification_llm_call(
     This is a thin wrapper so the verification pipeline stays synchronous
     while still delegating to the async provider infrastructure.
     """
-    import asyncio
-
     prompt = (
         "Evaluate whether the following task output satisfies the given criterion.\n"
         f"Criterion: {criterion}\n"
         f"Task output excerpt (first 2000 chars):\n"
         f"{excerpt}\n\n"
-        'Respond with JSON: {"passed": true/false, '
-        '"confidence": 0.0-1.0, "reason": "..."}'
+        'Respond with JSON: {{"passed": true/false, '
+        '"confidence": 0.0-1.0, "reason": "..."}}'
     )
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # Already inside an async context; use a thread to avoid deadlock.
-            import concurrent.futures
-
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 future = pool.submit(
                     asyncio.run,
@@ -44,8 +42,6 @@ def run_verification_llm_call(
 
 
 async def _call_provider(provider: LLMProvider, prompt: str) -> str:
-    from relay_teams.providers.provider_contracts import LLMRequest
-
     request = LLMRequest(
         run_id="verification",
         trace_id="verification",

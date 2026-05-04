@@ -1237,8 +1237,6 @@ def interactive_mode() -> None:
 
 def from_json_config(config_file: str) -> None:
     """Read and calculate from JSON config file"""
-    import json
-
     config_path = Path(config_file)
     if not config_path.exists():
         print(f"[Error] Config file does not exist: {config_file}")
@@ -1491,3 +1489,5 @@ Common commands:
 
 if __name__ == '__main__':
     main()
+
+import json

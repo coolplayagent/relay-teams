@@ -92,6 +92,14 @@ from relay_teams.roles.tool_diet_validation import (
 )
 from relay_teams.roles.tool_diet_policy import ToolDietPolicy as _ToolDietPolicy
 
+from relay_teams.agents.tasks.enums import (
+    TaskTimeoutAction,
+    WakeupReason,
+    WakeupStatus,
+)
+from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
+from relay_teams.roles.tool_diet_validation import should_reject
+
 LOGGER = get_logger(__name__)
 
 _TASK_ID_PREFIX_RE = re.compile(
@@ -1428,8 +1436,6 @@ class CoordinatorGraph(BaseModel):
                 objective=role.system_prompt or "",
                 role_id=record.envelope.role_id or "",
             )
-            from relay_teams.roles.tool_diet_validation import should_reject
-
             if should_reject(diet_report):
                 diet_messages = "; ".join(
                     f.message
@@ -1534,13 +1540,6 @@ class CoordinatorGraph(BaseModel):
         - HUMAN_GATE: emit an event requesting manual gate activation.
         - FAIL: do nothing (callers should handle FAIL like normal failure).
         """
-        from relay_teams.agents.tasks.enums import (
-            TaskTimeoutAction,
-            WakeupReason,
-            WakeupStatus,
-        )
-        from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
-
         lifecycle = task_record.envelope.lifecycle
         on_timeout = lifecycle.on_timeout
 
