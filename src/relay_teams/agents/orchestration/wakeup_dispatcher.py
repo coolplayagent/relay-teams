@@ -48,7 +48,7 @@ class WakeupDispatcher:
         try:
             await self._background_task
         except asyncio.CancelledError:
-            pass
+            LOGGER.debug("Dispatcher background task cancelled during shutdown")
         self._background_task = None
 
     async def _dispatch_loop_async(self) -> None:

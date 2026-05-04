@@ -55,8 +55,8 @@ class AgentWakeupRepository(SharedSqliteRepository):
             self._conn.execute(_IDX_STATUS_SQL)
             try:
                 self._conn.execute(_IDX_COALESCE_SQL)
-            except Exception:
-                pass
+            except sqlite3.OperationalError:
+                LOGGER.warning("Coalesce index already exists, skipping", exc_info=True)
             self._conn.execute(_IDX_TASK_SQL)
 
         self._run_write(

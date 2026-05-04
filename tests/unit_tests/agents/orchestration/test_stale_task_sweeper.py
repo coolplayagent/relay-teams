@@ -21,13 +21,6 @@ from relay_teams.agents.tasks.models import (
 from relay_teams.agents.orchestration.stale_task_sweeper import StaleTaskSweeper
 from relay_teams.sessions.runs.event_log import EventLog
 
-_DEFAULT_LIFECYCLE = TaskLifecyclePolicy(
-    heartbeat_interval_seconds=30.0,
-    stale_silence_multiplier=3.0,
-    on_timeout=TaskTimeoutAction.RETRY,
-    max_retry_attempts=3,
-)
-
 
 def _make_task_record(
     *,
@@ -65,7 +58,6 @@ def _make_task_record(
 @pytest.fixture
 def wakeup_repo() -> Generator[AgentWakeupRepository, None, None]:
     with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
         db_path = Path(tmpdir) / "test.db"
         yield AgentWakeupRepository(db_path)
 

@@ -56,11 +56,11 @@ class TestAgentWakeupEntry:
             _make_entry(unknown="value")  # type: ignore[arg-type]
 
     def test_all_statuses(self) -> None:
-        for status in WakeupStatus:
+        for status in WakeupStatus.__members__.values():
             entry = _make_entry(status=status)
             assert entry.status == status
 
     def test_all_timeout_actions(self) -> None:
-        for action in TaskTimeoutAction:
+        for action in TaskTimeoutAction.__members__.values():
             entry = _make_entry(timeout_action=action)
             assert entry.timeout_action == action

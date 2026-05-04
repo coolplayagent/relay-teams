@@ -48,7 +48,7 @@ class StaleTaskSweeper:
         try:
             await self._background_task
         except asyncio.CancelledError:
-            pass
+            LOGGER.debug("Sweeper background task cancelled during shutdown")
         self._background_task = None
 
     async def _sweep_loop_async(self) -> None:

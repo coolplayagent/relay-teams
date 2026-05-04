@@ -60,7 +60,6 @@ def _make_task_record(
 def wakeup_repo() -> Generator[AgentWakeupRepository, None, None]:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        db_path = Path(tmpdir) / "test.db"
         yield AgentWakeupRepository(db_path)
 
 
