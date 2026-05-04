@@ -8,6 +8,7 @@ from functools import partial
 import inspect
 import logging
 import time
+import warnings
 from collections.abc import Awaitable, Callable
 from typing import ParamSpec, TypeVar, cast
 
@@ -107,6 +108,15 @@ async def call_maybe_async(
     *args: ParamT.args,
     **kwargs: ParamT.kwargs,
 ) -> ResultT:
+    warnings.warn(
+        "call_maybe_async is deprecated. "
+        "Use explicit async service methods or the dedicated route-work "
+        "variants (call_maybe_async_in_isolated_thread, "
+        "call_maybe_async_in_session_read_thread, "
+        "call_maybe_async_in_network_probe_thread) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return await call_route_work(
         get_default_route_work_class(),
         getattr(function, "__name__", "route.call"),

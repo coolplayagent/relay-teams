@@ -3634,3 +3634,31 @@ Response: `MemorySearchResult`
 - `total_count`: total matching entries.
 
 Router: `src/relay_teams/interfaces/server/routers/memories.py`
+
+## Client SDK
+
+### `AsyncAgentTeamsClient`
+
+Async HTTP client for the Agent Teams server API. All methods are
+`async` and return JSON-marshalled dictionaries or typed models
+(`RunHandle`).
+
+Construction:
+- `base_url`: default `"http://127.0.0.1:8000"`.
+- `timeout_seconds`: request timeout, default `30.0`.
+- `stream_timeout_seconds`: SSE stream timeout, default `600.0`.
+
+Module: `src/relay_teams/interfaces/sdk/client.py`
+Package export: `from relay_teams import AsyncAgentTeamsClient`
+
+### `SyncAgentTeamsClient`
+
+Synchronous wrapper around `AsyncAgentTeamsClient`. Every method
+delegates to the async client via `asyncio.run`, providing a
+blocking API for scripts, tests, and non-async callers.
+
+Construction mirrors `AsyncAgentTeamsClient` exactly. Streaming
+methods (`stream_run_events`) are adapted to return plain `list`.
+
+Module: `src/relay_teams/interfaces/sdk/client.py`
+Package export: `from relay_teams import SyncAgentTeamsClient`

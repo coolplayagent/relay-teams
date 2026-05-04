@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Coroutine
+from typing import cast
 from urllib.parse import quote
 
 import httpx
@@ -1009,3 +1011,83 @@ def _expect_str(value: JsonValue | None, field_name: str) -> str:
     if isinstance(value, str):
         return value
     raise RuntimeError(f"Expected string field '{field_name}' in server response")
+
+
+class SyncAgentTeamsClient:
+    """Synchronous wrapper around :class:`AsyncAgentTeamsClient`.
+
+    Every method delegates to the async client via :func:`asyncio.run`,
+    providing a blocking API for scripts, tests, and non-async callers.
+
+    Streaming methods (``stream_run_events``) are adapted to return
+    synchronous iterators.
+
+    Construction mirrors :class:`AsyncAgentTeamsClient` exactly.
+    """
+
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8000",
+        timeout_seconds: float = 30.0,
+        stream_timeout_seconds: float = 600.0,
+    ) -> None:
+        self._async = AsyncAgentTeamsClient(
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            stream_timeout_seconds=stream_timeout_seconds,
+        )
+        self._base_url = base_url.rstrip("/")
+        self._timeout_seconds = timeout_seconds
+        self._stream_timeout_seconds = stream_timeout_seconds
+
+    def __repr__(self) -> str:
+        return (
+            f"SyncAgentTeamsClient(base_url={self._base_url!r}, "
+            f"timeout_seconds={self._timeout_seconds!r}, "
+            f"stream_timeout_seconds={self._stream_timeout_seconds!r})"
+        )
+
+    def __getattr__(self, name: str) -> Callable[..., object]:
+        async_attr = getattr(self._async, name)
+        if not callable(async_attr):
+            raise AttributeError(
+                f"SyncAgentTeamsClient only proxies callable methods, "
+                f"got {type(async_attr).__name__!r} for {name!r}"
+            )
+
+        if name == "stream_run_events":
+
+            def stream_run_events_sync(
+                *args: object, **kwargs: object
+            ) -> list[dict[str, JsonValue]]:
+                return asyncio.run(
+                    _stream_run_events_to_list(
+                        cast(
+                            AsyncIterator[dict[str, JsonValue]],
+                            async_attr(*args, **kwargs),
+                        )
+                    )
+                )
+
+            stream_run_events_sync.__name__ = "stream_run_events"
+            return stream_run_events_sync
+
+        def sync_method(*args: object, **kwargs: object) -> object:
+            return asyncio.run(
+                cast(
+                    Coroutine[None, None, object],
+                    async_attr(*args, **kwargs),
+                )
+            )
+
+        sync_method.__name__ = name
+        return sync_method
+
+
+async def _stream_run_events_to_list(
+    async_iter: AsyncIterator[dict[str, JsonValue]],
+) -> list[dict[str, JsonValue]]:
+    items: list[dict[str, JsonValue]] = []
+    async for item in async_iter:
+        items.append(item)
+    return items
