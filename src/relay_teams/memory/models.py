@@ -1,0 +1,371 @@
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from relay_teams.memory.memory_defaults import (
+    MEDIUM_TERM_TTL,
+    PERSISTENT_TTL,
+    WORKING_TTL,
+)
+
+
+# ---------------------------------------------------------------------------
+# Enums
+# ---------------------------------------------------------------------------
+
+
+class MemoryTier(str, Enum):
+    WORKING = "working"
+    MEDIUM_TERM = "medium_term"
+    PERSISTENT = "persistent"
+
+
+class MemoryScope(str, Enum):
+    WORKSPACE = "workspace"
+    SESSION = "session"
+    ROLE = "role"
+
+
+class MemoryEntryKind(str, Enum):
+    INSIGHT = "insight"
+    CONSTRAINT = "constraint"
+    DECISION = "decision"
+    FAILURE_MODE = "failure_mode"
+    PREFERENCE = "preference"
+    FACT = "fact"
+    SUMMARY = "summary"
+
+
+class MemoryEntryStatus(str, Enum):
+    ACTIVE = "active"
+    SUPERSEDED = "superseded"
+    EXPIRED = "expired"
+
+
+class MemorySourceKind(str, Enum):
+    CONSOLIDATION = "consolidation"
+    MANUAL = "manual"
+    REFLECTION = "reflection"
+    CONDENSATION = "condensation"
+    TASK_RESULT = "task_result"
+
+
+# ---------------------------------------------------------------------------
+# Structured content
+# ---------------------------------------------------------------------------
+
+
+class MemoryContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=500)
+    body: str = Field(min_length=1)
+    context: str = ""
+    outcome: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Core entry model
+# ---------------------------------------------------------------------------
+
+
+def _validate_tags(tags: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    for tag in tags:
+        if not tag:
+            message = "Tag must be non-empty"
+            raise ValueError(message)
+        lower = tag.lower()
+        if lower in seen:
+            message = f"Duplicate tag (case-insensitive): {tag}"
+            raise ValueError(message)
+        seen.add(lower)
+    return tags
+
+
+class MemoryEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    tier: MemoryTier
+    scope: MemoryScope
+    workspace_id: str = Field(min_length=1)
+    session_id: str | None = None
+    run_id: str | None = None
+    role_id: str | None = None
+    kind: MemoryEntryKind
+    status: MemoryEntryStatus = MemoryEntryStatus.ACTIVE
+    content: MemoryContent
+    tags: tuple[str, ...] = ()
+    confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    source: MemorySourceKind
+    source_ref: str = ""
+    superseded_by_id: str | None = None
+    parent_entry_id: str | None = None
+    version: int = Field(default=1, ge=1)
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime | None = None
+    last_accessed_at: datetime | None = None
+    access_count: int = Field(default=0, ge=0)
+    metadata: dict[str, str] = Field(default_factory=dict, max_length=20)
+
+    validate_tags = field_validator("tags")(_validate_tags)
+
+    @model_validator(mode="after")
+    def _validate_scope_tier_rules(self) -> MemoryEntry:
+        if self.scope == MemoryScope.SESSION and self.session_id is None:
+            message = "session_id is required when scope=SESSION"
+            raise ValueError(message)
+        if self.scope == MemoryScope.ROLE and self.role_id is None:
+            message = "role_id is required when scope=ROLE"
+            raise ValueError(message)
+        if self.tier == MemoryTier.WORKING and self.run_id is None:
+            message = "run_id is required when tier=WORKING"
+            raise ValueError(message)
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Summary projection
+# ---------------------------------------------------------------------------
+
+
+class MemoryEntrySummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tier: MemoryTier
+    scope: MemoryScope
+    workspace_id: str
+    session_id: str | None
+    role_id: str | None
+    kind: MemoryEntryKind
+    status: MemoryEntryStatus
+    content_title: str
+    content_body_preview: str
+    tags: tuple[str, ...]
+    confidence_score: float
+    source: MemorySourceKind
+    version: int
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime | None
+
+
+def _entry_to_summary(entry: MemoryEntry) -> MemoryEntrySummary:
+    body_preview = entry.content.body[:200]
+    return MemoryEntrySummary(
+        id=entry.id,
+        tier=entry.tier,
+        scope=entry.scope,
+        workspace_id=entry.workspace_id,
+        session_id=entry.session_id,
+        role_id=entry.role_id,
+        kind=entry.kind,
+        status=entry.status,
+        content_title=entry.content.title,
+        content_body_preview=body_preview,
+        tags=entry.tags,
+        confidence_score=entry.confidence_score,
+        source=entry.source,
+        version=entry.version,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+        expires_at=entry.expires_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+
+class CreateMemoryEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tier: MemoryTier
+    scope: MemoryScope
+    workspace_id: str = Field(min_length=1)
+    session_id: str | None = None
+    run_id: str | None = None
+    role_id: str | None = None
+    kind: MemoryEntryKind
+    content: MemoryContent
+    tags: tuple[str, ...] = ()
+    confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    source: MemorySourceKind = MemorySourceKind.MANUAL
+    source_ref: str = ""
+    expires_at: datetime | None = None
+    metadata: dict[str, str] = Field(default_factory=dict, max_length=20)
+
+    validate_tags = field_validator("tags")(_validate_tags)
+
+    @model_validator(mode="after")
+    def _validate_scope_tier_rules(self) -> CreateMemoryEntryRequest:
+        if self.scope == MemoryScope.SESSION and self.session_id is None:
+            message = "session_id is required when scope=SESSION"
+            raise ValueError(message)
+        if self.scope == MemoryScope.ROLE and self.role_id is None:
+            message = "role_id is required when scope=ROLE"
+            raise ValueError(message)
+        if self.tier == MemoryTier.WORKING and self.run_id is None:
+            message = "run_id is required when tier=WORKING"
+            raise ValueError(message)
+        return self
+
+
+# Sentinel for distinguishing ``null`` from absent in updates.
+_UNSET: Literal["_unset_sentinel"] = "_unset_sentinel"
+
+
+class UpdateMemoryEntryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: MemoryContent | None = None
+    tags: tuple[str, ...] | None = None
+    confidence_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    status: MemoryEntryStatus | None = None
+    expires_at: datetime | None | Literal["_unset_sentinel"] = _UNSET
+    metadata: dict[str, str] | None = None
+
+    validate_tags = field_validator("tags")(_validate_tags)
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> UpdateMemoryEntryRequest:
+        provided = [
+            self.content is not None,
+            self.tags is not None,
+            self.confidence_score is not None,
+            self.status is not None,
+            self.expires_at is not _UNSET,
+            self.metadata is not None,
+        ]
+        if not any(provided):
+            message = "At least one field must be provided for update"
+            raise ValueError(message)
+        return self
+
+
+def default_ttl_for_tier(tier: MemoryTier) -> datetime | None:
+    """Return an expiry datetime for the given tier relative to now, or None."""
+    from datetime import timezone
+
+    now = datetime.now(tz=timezone.utc)
+    if tier == MemoryTier.WORKING:
+        return now + WORKING_TTL
+    if tier == MemoryTier.MEDIUM_TERM:
+        return now + MEDIUM_TERM_TTL
+    return PERSISTENT_TTL
+
+
+# ---------------------------------------------------------------------------
+# Query / Result models
+# ---------------------------------------------------------------------------
+
+
+class MemoryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    tier: MemoryTier | None = None
+    scope: MemoryScope | None = None
+    session_id: str | None = None
+    role_id: str | None = None
+    kind: MemoryEntryKind | None = None
+    status: MemoryEntryStatus | None = None
+    tags: tuple[str, ...] = ()
+    text_query: str = ""
+    created_after: datetime | None = None
+    created_before: datetime | None = None
+    min_confidence: float = 0.0
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class MemoryQueryResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[MemoryEntrySummary, ...]
+    total_count: int = Field(ge=0)
+    offset: int
+    limit: int
+
+
+# ---------------------------------------------------------------------------
+# Consolidation models
+# ---------------------------------------------------------------------------
+
+
+class MemoryConsolidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    session_id: str | None = None
+    role_id: str | None = None
+    source_run_id: str | None = None
+    target_tier: MemoryTier
+    target_scope: MemoryScope
+    filter_tags: tuple[str, ...] = ()
+    filter_kind: MemoryEntryKind | None = None
+
+    validate_filter_tags = field_validator("filter_tags")(_validate_tags)
+
+    @model_validator(mode="after")
+    def _validate_target_tier(self) -> MemoryConsolidationRequest:
+        if self.target_tier == MemoryTier.WORKING:
+            message = "Consolidation target tier must be MEDIUM_TERM or PERSISTENT"
+            raise ValueError(message)
+        return self
+
+
+class MemoryConsolidationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_entry_count: int
+    consolidated_entry_count: int
+    superseded_entry_ids: tuple[str, ...]
+    new_entry_ids: tuple[str, ...]
+
+
+# ---------------------------------------------------------------------------
+# Search models
+# ---------------------------------------------------------------------------
+
+
+class MemorySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str = Field(min_length=1)
+    text_query: str = Field(min_length=1)
+    tier: MemoryTier | None = None
+    scope: MemoryScope | None = None
+    session_id: str | None = None
+    role_id: str | None = None
+    kind: MemoryEntryKind | None = None
+    tags: tuple[str, ...] = ()
+    min_confidence: float = 0.3
+    limit: int = Field(default=10, ge=1, le=100)
+
+    validate_tags = field_validator("tags")(_validate_tags)
+
+
+class MemorySearchHit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    entry: MemoryEntrySummary
+    score: float
+    rank: int = Field(ge=1)
+    snippet: str
+
+
+class MemorySearchResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[MemorySearchHit, ...]
+    total_count: int

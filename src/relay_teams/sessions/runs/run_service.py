@@ -155,6 +155,7 @@ class SessionRunService:
         shell_approval_repo: ShellApprovalRepository | None = None,
         user_question_manager: UserQuestionManager | None = None,
         hook_service: HookService | None = None,
+        memory_event_handler: object | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._provider_factory = provider_factory or (
@@ -189,6 +190,7 @@ class SessionRunService:
         self._shell_approval_repo = shell_approval_repo
         self._user_question_manager: UserQuestionManager | None = user_question_manager
         self._hook_service = hook_service
+        self._memory_event_handler = memory_event_handler
         self._event_publisher = RunEventPublisher(
             run_event_hub=self._run_event_hub,
             get_runtime=lambda run_id: self._runtime_for_run(run_id),
@@ -231,6 +233,7 @@ class SessionRunService:
                     **kwargs,
                 )
             ),
+            memory_event_handler=self._memory_event_handler,
         )
         self._terminal_results = RunTerminalResultService(
             session_repo=self._session_repo,

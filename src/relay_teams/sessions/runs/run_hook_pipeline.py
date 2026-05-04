@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 from typing import Protocol
 
 from relay_teams.hooks import (
@@ -17,6 +18,8 @@ from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.session_repository import SessionRepository
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AppendCoordinatorFollowup(Protocol):
@@ -38,11 +41,16 @@ class RunHookPipeline:
         session_repo: SessionRepository,
         run_event_hub: RunEventHub,
         append_followup_to_coordinator: AppendCoordinatorFollowup,
+        memory_event_handler: object | None = None,
     ) -> None:
         self._get_hook_service = get_hook_service
         self._session_repo = session_repo
         self._run_event_hub = run_event_hub
         self._append_followup_to_coordinator = append_followup_to_coordinator
+        # MemoryEventHandler is optional to avoid import cycles --
+        # the class is passed through as an opaque object and cast
+        # only at call-sites where the methods are needed.
+        self._memory_event_handler = memory_event_handler
 
     async def execute_session_start_hooks(
         self,
@@ -80,6 +88,43 @@ class RunHookPipeline:
         output_text: str,
         root_task_id: str | None = None,
     ) -> None:
+        # Memory bank lifecycle: trigger run and session consolidation.
+        if self._memory_event_handler is not None:
+            from relay_teams.memory.event_handler import MemoryEventHandler
+
+            handler = self._memory_event_handler
+            assert isinstance(handler, MemoryEventHandler)
+            workspace_id = self._resolve_workspace_id(session_id)
+            if workspace_id is not None:
+                try:
+                    handler.on_run_completed(
+                        workspace_id=workspace_id,
+                        session_id=session_id,
+                    )
+                except (ValueError, OSError, RuntimeError):
+                    # Best-effort: memory lifecycle failures must not
+                    # block session-end processing.
+                    LOGGER.exception(
+                        "memory bank on_run_completed failed; "
+                        "workspace_id=%s session_id=%s",
+                        workspace_id,
+                        session_id,
+                    )
+                try:
+                    handler.on_session_completed(
+                        workspace_id=workspace_id,
+                        session_id=session_id,
+                    )
+                except (ValueError, OSError, RuntimeError):
+                    # Best-effort: memory lifecycle failures must not
+                    # block session-end processing.
+                    LOGGER.exception(
+                        "memory bank on_session_completed failed; "
+                        "workspace_id=%s session_id=%s",
+                        workspace_id,
+                        session_id,
+                    )
+
         hook_service = self._get_hook_service()
         if hook_service is None:
             return
@@ -96,6 +141,12 @@ class RunHookPipeline:
             ),
             run_event_hub=self._run_event_hub,
         )
+
+    def _resolve_workspace_id(self, session_id: str) -> str | None:
+        session = self._session_repo.get(session_id)
+        if session is not None:
+            return session.workspace_id
+        return None
 
     async def execute_stop_hooks(
         self,

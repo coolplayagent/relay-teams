@@ -50,6 +50,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.media import MediaAssetService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import SystemReminderService
+from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -124,6 +125,7 @@ class TaskExecutionService(BaseModel):
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
     role_memory_service: RoleMemoryService | None = None
+    memory_event_handler: MemoryEventHandler | None = None
     runtime_role_resolver: RuntimeRoleResolver | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
@@ -155,6 +157,7 @@ class TaskExecutionService(BaseModel):
             mcp_registry=getattr(self, "mcp_registry", None),
             run_control_manager=getattr(self, "run_control_manager", None),
             role_memory_service=getattr(self, "role_memory_service", None),
+            memory_event_handler=getattr(self, "memory_event_handler", None),
             run_intent_repo=getattr(self, "run_intent_repo", None),
             media_asset_service=getattr(self, "media_asset_service", None),
             hook_service=getattr(self, "hook_service", None),

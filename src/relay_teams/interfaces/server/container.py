@@ -93,6 +93,9 @@ from relay_teams.gateway.im.service import ImToolService
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import GatewaySessionIngressService
+from relay_teams.memory.repository import MemoryBankRepository
+from relay_teams.memory.service import MemoryBankService
+from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.logger import get_logger, log_event
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
@@ -560,6 +563,17 @@ class ServerContainer:
         self.role_memory_service: RoleMemoryService = RoleMemoryService(
             repository=self.role_memory_repo
         )
+        self.memory_bank_repo: MemoryBankRepository = MemoryBankRepository(
+            runtime.paths.db_path
+        )
+        self.memory_bank_service: MemoryBankService = MemoryBankService(
+            repository=self.memory_bank_repo,
+            retrieval_service=self.retrieval_service,
+        )
+        self.memory_event_handler = MemoryEventHandler(
+            memory_bank_service=self.memory_bank_service,
+            role_memory_service=self.role_memory_service,
+        )
         self.temporary_role_repo: TemporaryRoleRepository = TemporaryRoleRepository(
             runtime.paths.db_path
         )
@@ -819,6 +833,7 @@ class ServerContainer:
             shell_approval_repo=self.shell_approval_repo,
             user_question_manager=self.user_question_manager,
             hook_service=self.hook_service,
+            memory_event_handler=self.memory_event_handler,
         )
         self.monitor_service.bind_action_sink(self.run_service)
         self.session_service: SessionService = SessionService(
@@ -1117,6 +1132,7 @@ class ServerContainer:
             self.automation_delivery_repo,
             self.automation_bound_session_queue_repo,
             self.role_memory_repo,
+            self.memory_bank_repo,
             self.temporary_role_repo,
             self.monitor_repository,
             self.xiaoluban_account_repository,
@@ -1208,6 +1224,7 @@ class ServerContainer:
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
+            memory_event_handler=self.memory_event_handler,
             runtime_role_resolver=self.runtime_role_resolver,
             hook_service=self.hook_service,
             todo_service=self.todo_service,

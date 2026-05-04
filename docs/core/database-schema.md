@@ -861,6 +861,7 @@ Primary query keys used by repositories:
 - `relay_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
 - `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
 - `relay_teams.roles`: `role_memories`.
+- `relay_teams.memory`: `memory_entries`.
 - Role document files: role Markdown front matter stores `RoleDefinition`
   metadata, including the optional `contract` object for behavioral
   preconditions, postconditions, and capability invariants. These files are
@@ -1603,3 +1604,77 @@ Notes:
 -  stores structured rule-specific data.
 - Indexed on , , , and  for common query patterns.
 - Repository: 
+
+---
+
+### 2.N+4 `memory_entries`
+
+```sql
+CREATE TABLE IF NOT EXISTS memory_entries (
+    memory_id         TEXT PRIMARY KEY,
+    tier              TEXT NOT NULL,
+    scope             TEXT NOT NULL,
+    workspace_id      TEXT NOT NULL,
+    session_id        TEXT,
+    run_id            TEXT,
+    role_id           TEXT,
+    kind              TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'active',
+    content_title     TEXT NOT NULL,
+    content_body      TEXT NOT NULL,
+    content_context   TEXT NOT NULL DEFAULT '',
+    content_outcome   TEXT NOT NULL DEFAULT '',
+    tags              TEXT NOT NULL DEFAULT '',
+    confidence_score  REAL NOT NULL DEFAULT 1.0,
+    source            TEXT NOT NULL,
+    source_ref        TEXT NOT NULL DEFAULT '',
+    superseded_by_id  TEXT,
+    parent_entry_id   TEXT,
+    version           INTEGER NOT NULL DEFAULT 1,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    expires_at        TEXT,
+    last_accessed_at  TEXT,
+    access_count      INTEGER NOT NULL DEFAULT 0,
+    metadata_json     TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY (superseded_by_id) REFERENCES memory_entries(memory_id),
+    FOREIGN KEY (parent_entry_id)  REFERENCES memory_entries(memory_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_entries_workspace_tier
+    ON memory_entries(workspace_id, tier, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_workspace_scope
+    ON memory_entries(workspace_id, scope, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_session
+    ON memory_entries(session_id, tier, status, updated_at DESC)
+    WHERE session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_entries_role
+    ON memory_entries(workspace_id, role_id, tier, status, updated_at DESC)
+    WHERE role_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_entries_run
+    ON memory_entries(run_id, status)
+    WHERE run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memory_entries_expires
+    ON memory_entries(expires_at)
+    WHERE expires_at IS NOT NULL AND status = 'active';
+CREATE INDEX IF NOT EXISTS idx_memory_entries_source_ref
+    ON memory_entries(source_ref);
+```
+
+Purpose: structured three-tier memory bank entries for the FE-1 Memory Bank feature. Supports Working (run-scoped), Medium-term (session/role-scoped), and Persistent (workspace-scoped) tiers with automatic TTL expiry, confidence decay, and consolidation promotion.
+
+Notes:
+- `memory_id` is generated as `mem-{uuid_hex}`.
+- `tier` is one of: `working`, `medium_term`, `persistent`.
+- `scope` is one of: `workspace`, `session`, `role`.
+- `kind` is one of: `insight`, `constraint`, `decision`, `failure_mode`, `preference`, `fact`, `summary`.
+- `status` is one of: `active`, `superseded`, `expired`.
+- `source` is one of: `consolidation`, `manual`, `reflection`, `condensation`, `task_result`.
+- `tags` stores space-separated tag tokens for LIKE-based filtering.
+- `confidence_score` decays over time for medium_term and persistent entries; entries below the minimum threshold are automatically expired.
+- `superseded_by_id` references the memory entry that replaced this entry during consolidation.
+- `parent_entry_id` references the source entry from which this entry was consolidated.
+- `expires_at` is set automatically based on tier TTL defaults (working=4h, medium_term=7d, persistent=null).
+- `metadata_json` stores up to 20 key-value string pairs.
+- This table is independent from the existing `role_memories` table and does not affect its operations.
+- Repository: `src/relay_teams/memory/repository.py`
