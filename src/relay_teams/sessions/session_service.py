@@ -108,6 +108,8 @@ if TYPE_CHECKING:
     from relay_teams.skills.skill_registry import SkillRegistry
 
 
+from relay_teams.roles.role_registry import SystemRolesUnavailableError
+
 AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
 ACTIVE_RUN_REBIND_ERROR = (
     "Cannot rebind workspace while session has active or recoverable run"
@@ -149,8 +151,6 @@ def _normalize_auto_session_title(value: str) -> str | None:
 
 
 def _system_roles_unavailable_error_type() -> type[Exception]:
-    from relay_teams.roles.role_registry import SystemRolesUnavailableError
-
     return SystemRolesUnavailableError
 
 

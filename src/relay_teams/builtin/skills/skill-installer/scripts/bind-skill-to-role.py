@@ -4,6 +4,12 @@ from __future__ import annotations
 import argparse
 import sys
 
+from relay_teams.skills.installer_support import (
+    SkillInstallerError,
+    mount_skills_to_roles,
+    render_mount_results_text,
+)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -14,12 +20,6 @@ def main() -> int:
     if not args.skill:
         print("Provide at least one --skill value", file=sys.stderr)
         return 1
-
-    from relay_teams.skills.installer_support import (
-        SkillInstallerError,
-        mount_skills_to_roles,
-        render_mount_results_text,
-    )
 
     try:
         mounted_roles = mount_skills_to_roles(

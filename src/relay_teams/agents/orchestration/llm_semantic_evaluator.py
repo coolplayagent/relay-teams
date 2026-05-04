@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from typing import Callable
 
 from pydantic import BaseModel
@@ -88,8 +89,6 @@ class LlmSemanticEvaluator:
             loop = None
 
         if loop is not None and loop.is_running():
-            import concurrent.futures
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(
                     asyncio.run,

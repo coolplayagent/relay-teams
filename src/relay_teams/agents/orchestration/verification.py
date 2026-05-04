@@ -57,6 +57,9 @@ from relay_teams.agents.orchestration.llm_security_evaluator import (
     LLMSecurityEvaluator,
 )
 from relay_teams.providers.provider_contracts import LLMProvider
+from relay_teams.agents.orchestration.verification_helpers import (
+    run_verification_llm_call,
+)
 
 _COMMAND_OUTPUT_CAPTURE_BYTES = 64 * 1024
 _OUTPUT_READ_CHUNK_BYTES = 8192
@@ -114,10 +117,6 @@ class _LlmSemanticEvaluator:
 
     def __call__(self, request: SemanticEvaluationRequest) -> SemanticEvaluationResult:
         try:
-            from relay_teams.agents.orchestration.verification_helpers import (
-                run_verification_llm_call,
-            )
-
             response_text = run_verification_llm_call(
                 provider=self._provider,
                 criterion=request.criterion,
@@ -149,13 +148,11 @@ def _parse_llm_evaluator_response(
     response_text: str,
 ) -> SemanticEvaluationResult:
     """Parse the LLM evaluator response into a structured result."""
-    import json as _json
-
     try:
         json_start = response_text.find("{")
         json_end = response_text.rfind("}") + 1
         if 0 <= json_start < json_end:
-            parsed = _json.loads(response_text[json_start:json_end])
+            parsed = json.loads(response_text[json_start:json_end])
             return SemanticEvaluationResult(
                 criterion=request.criterion,
                 passed=bool(parsed.get("passed", False)),
@@ -163,7 +160,7 @@ def _parse_llm_evaluator_response(
                 reason=str(parsed.get("reason", "LLM evaluation")),
                 evaluator="llm_semantic",
             )
-    except (_json.JSONDecodeError, ValueError, KeyError):
+    except (json.JSONDecodeError, ValueError, KeyError):
         log_event(
             LOGGER,
             logging.DEBUG,

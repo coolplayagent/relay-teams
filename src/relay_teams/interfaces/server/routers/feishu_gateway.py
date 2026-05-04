@@ -21,6 +21,8 @@ from relay_teams.interfaces.server.router_error_mapping import http_exception_fo
 from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
 
+import asyncio
+
 router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 
 
@@ -63,7 +65,6 @@ async def update_feishu_account(
     ],
 ) -> FeishuGatewayAccountRecord:
     try:
-        import asyncio
 
         def _update_feishu_account() -> FeishuGatewayAccountRecord:
             existing = service.get_account(account_id)

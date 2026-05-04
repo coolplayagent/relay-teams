@@ -5,14 +5,14 @@ from pydantic_ai import Agent
 
 from relay_teams.tools.runtime.context import ToolDeps
 
+from relay_teams.tools.computer_tools.runtime import register as register_impl
+
 _COMPUTER_REGISTERED_ATTR = "_agent_teams_computer_tools_registered"
 
 
 def register_computer_tools(agent: Agent[ToolDeps, str]) -> None:
     if bool(getattr(agent, _COMPUTER_REGISTERED_ATTR, False)):
         return
-    from relay_teams.tools.computer_tools.runtime import register as register_impl
-
     register_impl(agent)
     setattr(agent, _COMPUTER_REGISTERED_ATTR, True)
 

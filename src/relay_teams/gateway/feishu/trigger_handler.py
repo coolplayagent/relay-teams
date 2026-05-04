@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from lark_oapi.event.context import EventHeader
     from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
 
+from lark_oapi.core.json import JSON
+
 _AT_TAG_PATTERN = re.compile(r"<at\b[^>]*>.*?</at>", re.IGNORECASE)
 _AT_TAG_LABEL_PATTERN = re.compile(r"<at\b[^>]*>(.*?)</at>", re.IGNORECASE)
 _LEADING_MENTION_TOKEN_PATTERN = re.compile(r"^(?:@\S+\s*)+")
@@ -314,8 +316,6 @@ def _normalize_sdk_message(event: P2ImMessageReceiveV1) -> FeishuNormalizedMessa
 
 
 def _sdk_event_payload(event: P2ImMessageReceiveV1) -> dict[str, JsonValue]:
-    from lark_oapi.core.json import JSON
-
     marshaled = JSON.marshal(event)
     if marshaled is None:
         raise ValueError("Feishu SDK event payload is empty")

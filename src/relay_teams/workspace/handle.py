@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from pathlib import Path, PurePosixPath
 import posixpath
+import re
+import sys
+from pathlib import Path, PurePosixPath
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr, model_validator
@@ -113,9 +115,6 @@ class WorkspaceHandle(BaseModel):
 
     @staticmethod
     def _normalize_raw_path(raw_path: str) -> str:
-        import re
-        import sys
-
         normalized_path = raw_path
         if sys.platform == "win32" and normalized_path.startswith("/"):
             match = re.match(r"^/([a-zA-Z])/(.*)", normalized_path)

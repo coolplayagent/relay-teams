@@ -9,6 +9,8 @@ from relay_teams.agents.tasks.models import TaskArtifact, TaskArtifactSummary
 from relay_teams.interfaces.server.deps import get_artifact_query_service
 from relay_teams.validation import RequiredIdentifierStr
 
+from fastapi import HTTPException
+
 router = APIRouter(tags=["Artifacts"])
 
 
@@ -23,8 +25,6 @@ async def get_task_artifact(
 ) -> TaskArtifact:
     artifact = service.get_artifact(task_id=task_id)
     if artifact is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact
 
@@ -67,7 +67,5 @@ async def get_task_artifact_summary(
 ) -> TaskArtifactSummary:
     summary = service.get_artifact_summary(task_id=task_id)
     if summary is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="Artifact summary not found")
     return summary

@@ -45,6 +45,9 @@ if TYPE_CHECKING:
     from relay_teams.external_agents import ExternalAgentConfigService
 
 
+from relay_teams.roles.tool_diet_validation import should_reject
+
+
 class RoleSettingsService:
     def __init__(
         self,
@@ -176,8 +179,6 @@ class RoleSettingsService:
                 draft=normalized,
             )
         validation_result = self.validate_role_document(normalized)
-        from relay_teams.roles.tool_diet_validation import should_reject
-
         diet_report = getattr(validation_result, "diet_report", None)
         if diet_report is not None and should_reject(diet_report):
             error_msg = "; ".join(

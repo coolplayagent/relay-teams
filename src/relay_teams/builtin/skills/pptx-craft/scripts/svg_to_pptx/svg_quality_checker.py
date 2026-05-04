@@ -308,8 +308,6 @@ class SVGQualityChecker:
             svg_files = [dir_path]
         else:
             # Import here to avoid circular dependency at module level
-            from constants import DIR_ALIAS_MAP
-
             # Resolve source alias to actual directory name
             if source:
                 dir_name = DIR_ALIAS_MAP.get(source, source)
@@ -493,7 +491,6 @@ def main():
     if target == '--all':
         # Check all example projects
         base_dir = sys.argv[2] if len(sys.argv) > 2 else 'examples'
-        from project_utils import find_all_projects
         projects = find_all_projects(base_dir)
 
         for project in projects:
@@ -525,3 +522,6 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+from constants import DIR_ALIAS_MAP
+from project_utils import find_all_projects
