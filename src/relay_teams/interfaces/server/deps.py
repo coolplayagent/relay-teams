@@ -11,6 +11,7 @@ from relay_teams.agents.orchestration.settings_service import (
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
+from relay_teams.agents.tasks.artifact_query_service import ArtifactQueryService
 from relay_teams.agents.tasks.spec_artifact_diff_service import (
     SpecArtifactDiffService,
 )
@@ -310,3 +311,7 @@ def get_hook_service(request: Request) -> HookService:
 def get_spec_artifact_diff_service(request: Request) -> SpecArtifactDiffService:
     task_repo: TaskRepository = get_container(request).task_service.task_repo
     return SpecArtifactDiffService(task_repo)
+
+
+def get_artifact_query_service(request: Request) -> ArtifactQueryService:
+    return ArtifactQueryService(get_container(request).artifact_repo)

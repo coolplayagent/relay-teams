@@ -7,6 +7,8 @@ from typing import cast
 
 from pydantic import JsonValue
 from pydantic_ai.models.anthropic import AnthropicModelSettings
+
+from relay_teams.providers.prompt_caching import apply_anthropic_cache_markers
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.messages import (
@@ -326,6 +328,11 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
                 anthropic_settings["max_tokens"] = max_tokens
             if request.thinking.enabled and request.thinking.effort is not None:
                 anthropic_settings["thinking"] = request.thinking.effort
+            updated = apply_anthropic_cache_markers(
+                system_prompt, dict(anthropic_settings)
+            )
+            if "extra_body" in updated:
+                anthropic_settings["extra_body"] = updated["extra_body"]
             return anthropic_settings
         openai_settings: OpenAIChatModelSettings = {
             "openai_continuous_usage_stats": True,

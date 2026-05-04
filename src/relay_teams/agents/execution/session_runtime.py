@@ -66,6 +66,10 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.agents.execution.context_editing import (
+    build_diff_injection,
+    build_injection_message,
+)
 from relay_teams.agents.execution.recovery_flow import FallbackAttemptState
 from relay_teams.agents.execution.spec_drift_evaluator import evaluate_spec_drift
 from relay_teams.workspace import build_conversation_id
@@ -819,6 +823,45 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                         decision=decision,
                         run_event_hub=self._run_event_hub,
                     )
+
+                # Context editing: inject incremental diff via message_repo
+                # when spec checkpoint content changes, avoiding full re-sends.
+                if (
+                    decision.content
+                    and len(decision.content) > 0
+                    and agent_system_prompt
+                    and agent_system_prompt != decision.content
+                ):
+                    edit_job = build_diff_injection(
+                        task_id=request.task_id,
+                        session_id=request.session_id,
+                        run_id=request.run_id,
+                        old_spec=agent_system_prompt,
+                        new_spec=decision.content,
+                    )
+                    if "No changes detected" not in edit_job.diff_description:
+                        edit_message = build_injection_message(edit_job)
+                        was_appended = await self._message_repo.append_system_prompt_if_missing_async(
+                            session_id=request.session_id,
+                            workspace_id=resolved_workspace_id,
+                            conversation_id=resolved_conversation_id,
+                            agent_role_id=request.role_id,
+                            instance_id=request.instance_id,
+                            task_id=request.task_id,
+                            trace_id=request.trace_id,
+                            content=edit_message,
+                        )
+                        if was_appended:
+                            log_event(
+                                LOGGER,
+                                logging.DEBUG,
+                                event="llm.context_edit.injected",
+                                message="Injected incremental context edit for spec checkpoint update",
+                                payload={
+                                    "run_id": request.run_id,
+                                    "task_id": request.task_id,
+                                },
+                            )
                 (
                     prepared_prompt,
                     history,

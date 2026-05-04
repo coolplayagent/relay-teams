@@ -31,6 +31,7 @@ from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.workspace import WorkspaceManager
+from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
 from relay_teams.hooks import HookService
 
 
@@ -62,6 +63,7 @@ def create_task_execution_service(
     hook_service: HookService | None = None,
     todo_service: TodoService | None = None,
     reminder_service: SystemReminderService | None = None,
+    artifact_repo: TaskArtifactRepository | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -99,4 +101,5 @@ def create_task_execution_service(
         hook_service=hook_service,
         todo_service=todo_service,
         reminder_service=reminder_service,
+        artifact_repo=artifact_repo,
     )

@@ -204,6 +204,7 @@ from relay_teams.sessions.runs.system_injection import SystemInjectionSink
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import ReminderStateRepository, SystemReminderService
+from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
@@ -418,6 +419,9 @@ class ServerContainer:
         )
 
         self.task_repo: TaskRepository = TaskRepository(runtime.paths.db_path)
+        self.artifact_repo: TaskArtifactRepository = TaskArtifactRepository(
+            runtime.paths.db_path
+        )
         self.audit_repository: AuditEventRepository = AuditEventRepository(
             runtime.paths.db_path
         )
@@ -1208,6 +1212,7 @@ class ServerContainer:
             hook_service=self.hook_service,
             todo_service=self.todo_service,
             reminder_service=self.reminder_service,
+            artifact_repo=self.artifact_repo,
         )
         self.task_service = TaskOrchestrationService(
             task_repo=self.task_repo,

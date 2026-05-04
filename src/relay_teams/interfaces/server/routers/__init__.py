@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from relay_teams.interfaces.server.routers import (
+    artifacts_router,
     audit,
     auto_harness,
     automation,
     commands,
     feishu_gateway,
     gateway,
+    guardrails_router,
     logs,
     mcp,
     observability,
@@ -24,12 +26,14 @@ from relay_teams.interfaces.server.routers import (
 )
 
 __all__ = [
+    "artifacts_router",
     "audit",
     "auto_harness",
     "automation",
     "commands",
     "feishu_gateway",
     "gateway",
+    "guardrails_router",
     "logs",
     "mcp",
     "observability",

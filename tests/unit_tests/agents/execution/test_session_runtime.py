@@ -1091,7 +1091,9 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
         )
 
     assert len(fallback_exhausted_calls) == 1
-    assert len(message_repo.appended_system_prompts) == 1
+    # Context editing injection adds a second system prompt append when
+    # the spec checkpoint content differs from the agent's current system prompt.
+    assert len(message_repo.appended_system_prompts) == 2
     assert retry_scheduled_calls == []
     assert retry_exhausted_calls == []
 

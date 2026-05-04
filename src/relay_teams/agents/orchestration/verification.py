@@ -50,6 +50,13 @@ from relay_teams.tools.runtime.guardrails import (
 )
 from relay_teams.tools.runtime.models import ToolRuntimeDecision
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
+from relay_teams.agents.orchestration.llm_behavior_evaluator import (
+    LLMBehaviorEvaluator,
+)
+from relay_teams.agents.orchestration.llm_security_evaluator import (
+    LLMSecurityEvaluator,
+)
+from relay_teams.providers.provider_contracts import LLMProvider
 
 _COMMAND_OUTPUT_CAPTURE_BYTES = 64 * 1024
 _OUTPUT_READ_CHUNK_BYTES = 8192
@@ -127,6 +134,7 @@ def verify_task(
     semantic_evaluator: SemanticVerificationEvaluator | None = None,
     role: RoleDefinition | None = None,
     require_guardrail_report: bool = False,
+    llm_provider: LLMProvider | None = None,
 ) -> VerificationResult:
     task = task_repo.get(task_id)
     evidence_bundle: VerificationEvidenceBundle | None
@@ -162,6 +170,7 @@ def verify_task(
                 task_id=task.envelope.task_id,
             ),
             require_guardrail_report=require_guardrail_report,
+            llm_provider=llm_provider,
         )
         checks = list(plan_run.checks)
         semantic_results = plan_run.semantic_results
@@ -256,6 +265,7 @@ def _run_verification_plan(
     semantic_evaluator: SemanticVerificationEvaluator | None,
     guardrail_report: RuntimeGuardrailReport | None,
     require_guardrail_report: bool,
+    llm_provider: LLMProvider | None = None,
 ) -> _VerificationPlanRun:
     checks: list[VerificationCheckResult] = []
     evidence_items: list[VerificationEvidenceItem] = [
@@ -287,6 +297,37 @@ def _run_verification_plan(
         required=require_guardrail_report,
     )
     checks.extend(guardrail_checks)
+
+    # FE-5: LLM-based behavior and security evaluations
+    if llm_provider is not None:
+        behavior_evaluator = LLMBehaviorEvaluator(
+            provider=llm_provider,
+        )
+        tool_call_events = _extract_tool_call_events(
+            event_bus=event_bus,
+            trace_id=trace_id,
+            task_id=task_id_filter,
+        )
+        behavior_checks = behavior_evaluator.evaluate_behavior(
+            task_id=task_id,
+            tool_calls=tool_call_events,
+            result=result,
+            constraints=plan.acceptance_criteria,
+        )
+        checks.extend(behavior_checks)
+        evidence_items.extend(_evidence_items_from_checks(list(behavior_checks)))
+
+        security_evaluator = LLMSecurityEvaluator(
+            provider=llm_provider,
+        )
+        security_checks = security_evaluator.evaluate_security(
+            task_id=task_id,
+            result=result,
+            tool_calls=tool_call_events,
+            guardrail_report=guardrail_report,
+        )
+        checks.extend(security_checks)
+        evidence_items.extend(_evidence_items_from_checks(list(security_checks)))
     formal_checks, optional_formal_names = _run_formal_checks(
         plan=plan,
         allowed_tools=allowed_tools,
@@ -1326,6 +1367,28 @@ def _latest_guardrail_report(
         if candidate is not None:
             report = candidate
     return report
+
+
+def _extract_tool_call_events(
+    *,
+    event_bus: EventLog,
+    trace_id: str,
+    task_id: str,
+) -> tuple[dict[str, object], ...]:
+    """Extract tool call records from the event log for LLM evaluations."""
+    calls: list[dict[str, object]] = []
+    for event in event_bus.list_by_trace(trace_id):
+        if str(event.get("task_id") or "") != task_id:
+            continue
+        payload = _parse_event_payload(event.get("payload_json"))
+        if payload and payload.get("tool_name"):
+            calls.append(
+                {
+                    "tool_name": str(payload.get("tool_name", "")),
+                    "args": payload.get("tool_args", {}),
+                }
+            )
+    return tuple(calls)
 
 
 def _runtime_guardrail_checks(

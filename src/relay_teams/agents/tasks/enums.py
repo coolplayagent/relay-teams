@@ -92,3 +92,10 @@ class WakeupStatus(str, Enum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
     EXPIRED = "expired"
+
+
+class TaskArtifactPhase(str, Enum):
+    SPEC = "spec"
+    EXECUTION = "execution"
+    VERIFICATION = "verification"
+    DELIVERY = "delivery"

@@ -39,12 +39,14 @@ from relay_teams.interfaces.server.runtime_identity import (
     build_server_health_payload,
 )
 from relay_teams.interfaces.server.routers import (
+    artifacts_router,
     audit,
     auto_harness,
     automation,
     commands,
     feishu_gateway,
     gateway,
+    guardrails_router,
     logs,
     mcp,
     observability,
@@ -214,11 +216,13 @@ app.include_router(session_media.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
 app.include_router(speech.router, prefix="/api")
 app.include_router(triggers.router, prefix="/api")
+app.include_router(artifacts_router.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(roles.router, prefix="/api")
 app.include_router(prompts.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
+app.include_router(guardrails_router.router, prefix="/api")
 
 
 @app.middleware("http")

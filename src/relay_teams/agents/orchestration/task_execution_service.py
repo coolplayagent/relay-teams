@@ -6,41 +6,39 @@ import logging
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Literal, Optional, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.execution.subagent_runner import SubAgentRunner
 from relay_teams.agents.execution.system_prompts import (
-    PromptSkillInstruction,
     RuntimePromptBuilder,
-    RuntimePromptSections,
 )
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.agents.instances.models import (
-    RuntimeToolSnapshotEntry,
-    RuntimeToolsSnapshot,
-)
 from relay_teams.agents.orchestration.harnesses import (
     TASK_MEMORY_RESULT_EXCERPT_CHARS,
-    PreparedRuntimeSnapshot,
+    ExecutionHarness,
     TaskLlmHarness,
     TaskPersistenceHarness,
     TaskPromptHarness,
-    TaskToolHarness,
     truncate_task_memory_result,
-)
-from relay_teams.agents.orchestration.harnesses.prompt_harness import (
-    ProviderUserPromptContent,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.tasks.agent_wakeup_repository import AgentWakeupRepository
-from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction, WakeupStatus
+from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
+from relay_teams.agents.tasks.enums import (
+    TaskArtifactPhase,
+    TaskStatus,
+    TaskTimeoutAction,
+    WakeupStatus,
+)
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
-from relay_teams.agents.tasks.models import TaskEnvelope, TaskHandoff
+from relay_teams.agents.tasks.models import (
+    TaskArtifactEntry,
+    TaskEnvelope,
+    TaskHandoff,
+)
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
 from relay_teams.hooks import HookService
@@ -48,7 +46,7 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.media import MediaAssetService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.reminders import ReminderDecision, SystemReminderService
+from relay_teams.reminders import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -69,11 +67,8 @@ from relay_teams.sessions.runs.recoverable_pause import (
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import (
-    RunKind,
     RunEvent,
-    RuntimePromptConversationContext,
     RunThinkingConfig,
-    RunTopologySnapshot,
 )
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,
@@ -81,16 +76,16 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from relay_teams.sessions.runs.todo_service import TodoService
-from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.runtime.guardrails import generate_runtime_guardrail_report_async
-from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
+from relay_teams.workspace import WorkspaceManager
 
 LOGGER = get_logger(__name__)
 TaskResultT = TypeVar("TaskResultT")
 TIMEOUT_WORKER_CANCEL_GRACE_SECONDS = 5.0
 TASK_TIMEOUT_PROGRESS_POLL_MAX_SECONDS = 1.0
 TASK_TIMEOUT_PROGRESS_POLL_MIN_SECONDS = 0.001
+
 __all__ = [
     "TASK_MEMORY_RESULT_EXCERPT_CHARS",
     "TaskExecutionService",
@@ -99,6 +94,12 @@ __all__ = [
 
 
 class TaskExecutionService(BaseModel):
+    """Control plane for task execution.
+
+    Orchestrates lifecycle transitions, timeout management, error handling,
+    and state coordination.  Delegates compute operations to ExecutionHarness.
+    """
+
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     role_registry: RoleRegistry
@@ -127,6 +128,40 @@ class TaskExecutionService(BaseModel):
     todo_service: TodoService | None = None
     reminder_service: SystemReminderService | None = None
     wakeup_repo: AgentWakeupRepository | None = None
+    artifact_repo: TaskArtifactRepository | None = None
+
+    # ── Harness factory ───────────────────────────────────────────────
+
+    def _execution_harness(self) -> ExecutionHarness:
+        return ExecutionHarness.model_construct(
+            role_registry=getattr(self, "role_registry", None),
+            task_repo=getattr(self, "task_repo", None),
+            shared_store=getattr(self, "shared_store", None),
+            event_bus=getattr(self, "event_bus", None),
+            agent_repo=getattr(self, "agent_repo", None),
+            message_repo=getattr(self, "message_repo", None),
+            approval_ticket_repo=getattr(self, "approval_ticket_repo", None),
+            run_runtime_repo=getattr(self, "run_runtime_repo", None),
+            run_event_hub=getattr(self, "run_event_hub", None),
+            workspace_manager=getattr(self, "workspace_manager", None),
+            prompt_builder=getattr(self, "prompt_builder", None),
+            provider_factory=getattr(self, "provider_factory", None),
+            tool_registry=getattr(self, "tool_registry", None),
+            skill_registry=getattr(self, "skill_registry", None),
+            skill_runtime_service=getattr(self, "skill_runtime_service", None),
+            mcp_registry=getattr(self, "mcp_registry", None),
+            run_control_manager=getattr(self, "run_control_manager", None),
+            role_memory_service=getattr(self, "role_memory_service", None),
+            run_intent_repo=getattr(self, "run_intent_repo", None),
+            media_asset_service=getattr(self, "media_asset_service", None),
+            hook_service=getattr(self, "hook_service", None),
+            todo_service=getattr(self, "todo_service", None),
+            reminder_service=getattr(self, "reminder_service", None),
+            artifact_repo=getattr(self, "artifact_repo", None),
+            runtime_role_resolver=getattr(self, "runtime_role_resolver", None),
+        )
+
+    # ── Public entry point ────────────────────────────────────────────
 
     async def execute(
         self,
@@ -219,6 +254,8 @@ class TaskExecutionService(BaseModel):
                     instance_id=instance_id,
                 )
 
+    # ── Core execution flow ───────────────────────────────────────────
+
     async def _wait_for_worker_with_progress_timeout_async(
         self,
         *,
@@ -293,6 +330,8 @@ class TaskExecutionService(BaseModel):
                 "role_id": role_id,
             },
         )
+
+        # Control: initial state transitions
         await self.agent_repo.mark_status_async(instance_id, InstanceStatus.RUNNING)
         _ = await self.task_repo.update_status_async(
             task.task_id,
@@ -335,17 +374,38 @@ class TaskExecutionService(BaseModel):
             )
         )
 
-        if self.runtime_role_resolver is not None:
-            role = await self.runtime_role_resolver.get_effective_role_async(
-                run_id=task.trace_id,
-                role_id=role_id,
-            )
-        else:
-            role = self.role_registry.get(role_id)
+        # OP-3: Create artifact container (spec phase).
+        if self.artifact_repo is not None:
+            try:
+                self.artifact_repo.ensure_artifact(
+                    task_id=task.task_id,
+                    spec_artifact_id=task.spec_artifact_id or "",
+                )
+                self.artifact_repo.append_entry(
+                    task_id=task.task_id,
+                    entry=TaskArtifactEntry(
+                        entry_id=f"start-{task.task_id}",
+                        phase=TaskArtifactPhase.SPEC,
+                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                        role_id=role_id,
+                        instance_id=instance_id,
+                        event_type="task_started",
+                        description="Task execution started",
+                        payload_json=task.model_dump_json(),
+                    ),
+                )
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="artifact.create_failed",
+                    message="Failed to create task artifact",
+                    payload={"task_id": task.task_id, "error": str(exc)},
+                )
+
+        # Compute: resolve workspace before try for error-path access
+        harness = self._execution_harness()
         instance_record = await self.agent_repo.get_instance_async(instance_id)
-        prompt_harness = self._prompt_harness()
-        llm_harness = self._llm_harness()
-        persistence_harness = self._full_persistence_harness()
         workspace = self.workspace_manager.resolve(
             session_id=task.session_id,
             role_id=role_id,
@@ -353,91 +413,49 @@ class TaskExecutionService(BaseModel):
             workspace_id=instance_record.workspace_id,
             conversation_id=instance_record.conversation_id,
         )
-        role_for_run = prompt_harness.role_with_memory(
-            role=role,
-            role_id=role_id,
-            workspace_id=workspace.ref.workspace_id,
-        )
-        session_mode = "normal"
-        run_kind = RunKind.CONVERSATION
-        if self.run_intent_repo is not None:
-            try:
-                intent = self.run_intent_repo.get(
-                    task.trace_id,
-                    fallback_session_id=task.session_id,
-                )
-                session_mode = intent.session_mode.value
-                run_kind = intent.run_kind
-            except KeyError:
-                # Some direct task-execution tests and legacy flows have no run intent.
-                pass
-        # Sub-agent tasks must always run in normal mode, not the
-        # orchestrator's session mode.  When ``task.parent_task_id`` is set,
-        # the intent lookup above returns the *orchestrator's* mode because
-        # sub-tasks share the same ``trace_id`` (run id).  Forcing ``normal``
-        # here isolates the sub-agent from orchestration-specific prompt
-        # topology and session content that belongs to the orchestrator.
-        if task.parent_task_id is not None:
-            session_mode = "normal"
-            run_kind = RunKind.CONVERSATION
-        runner = SubAgentRunner(
-            role=role_for_run,
-            prompt_builder=self.prompt_builder,
-            provider=self.provider_factory(role_for_run, task.session_id),
-            session_mode=session_mode,
-            run_kind=run_kind,
-        )
-        snapshot = await prompt_harness.shared_state_snapshot_async(
-            session_id=task.session_id,
-            role_id=role_id,
-            conversation_id=workspace.ref.conversation_id,
-        )
+
         try:
-            prepared_runtime_snapshot = await prompt_harness.prepare_runtime_snapshot(
-                role=role_for_run,
+            # OP-3: Append implementation phase entry.
+            if self.artifact_repo is not None:
+                try:
+                    self.artifact_repo.append_entry(
+                        task_id=task.task_id,
+                        entry=TaskArtifactEntry(
+                            entry_id=f"impl-{task.task_id}",
+                            phase=TaskArtifactPhase.EXECUTION,
+                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                            role_id=role_id,
+                            instance_id=instance_id,
+                            event_type="llm_execution_start",
+                            description="LLM execution started",
+                            payload_json="{}",
+                        ),
+                    )
+                except Exception as exc:
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="artifact.append_failed",
+                        message="Failed to append implementation entry",
+                        payload={"task_id": task.task_id, "error": str(exc)},
+                    )
+
+            # Compute: full execution config (role, runner, prompts, snapshot)
+            config = await harness.prepare_execution_config(
                 task=task,
-                working_directory=workspace.resolve_workdir(),
-                worktree_root=workspace.scope_root,
-                workspace=workspace,
-                shared_state_snapshot=snapshot,
-                objective=prompt_harness.resolve_turn_objective(
-                    task=task,
-                    user_prompt_override=user_prompt_override,
-                ),
-            )
-            await prompt_harness.ensure_committed_task_prompt_async(
-                role_id=role_id,
-                workspace_id=workspace.ref.workspace_id,
-                conversation_id=workspace.ref.conversation_id,
                 instance_id=instance_id,
-                task=task,
-                user_prompt_text=prepared_runtime_snapshot.user_prompt,
+                role_id=role_id,
                 user_prompt_override=user_prompt_override,
+                workspace=workspace,
+                instance_record=instance_record,
             )
-            runtime_prompt_sections = prepared_runtime_snapshot.prompt_sections
-            runtime_tools_json = prepared_runtime_snapshot.runtime_tools_json
-            runtime_system_prompt = prompt_harness.compose_runtime_system_prompt(
-                runtime_prompt_sections=runtime_prompt_sections,
-                skill_instructions=prepared_runtime_snapshot.skill_instructions,
-            )
-            await self.agent_repo.update_runtime_snapshot_async(
-                instance_id,
-                runtime_system_prompt=runtime_system_prompt,
-                runtime_tools_json=runtime_tools_json,
-            )
-            provider_system_prompt = prompt_harness.compose_provider_system_prompt(
-                runtime_prompt_sections=runtime_prompt_sections,
-                skill_instructions=prepared_runtime_snapshot.skill_instructions,
-            )
-            guarded_result = await llm_harness.run_with_completion_guard(
-                runner=runner,
+
+            # Compute: LLM execution
+            guarded_result = await harness.run_llm_execution(
+                config,
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
-                workspace=workspace,
-                conversation_id=workspace.ref.conversation_id,
-                shared_state_snapshot=snapshot,
-                system_prompt_override=provider_system_prompt,
             )
             _raise_if_timeout_cancellation_requested(
                 timeout_cancellation,
@@ -448,57 +466,76 @@ class TaskExecutionService(BaseModel):
             if isinstance(guarded_result, TaskExecutionResult):
                 return guarded_result
             result = guarded_result
-            await persistence_harness.execute_task_completed_hooks(
+
+            # Compute: result handling
+            await harness.handle_execution_result(
+                result=result,
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
-                output_text=result,
+                workspace=workspace,
+                instance_record=instance_record,
             )
-            await self.task_repo.update_status_async(
-                task.task_id, TaskStatus.COMPLETED, result=result
-            )
-            await self.agent_repo.mark_status_async(
-                instance_id, InstanceStatus.COMPLETED
-            )
-            await persistence_harness.mark_runtime_idle_after_success_async(
-                run_id=task.trace_id,
-                completed_task_id=task.task_id,
-            )
-            await self.event_bus.emit_async(
-                EventEnvelope(
-                    event_type=EventType.TASK_COMPLETED,
-                    trace_id=task.trace_id,
-                    session_id=task.session_id,
-                    task_id=task.task_id,
-                    instance_id=instance_id,
-                    payload_json="{}",
-                )
-            )
+
+            # Control: guardrail report
             await self._publish_runtime_guardrail_report_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            await persistence_harness.record_memory_if_needed_async(
-                role_id=role_id,
-                workspace_id=workspace.ref.workspace_id,
-                task=task,
-                conversation_id=workspace.ref.conversation_id,
-                instance_id=instance_id,
-                lifecycle=instance_record.lifecycle.value,
-                result=result,
-            )
-            log_event(
-                LOGGER,
-                logging.DEBUG,
-                event="task.execution.completed",
-                message="Task execution completed",
-                payload={
-                    "task_id": task.task_id,
-                    "instance_id": instance_id,
-                    "role_id": role_id,
-                },
-            )
+
+            # OP-3: Append verification phase entry.
+            if self.artifact_repo is not None:
+                try:
+                    self.artifact_repo.append_entry(
+                        task_id=task.task_id,
+                        entry=TaskArtifactEntry(
+                            entry_id=f"verify-{task.task_id}",
+                            phase=TaskArtifactPhase.VERIFICATION,
+                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                            role_id=role_id,
+                            instance_id=instance_id,
+                            event_type="guardrail_report_completed",
+                            description="Guardrail report and runtime checks completed",
+                            payload_json="{}",
+                        ),
+                    )
+                except Exception as exc:
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="artifact.verify_failed",
+                        message="Failed to append verification entry",
+                        payload={"task_id": task.task_id, "error": str(exc)},
+                    )
+
+            # OP-3: Append delivery phase entry and update summary.
+            if self.artifact_repo is not None:
+                try:
+                    self.artifact_repo.append_entry(
+                        task_id=task.task_id,
+                        entry=TaskArtifactEntry(
+                            entry_id=f"delivery-{task.task_id}",
+                            phase=TaskArtifactPhase.DELIVERY,
+                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                            role_id=role_id,
+                            instance_id=instance_id,
+                            event_type="task_completed",
+                            description="Task execution completed",
+                            payload_json="{}",
+                        ),
+                    )
+                    self.artifact_repo.update_summary(
+                        task_id=task.task_id, summary=result
+                    )
+                except Exception as exc:
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="artifact.delivery_failed",
+                        message="Failed to append delivery entry",
+                        payload={"task_id": task.task_id, "error": str(exc)},
+                    )
             return TaskExecutionResult(output=result)
         except asyncio.CancelledError:
             if timeout_cancellation.is_set():
@@ -547,7 +584,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            return await persistence_harness.complete_with_assistant_error_async(
+            return await harness.complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -616,7 +653,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            return await persistence_harness.complete_with_assistant_error_async(
+            return await harness.complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -636,7 +673,7 @@ class TaskExecutionService(BaseModel):
                 instance_id=instance_id,
                 role_id=role_id,
             )
-            return await persistence_harness.complete_with_assistant_error_async(
+            return await harness.complete_with_assistant_error_async(
                 task=task,
                 instance_id=instance_id,
                 role_id=role_id,
@@ -649,6 +686,8 @@ class TaskExecutionService(BaseModel):
                 error_code="internal_execution_error",
                 error_message=str(exc),
             )
+
+    # ── Guardrail report ──────────────────────────────────────────────
 
     async def _publish_runtime_guardrail_report_async(
         self,
@@ -693,6 +732,8 @@ class TaskExecutionService(BaseModel):
                     "error": str(exc),
                 },
             )
+
+    # ── Heartbeat ─────────────────────────────────────────────────────
 
     def _start_task_heartbeat(
         self,
@@ -821,6 +862,8 @@ class TaskExecutionService(BaseModel):
         )
         return True
 
+    # ── Timeout management ────────────────────────────────────────────
+
     async def _complete_task_timeout_async(
         self,
         *,
@@ -845,8 +888,7 @@ class TaskExecutionService(BaseModel):
         )
         current = await self.task_repo.get_async(task.task_id)
         handoff = _timeout_handoff(
-            task=current.envelope,
-            timeout_seconds=timeout_seconds,
+            task=current.envelope, timeout_seconds=timeout_seconds
         )
         await self.task_repo.update_envelope_async(
             task.task_id,
@@ -991,480 +1033,7 @@ class TaskExecutionService(BaseModel):
             timeout_seconds=timeout_seconds,
         )
 
-    def _tool_harness(self) -> TaskToolHarness:
-        return TaskToolHarness.model_construct(
-            role_registry=self.role_registry,
-            tool_registry=self.tool_registry,
-            skill_registry=self.skill_registry,
-            mcp_registry=self.mcp_registry,
-        )
-
-    def _prompt_harness(self) -> TaskPromptHarness:
-        return TaskPromptHarness.model_construct(
-            role_registry=self.role_registry,
-            shared_store=self.shared_store,
-            message_repo=self.message_repo,
-            workspace_manager=self.workspace_manager,
-            prompt_builder=self.prompt_builder,
-            tool_harness=self._tool_harness(),
-            skill_runtime_service=self.skill_runtime_service,
-            role_memory_service=self.role_memory_service,
-            runtime_role_resolver=self.runtime_role_resolver,
-            run_intent_repo=self.run_intent_repo,
-            media_asset_service=self.media_asset_service,
-        )
-
-    def _full_persistence_harness(self) -> TaskPersistenceHarness:
-        return TaskPersistenceHarness.model_construct(
-            task_repo=self.task_repo,
-            shared_store=self.shared_store,
-            event_bus=self.event_bus,
-            agent_repo=self.agent_repo,
-            message_repo=self.message_repo,
-            run_runtime_repo=self.run_runtime_repo,
-            run_event_hub=self.run_event_hub,
-            run_control_manager=self.run_control_manager,
-            hook_service=self.hook_service,
-        )
-
-    def _llm_harness(self) -> TaskLlmHarness:
-        return TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            todo_service=self.todo_service,
-            reminder_service=self.reminder_service,
-            persistence_harness=self._full_persistence_harness(),
-        )
-
-    async def _run_with_completion_guard(
-        self,
-        *,
-        runner: SubAgentRunner,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        workspace: WorkspaceHandle,
-        conversation_id: str,
-        shared_state_snapshot: tuple[tuple[str, str], ...],
-        system_prompt_override: str,
-    ) -> str | TaskExecutionResult:
-        return await self._llm_harness().run_with_completion_guard(
-            runner=runner,
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            workspace=workspace,
-            conversation_id=conversation_id,
-            shared_state_snapshot=shared_state_snapshot,
-            system_prompt_override=system_prompt_override,
-        )
-
-    async def _run_agent_once(
-        self,
-        *,
-        runner: SubAgentRunner,
-        task: TaskEnvelope,
-        instance_id: str,
-        workspace: WorkspaceHandle,
-        conversation_id: str,
-        shared_state_snapshot: tuple[tuple[str, str], ...],
-        system_prompt_override: str,
-    ) -> str:
-        return await self._llm_harness().run_agent_once(
-            runner=runner,
-            task=task,
-            instance_id=instance_id,
-            workspace=workspace,
-            conversation_id=conversation_id,
-            shared_state_snapshot=shared_state_snapshot,
-            system_prompt_override=system_prompt_override,
-        )
-
-    async def _evaluate_completion_guard_async(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        workspace: WorkspaceHandle,
-        conversation_id: str,
-        output_text: str,
-    ) -> ReminderDecision:
-        return await TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            todo_service=self.todo_service,
-            reminder_service=self.reminder_service,
-            persistence_harness=TaskPersistenceHarness.model_construct(),
-        ).evaluate_completion_guard_async(
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            workspace=workspace,
-            conversation_id=conversation_id,
-            output_text=output_text,
-        )
-
-    async def _thinking_for_run_async(self, run_id: str) -> RunThinkingConfig:
-        return await TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            persistence_harness=TaskPersistenceHarness.model_construct(),
-        ).thinking_for_run_async(run_id)
-
-    def _evaluate_completion_guard(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        workspace: WorkspaceHandle,
-        conversation_id: str,
-        output_text: str,
-    ) -> ReminderDecision:
-        return TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            todo_service=self.todo_service,
-            reminder_service=self.reminder_service,
-            persistence_harness=TaskPersistenceHarness.model_construct(),
-        ).evaluate_completion_guard(
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            workspace=workspace,
-            conversation_id=conversation_id,
-            output_text=output_text,
-        )
-
-    def _thinking_for_run(self, run_id: str) -> RunThinkingConfig:
-        return TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            persistence_harness=TaskPersistenceHarness.model_construct(),
-        ).thinking_for_run(run_id)
-
-    async def _execute_task_completed_hooks(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        output_text: str,
-    ) -> None:
-        await TaskPersistenceHarness.model_construct(
-            run_event_hub=self.run_event_hub,
-            hook_service=self.hook_service,
-        ).execute_task_completed_hooks(
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            output_text=output_text,
-        )
-
-    def _complete_with_assistant_error(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        conversation_id: str,
-        workspace_id: str,
-        assistant_message: str,
-        error_code: str,
-        error_message: str,
-        append_message: bool = True,
-    ) -> TaskExecutionResult:
-        return self._full_persistence_harness().complete_with_assistant_error(
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            conversation_id=conversation_id,
-            workspace_id=workspace_id,
-            assistant_message=assistant_message,
-            error_code=error_code,
-            error_message=error_message,
-            append_message=append_message,
-        )
-
-    async def _complete_with_assistant_error_async(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        conversation_id: str,
-        workspace_id: str,
-        assistant_message: str,
-        error_code: str,
-        error_message: str,
-        append_message: bool = True,
-    ) -> TaskExecutionResult:
-        return (
-            await self._full_persistence_harness().complete_with_assistant_error_async(
-                task=task,
-                instance_id=instance_id,
-                role_id=role_id,
-                conversation_id=conversation_id,
-                workspace_id=workspace_id,
-                assistant_message=assistant_message,
-                error_code=error_code,
-                error_message=error_message,
-                append_message=append_message,
-            )
-        )
-
-    def _topology_for_run(self, run_id: str) -> RunTopologySnapshot | None:
-        return TaskPromptHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-        ).topology_for_run(run_id)
-
-    def _conversation_context_for_run(
-        self,
-        run_id: str,
-    ) -> RuntimePromptConversationContext | None:
-        return TaskPromptHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-        ).conversation_context_for_run(run_id)
-
-    async def _topology_for_run_async(self, run_id: str) -> RunTopologySnapshot | None:
-        return await TaskPromptHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-        ).topology_for_run_async(run_id)
-
-    async def _conversation_context_for_run_async(
-        self,
-        run_id: str,
-    ) -> RuntimePromptConversationContext | None:
-        return await TaskPromptHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-        ).conversation_context_for_run_async(run_id)
-
-    def _role_with_memory(
-        self,
-        *,
-        role: RoleDefinition,
-        role_id: str,
-        workspace_id: str,
-    ) -> RoleDefinition:
-        return TaskPromptHarness.model_construct(
-            role_registry=self.role_registry,
-            role_memory_service=self.role_memory_service,
-        ).role_with_memory(
-            role=role,
-            role_id=role_id,
-            workspace_id=workspace_id,
-        )
-
-    async def _prepare_runtime_snapshot(
-        self,
-        *,
-        role: RoleDefinition,
-        task: TaskEnvelope,
-        working_directory: Path | None,
-        worktree_root: Path | None,
-        workspace: WorkspaceHandle | None,
-        shared_state_snapshot: tuple[tuple[str, str], ...],
-        objective: str,
-    ) -> PreparedRuntimeSnapshot:
-        return await self._prompt_harness().prepare_runtime_snapshot(
-            role=role,
-            task=task,
-            working_directory=working_directory,
-            worktree_root=worktree_root,
-            workspace=workspace,
-            shared_state_snapshot=shared_state_snapshot,
-            objective=objective,
-        )
-
-    @staticmethod
-    def _compose_runtime_system_prompt(
-        *,
-        runtime_prompt_sections: RuntimePromptSections,
-        skill_instructions: tuple[PromptSkillInstruction, ...],
-    ) -> str:
-        return TaskPromptHarness.model_construct().compose_runtime_system_prompt(
-            runtime_prompt_sections=runtime_prompt_sections,
-            skill_instructions=skill_instructions,
-        )
-
-    @staticmethod
-    def _compose_provider_system_prompt(
-        *,
-        runtime_prompt_sections: RuntimePromptSections,
-        skill_instructions: tuple[PromptSkillInstruction, ...],
-    ) -> str:
-        return TaskPromptHarness.model_construct().compose_provider_system_prompt(
-            runtime_prompt_sections=runtime_prompt_sections,
-            skill_instructions=skill_instructions,
-        )
-
-    async def _build_runtime_tools_snapshot(
-        self,
-        role: RoleDefinition,
-        task: TaskEnvelope | None = None,
-    ) -> RuntimeToolsSnapshot:
-        return await self._tool_harness().build_runtime_tools_snapshot(
-            role=role,
-            task=task,
-        )
-
-    @staticmethod
-    def _tool_entry_from_definition(
-        *,
-        source: Literal["local", "skill", "mcp"],
-        name: str,
-        description: str,
-        kind: Literal["function", "output", "external", "unapproved"],
-        strict: bool | None,
-        sequential: bool,
-        parameters_json_schema: Mapping[str, JsonValue],
-        server_name: str = "",
-    ) -> RuntimeToolSnapshotEntry:
-        return TaskToolHarness.model_construct().tool_entry_from_definition(
-            source=source,
-            name=name,
-            description=description,
-            kind=kind,
-            strict=strict,
-            sequential=sequential,
-            parameters_json_schema=parameters_json_schema,
-            server_name=server_name,
-        )
-
-    @staticmethod
-    def _normalize_tool_kind(
-        kind: str,
-    ) -> Literal["function", "output", "external", "unapproved"]:
-        return TaskToolHarness.model_construct().normalize_tool_kind(kind)
-
-    def _record_memory_if_needed(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-        task: TaskEnvelope,
-        conversation_id: str,
-        instance_id: str,
-        lifecycle: str,
-        result: str,
-    ) -> None:
-        TaskPersistenceHarness.model_construct(
-            shared_store=self.shared_store,
-        ).record_memory_if_needed(
-            role_id=role_id,
-            workspace_id=workspace_id,
-            task=task,
-            conversation_id=conversation_id,
-            instance_id=instance_id,
-            lifecycle=lifecycle,
-            result=result,
-        )
-
-    async def _record_memory_if_needed_async(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-        task: TaskEnvelope,
-        conversation_id: str,
-        instance_id: str,
-        lifecycle: str,
-        result: str,
-    ) -> None:
-        await TaskPersistenceHarness.model_construct(
-            shared_store=self.shared_store,
-        ).record_memory_if_needed_async(
-            role_id=role_id,
-            workspace_id=workspace_id,
-            task=task,
-            conversation_id=conversation_id,
-            instance_id=instance_id,
-            lifecycle=lifecycle,
-            result=result,
-        )
-
-    def _runtime_persistence_harness(self) -> TaskPersistenceHarness:
-        return TaskPersistenceHarness.model_construct(
-            task_repo=self.task_repo,
-            run_runtime_repo=self.run_runtime_repo,
-            run_control_manager=self.run_control_manager,
-        )
-
-    def _mark_runtime_idle_after_success(
-        self,
-        *,
-        run_id: str,
-        completed_task_id: str,
-    ) -> None:
-        self._runtime_persistence_harness().mark_runtime_idle_after_success(
-            run_id=run_id,
-            completed_task_id=completed_task_id,
-        )
-
-    async def _mark_runtime_idle_after_success_async(
-        self,
-        *,
-        run_id: str,
-        completed_task_id: str,
-    ) -> None:
-        await TaskPersistenceHarness.model_construct(
-            task_repo=self.task_repo,
-            run_runtime_repo=self.run_runtime_repo,
-            run_control_manager=self.run_control_manager,
-        ).mark_runtime_idle_after_success_async(
-            run_id=run_id,
-            completed_task_id=completed_task_id,
-        )
-
-    def _mark_runtime_after_terminal_task_update(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        status: RunRuntimeStatus,
-        phase: RunRuntimePhase,
-        active_instance_id: Optional[str],
-        active_task_id: Optional[str],
-        active_role_id: Optional[str],
-        active_subagent_instance_id: Optional[str],
-        last_error: Optional[str],
-    ) -> None:
-        self._runtime_persistence_harness().mark_runtime_after_terminal_task_update(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            status=status,
-            phase=phase,
-            active_instance_id=active_instance_id,
-            active_task_id=active_task_id,
-            active_role_id=active_role_id,
-            active_subagent_instance_id=active_subagent_instance_id,
-            last_error=last_error,
-        )
-
-    async def _mark_runtime_after_terminal_task_update_async(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        status: RunRuntimeStatus,
-        phase: RunRuntimePhase,
-        active_instance_id: Optional[str],
-        active_task_id: Optional[str],
-        active_role_id: Optional[str],
-        active_subagent_instance_id: Optional[str],
-        last_error: Optional[str],
-    ) -> None:
-        await TaskPersistenceHarness.model_construct(
-            task_repo=self.task_repo,
-            run_runtime_repo=self.run_runtime_repo,
-            run_control_manager=self.run_control_manager,
-        ).mark_runtime_after_terminal_task_update_async(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            status=status,
-            phase=phase,
-            active_instance_id=active_instance_id,
-            active_task_id=active_task_id,
-            active_role_id=active_role_id,
-            active_subagent_instance_id=active_subagent_instance_id,
-            last_error=last_error,
-        )
+    # ── Cancelled execution persistence ───────────────────────────────
 
     async def _persist_cancelled_execution_async(
         self,
@@ -1544,16 +1113,73 @@ class TaskExecutionService(BaseModel):
             )
         return stopped, paused_subagent
 
-    def _promote_running_runtime_lane(
+    # ── Thin wrappers preserving async-wrapper coverage ────────────────
+
+    async def _thinking_for_run_async(self, run_id: str) -> RunThinkingConfig:
+        return await TaskLlmHarness.model_construct(
+            run_intent_repo=getattr(self, "run_intent_repo", None),
+            persistence_harness=TaskPersistenceHarness.model_construct(),
+        ).thinking_for_run_async(run_id)
+
+    async def _execute_task_completed_hooks(
+        self,
+        *,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        output_text: str,
+    ) -> None:
+        await TaskPersistenceHarness.model_construct(
+            run_event_hub=getattr(self, "run_event_hub", None),
+            hook_service=getattr(self, "hook_service", None),
+        ).execute_task_completed_hooks(
+            task=task,
+            instance_id=instance_id,
+            role_id=role_id,
+            output_text=output_text,
+        )
+
+    async def _mark_runtime_idle_after_success_async(
+        self,
+        *,
+        run_id: str,
+        completed_task_id: str,
+    ) -> None:
+        await TaskPersistenceHarness.model_construct(
+            task_repo=getattr(self, "task_repo", None),
+            run_runtime_repo=getattr(self, "run_runtime_repo", None),
+            run_control_manager=getattr(self, "run_control_manager", None),
+        ).mark_runtime_idle_after_success_async(
+            run_id=run_id,
+            completed_task_id=completed_task_id,
+        )
+
+    async def _mark_runtime_after_terminal_task_update_async(
         self,
         *,
         run_id: str,
         terminal_task_id: str,
-        last_error: Optional[str],
-    ) -> bool:
-        return self._runtime_persistence_harness().promote_running_runtime_lane(
+        status: RunRuntimeStatus,
+        phase: RunRuntimePhase,
+        active_instance_id: str | None,
+        active_task_id: str | None,
+        active_role_id: str | None,
+        active_subagent_instance_id: str | None,
+        last_error: str | None,
+    ) -> None:
+        await TaskPersistenceHarness.model_construct(
+            task_repo=getattr(self, "task_repo", None),
+            run_runtime_repo=getattr(self, "run_runtime_repo", None),
+            run_control_manager=getattr(self, "run_control_manager", None),
+        ).mark_runtime_after_terminal_task_update_async(
             run_id=run_id,
             terminal_task_id=terminal_task_id,
+            status=status,
+            phase=phase,
+            active_instance_id=active_instance_id,
+            active_task_id=active_task_id,
+            active_role_id=active_role_id,
+            active_subagent_instance_id=active_subagent_instance_id,
             last_error=last_error,
         )
 
@@ -1562,101 +1188,16 @@ class TaskExecutionService(BaseModel):
         *,
         run_id: str,
         terminal_task_id: str,
-        last_error: Optional[str],
+        last_error: str | None,
     ) -> bool:
         return await TaskPersistenceHarness.model_construct(
-            task_repo=self.task_repo,
-            run_runtime_repo=self.run_runtime_repo,
-            run_control_manager=self.run_control_manager,
+            task_repo=getattr(self, "task_repo", None),
+            run_runtime_repo=getattr(self, "run_runtime_repo", None),
+            run_control_manager=getattr(self, "run_control_manager", None),
         ).promote_running_runtime_lane_async(
             run_id=run_id,
             terminal_task_id=terminal_task_id,
             last_error=last_error,
-        )
-
-    def _promote_paused_runtime_lane(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        last_error: Optional[str],
-    ) -> bool:
-        return self._runtime_persistence_harness().promote_paused_runtime_lane(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            last_error=last_error,
-        )
-
-    async def _promote_paused_runtime_lane_async(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        last_error: Optional[str],
-    ) -> bool:
-        return await TaskPersistenceHarness.model_construct(
-            task_repo=self.task_repo,
-            run_runtime_repo=self.run_runtime_repo,
-            run_control_manager=self.run_control_manager,
-        ).promote_paused_runtime_lane_async(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            last_error=last_error,
-        )
-
-    def _shared_state_snapshot(
-        self,
-        *,
-        session_id: str,
-        role_id: str,
-        conversation_id: str,
-    ) -> tuple[tuple[str, str], ...]:
-        return TaskPromptHarness.model_construct(
-            shared_store=self.shared_store,
-        ).shared_state_snapshot(
-            session_id=session_id,
-            role_id=role_id,
-            conversation_id=conversation_id,
-        )
-
-    async def _shared_state_snapshot_async(
-        self,
-        *,
-        session_id: str,
-        role_id: str,
-        conversation_id: str,
-    ) -> tuple[tuple[str, str], ...]:
-        return await TaskPromptHarness.model_construct(
-            shared_store=self.shared_store,
-        ).shared_state_snapshot_async(
-            session_id=session_id,
-            role_id=role_id,
-            conversation_id=conversation_id,
-        )
-
-    def _ensure_committed_task_prompt(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-        conversation_id: str,
-        instance_id: str,
-        task: TaskEnvelope,
-        user_prompt_text: str,
-        user_prompt_override: str | None,
-    ) -> None:
-        TaskPromptHarness.model_construct(
-            message_repo=self.message_repo,
-            run_intent_repo=self.run_intent_repo,
-            media_asset_service=self.media_asset_service,
-        ).ensure_committed_task_prompt(
-            role_id=role_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            instance_id=instance_id,
-            task=task,
-            user_prompt_text=user_prompt_text,
-            user_prompt_override=user_prompt_override,
         )
 
     async def _ensure_committed_task_prompt_async(
@@ -1671,9 +1212,9 @@ class TaskExecutionService(BaseModel):
         user_prompt_override: str | None,
     ) -> None:
         await TaskPromptHarness.model_construct(
-            message_repo=self.message_repo,
-            run_intent_repo=self.run_intent_repo,
-            media_asset_service=self.media_asset_service,
+            message_repo=getattr(self, "message_repo", None),
+            run_intent_repo=getattr(self, "run_intent_repo", None),
+            media_asset_service=getattr(self, "media_asset_service", None),
         ).ensure_committed_task_prompt_async(
             role_id=role_id,
             workspace_id=workspace_id,
@@ -1681,61 +1222,6 @@ class TaskExecutionService(BaseModel):
             instance_id=instance_id,
             task=task,
             user_prompt_text=user_prompt_text,
-            user_prompt_override=user_prompt_override,
-        )
-
-    def _build_user_prompt(
-        self,
-        *,
-        role: RoleDefinition,
-        objective: str,
-        shared_state_snapshot: tuple[tuple[str, str], ...],
-        conversation_context: RuntimePromptConversationContext | None,
-        orchestration_prompt: str,
-        skill_names: Optional[tuple[str, ...]] = None,
-    ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
-        return TaskPromptHarness.model_construct(
-            skill_runtime_service=self.skill_runtime_service,
-        ).build_user_prompt(
-            role=role,
-            objective=objective,
-            shared_state_snapshot=shared_state_snapshot,
-            conversation_context=conversation_context,
-            orchestration_prompt=orchestration_prompt,
-            skill_names=skill_names,
-        )
-
-    @staticmethod
-    def _to_prompt_skill_instructions(
-        entries: tuple[SkillInstructionEntry, ...],
-    ) -> tuple[PromptSkillInstruction, ...]:
-        return TaskPromptHarness.model_construct().to_prompt_skill_instructions(entries)
-
-    @staticmethod
-    def _merge_provider_prompt_content(
-        *,
-        provider_content: ProviderUserPromptContent,
-        user_prompt_text: str,
-    ) -> ProviderUserPromptContent:
-        return TaskPromptHarness.model_construct().merge_provider_prompt_content(
-            provider_content=provider_content,
-            user_prompt_text=user_prompt_text,
-        )
-
-    @staticmethod
-    def _user_prompt_skill_appendix(user_prompt_text: str) -> str:
-        return TaskPromptHarness.model_construct().user_prompt_skill_appendix(
-            user_prompt_text
-        )
-
-    @staticmethod
-    def _resolve_turn_objective(
-        *,
-        task: TaskEnvelope,
-        user_prompt_override: str | None,
-    ) -> str:
-        return TaskPromptHarness.model_construct().resolve_turn_objective(
-            task=task,
             user_prompt_override=user_prompt_override,
         )
 
@@ -1753,8 +1239,8 @@ async def _cancel_and_wait(
         completed, _ = await asyncio.wait((task,), timeout=timeout_seconds)
         if task not in completed:
             task.add_done_callback(
-                lambda completed_task: _consume_cancelled_background_result(
-                    completed_task,
+                lambda t: _consume_cancelled_background_result(
+                    t,
                     task_name=task_name,
                     context=context,
                 )
@@ -1802,11 +1288,7 @@ async def _cancel_and_wait(
             logging.WARNING,
             event="task.execution.background_cancel_failed",
             message="Background task raised while being cancelled",
-            payload={
-                "task_name": task_name,
-                "error": str(exc),
-                **dict(context or {}),
-            },
+            payload={"task_name": task_name, "error": str(exc), **dict(context or {})},
         )
         return None
 
@@ -1869,11 +1351,7 @@ def _consume_cancelled_background_result(
             logging.WARNING,
             event="task.execution.background_cancel_failed",
             message="Background task raised after cancel wait timeout",
-            payload={
-                "task_name": task_name,
-                "error": str(exc),
-                **dict(context or {}),
-            },
+            payload={"task_name": task_name, "error": str(exc), **dict(context or {})},
         )
 
 
@@ -1914,10 +1392,7 @@ def _timeout_handoff(*, task: TaskEnvelope, timeout_seconds: float) -> TaskHando
     if task.handoff is not None:
         reason = task.handoff.reason or f"timeout after {timeout_seconds:g}s"
         return task.handoff.model_copy(
-            update={
-                "reason": reason,
-                "updated_at": datetime.now(tz=timezone.utc),
-            }
+            update={"reason": reason, "updated_at": datetime.now(tz=timezone.utc)}
         )
     return TaskHandoff(
         incomplete=(task.objective,),

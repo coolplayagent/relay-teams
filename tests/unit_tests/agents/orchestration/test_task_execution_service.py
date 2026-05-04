@@ -627,7 +627,7 @@ async def test_execute_does_not_emit_task_completed_hook_for_root_task(
     )
     _ = task_repo.create(root_task)
 
-    await service._execute_task_completed_hooks(
+    await service._execution_harness().execute_task_completed_hooks(
         task=root_task,
         instance_id="inst-root",
         role_id="time",
@@ -1604,10 +1604,12 @@ async def test_build_runtime_tools_snapshot_uses_external_tool_descriptions(
         mcp_registry=McpRegistry(),
     )
 
-    coordinator_snapshot = await service._build_runtime_tools_snapshot(
-        role_registry.get("Coordinator")
+    coordinator_snapshot = (
+        await service._execution_harness().build_runtime_tools_snapshot(
+            role_registry.get("Coordinator")
+        )
     )
-    writer_snapshot = await service._build_runtime_tools_snapshot(
+    writer_snapshot = await service._execution_harness().build_runtime_tools_snapshot(
         role_registry.get("writer_agent")
     )
 
@@ -1711,7 +1713,7 @@ async def test_build_runtime_tools_snapshot_skips_mcp_servers_that_fail_to_load(
         mcp_registry=mcp_registry,
     )
 
-    snapshot = await service._build_runtime_tools_snapshot(
+    snapshot = await service._execution_harness().build_runtime_tools_snapshot(
         role_registry.get("docs_agent")
     )
 

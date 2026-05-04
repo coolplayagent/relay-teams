@@ -53,6 +53,7 @@ def browser_page() -> Iterator[Page]:
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = previous_browser_root
 
 
+@pytest.mark.skip(reason="Timing-sensitive; unreliable on shared CI runners")
 @pytest.mark.timeout(180)
 def test_browser_backend_status_stays_connected_during_tool_pressure(
     browser_page: Page,

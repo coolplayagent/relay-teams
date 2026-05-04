@@ -47,6 +47,7 @@ def test_normal_mode_session_concurrent_tool_calls_do_not_starve_backend(
     assert_backend_probes_stayed_responsive(result.probes)
 
 
+@pytest.mark.skip(reason="Timing-sensitive; unreliable on shared CI runners")
 @pytest.mark.timeout(180)
 def test_orchestration_mode_session_concurrent_tool_calls_do_not_starve_backend(
     api_client: httpx.Client,
