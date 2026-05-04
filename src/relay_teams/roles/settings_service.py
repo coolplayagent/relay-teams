@@ -173,7 +173,16 @@ class RoleSettingsService:
                 source_definition=source_definition,
                 draft=normalized,
             )
-        validated = self.validate_role_document(normalized).role
+        validation_result = self.validate_role_document(normalized)
+        from relay_teams.roles.tool_diet_validation import should_reject
+
+        diet_report = getattr(validation_result, "diet_report", None)
+        if diet_report is not None and should_reject(diet_report):
+            error_msg = "; ".join(
+                f.message for f in diet_report.findings if f.severity.value == "error"
+            )
+            raise ValueError(f"Role tool diet validation failed: {error_msg}")
+        validated = validation_result.role
         target_path = self._roles_dir / f"{normalized.role_id}.md"
         if source_record is None and normalized.source_role_id:
             raise ValueError(f"Role not found: {source_role_id}")

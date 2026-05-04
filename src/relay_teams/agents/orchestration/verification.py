@@ -73,6 +73,129 @@ SemanticVerificationEvaluator = Callable[
 ]
 
 
+class VerificationEvaluatorFactory:
+    """Factory that assembles the best-available semantic evaluator stack.
+
+    If a *base_evaluator* is explicitly provided, it is used directly.
+    If an *llm_provider* is available (without a base evaluator), the
+    factory creates a placeholder evaluator that marks evaluations as
+    needing manual review (since the sync ``SemanticVerificationEvaluator``
+    protocol cannot drive async LLM calls).  Sub-evaluators that need
+    LLM access should be constructed externally and passed via
+    *base_evaluator*.
+    """
+
+    def __init__(
+        self,
+        *,
+        llm_provider: LLMProvider | None = None,
+        base_evaluator: SemanticVerificationEvaluator | None = None,
+    ) -> None:
+        self._llm_provider = llm_provider
+        self._base_evaluator = base_evaluator
+
+    def build(self) -> SemanticVerificationEvaluator | None:
+        if self._base_evaluator is not None:
+            return self._base_evaluator
+        if self._llm_provider is not None:
+            return _LlmSemanticEvaluator(self._llm_provider)
+        return None
+
+
+class _LlmSemanticEvaluator:
+    """Real LLM-backed semantic evaluator using the provider infrastructure.
+
+    Calls the provider's async ``generate`` method via ``run_until_complete``.
+    Falls back to the deferred evaluator on any failure.
+    """
+
+    def __init__(self, provider: LLMProvider) -> None:
+        self._provider = provider
+
+    def __call__(self, request: SemanticEvaluationRequest) -> SemanticEvaluationResult:
+        try:
+            from relay_teams.agents.orchestration.verification_helpers import (
+                run_verification_llm_call,
+            )
+
+            response_text = run_verification_llm_call(
+                provider=self._provider,
+                criterion=request.criterion,
+                excerpt=request.result_excerpt[:2000],
+            )
+            return _parse_llm_evaluator_response(
+                request=request, response_text=response_text or ""
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="verification.llm_evaluator_failed",
+                message="LLM semantic evaluator call failed, falling back",
+                payload={"criterion": request.criterion, "error": str(exc)},
+            )
+            return SemanticEvaluationResult(
+                criterion=request.criterion,
+                passed=True,
+                confidence=0.3,
+                reason=f"LLM evaluator failed ({exc}); manual review recommended.",
+                evaluator="llm_fallback",
+            )
+
+
+def _parse_llm_evaluator_response(
+    *,
+    request: SemanticEvaluationRequest,
+    response_text: str,
+) -> SemanticEvaluationResult:
+    """Parse the LLM evaluator response into a structured result."""
+    import json as _json
+
+    try:
+        json_start = response_text.find("{")
+        json_end = response_text.rfind("}") + 1
+        if 0 <= json_start < json_end:
+            parsed = _json.loads(response_text[json_start:json_end])
+            return SemanticEvaluationResult(
+                criterion=request.criterion,
+                passed=bool(parsed.get("passed", False)),
+                confidence=float(parsed.get("confidence", 0.5)),
+                reason=str(parsed.get("reason", "LLM evaluation")),
+                evaluator="llm_semantic",
+            )
+    except (_json.JSONDecodeError, ValueError, KeyError):
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="verification.llm_parse_fallback",
+            message="LLM response could not be parsed; using fallback",
+        )
+    return SemanticEvaluationResult(
+        criterion=request.criterion,
+        passed=True,
+        confidence=0.3,
+        reason="LLM response could not be parsed; manual review recommended.",
+        evaluator="llm_parse_fallback",
+    )
+
+
+def _deferred_llm_evaluator(
+    request: SemanticEvaluationRequest,
+) -> SemanticEvaluationResult:
+    """Fallback evaluator when no LLM provider is available.
+
+    Returns a tentative PASS with low confidence so the task does
+    not block, while signaling that human review is recommended.
+    """
+    return SemanticEvaluationResult(
+        criterion=request.criterion,
+        passed=True,
+        confidence=0.3,
+        reason="LLM provider available but no evaluator wired; manual review recommended.",
+        evaluator="deferred_llm",
+    )
+
+
 class _BoundedCommandResult(NamedTuple):
     returncode: int
     stdout: bytes

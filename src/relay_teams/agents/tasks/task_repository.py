@@ -603,6 +603,88 @@ class TaskRepository(SharedSqliteRepository):
         )
         return tuple(self._to_record(row) for row in rows)
 
+    async def claim_task_async(
+        self,
+        task_id: str,
+        lease_owner: str,
+        claim_token: str,
+        lease_duration_seconds: float,
+    ) -> bool:
+        """Atomically set lease fields if task is ASSIGNED or CREATED."""
+        from datetime import timedelta
+
+        now = datetime.now(tz=timezone.utc)
+        expires_at = now + timedelta(seconds=lease_duration_seconds)
+
+        async def _op(conn: aiosqlite.Connection) -> bool:
+            row = await async_fetchone(
+                conn,
+                "SELECT envelope_json, status FROM tasks WHERE task_id=?",
+                (task_id,),
+            )
+            if row is None:
+                return False
+            current_status = str(row["status"])
+            if current_status not in (
+                TaskStatus.CREATED.value,
+                TaskStatus.ASSIGNED.value,
+            ):
+                return False
+            envelope = _task_envelope_from_storage(row["envelope_json"])
+            if envelope is None:
+                return False
+            updated_envelope = envelope.model_copy(
+                update={
+                    "lease_owner": lease_owner,
+                    "lease_expires_at": expires_at,
+                    "claim_token": claim_token,
+                }
+            )
+            cursor = await conn.execute(
+                "UPDATE tasks SET envelope_json=?, updated_at=? "
+                "WHERE task_id=? AND status IN (?, ?)",
+                (
+                    updated_envelope.model_dump_json(),
+                    now.isoformat(),
+                    task_id,
+                    TaskStatus.CREATED.value,
+                    TaskStatus.ASSIGNED.value,
+                ),
+            )
+            updated = cursor.rowcount > 0
+            await cursor.close()
+            return updated
+
+        return await self._run_async_write(
+            operation_name="claim_task_async",
+            operation=_op,
+        )
+
+    async def find_expired_leases_async(
+        self,
+        older_than: datetime,
+    ) -> tuple[TaskRecord, ...]:
+        """Return RUNNING tasks whose lease_expires_at is in the past."""
+
+        async def _op(conn: aiosqlite.Connection) -> tuple[TaskRecord, ...]:
+            rows = await async_fetchall(
+                conn,
+                "SELECT * FROM tasks WHERE status=? ORDER BY updated_at ASC",
+                (TaskStatus.RUNNING.value,),
+            )
+            expired: list[TaskRecord] = []
+            for row in rows:
+                record = self._to_record(row)
+                lease_expires = record.envelope.lease_expires_at
+                if lease_expires is not None and lease_expires < older_than:
+                    expired.append(record)
+            return tuple(expired)
+
+        return await self._run_async_write(
+            operation_name="find_expired_leases_async",
+            operation=_op,
+        )
+
     async def list_all_async(self) -> tuple[TaskRecord, ...]:
         rows = await self._run_async_read(
             lambda conn: async_fetchall(

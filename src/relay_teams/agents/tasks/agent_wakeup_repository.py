@@ -7,11 +7,14 @@ import aiosqlite
 from datetime import datetime, timezone
 from pathlib import Path
 
-from relay_teams.agents.tasks.enums import TaskTimeoutAction, WakeupStatus
+from relay_teams.agents.tasks.enums import TaskTimeoutAction, WakeupReason, WakeupStatus
 from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
 from relay_teams.logger import get_logger
 from relay_teams.persistence import async_fetchall, async_fetchone
-from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
+from relay_teams.persistence.sqlite_repository import (
+    BlockingAsyncSqliteConnection,
+    SharedSqliteRepository,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -29,7 +32,10 @@ CREATE TABLE IF NOT EXISTS agent_wakeups (
     status         TEXT NOT NULL DEFAULT 'pending',
     enqueued_at    TEXT NOT NULL,
     claimed_at     TEXT,
-    completed_at   TEXT
+    completed_at   TEXT,
+    wake_reason    TEXT NOT NULL DEFAULT 'timeout_retry',
+    target_role    TEXT NOT NULL DEFAULT '',
+    target_instance TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -42,6 +48,20 @@ _IDX_COALESCE_SQL = (
     "ON agent_wakeups(coalesce_key, status)"
 )
 _IDX_TASK_SQL = "CREATE INDEX IF NOT EXISTS idx_wakeups_task ON agent_wakeups(task_id)"
+_IDX_TARGET_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_wakeups_target "
+    "ON agent_wakeups(target_role, status)"
+)
+
+
+def _add_column_if_missing(
+    conn: BlockingAsyncSqliteConnection, table: str, column: str, ddl: str
+) -> None:
+    try:
+        _cursor = conn.execute(f"SELECT {column} FROM {table} LIMIT 0")
+        _cursor.close()
+    except sqlite3.OperationalError:
+        conn.execute(ddl)
 
 
 class AgentWakeupRepository(SharedSqliteRepository):
@@ -58,6 +78,28 @@ class AgentWakeupRepository(SharedSqliteRepository):
             except sqlite3.OperationalError:
                 LOGGER.warning("Coalesce index already exists, skipping", exc_info=True)
             self._conn.execute(_IDX_TASK_SQL)
+            try:
+                self._conn.execute(_IDX_TARGET_SQL)
+            except sqlite3.OperationalError:
+                LOGGER.warning("Target index already exists, skipping", exc_info=True)
+            _add_column_if_missing(
+                self._conn,
+                "agent_wakeups",
+                "wake_reason",
+                "ALTER TABLE agent_wakeups ADD COLUMN wake_reason TEXT NOT NULL DEFAULT 'timeout_retry'",
+            )
+            _add_column_if_missing(
+                self._conn,
+                "agent_wakeups",
+                "target_role",
+                "ALTER TABLE agent_wakeups ADD COLUMN target_role TEXT NOT NULL DEFAULT ''",
+            )
+            _add_column_if_missing(
+                self._conn,
+                "agent_wakeups",
+                "target_instance",
+                "ALTER TABLE agent_wakeups ADD COLUMN target_instance TEXT NOT NULL DEFAULT ''",
+            )
 
         self._run_write(
             operation_name="init_agent_wakeups_tables",
@@ -71,8 +113,9 @@ class AgentWakeupRepository(SharedSqliteRepository):
                 INSERT OR IGNORE INTO agent_wakeups(
                     wakeup_id, task_id, trace_id, session_id, coalesce_key,
                     timeout_action, timeout_seconds, attempt, max_attempts,
-                    status, enqueued_at, claimed_at, completed_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, enqueued_at, claimed_at, completed_at,
+                    wake_reason, target_role, target_instance
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry.wakeup_id,
@@ -88,6 +131,9 @@ class AgentWakeupRepository(SharedSqliteRepository):
                     entry.enqueued_at.isoformat(),
                     entry.claimed_at.isoformat() if entry.claimed_at else None,
                     entry.completed_at.isoformat() if entry.completed_at else None,
+                    entry.wake_reason.value,
+                    entry.target_role,
+                    entry.target_instance,
                 ),
             )
             inserted = cursor.rowcount > 0
@@ -98,6 +144,10 @@ class AgentWakeupRepository(SharedSqliteRepository):
             operation_name="enqueue_async",
             operation=_op,
         )
+
+    async def enqueue_generalized_async(self, entry: AgentWakeupEntry) -> bool:
+        """Insert a wakeup entry with full generalized wake_reason support."""
+        return await self.enqueue_async(entry)
 
     async def claim_next_pending_async(self) -> AgentWakeupEntry | None:
         async def _op(conn: aiosqlite.Connection) -> AgentWakeupEntry | None:
@@ -132,6 +182,45 @@ class AgentWakeupRepository(SharedSqliteRepository):
             operation=_op,
         )
 
+    async def claim_pending_for_target_async(
+        self,
+        target_role: str,
+    ) -> AgentWakeupEntry | None:
+        """Claim the oldest pending wakeup scoped to a target role."""
+
+        async def _op(conn: aiosqlite.Connection) -> AgentWakeupEntry | None:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM agent_wakeups "
+                "WHERE status = ? AND target_role = ? "
+                "ORDER BY enqueued_at ASC LIMIT 1",
+                (WakeupStatus.PENDING.value, target_role),
+            )
+            if row is None:
+                return None
+            wakeup_id = str(row["wakeup_id"])
+            now = datetime.now(tz=timezone.utc).isoformat()
+            cursor = await conn.execute(
+                "UPDATE agent_wakeups SET status=?, claimed_at=? "
+                "WHERE wakeup_id=? AND status=?",
+                (
+                    WakeupStatus.CLAIMED.value,
+                    now,
+                    wakeup_id,
+                    WakeupStatus.PENDING.value,
+                ),
+            )
+            updated = cursor.rowcount > 0
+            await cursor.close()
+            if not updated:
+                return None
+            return _to_entry(row)
+
+        return await self._run_async_write(
+            operation_name="claim_pending_for_target_async",
+            operation=_op,
+        )
+
     async def complete_async(self, wakeup_id: str) -> None:
         async def _op(conn: aiosqlite.Connection) -> None:
             now = datetime.now(tz=timezone.utc).isoformat()
@@ -157,6 +246,35 @@ class AgentWakeupRepository(SharedSqliteRepository):
 
         await self._run_async_write(
             operation_name="expire_async",
+            operation=_op,
+        )
+
+    async def mark_expired_for_task_async(
+        self,
+        task_id: str,
+        reason: WakeupReason,
+    ) -> int:
+        """Bulk-expire stale wakeups for a given task and reason."""
+
+        async def _op(conn: aiosqlite.Connection) -> int:
+            now = datetime.now(tz=timezone.utc).isoformat()
+            cursor = await conn.execute(
+                "UPDATE agent_wakeups SET status=?, completed_at=? "
+                "WHERE task_id=? AND wake_reason=? AND status=?",
+                (
+                    WakeupStatus.EXPIRED.value,
+                    now,
+                    task_id,
+                    reason.value,
+                    WakeupStatus.PENDING.value,
+                ),
+            )
+            count = cursor.rowcount
+            await cursor.close()
+            return count
+
+        return await self._run_async_write(
+            operation_name="mark_expired_for_task_async",
             operation=_op,
         )
 
@@ -191,7 +309,14 @@ class AgentWakeupRepository(SharedSqliteRepository):
         return await self._run_async_read(_op)
 
 
-def _to_entry(row: sqlite3.Row) -> AgentWakeupEntry:
+def _to_entry(row: aiosqlite.Row) -> AgentWakeupEntry:
+    wake_reason_raw = (
+        row["wake_reason"] if "wake_reason" in row.keys() else "timeout_retry"
+    )
+    target_role_raw = row["target_role"] if "target_role" in row.keys() else ""
+    target_instance_raw = (
+        row["target_instance"] if "target_instance" in row.keys() else ""
+    )
     return AgentWakeupEntry(
         wakeup_id=str(row["wakeup_id"]),
         task_id=str(row["task_id"]),
@@ -214,4 +339,7 @@ def _to_entry(row: sqlite3.Row) -> AgentWakeupEntry:
             if row["completed_at"]
             else None
         ),
+        wake_reason=WakeupReason(str(wake_reason_raw)),
+        target_role=str(target_role_raw),
+        target_instance=str(target_instance_raw),
     )

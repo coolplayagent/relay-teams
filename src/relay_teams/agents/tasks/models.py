@@ -421,6 +421,9 @@ class TaskEnvelope(BaseModel):
     orchestration_node_id: OptionalIdentifierStr = None
     depends_on_task_ids: tuple[str, ...] = ()
     retry_attempt: int = Field(default=0, ge=0)
+    lease_owner: str = ""
+    lease_expires_at: datetime | None = None
+    claim_token: str = ""
 
     @field_validator("skills", mode="before")
     @classmethod
@@ -543,6 +546,21 @@ class TaskArtifactSummary(BaseModel):
     has_summary: bool = False
     created_at: str = ""
     updated_at: str = ""
+
+
+class TaskArtifactSnapshot(BaseModel):
+    """Normalized read-only artifact snapshot for Gater consumption."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: RequiredIdentifierStr
+    spec_summary: str = ""
+    execution_entries: tuple[TaskArtifactEntry, ...] = ()
+    verification_entries: tuple[TaskArtifactEntry, ...] = ()
+    delivery_entries: tuple[TaskArtifactEntry, ...] = ()
+    evidence_bundle: VerificationEvidenceBundle | None = None
+    verification_report_summary: str = ""
+    total_entries: int = 0
 
 
 class SpecCheckpointEvaluation(BaseModel):

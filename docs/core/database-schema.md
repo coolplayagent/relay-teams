@@ -1587,3 +1587,19 @@ Notes:
 - `linked_evidence_ids` is a JSON array of evidence item IDs from the parent artifact's evidence bundle.
 - Entries are append-only; ordered by `id` for chronological replay.
 - Repository: `src/relay_teams/agents/tasks/artifact_repository.py`
+
+---
+
+### 2.N+3 runtime_guardrail_audit
+
+
+
+Purpose: persistent store for runtime guardrail audit findings, enabling compliance queries and debugging of guardrail decisions across tasks and roles.
+
+Notes:
+- One row per guardrail finding event.
+-  is one of: , , , .
+-  is one of: , , .
+-  stores structured rule-specific data.
+- Indexed on , , , and  for common query patterns.
+- Repository: 

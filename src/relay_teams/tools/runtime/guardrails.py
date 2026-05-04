@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 import asyncio
 from enum import Enum
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
@@ -325,6 +327,47 @@ def evaluate_in_execution_guardrails(
     return RuntimeGuardrailEvaluation(findings=tuple(findings))
 
 
+def evaluate_post_validation_guardrails(
+    *,
+    policy: RuntimeGuardrailPolicy,
+    context: RuntimeGuardrailContext,
+    tool_input: dict[str, JsonValue],
+    result_envelope: dict[str, JsonValue],
+    strictness: TaskSpecStrictness = TaskSpecStrictness.MEDIUM,
+) -> RuntimeGuardrailEvaluation:
+    """Evaluate guardrails after tool execution with strictness escalation.
+
+    Applies all rules across PRE_EXECUTION and IN_EXECUTION layers,
+    then escalates WARN->DENY when strictness is HIGH and DENY->WARN
+    when strictness is LOW.  This enables a stricter post-hoc
+    validation pass for high-stakes tasks.
+    """
+    _ = tool_input
+    findings: list[RuntimeGuardrailFinding] = []
+    for layer in (
+        RuntimeGuardrailLayer.PRE_EXECUTION,
+        RuntimeGuardrailLayer.IN_EXECUTION,
+    ):
+        for rule in policy.matching_rules(layer=layer, context=context):
+            if layer == RuntimeGuardrailLayer.PRE_EXECUTION:
+                finding = _evaluate_in_execution_rule(
+                    rule=rule,
+                    context=context,
+                    result_envelope=result_envelope,
+                )
+            else:
+                finding = _evaluate_in_execution_rule(
+                    rule=rule,
+                    context=context,
+                    result_envelope=result_envelope,
+                )
+            if finding is not None:
+                findings.append(finding)
+    for idx, finding in enumerate(findings):
+        findings[idx] = adjust_finding_for_strictness(finding, strictness)
+    return RuntimeGuardrailEvaluation(findings=tuple(findings))
+
+
 def adjust_finding_for_strictness(
     finding: RuntimeGuardrailFinding,
     strictness: TaskSpecStrictness,
@@ -342,6 +385,127 @@ def adjust_finding_for_strictness(
         if finding.action == RuntimeGuardrailAction.DENY:
             return finding.model_copy(update={"action": RuntimeGuardrailAction.WARN})
     return finding
+
+
+def strictness_augmented_rules(
+    base_rules: tuple[RuntimeGuardrailRule, ...],
+    strictness: TaskSpecStrictness,
+) -> tuple[RuntimeGuardrailRule, ...]:
+    """Return rule set adjusted for task spec strictness.
+
+    LOW: base rules unchanged.
+    MEDIUM: base rules + reduced CALL_FREQUENCY limits.
+    HIGH: base rules + tighter CALL_FREQUENCY, OUTPUT_SIZE, expanded shell patterns.
+    """
+    if strictness == TaskSpecStrictness.LOW:
+        return base_rules
+
+    augmented = list(base_rules)
+
+    if strictness in (TaskSpecStrictness.MEDIUM, TaskSpecStrictness.HIGH):
+        augmented.append(
+            RuntimeGuardrailRule(
+                rule_id="strictness_call_frequency_medium",
+                layer=RuntimeGuardrailLayer.PRE_EXECUTION,
+                rule_type=RuntimeGuardrailRuleType.CALL_FREQUENCY,
+                action=RuntimeGuardrailAction.WARN,
+                tool_names=("edit", "shell", "write"),
+                max_calls_per_task=15,
+                description="Medium-strictness call frequency guardrail.",
+            )
+        )
+
+    if strictness == TaskSpecStrictness.HIGH:
+        augmented.append(
+            RuntimeGuardrailRule(
+                rule_id="strictness_output_size_high",
+                layer=RuntimeGuardrailLayer.IN_EXECUTION,
+                rule_type=RuntimeGuardrailRuleType.OUTPUT_SIZE,
+                action=RuntimeGuardrailAction.WARN,
+                max_bytes=256 * 1024,
+                description="High-strictness output size guardrail.",
+            )
+        )
+        augmented.append(
+            RuntimeGuardrailRule(
+                rule_id="strictness_shell_expanded_high",
+                layer=RuntimeGuardrailLayer.PRE_EXECUTION,
+                rule_type=RuntimeGuardrailRuleType.SHELL_DESTRUCTIVE_PATTERN,
+                action=RuntimeGuardrailAction.DENY,
+                tool_names=("shell",),
+                blocked_patterns=(
+                    r"(^|[;&|]\s*)chmod\b",
+                    r"(^|[;&|]\s*)chown\b",
+                    r"(^|[;&|]\s*)mkfs\b",
+                    r"(^|[;&|]\s*)dd\b.*of=",
+                ),
+                description="High-strictness expanded destructive shell patterns.",
+            )
+        )
+
+    return tuple(augmented)
+
+
+def guardrail_rules_from_contract(
+    role_id: str,
+    contract_invariants: tuple[Mapping[str, object], ...],
+) -> tuple[RuntimeGuardrailRule, ...]:
+    """Auto-generate guardrail rules from a role contract's invariants.
+
+    Each invariant with a ``denied_tools`` or ``allowed_tools`` key
+    produces a corresponding TOOL_DENYLIST or TOOL_ALLOWLIST rule scoped
+    to the given role.
+    """
+    rules: list[RuntimeGuardrailRule] = []
+    for idx, invariant in enumerate(contract_invariants):
+        denied = invariant.get("denied_tools")
+        if isinstance(denied, (tuple, list)) and denied:
+            tool_names = tuple(str(t) for t in denied)
+            rules.append(
+                RuntimeGuardrailRule(
+                    rule_id=f"contract_deny_{role_id}_{idx}",
+                    layer=RuntimeGuardrailLayer.PRE_EXECUTION,
+                    rule_type=RuntimeGuardrailRuleType.TOOL_DENYLIST,
+                    action=RuntimeGuardrailAction.DENY,
+                    tool_names=tool_names,
+                    role_ids=(role_id,),
+                    description=(
+                        f"Contract-derived deny rule for role {role_id}: "
+                        f"{', '.join(tool_names)}"
+                    ),
+                )
+            )
+        allowed = invariant.get("allowed_tools")
+        if isinstance(allowed, (tuple, list)) and allowed:
+            tool_names = tuple(str(t) for t in allowed)
+            rules.append(
+                RuntimeGuardrailRule(
+                    rule_id=f"contract_allow_{role_id}_{idx}",
+                    layer=RuntimeGuardrailLayer.PRE_EXECUTION,
+                    rule_type=RuntimeGuardrailRuleType.TOOL_ALLOWLIST,
+                    action=RuntimeGuardrailAction.DENY,
+                    tool_names=tool_names,
+                    role_ids=(role_id,),
+                    description=(
+                        f"Contract-derived allowlist rule for role {role_id}: "
+                        f"{', '.join(tool_names)}"
+                    ),
+                )
+            )
+    return tuple(rules)
+
+
+def merge_contract_rules(
+    base_rules: tuple[RuntimeGuardrailRule, ...],
+    contract_rules: tuple[RuntimeGuardrailRule, ...],
+) -> tuple[RuntimeGuardrailRule, ...]:
+    """Merge base rules with contract-derived rules, deduplicating by rule_id."""
+    seen: dict[str, RuntimeGuardrailRule] = {}
+    for rule in base_rules:
+        seen[rule.rule_id] = rule
+    for rule in contract_rules:
+        seen[rule.rule_id] = rule
+    return tuple(seen.values())
 
 
 def adjust_evaluation_for_strictness(
