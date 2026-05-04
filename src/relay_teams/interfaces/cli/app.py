@@ -19,6 +19,7 @@ from relay_teams.external_agents.agent_cli import build_agent_runtimes_app
 from relay_teams.interfaces.cli.gateway_cli import build_gateway_app
 from relay_teams.interfaces.cli.approvals_cli import build_approvals_app
 from relay_teams.interfaces.cli.hooks_cli import build_hooks_app
+from relay_teams.interfaces.cli.memories_cli import build_memories_app
 from relay_teams.interfaces.cli.questions_cli import build_questions_app
 from relay_teams.interfaces.cli.metrics_cli import build_metrics_app
 from relay_teams.interfaces.cli.runs_cli import build_runs_app
@@ -289,6 +290,11 @@ runs_app = build_runs_app(
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,
 )
+memories_app = build_memories_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
 commands_app = build_commands_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
@@ -431,6 +437,7 @@ app.add_typer(runs_app, name="runs")
 app.add_typer(commands_app, name="commands")
 app.add_typer(hooks_app, name="hooks")
 app.add_typer(gateway_app, name="gateway")
+app.add_typer(memories_app, name="memories")
 
 
 def main() -> None:

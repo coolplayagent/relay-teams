@@ -3534,3 +3534,103 @@ Response fields:
 - `next_offset`: offset for the next page, or `null` if no more results.
 
 Router: `src/relay_teams/interfaces/server/routers/guardrails_router.py`
+
+## Memory Bank APIs
+
+Workspace-scoped structured memory entries with three tiers (working, medium_term, persistent), six kinds (fact, procedure, preference, episode, insight, context), and full-text search.
+
+### `GET /workspaces/{workspace_id}/memories`
+
+Lists memory entries with optional filters.
+
+Query fields:
+- `tier`: optional `working`, `medium_term`, or `persistent`.
+- `scope`: optional `workspace`, `session`, `role`, or `run`.
+- `session_id`: optional exact-match filter.
+- `role_id`: optional exact-match filter.
+- `kind`: optional entry kind filter (`fact`, `procedure`, `preference`, `episode`, `insight`, `context`).
+- `status`: optional `active` or `archived`.
+- `tags`: comma-separated tag filter.
+- `min_confidence`: minimum confidence score `0.0..1.0`, default `0.0`.
+- `limit`: page size `1..100`, default `20`.
+- `offset`: default `0`.
+
+Response: `MemoryQueryResult`
+- `items[]`: array of `MemoryEntrySummary` objects.
+- `total_count`: total matching entries.
+- `offset`: current page offset.
+- `limit`: current page size.
+
+### `POST /workspaces/{workspace_id}/memories`
+
+Creates a memory entry. Returns `201` on success.
+
+Request: `CreateMemoryEntryRequest`
+- `workspace_id`: path-derived.
+- `tier`: `working`, `medium_term`, or `persistent`.
+- `scope`: `workspace`, `session`, `role`, or `run`.
+- `kind`: `fact`, `procedure`, `preference`, `episode`, `insight`, or `context`.
+- `content_title`: human-readable title.
+- `content_body`: full content text.
+- `tags`: optional list of tag strings.
+- `source`: optional provenance string.
+- `confidence_score`: optional `0.0..1.0`.
+- `session_id`, `role_id`, `run_id`: optional scoping references.
+- `expires_at`: optional ISO 8601 expiry timestamp.
+
+Response: `MemoryEntry` (full entry with generated `id`, `version`, timestamps).
+
+### `GET /workspaces/{workspace_id}/memories/{memory_id}`
+
+Returns a single memory entry.
+
+Response: `MemoryEntry`. Returns `404` when the entry does not exist or does not belong to the workspace.
+
+### `PUT /workspaces/{workspace_id}/memories/{memory_id}`
+
+Updates a memory entry.
+
+Request: `UpdateMemoryEntryRequest`
+- `content_title`: optional new title.
+- `content_body`: optional new body.
+- `tags`: optional replacement tags.
+- `confidence_score`: optional new score.
+- `status`: optional new status (`active` or `archived`).
+- `expires_at`: optional new expiry.
+
+Response: `MemoryEntry`. Returns `404` when the entry does not exist or does not belong to the workspace.
+
+### `DELETE /workspaces/{workspace_id}/memories/{memory_id}`
+
+Deletes a memory entry. Returns `204` on success. Returns `404` when the entry does not exist or does not belong to the workspace.
+
+### `POST /workspaces/{workspace_id}/memories/consolidate`
+
+Triggers memory consolidation from working-tier entries into medium-term or persistent entries.
+
+Request: `MemoryConsolidationRequest`
+- `workspace_id`: path-derived.
+- `target_tier`: consolidation target tier.
+- `target_scope`: consolidation target scope.
+- Optional filtering fields.
+
+Response: `MemoryConsolidationResult`
+- `consolidated_entry_count`: number of new entries created.
+- `source_entry_count`: number of source entries examined.
+- `created_entries[]`: list of newly created `MemoryEntry` objects.
+
+### `POST /workspaces/{workspace_id}/memories/search`
+
+Full-text search across memory entries.
+
+Request: `MemorySearchRequest`
+- `workspace_id`: path-derived.
+- `text_query`: search text.
+- `tier`, `scope`, `kind`: optional filters.
+- `limit`: max results, default `20`.
+
+Response: `MemorySearchResult`
+- `items[]`: array of ranked results with `entry`, `score`, `rank`, and optional `snippet`.
+- `total_count`: total matching entries.
+
+Router: `src/relay_teams/interfaces/server/routers/memories.py`

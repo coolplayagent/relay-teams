@@ -49,6 +49,7 @@ from relay_teams.interfaces.server.routers import (
     guardrails_router,
     logs,
     mcp,
+    memories,
     observability,
     prompts,
     roles,
@@ -223,6 +224,7 @@ app.include_router(prompts.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
 app.include_router(guardrails_router.router, prefix="/api")
+app.include_router(memories.router, prefix="/api")
 
 
 @app.middleware("http")

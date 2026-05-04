@@ -43,6 +43,7 @@ from relay_teams.media import MediaAssetService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import ReminderDecision, SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
+from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -107,6 +108,7 @@ class ExecutionHarness(BaseModel):
     mcp_registry: McpRegistry
     run_control_manager: object | None = None
     role_memory_service: RoleMemoryService | None = None
+    memory_event_handler: MemoryEventHandler | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
     hook_service: HookService | None = None
@@ -342,6 +344,21 @@ class ExecutionHarness(BaseModel):
             lifecycle=instance_record.lifecycle.value,
             result=result,
         )
+        # Memory bank lifecycle: record task result as a WORKING entry
+        # and trigger run/session consolidation.  The handler is a
+        # no-op when ``memory_event_handler`` is ``None`` (e.g. tests or
+        # lightweight runtimes that skip the container wiring).
+        memory_handler = self.memory_event_handler
+        if memory_handler is not None:
+            memory_handler.on_task_completed(
+                workspace_id=workspace.ref.workspace_id,
+                role_id=role_id,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                task_id=task.task_id,
+                objective=task.objective or "",
+                result=result,
+            )
         log_event(
             LOGGER,
             logging.DEBUG,

@@ -33,6 +33,7 @@ from relay_teams.tools.registry import ToolRegistry
 from relay_teams.workspace import WorkspaceManager
 from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
 from relay_teams.hooks import HookService
+from relay_teams.memory.event_handler import MemoryEventHandler
 
 
 def create_task_execution_service(
@@ -64,6 +65,7 @@ def create_task_execution_service(
     todo_service: TodoService | None = None,
     reminder_service: SystemReminderService | None = None,
     artifact_repo: TaskArtifactRepository | None = None,
+    memory_event_handler: MemoryEventHandler | None = None,
 ) -> TaskExecutionService:
     return TaskExecutionService(
         role_registry=role_registry,
@@ -102,4 +104,5 @@ def create_task_execution_service(
         todo_service=todo_service,
         reminder_service=reminder_service,
         artifact_repo=artifact_repo,
+        memory_event_handler=memory_event_handler,
     )

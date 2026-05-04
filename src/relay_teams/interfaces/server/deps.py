@@ -40,6 +40,7 @@ from relay_teams.mcp.config_reload_service import McpConfigReloadService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.mcp.mcp_service import McpService
 from relay_teams.media import MediaAssetService
+from relay_teams.memory.service import MemoryBankService
 from relay_teams.metrics import MetricsService
 from relay_teams.net.clawhub_connectivity import ClawHubConnectivityProbeService
 from relay_teams.net.github_connectivity import (
@@ -315,3 +316,7 @@ def get_spec_artifact_diff_service(request: Request) -> SpecArtifactDiffService:
 
 def get_artifact_query_service(request: Request) -> ArtifactQueryService:
     return ArtifactQueryService(get_container(request).artifact_repo)
+
+
+def get_memory_bank_service(request: Request) -> MemoryBankService:
+    return get_container(request).memory_bank_service
