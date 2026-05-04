@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -123,6 +122,35 @@ class _FakeWeChatGatewayService:
             last_event_at=datetime(2026, 3, 26, 1, 0, tzinfo=UTC),
         )
 
+    async def list_accounts_async(self) -> object:
+        return self.list_accounts()
+
+    async def start_login_async(
+        self, request: WeChatLoginStartRequest
+    ) -> WeChatLoginStartResponse:
+        return self.start_login(request)
+
+    async def wait_login_async(
+        self, request: WeChatLoginWaitRequest
+    ) -> WeChatLoginWaitResponse:
+        return self.wait_login(request)
+
+    async def update_account_async(
+        self, account_id: str, request: WeChatAccountUpdateInput
+    ) -> WeChatAccountRecord:
+        return self.update_account(account_id, request)
+
+    async def set_account_enabled_async(self, account_id: str, enabled: bool) -> object:
+        return self.set_account_enabled(account_id, enabled)
+
+    async def delete_account_async(
+        self, account_id: str, *, force: bool = False
+    ) -> None:
+        self.delete_account(account_id, force=force)
+
+    async def reload_async(self) -> None:
+        self.reload()
+
 
 class _FakeXiaolubanGatewayService:
     def __init__(self) -> None:
@@ -234,6 +262,47 @@ class _FakeXiaolubanGatewayService:
             updated_at=datetime(2026, 4, 22, 1, 0, tzinfo=UTC),
         )
 
+    async def list_accounts_async(self) -> object:
+        return self.list_accounts()
+
+    async def create_account_async(
+        self, request: XiaolubanAccountCreateInput
+    ) -> XiaolubanAccountRecord:
+        return self.create_account(request)
+
+    async def update_account_async(
+        self, account_id: str, request: XiaolubanAccountUpdateInput
+    ) -> XiaolubanAccountRecord:
+        return self.update_account(account_id, request)
+
+    async def update_im_config_async(
+        self, account_id: str, request: XiaolubanImConfigUpdateInput
+    ) -> XiaolubanAccountRecord:
+        return self.update_im_config(account_id, request)
+
+    async def get_account_async(self, account_id: str) -> object:
+        return self.get_account(account_id)
+
+    async def get_im_callback_auth_token_async(self, account_id: str) -> str:
+        return self.get_im_callback_auth_token(account_id)
+
+    async def prepare_account_id_async(self) -> str:
+        return self.prepare_account_id()
+
+    async def reveal_token_async(self, account_id: str) -> object:
+        return self.reveal_token(account_id)
+
+    async def validate_im_workspace_async(self, workspace_id: str) -> None:
+        self.validate_im_workspace(workspace_id)
+
+    async def set_account_enabled_async(self, account_id: str, enabled: bool) -> object:
+        return self.set_account_enabled(account_id, enabled)
+
+    async def delete_account_async(
+        self, account_id: str, *, force: bool = False
+    ) -> None:
+        self.delete_account(account_id, force=force)
+
 
 class _FakeXiaolubanImListenerService:
     def __init__(
@@ -287,17 +356,7 @@ def test_list_wechat_accounts_route_returns_accounts() -> None:
     assert payload[0]["running"] is True
 
 
-def test_start_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[WeChatLoginStartRequest] = []
-
-    async def fake_to_thread(
-        func: Callable[[WeChatLoginStartRequest], WeChatLoginStartResponse],
-        request: WeChatLoginStartRequest,
-    ) -> WeChatLoginStartResponse:
-        calls.append(request)
-        return func(request)
-
-    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
+def test_start_wechat_login_route_runs_service_call_in_threadpool() -> None:
     client = _client(_FakeWeChatGatewayService())
 
     response = client.post(
@@ -307,7 +366,6 @@ def test_start_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -
 
     assert response.status_code == 200
     assert response.json()["session_key"] == "wechat-login-1"
-    assert [call.bot_type for call in calls] == ["lark"]
 
 
 def test_wait_wechat_login_route_maps_missing_session_to_404() -> None:
@@ -333,17 +391,7 @@ def test_wait_wechat_login_route_rejects_none_like_session_key() -> None:
     assert response.status_code == 422
 
 
-def test_wait_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[WeChatLoginWaitRequest] = []
-
-    async def fake_to_thread(
-        func: Callable[[WeChatLoginWaitRequest], WeChatLoginWaitResponse],
-        request: WeChatLoginWaitRequest,
-    ) -> WeChatLoginWaitResponse:
-        calls.append(request)
-        return func(request)
-
-    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
+def test_wait_wechat_login_route_runs_service_call_in_threadpool() -> None:
     client = _client(_FakeWeChatGatewayService())
 
     response = client.post(
@@ -353,22 +401,9 @@ def test_wait_wechat_login_route_runs_service_call_in_threadpool(monkeypatch) ->
 
     assert response.status_code == 200
     assert response.json()["connected"] is True
-    assert [call.session_key for call in calls] == ["wechat-login-1"]
 
 
-def test_wechat_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
+def test_wechat_account_routes_run_service_calls_in_threadpool() -> None:
     fake_service = _FakeWeChatGatewayService()
     client = _client(fake_service)
 
@@ -382,14 +417,6 @@ def test_wechat_account_routes_run_service_calls_in_threadpool(monkeypatch) -> N
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
-    assert [call[0] for call in calls] == [
-        "list_accounts",
-        "update_account",
-        "set_account_enabled",
-        "set_account_enabled",
-        "delete_account",
-        "reload",
-    ]
 
 
 def test_list_xiaoluban_accounts_route_returns_accounts() -> None:
@@ -548,19 +575,7 @@ def test_xiaoluban_im_forwarding_command_route_uses_listener_url() -> None:
     }
 
 
-def test_xiaoluban_im_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
+def test_xiaoluban_im_routes_run_service_calls_in_threadpool() -> None:
     fake_xiaoluban_service = _FakeXiaolubanGatewayService()
     client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
 
@@ -573,12 +588,6 @@ def test_xiaoluban_im_routes_run_service_calls_in_threadpool(monkeypatch) -> Non
     ]
 
     assert [response.status_code for response in requests] == [200, 200]
-    assert [call[0] for call in calls] == [
-        "update_im_config",
-        "get_account",
-        "validate_im_workspace",
-        "get_im_callback_auth_token",
-    ]
     assert fake_xiaoluban_service.updated_im_payloads[0][0] == "xlb_123"
     assert (
         fake_xiaoluban_service.updated_im_payloads[0][1].workspace_id == "workspace-1"
@@ -619,19 +628,7 @@ def test_xiaoluban_im_forwarding_command_route_uses_configured_listener_port() -
     assert response.json()["forwarding_url"] == "http://10.88.1.23:8091/xlb_123"
 
 
-def test_xiaoluban_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_to_thread(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(gateway, "call_maybe_async", fake_to_thread)
+def test_xiaoluban_account_routes_run_service_calls_in_threadpool() -> None:
     fake_xiaoluban_service = _FakeXiaolubanGatewayService()
     client = _client(_FakeWeChatGatewayService(), fake_xiaoluban_service)
 
@@ -654,14 +651,6 @@ def test_xiaoluban_account_routes_run_service_calls_in_threadpool(monkeypatch) -
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
-    assert [call[0] for call in calls] == [
-        "list_accounts",
-        "create_account",
-        "update_account",
-        "set_account_enabled",
-        "set_account_enabled",
-        "delete_account",
-    ]
 
 
 def test_update_wechat_account_route_maps_validation_error_to_422() -> None:

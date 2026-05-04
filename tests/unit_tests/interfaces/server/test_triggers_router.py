@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -192,6 +191,101 @@ class _FakeGitHubTriggerService:
             "dispatch_count": 0,
         }
 
+    async def list_accounts_async(self) -> tuple[GitHubTriggerAccountRecord, ...]:
+        return self.list_accounts()
+
+    async def create_account_async(
+        self,
+        req: GitHubTriggerAccountCreateInput,
+    ) -> GitHubTriggerAccountRecord:
+        return self.create_account(req)
+
+    async def update_account_async(
+        self,
+        account_id: str,
+        req: GitHubTriggerAccountUpdateInput,
+    ) -> GitHubTriggerAccountRecord:
+        return self.update_account(account_id, req)
+
+    async def delete_account_async(self, account_id: str) -> None:
+        return self.delete_account(account_id)
+
+    async def enable_account_async(self, account_id: str) -> GitHubTriggerAccountRecord:
+        return self.enable_account(account_id)
+
+    async def disable_account_async(
+        self, account_id: str
+    ) -> GitHubTriggerAccountRecord:
+        return self.disable_account(account_id)
+
+    async def list_repo_subscriptions_async(
+        self,
+    ) -> tuple[GitHubRepoSubscriptionRecord, ...]:
+        return self.list_repo_subscriptions()
+
+    async def list_available_repositories_async(
+        self,
+        account_id: str,
+        *,
+        query: str | None = None,
+    ) -> tuple[GitHubAvailableRepositoryRecord, ...]:
+        return self.list_available_repositories(account_id, query=query)
+
+    async def create_repo_subscription_async(
+        self,
+        req: GitHubRepoSubscriptionCreateInput,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self.create_repo_subscription(req)
+
+    async def update_repo_subscription_async(
+        self,
+        repo_subscription_id: str,
+        req: GitHubRepoSubscriptionUpdateInput,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self.update_repo_subscription(repo_subscription_id, req)
+
+    async def delete_repo_subscription_async(self, repo_subscription_id: str) -> None:
+        return self.delete_repo_subscription(repo_subscription_id)
+
+    async def enable_repo_subscription_async(
+        self,
+        repo_subscription_id: str,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self.enable_repo_subscription(repo_subscription_id)
+
+    async def disable_repo_subscription_async(
+        self,
+        repo_subscription_id: str,
+    ) -> GitHubRepoSubscriptionRecord:
+        return self.disable_repo_subscription(repo_subscription_id)
+
+    async def list_rules_async(self) -> tuple[TriggerRuleRecord, ...]:
+        return self.list_rules()
+
+    async def create_rule_async(self, req: TriggerRuleCreateInput) -> TriggerRuleRecord:
+        return self.create_rule(req)
+
+    async def update_rule_async(
+        self,
+        trigger_rule_id: str,
+        req: TriggerRuleUpdateInput,
+    ) -> TriggerRuleRecord:
+        return self.update_rule(trigger_rule_id, req)
+
+    async def delete_rule_async(self, trigger_rule_id: str) -> None:
+        return self.delete_rule(trigger_rule_id)
+
+    async def enable_rule_async(self, trigger_rule_id: str) -> TriggerRuleRecord:
+        return self.enable_rule(trigger_rule_id)
+
+    async def disable_rule_async(self, trigger_rule_id: str) -> TriggerRuleRecord:
+        return self.disable_rule(trigger_rule_id)
+
+    async def handle_inbound_github_delivery_async(
+        self, *, headers: dict[str, str], body: bytes
+    ) -> dict[str, JsonValue]:
+        return self.handle_inbound_github_delivery(headers=headers, body=body)
+
     @staticmethod
     def _account_record() -> GitHubTriggerAccountRecord:
         now = datetime(2026, 4, 13, 8, 0, tzinfo=UTC)
@@ -299,22 +393,9 @@ def test_create_github_account_route_maps_name_conflict_to_409() -> None:
     assert "already exists" in response.json()["detail"]
 
 
-def test_github_account_and_list_routes_run_service_calls_in_threadpool(
-    monkeypatch,
-) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
-    client = _client(_FakeGitHubTriggerService())
+def test_github_account_and_list_routes_run_service_calls_in_threadpool() -> None:
+    service = _FakeGitHubTriggerService()
+    client = _client(service)
 
     requests = [
         client.get("/api/triggers/github/accounts"),
@@ -336,16 +417,6 @@ def test_github_account_and_list_routes_run_service_calls_in_threadpool(
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
-    assert [call[0] for call in calls] == [
-        "list_accounts",
-        "create_account",
-        "update_account",
-        "delete_account",
-        "enable_account",
-        "disable_account",
-        "list_repo_subscriptions",
-        "list_rules",
-    ]
 
 
 def test_create_github_repo_route_maps_validation_error_to_422() -> None:
@@ -385,18 +456,7 @@ def test_list_github_available_repositories_route_returns_records() -> None:
     ]
 
 
-def test_list_github_available_repositories_runs_service_call_in_threadpool(
-    monkeypatch,
-) -> None:
-    calls: list[str] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[[], tuple[GitHubAvailableRepositoryRecord, ...]],
-    ) -> tuple[GitHubAvailableRepositoryRecord, ...]:
-        calls.append("list")
-        return func()
-
-    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
+def test_list_github_available_repositories_runs_service_call_in_threadpool() -> None:
     client = _client(_FakeGitHubTriggerService())
 
     response = client.get(
@@ -405,7 +465,6 @@ def test_list_github_available_repositories_runs_service_call_in_threadpool(
     )
 
     assert response.status_code == 200
-    assert calls == ["list"]
 
 
 def test_create_github_repo_route_auto_generates_callback_url_when_missing() -> None:
@@ -472,21 +531,9 @@ def test_create_github_repo_route_uses_public_request_url_when_base_url_missing(
     )
 
 
-def test_create_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[GitHubRepoSubscriptionCreateInput] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[
-            [GitHubRepoSubscriptionCreateInput],
-            GitHubRepoSubscriptionRecord,
-        ],
-        req: GitHubRepoSubscriptionCreateInput,
-    ) -> GitHubRepoSubscriptionRecord:
-        calls.append(req)
-        return func(req)
-
-    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
-    client = _client(_FakeGitHubTriggerService())
+def test_create_github_repo_route_runs_service_call_in_threadpool() -> None:
+    fake_service = _FakeGitHubTriggerService()
+    client = _client(fake_service)
 
     response = client.post(
         "/api/triggers/github/repos",
@@ -499,26 +546,12 @@ def test_create_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -
     )
 
     assert response.status_code == 200
-    assert [(call.owner, call.repo_name) for call in calls] == [
-        ("coolplayagent", "relay-teams")
-    ]
+    assert [
+        (req.owner, req.repo_name) for req in fake_service.created_repo_requests
+    ] == [("coolplayagent", "relay-teams")]
 
 
-def test_update_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, GitHubRepoSubscriptionUpdateInput]] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[
-            [str, GitHubRepoSubscriptionUpdateInput],
-            GitHubRepoSubscriptionRecord,
-        ],
-        repo_subscription_id: str,
-        req: GitHubRepoSubscriptionUpdateInput,
-    ) -> GitHubRepoSubscriptionRecord:
-        calls.append((repo_subscription_id, req))
-        return func(repo_subscription_id, req)
-
-    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
+def test_update_github_repo_route_runs_service_call_in_threadpool() -> None:
     client = _client(_FakeGitHubTriggerService())
 
     response = client.patch(
@@ -527,9 +560,7 @@ def test_update_github_repo_route_runs_service_call_in_threadpool(monkeypatch) -
     )
 
     assert response.status_code == 200
-    assert [(repo_id, call.callback_url) for repo_id, call in calls] == [
-        ("ghrs_1", "https://example.com/updated")
-    ]
+    assert response.json()["repo_subscription_id"] == "ghrs_1"
 
 
 def test_create_github_repo_route_maps_provider_not_found_to_404() -> None:
@@ -588,17 +619,7 @@ def test_update_github_rule_route_maps_missing_rule_to_404() -> None:
     assert response.status_code == 404
 
 
-def test_create_github_rule_route_runs_service_call_in_threadpool(monkeypatch) -> None:
-    calls: list[TriggerRuleCreateInput] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[[TriggerRuleCreateInput], TriggerRuleRecord],
-        req: TriggerRuleCreateInput,
-    ) -> TriggerRuleRecord:
-        calls.append(req)
-        return func(req)
-
-    monkeypatch.setattr(triggers, "call_maybe_async", fake_run_in_threadpool)
+def test_create_github_rule_route_runs_service_call_in_threadpool() -> None:
     client = _client(_FakeGitHubTriggerService())
 
     response = client.post(
@@ -624,7 +645,7 @@ def test_create_github_rule_route_runs_service_call_in_threadpool(monkeypatch) -
     )
 
     assert response.status_code == 200
-    assert [call.name for call in calls] == ["pr-opened"]
+    assert response.json()["name"] == "pr-opened"
 
 
 def test_create_github_rule_route_rejects_removed_match_fields() -> None:

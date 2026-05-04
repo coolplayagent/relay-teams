@@ -49,6 +49,7 @@ from relay_teams.workspace.workspace_models import (
     legacy_workspace_mount_from_profile,
 )
 from relay_teams.workspace.workspace_repository import WorkspaceRepository
+import asyncio
 
 
 _NON_WORKSPACE_ID_CHARS = re.compile(r"[^a-z0-9]+")
@@ -224,6 +225,38 @@ class WorkspaceService:
             default_mount_name=resolved_default_mount_name,
         )
 
+    async def create_workspace_async(
+        self,
+        *,
+        workspace_id: str,
+        root_path: Path | None = None,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str | None = None,
+    ) -> WorkspaceRecord:
+
+        return await asyncio.to_thread(
+            self.create_workspace,
+            workspace_id=workspace_id,
+            root_path=root_path,
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
+
+    async def update_workspace_async(
+        self,
+        workspace_id: str,
+        *,
+        mounts: tuple[WorkspaceMountRecord, ...],
+        default_mount_name: str,
+    ) -> WorkspaceRecord:
+
+        return await asyncio.to_thread(
+            self.update_workspace,
+            workspace_id,
+            mounts=mounts,
+            default_mount_name=default_mount_name,
+        )
+
     def _resolve_workspace_mounts(
         self,
         *,
@@ -318,6 +351,14 @@ class WorkspaceService:
             profile=profile,
         )
 
+    async def create_workspace_for_root_async(
+        self, *, root_path: Path
+    ) -> WorkspaceRecord | None:
+
+        return await asyncio.to_thread(
+            self.create_workspace_for_root, root_path=root_path
+        )
+
     def get_workspace(self, workspace_id: str) -> WorkspaceRecord:
         return self._repository.get(workspace_id)
 
@@ -370,6 +411,21 @@ class WorkspaceService:
         )
         return root_path
 
+    async def open_workspace_root_async(
+        self,
+        workspace_id: str,
+        *,
+        mount_name: str | None = None,
+    ) -> Path:
+
+        if mount_name is None:
+            return await asyncio.to_thread(self.open_workspace_root, workspace_id)
+        return await asyncio.to_thread(
+            self.open_workspace_root,
+            workspace_id,
+            mount_name=mount_name,
+        )
+
     def get_workspace_snapshot(self, workspace_id: str) -> WorkspaceSnapshot:
         record = self._repository.get(workspace_id)
         default_mount_root = record.default_mount.local_root_path()
@@ -395,6 +451,12 @@ class WorkspaceService:
                 children=mount_children,
             ),
         )
+
+    async def get_workspace_snapshot_async(
+        self, workspace_id: str
+    ) -> WorkspaceSnapshot:
+
+        return await asyncio.to_thread(self.get_workspace_snapshot, workspace_id)
 
     def get_workspace_tree_listing(
         self,
@@ -438,6 +500,44 @@ class WorkspaceService:
             mount_name=mount.mount_name,
             directory_path=normalized_directory_path,
             children=children,
+        )
+
+    async def get_workspace_tree_listing_async(
+        self,
+        workspace_id: str,
+        *,
+        directory_path: str = ".",
+        mount_name: str | None = None,
+    ) -> WorkspaceTreeListing:
+
+        if mount_name is None:
+            return await asyncio.to_thread(
+                self.get_workspace_tree_listing,
+                workspace_id,
+                directory_path=directory_path,
+            )
+        return await asyncio.to_thread(
+            self.get_workspace_tree_listing,
+            workspace_id,
+            directory_path=directory_path,
+            mount_name=mount_name,
+        )
+
+    async def search_workspace_paths_async(
+        self,
+        workspace_id: str,
+        *,
+        query: str = "",
+        limit: int = 40,
+        mount_name: str | None = None,
+    ) -> WorkspaceSearchResponse:
+
+        return await asyncio.to_thread(
+            self.search_workspace_paths,
+            workspace_id,
+            query=query,
+            limit=limit,
+            mount_name=mount_name,
         )
 
     def search_workspace_paths(
@@ -1001,6 +1101,21 @@ class WorkspaceService:
             diff_message=None,
         )
 
+    async def get_workspace_diffs_async(
+        self,
+        workspace_id: str,
+        *,
+        mount_name: str | None = None,
+    ) -> WorkspaceDiffListing:
+
+        if mount_name is None:
+            return await asyncio.to_thread(self.get_workspace_diffs, workspace_id)
+        return await asyncio.to_thread(
+            self.get_workspace_diffs,
+            workspace_id,
+            mount_name=mount_name,
+        )
+
     def get_workspace_diff_file(
         self,
         workspace_id: str,
@@ -1038,6 +1153,27 @@ class WorkspaceService:
                 )
         raise ValueError(f"Workspace diff file not found: {path}")
 
+    async def get_workspace_diff_file_async(
+        self,
+        workspace_id: str,
+        *,
+        path: str,
+        mount_name: str | None = None,
+    ) -> WorkspaceDiffFile:
+
+        if mount_name is None:
+            return await asyncio.to_thread(
+                self.get_workspace_diff_file,
+                workspace_id,
+                path=path,
+            )
+        return await asyncio.to_thread(
+            self.get_workspace_diff_file,
+            workspace_id,
+            path=path,
+            mount_name=mount_name,
+        )
+
     def get_workspace_image_preview_file(
         self,
         workspace_id: str,
@@ -1069,13 +1205,51 @@ class WorkspaceService:
             raise ValueError(f"Workspace file is not a supported image: {path}")
         return resolved_path, media_type
 
+    async def get_workspace_image_preview_file_async(
+        self,
+        workspace_id: str,
+        *,
+        path: str,
+        mount_name: str | None = None,
+    ) -> tuple[Path, str]:
+
+        if mount_name is None:
+            return await asyncio.to_thread(
+                self.get_workspace_image_preview_file,
+                workspace_id,
+                path=path,
+            )
+        return await asyncio.to_thread(
+            self.get_workspace_image_preview_file,
+            workspace_id,
+            path=path,
+            mount_name=mount_name,
+        )
+
     def list_workspaces(self) -> tuple[WorkspaceRecord, ...]:
         return self._repository.list_all()
+
+    async def list_workspaces_async(self) -> tuple[WorkspaceRecord, ...]:
+
+        return await asyncio.to_thread(self.list_workspaces)
 
     def delete_workspace(self, workspace_id: str) -> None:
         _ = self.delete_workspace_with_options(
             workspace_id=workspace_id,
             remove_directory=False,
+        )
+
+    async def delete_workspace_with_options_async(
+        self,
+        *,
+        workspace_id: str,
+        remove_directory: bool = False,
+    ) -> WorkspaceRecord:
+
+        return await asyncio.to_thread(
+            self.delete_workspace_with_options,
+            workspace_id=workspace_id,
+            remove_directory=remove_directory,
         )
 
     def delete_workspace_with_options(
@@ -1157,6 +1331,21 @@ class WorkspaceService:
                 ignore_errors=True,
             )
             raise
+
+    async def fork_workspace_async(
+        self,
+        source_workspace_id: str,
+        *,
+        name: str,
+        start_ref: str | None = None,
+    ) -> WorkspaceRecord:
+
+        return await asyncio.to_thread(
+            self.fork_workspace,
+            source_workspace_id=source_workspace_id,
+            name=name,
+            start_ref=start_ref,
+        )
 
     def _resolve_default_fork_start_point(
         self,

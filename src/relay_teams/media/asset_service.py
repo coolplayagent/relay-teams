@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import binascii
 import mimetypes
 import re
@@ -217,6 +218,56 @@ class MediaAssetService:
         if not file_path.exists() or not file_path.is_file():
             raise FileNotFoundError(f"Asset file not found: {asset_id}")
         return file_path, record.mime_type
+
+    async def get_asset_async(self, asset_id: str) -> MediaAssetRecord:
+        return await self._repository.get_async(asset_id)
+
+    async def list_session_assets_async(
+        self, session_id: str
+    ) -> tuple[MediaAssetRecord, ...]:
+        return await self._repository.list_by_session_async(session_id)
+
+    async def store_bytes_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        modality: MediaModality,
+        mime_type: str,
+        data: bytes,
+        name: str = "",
+        size_bytes: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        duration_ms: int | None = None,
+        thumbnail_asset_id: str | None = None,
+        source: str = "generated",
+    ) -> MediaAssetRecord:
+        return await asyncio.to_thread(
+            self.store_bytes,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            modality=modality,
+            mime_type=mime_type,
+            data=data,
+            name=name,
+            size_bytes=size_bytes,
+            width=width,
+            height=height,
+            duration_ms=duration_ms,
+            thumbnail_asset_id=thumbnail_asset_id,
+            source=source,
+        )
+
+    async def delete_session_assets_async(self, session_id: str) -> None:
+        await self._repository.delete_by_session_async(session_id)
+
+    async def get_asset_file_async(
+        self, *, session_id: str, asset_id: str
+    ) -> tuple[Path, str]:
+        return await asyncio.to_thread(
+            self.get_asset_file, session_id=session_id, asset_id=asset_id
+        )
 
     def to_content_part(self, record: MediaAssetRecord) -> MediaRefContentPart:
         return MediaRefContentPart(

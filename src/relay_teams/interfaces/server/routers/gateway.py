@@ -5,7 +5,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from relay_teams.interfaces.server.async_call import call_maybe_async
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
@@ -42,7 +41,7 @@ router = APIRouter(prefix="/gateway", tags=["Gateway"])
 async def list_wechat_accounts(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> list[WeChatAccountRecord]:
-    accounts = await call_maybe_async(service.list_accounts)
+    accounts = await service.list_accounts_async()
     return list(accounts)
 
 
@@ -50,7 +49,7 @@ async def list_wechat_accounts(
 async def list_xiaoluban_accounts(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> list[XiaolubanAccountRecord]:
-    accounts = await call_maybe_async(service.list_accounts)
+    accounts = await service.list_accounts_async()
     return list(accounts)
 
 
@@ -60,7 +59,7 @@ async def create_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await call_maybe_async(service.create_account, req)
+        return await service.create_account_async(req)
     except ValueError as exc:
         raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
 
@@ -77,7 +76,7 @@ async def prepare_xiaoluban_account(
     ],
 ) -> XiaolubanImForwardingCommandResponse:
     try:
-        account_id = await call_maybe_async(service.prepare_account_id)
+        account_id = await service.prepare_account_id_async()
         forwarding_url = _xiaoluban_forwarding_url(
             listener_service.callback_url(account_id=account_id)
         )
@@ -98,7 +97,7 @@ async def update_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await call_maybe_async(service.update_account, account_id, req)
+        return await service.update_account_async(account_id, req)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -115,7 +114,7 @@ async def reveal_xiaoluban_account_token(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanTokenRevealResponse:
     try:
-        return await call_maybe_async(service.reveal_token, account_id)
+        return await service.reveal_token_async(account_id)
     except KeyError as exc:
         raise http_exception_for(exc) from exc
 
@@ -130,7 +129,7 @@ async def update_xiaoluban_im_config(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await call_maybe_async(service.update_im_config, account_id, req)
+        return await service.update_im_config_async(account_id, req)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -151,15 +150,13 @@ async def get_xiaoluban_im_forwarding_command(
     ],
 ) -> XiaolubanImForwardingCommandResponse:
     try:
-        account = await call_maybe_async(service.get_account, account_id)
+        account = await service.get_account_async(account_id)
         if account.status != XiaolubanAccountStatus.ENABLED:
             raise ValueError("xiaoluban_account_disabled")
         if not account.im_config.workspace_id:
             raise ValueError("xiaoluban_im_workspace_missing")
-        await call_maybe_async(
-            service.validate_im_workspace, account.im_config.workspace_id
-        )
-        _ = await call_maybe_async(service.get_im_callback_auth_token, account_id)
+        await service.validate_im_workspace_async(account.im_config.workspace_id)
+        _ = await service.get_im_callback_auth_token_async(account_id)
         forwarding_url = _xiaoluban_forwarding_url(
             listener_service.callback_url(account_id=account_id)
         )
@@ -185,7 +182,7 @@ async def enable_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await call_maybe_async(service.set_account_enabled, account_id, True)
+        return await service.set_account_enabled_async(account_id, True)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -202,7 +199,7 @@ async def disable_xiaoluban_account(
     service: Annotated[XiaolubanGatewayService, Depends(get_xiaoluban_gateway_service)],
 ) -> XiaolubanAccountRecord:
     try:
-        return await call_maybe_async(service.set_account_enabled, account_id, False)
+        return await service.set_account_enabled_async(account_id, False)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -217,8 +214,7 @@ async def delete_xiaoluban_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(
-            service.delete_account,
+        await service.delete_account_async(
             account_id,
             force=req.force if req is not None else False,
         )
@@ -235,7 +231,7 @@ async def start_wechat_login(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginStartResponse:
     try:
-        return await call_maybe_async(service.start_login, req)
+        return await service.start_login_async(req)
     except RuntimeError as exc:
         raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
 
@@ -246,7 +242,7 @@ async def wait_wechat_login(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatLoginWaitResponse:
     try:
-        return await call_maybe_async(service.wait_login, req)
+        return await service.wait_login_async(req)
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
             exc,
@@ -261,7 +257,7 @@ async def update_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return await call_maybe_async(service.update_account, account_id, req)
+        return await service.update_account_async(account_id, req)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -275,7 +271,7 @@ async def enable_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return await call_maybe_async(service.set_account_enabled, account_id, True)
+        return await service.set_account_enabled_async(account_id, True)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -291,7 +287,7 @@ async def disable_wechat_account(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> WeChatAccountRecord:
     try:
-        return await call_maybe_async(service.set_account_enabled, account_id, False)
+        return await service.set_account_enabled_async(account_id, False)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -306,8 +302,7 @@ async def delete_wechat_account(
     req: DeleteRequest | None = Body(default=None),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(
-            service.delete_account,
+        await service.delete_account_async(
             account_id,
             force=req.force if req is not None else False,
         )
@@ -322,7 +317,7 @@ async def delete_wechat_account(
 async def reload_wechat_gateway(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
 ) -> dict[str, str]:
-    await call_maybe_async(service.reload)
+    await service.reload_async()
     return {"status": "ok"}
 
 

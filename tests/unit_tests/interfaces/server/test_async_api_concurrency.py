@@ -65,6 +65,9 @@ class _AsyncSessionService:
             self._records[resolved_session_id] = record
             return record
 
+    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
+        return await self.list_sessions()
+
     async def list_sessions(self) -> tuple[SessionRecord, ...]:
         async with self._lock:
             return tuple(self._records.values())

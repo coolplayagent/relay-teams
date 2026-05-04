@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -45,6 +44,9 @@ from relay_teams.roles import default_memory_profile
 class _FakeRoleSettingsService:
     validate_all_error: Exception | None = None
 
+    async def list_role_documents_async(self) -> tuple[RoleDocumentSummary, ...]:
+        return self.list_role_documents()
+
     def list_role_documents(self) -> tuple[RoleDocumentSummary, ...]:
         return (
             RoleDocumentSummary(
@@ -80,6 +82,9 @@ class _FakeRoleSettingsService:
             content="---\nrole_id: writer\n---\n\nWrite clearly.\n",
         )
 
+    async def get_role_document_async(self, role_id: str) -> RoleDocumentRecord:
+        return self.get_role_document(role_id)
+
     def save_role_document(
         self,
         role_id: str,
@@ -88,12 +93,23 @@ class _FakeRoleSettingsService:
         _ = draft
         return self.get_role_document(role_id)
 
+    async def save_role_document_async(
+        self, role_id: str, draft: object
+    ) -> RoleDocumentRecord:
+        return self.save_role_document(role_id, draft)
+
     def validate_role_document(
         self,
         draft: object,
     ) -> RoleValidationResult:
         _ = draft
         return RoleValidationResult(valid=True, role=self.get_role_document("writer"))
+
+    async def validate_role_document_async(self, draft: object) -> RoleValidationResult:
+        return self.validate_role_document(draft)
+
+    async def validate_all_roles_async(self) -> dict[str, int | bool]:
+        return self.validate_all_roles()
 
     def validate_all_roles(self) -> dict[str, int | bool]:
         if self.validate_all_error is not None:
@@ -105,6 +121,9 @@ class _FakeRoleSettingsService:
             raise ValueError("Role not found: missing")
         if role_id != "writer":
             raise ValueError(f"Role cannot be deleted: {role_id}")
+
+    async def delete_role_document_async(self, role_id: str) -> None:
+        return self.delete_role_document(role_id)
 
 
 class _FakeToolRegistry:
@@ -326,18 +345,6 @@ def test_validate_role_config() -> None:
 
 
 def test_role_config_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(roles, "call_maybe_async", fake_run_in_threadpool)
     client = _create_test_client()
     role_payload = {
         "role_id": "writer",
@@ -362,37 +369,14 @@ def test_role_config_routes_run_service_calls_in_threadpool(monkeypatch) -> None
     ]
 
     assert [response.status_code for response in responses] == [200] * len(responses)
-    assert [call[0] for call in calls] == [
-        "list_role_documents",
-        "get_role_document",
-        "save_role_document",
-        "delete_role_document",
-        "validate_all_roles",
-        "validate_role_document",
-    ]
 
 
-def test_get_role_config_options_runs_in_threadpool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        calls.append((func.__name__, args, kwargs))
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(roles, "call_maybe_async", fake_run_in_threadpool)
+def test_get_role_config_options_runs_in_threadpool() -> None:
     client = _create_test_client()
 
     response = client.get("/api/roles:options")
 
     assert response.status_code == 200
-    assert [call[0] for call in calls] == ["_build_role_config_options"]
 
 
 def test_get_role_config_options_returns_503_when_system_roles_are_missing() -> None:

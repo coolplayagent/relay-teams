@@ -7,8 +7,9 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+import asyncio
+
 from relay_teams.interfaces.server.async_call import (
-    call_maybe_async,
     call_maybe_async_in_isolated_thread,
     call_maybe_async_in_network_probe_thread,
 )
@@ -253,7 +254,7 @@ async def get_control_plane() -> ControlPlaneDiscoveryPayload:
 async def get_config_status(
     service: ConfigStatusService = Depends(get_config_status_service),
 ) -> dict[str, JsonValue]:
-    return await call_maybe_async(service.get_config_status)
+    return await asyncio.to_thread(service.get_config_status)
 
 
 @router.get("/configs/plugins/runtime")
@@ -267,7 +268,7 @@ async def get_plugins_runtime_view(
 async def list_ssh_profiles(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> list[SshProfileRecord]:
-    return list(await call_maybe_async(service.list_profiles))
+    return list(await asyncio.to_thread(service.list_profiles))
 
 
 @router.get("/configs/workspace/ssh-profiles/{ssh_profile_id}")
@@ -276,7 +277,7 @@ async def get_ssh_profile(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
     try:
-        return await call_maybe_async(service.get_profile, ssh_profile_id)
+        return await asyncio.to_thread(service.get_profile, ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -292,7 +293,7 @@ async def reveal_ssh_profile_password(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfilePasswordRevealView:
     try:
-        return await call_maybe_async(service.reveal_password, ssh_profile_id)
+        return await asyncio.to_thread(service.reveal_password, ssh_profile_id)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -329,7 +330,7 @@ async def save_ssh_profile(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> SshProfileRecord:
     try:
-        return await call_maybe_async(
+        return await asyncio.to_thread(
             service.save_profile,
             ssh_profile_id=ssh_profile_id,
             config=req.config,
@@ -347,7 +348,7 @@ async def delete_ssh_profile(
     service: SshProfileService = Depends(get_ssh_profile_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.delete_profile, ssh_profile_id)
+        await asyncio.to_thread(service.delete_profile, ssh_profile_id)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -362,7 +363,7 @@ async def delete_ssh_profile(
 async def get_ui_language_settings(
     service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
 ) -> UiLanguageSettings:
-    return await call_maybe_async(service.get_ui_language_settings)
+    return await asyncio.to_thread(service.get_ui_language_settings)
 
 
 @router.put("/configs/ui-language")
@@ -371,7 +372,7 @@ async def save_ui_language_settings(
     service: UiLanguageSettingsService = Depends(get_ui_language_settings_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.save_ui_language_settings, req)
+        await asyncio.to_thread(service.save_ui_language_settings, req)
         return {"status": "ok"}
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -381,21 +382,21 @@ async def save_ui_language_settings(
 async def get_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, JsonValue]:
-    return await call_maybe_async(service.get_model_config)
+    return await asyncio.to_thread(service.get_model_config)
 
 
 @router.get("/configs/model/profiles")
 async def get_model_profiles(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, dict[str, JsonValue]]:
-    return await call_maybe_async(service.get_model_profiles)
+    return await asyncio.to_thread(service.get_model_profiles)
 
 
 @router.get("/configs/model-fallback")
 async def get_model_fallback_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelFallbackConfig:
-    return await call_maybe_async(service.get_model_fallback_config)
+    return await asyncio.to_thread(service.get_model_fallback_config)
 
 
 @router.get("/configs/model/catalog")
@@ -403,14 +404,14 @@ async def get_model_catalog(
     refresh: bool = Query(default=False),
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelCatalogResult:
-    return await call_maybe_async(service.get_model_catalog, refresh=refresh)
+    return await asyncio.to_thread(service.get_model_catalog, refresh=refresh)
 
 
 @router.post("/configs/model/catalog:refresh")
 async def refresh_model_catalog(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelCatalogResult:
-    return await call_maybe_async(service.get_model_catalog, refresh=True)
+    return await asyncio.to_thread(service.get_model_catalog, refresh=True)
 
 
 class ModelProfileRequest(ModelProfileConfigPayload):
@@ -509,7 +510,7 @@ async def save_model_profile(
             profile["maas_auth"] = req.maas_auth.model_dump(mode="json")
         if req.codeagent_auth is not None:
             profile["codeagent_auth"] = req.codeagent_auth.model_dump(mode="json")
-        await call_maybe_async(
+        await asyncio.to_thread(
             service.save_model_profile,
             name,
             profile,
@@ -619,7 +620,7 @@ async def verify_codeagent_auth(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> CodeAgentAuthVerifyResponse:
     try:
-        result = await call_maybe_async(
+        result = await asyncio.to_thread(
             service.verify_codeagent_auth,
             profile_name=req.profile_name,
         )
@@ -637,7 +638,7 @@ async def get_provider_models(
 ) -> list[dict[str, JsonValue]]:
     return [
         model.model_dump(mode="json")
-        for model in await call_maybe_async(
+        for model in await asyncio.to_thread(
             service.get_provider_models,
             provider=provider,
         )
@@ -650,7 +651,7 @@ async def delete_model_profile(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.delete_model_profile, name)
+        await asyncio.to_thread(service.delete_model_profile, name)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -667,7 +668,7 @@ async def save_model_config(
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, ModelConfigRequest) else req
-        await call_maybe_async(service.save_model_config, config)
+        await asyncio.to_thread(service.save_model_config, config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400)
@@ -680,7 +681,7 @@ async def save_model_fallback_config(
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, ModelFallbackConfigRequest) else req
-        await call_maybe_async(service.save_model_fallback_config, config)
+        await asyncio.to_thread(service.save_model_fallback_config, config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400)
@@ -720,7 +721,7 @@ async def discover_model_catalog(
 async def get_notification_config(
     service: NotificationSettingsService = Depends(get_notification_settings_service),
 ) -> NotificationConfig:
-    return await call_maybe_async(service.get_notification_config)
+    return await asyncio.to_thread(service.get_notification_config)
 
 
 @router.get("/configs/environment-variables")
@@ -728,7 +729,7 @@ async def get_environment_variables(
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> EnvironmentVariableCatalog:
     try:
-        return await call_maybe_async(service.list_environment_variables)
+        return await asyncio.to_thread(service.list_environment_variables)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -741,7 +742,7 @@ async def save_environment_variable(
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> EnvironmentVariableRecord:
     try:
-        return await call_maybe_async(
+        return await asyncio.to_thread(
             service.save_environment_variable,
             scope=scope,
             key=key,
@@ -763,7 +764,7 @@ async def delete_environment_variable(
     service: EnvironmentVariableService = Depends(get_environment_variable_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(
+        await asyncio.to_thread(
             service.delete_environment_variable,
             scope=scope,
             key=key,
@@ -782,7 +783,7 @@ async def delete_environment_variable(
 async def get_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> ProxyEnvInput:
-    return await call_maybe_async(service.get_saved_proxy_config)
+    return await asyncio.to_thread(service.get_saved_proxy_config)
 
 
 @router.put("/configs/proxy")
@@ -791,7 +792,7 @@ async def save_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.save_proxy_config, req)
+        await asyncio.to_thread(service.save_proxy_config, req)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -805,7 +806,7 @@ async def save_proxy_config(
 async def get_web_config(
     service: WebConfigService = Depends(get_web_config_service),
 ) -> WebConfig:
-    return await call_maybe_async(service.get_web_config)
+    return await asyncio.to_thread(service.get_web_config)
 
 
 @router.put("/configs/web")
@@ -814,7 +815,7 @@ async def save_web_config(
     service: WebConfigService = Depends(get_web_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.save_web_config, req)
+        await asyncio.to_thread(service.save_web_config, req)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -828,7 +829,7 @@ async def save_web_config(
 async def list_agent_runtimes(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> tuple[ExternalAgentSummary, ...]:
-    return await call_maybe_async(service.list_agents)
+    return await asyncio.to_thread(service.list_agents)
 
 
 @router.get("/configs/agent-runtimes/{agent_id}", response_model=ExternalAgentConfig)
@@ -837,7 +838,7 @@ async def get_agent_runtime(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
     try:
-        return await call_maybe_async(service.get_agent, agent_id)
+        return await asyncio.to_thread(service.get_agent, agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -849,7 +850,7 @@ async def save_agent_runtime(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> ExternalAgentConfig:
     try:
-        return await call_maybe_async(service.save_agent, agent_id, req)
+        return await asyncio.to_thread(service.save_agent, agent_id, req)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -860,7 +861,7 @@ async def delete_agent_runtime(
     service: ExternalAgentConfigService = Depends(get_external_agent_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.delete_agent, agent_id)
+        await asyncio.to_thread(service.delete_agent, agent_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -876,7 +877,7 @@ async def test_agent_runtime(
     workspace_manager: WorkspaceManager = Depends(get_workspace_manager),
 ) -> ExternalAgentTestResult:
     try:
-        config = await call_maybe_async(service.resolve_runtime_agent, agent_id)
+        config = await asyncio.to_thread(service.resolve_runtime_agent, agent_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     runtime_cwd = None
@@ -898,14 +899,14 @@ async def test_agent_runtime(
 async def get_github_config(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubConfigView:
-    return await call_maybe_async(service.get_github_config_view)
+    return await asyncio.to_thread(service.get_github_config_view)
 
 
 @router.post("/configs/github:reveal")
 async def reveal_github_token(
     service: GitHubConfigService = Depends(get_github_config_service),
 ) -> GitHubTokenRevealView:
-    return await call_maybe_async(service.reveal_github_token)
+    return await asyncio.to_thread(service.reveal_github_token)
 
 
 @router.put("/configs/github")
@@ -923,7 +924,7 @@ async def save_github_config(
                 previous_webhook_base_url=previous_config.webhook_base_url
             )
 
-        await call_maybe_async(_save_github_config)
+        await asyncio.to_thread(_save_github_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -937,7 +938,7 @@ async def save_github_config(
 async def get_clawhub_config(
     service: ClawHubConfigService = Depends(get_clawhub_config_service),
 ) -> ClawHubConfig:
-    return await call_maybe_async(service.get_clawhub_config)
+    return await asyncio.to_thread(service.get_clawhub_config)
 
 
 @router.put("/configs/clawhub")
@@ -946,7 +947,7 @@ async def save_clawhub_config(
     service: ClawHubConfigService = Depends(get_clawhub_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.save_clawhub_config, req)
+        await asyncio.to_thread(service.save_clawhub_config, req)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -964,7 +965,7 @@ async def probe_clawhub_connectivity(
     ),
 ) -> ClawHubConnectivityProbeResult:
     try:
-        return await call_maybe_async(service.probe, req)
+        return await asyncio.to_thread(service.probe, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -976,7 +977,7 @@ async def probe_clawhub_connectivity(
 async def list_clawhub_skills(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> tuple[ClawHubSkillSummary, ...]:
-    return await call_maybe_async(service.list_skills)
+    return await asyncio.to_thread(service.list_skills)
 
 
 @router.get(
@@ -988,7 +989,7 @@ async def get_clawhub_skill(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> ClawHubSkillDetail:
     try:
-        return await call_maybe_async(service.get_skill, skill_id)
+        return await asyncio.to_thread(service.get_skill, skill_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1005,7 +1006,7 @@ async def save_clawhub_skill(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> ClawHubSkillDetail:
     try:
-        return await call_maybe_async(service.save_skill, skill_id, req)
+        return await asyncio.to_thread(service.save_skill, skill_id, req)
     except (KeyError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1016,7 +1017,7 @@ async def delete_clawhub_skill(
     service: ClawHubSkillService = Depends(get_clawhub_skill_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.delete_skill, skill_id)
+        await asyncio.to_thread(service.delete_skill, skill_id)
         return {"status": "ok"}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1031,7 +1032,7 @@ async def save_notification_config(
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, NotificationConfigRequest) else req
-        await call_maybe_async(service.save_notification_config, config)
+        await asyncio.to_thread(service.save_notification_config, config)
         return {"status": "ok"}
     except OSError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -1041,7 +1042,7 @@ async def save_notification_config(
 async def get_orchestration_config(
     service: OrchestrationSettingsService = Depends(get_orchestration_settings_service),
 ) -> OrchestrationSettings:
-    return await call_maybe_async(service.get_orchestration_config)
+    return await asyncio.to_thread(service.get_orchestration_config)
 
 
 @router.put("/configs/orchestration")
@@ -1051,7 +1052,7 @@ async def save_orchestration_config(
 ) -> dict[str, str]:
     try:
         config = req.config if isinstance(req, OrchestrationConfigRequest) else req
-        await call_maybe_async(service.save_orchestration_config, config)
+        await asyncio.to_thread(service.save_orchestration_config, config)
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1062,7 +1063,7 @@ async def reload_model_config(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.reload_model_config)
+        await asyncio.to_thread(service.reload_model_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -1077,7 +1078,7 @@ async def reload_proxy_config(
     service: ProxyConfigService = Depends(get_proxy_config_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.reload_proxy_config)
+        await asyncio.to_thread(service.reload_proxy_config)
         return {"status": "ok"}
     except Exception as exc:
         _raise_system_http_error(
@@ -1119,7 +1120,7 @@ async def probe_github_webhook_connectivity(
     ),
 ) -> GitHubWebhookConnectivityProbeResult:
     try:
-        return await call_maybe_async(service.probe, req)
+        return await asyncio.to_thread(service.probe, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1128,7 +1129,7 @@ async def probe_github_webhook_connectivity(
 async def get_github_webhook_tunnel_status(
     service: LocalhostRunTunnelService = Depends(get_localhost_run_tunnel_service),
 ) -> LocalhostRunTunnelStatus:
-    return await call_maybe_async(service.get_status)
+    return await asyncio.to_thread(service.get_status)
 
 
 @router.post("/configs/github/webhook/tunnel:start")
@@ -1160,7 +1161,7 @@ async def start_github_webhook_tunnel(
                 )
             return status
 
-        return await call_maybe_async(_start_tunnel)
+        return await asyncio.to_thread(_start_tunnel)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -1194,7 +1195,7 @@ async def stop_github_webhook_tunnel(
                     )
             return status
 
-        return await call_maybe_async(_stop_tunnel)
+        return await asyncio.to_thread(_stop_tunnel)
     except Exception as exc:
         _raise_system_http_error(
             exc,
@@ -1208,7 +1209,7 @@ async def reload_mcp_config(
     service: McpConfigReloadService = Depends(get_mcp_config_reload_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.reload_mcp_config)
+        await asyncio.to_thread(service.reload_mcp_config)
         return {"status": "ok"}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1221,7 +1222,7 @@ async def reload_skills_config(
     service: SkillsConfigReloadService = Depends(get_skills_config_reload_service),
 ) -> dict[str, str]:
     try:
-        await call_maybe_async(service.reload_skills_config)
+        await asyncio.to_thread(service.reload_skills_config)
         return {"status": "ok"}
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1233,14 +1234,14 @@ async def reload_skills_config(
 async def get_hooks_config(
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
-    return await call_maybe_async(service.get_user_config)
+    return await asyncio.to_thread(service.get_user_config)
 
 
 @router.get("/configs/hooks/runtime")
 async def get_hooks_runtime_view(
     service: HookService = Depends(get_hook_service),
 ) -> HookRuntimeView:
-    return await call_maybe_async(service.get_runtime_view)
+    return await asyncio.to_thread(service.get_runtime_view)
 
 
 @router.put("/configs/hooks")
@@ -1249,7 +1250,7 @@ async def save_hooks_config(
     service: HookService = Depends(get_hook_service),
 ) -> HooksConfig:
     try:
-        return await call_maybe_async(service.save_user_config, req)
+        return await asyncio.to_thread(service.save_user_config, req)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1260,7 +1261,7 @@ async def validate_hooks_config(
     service: HookService = Depends(get_hook_service),
 ) -> dict[str, str]:
     try:
-        _ = await call_maybe_async(service.validate_config, req)
+        _ = await asyncio.to_thread(service.validate_config, req)
         return {"status": "ok"}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

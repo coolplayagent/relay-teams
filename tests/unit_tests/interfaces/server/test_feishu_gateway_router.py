@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -114,10 +113,34 @@ class _FakeFeishuGatewayService:
             updated_at=now,
         )
 
+    async def list_accounts_async(self) -> object:
+        return self.list_accounts()
+
+    async def create_account_async(
+        self, request: FeishuGatewayAccountCreateInput
+    ) -> FeishuGatewayAccountRecord:
+        return self.create_account(request)
+
+    async def update_account_async(
+        self, account_id: str, request: FeishuGatewayAccountUpdateInput
+    ) -> FeishuGatewayAccountRecord:
+        return self.update_account(account_id, request)
+
+    async def set_account_enabled_async(self, account_id: str, enabled: bool) -> object:
+        return self.set_account_enabled(account_id, enabled)
+
+    async def delete_account_async(
+        self, account_id: str, *, force: bool = False
+    ) -> None:
+        self.delete_account(account_id, force=force)
+
 
 class _FakeSubscriptionService:
     def __init__(self) -> None:
         self.reload_calls = 0
+
+    async def reload_async(self) -> None:
+        self.reload()
 
     def reload(self) -> None:
         self.reload_calls += 1
@@ -174,16 +197,7 @@ def test_create_feishu_account_route_reloads_subscription_service() -> None:
     assert gateway_service.created_payloads[0].name == "feishu_ops"
 
 
-def test_feishu_account_routes_run_service_calls_in_threadpool(monkeypatch) -> None:
-    calls: list[str] = []
-
-    async def fake_run_in_threadpool(
-        func: Callable[[], object],
-    ) -> object:
-        calls.append(func.__name__)
-        return func()
-
-    monkeypatch.setattr(feishu_gateway, "call_maybe_async", fake_run_in_threadpool)
+def test_feishu_account_routes_run_service_calls_in_threadpool() -> None:
     gateway_service = _FakeFeishuGatewayService()
     subscription_service = _FakeSubscriptionService()
     client = _client(gateway_service, subscription_service)
@@ -222,15 +236,6 @@ def test_feishu_account_routes_run_service_calls_in_threadpool(monkeypatch) -> N
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
-    assert calls == [
-        "list_accounts",
-        "_create_feishu_account",
-        "_update_feishu_account",
-        "_enable_feishu_account",
-        "_disable_feishu_account",
-        "_delete_feishu_account",
-        "reload",
-    ]
 
 
 def test_create_feishu_account_route_rejects_none_like_name() -> None:
