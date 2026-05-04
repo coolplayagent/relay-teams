@@ -29,23 +29,6 @@ from relay_teams.net.websocket import (
     resolve_websocket_proxy_url,
 )
 
-from lark_oapi.ws.const import (
-    AUTH_FAILED,
-    DEVICE_ID,
-    EXCEED_CONN_LIMIT,
-    FORBIDDEN,
-    GEN_ENDPOINT_URI,
-    HEADER_HANDSHAKE_AUTH_ERRCODE,
-    HEADER_HANDSHAKE_MSG,
-    HEADER_HANDSHAKE_STATUS,
-    SERVICE_ID,
-)
-from lark_oapi.ws.exception import (
-    ClientException,
-    ServerException,
-)
-from lark_oapi.ws.model import EndpointResp
-
 logger = get_logger(__name__)
 
 
@@ -467,6 +450,8 @@ class _FeishuWsController:
         return self._task is not None and not self._task.done()
 
     async def _run(self) -> None:
+        from lark_oapi.ws.exception import ClientException
+
         reconnect_attempt = 0
         while not self._stop_requested:
             try:
@@ -555,6 +540,8 @@ class _FeishuWsController:
         )
 
     async def _connect_client(self, client: WsClientLike) -> None:
+        from lark_oapi.ws.const import DEVICE_ID, SERVICE_ID
+
         ws_client_module = import_lark_ws_client_module()
         conn_url = await asyncio.to_thread(self._get_conn_url, client)
         conn_query = parse_qs(urlparse(conn_url).query)
@@ -660,6 +647,10 @@ class _FeishuWsController:
         return float(max(client._reconnect_interval, 1))
 
     def _get_conn_url(self, client: WsClientLike) -> str:
+        from lark_oapi.ws.const import GEN_ENDPOINT_URI
+        from lark_oapi.ws.exception import ClientException, ServerException
+        from lark_oapi.ws.model import EndpointResp
+
         response = self._create_feishu_http_client().post(
             f"https://open.feishu.cn{GEN_ENDPOINT_URI}",
             headers={"locale": "zh"},
@@ -734,6 +725,16 @@ def _resolve_ws_exception_headers(exc: Exception) -> HeadersLike | None:
 
 
 def _parse_ws_conn_exception(exc: Exception) -> NoReturn:
+    from lark_oapi.ws.const import (
+        AUTH_FAILED,
+        EXCEED_CONN_LIMIT,
+        FORBIDDEN,
+        HEADER_HANDSHAKE_AUTH_ERRCODE,
+        HEADER_HANDSHAKE_MSG,
+        HEADER_HANDSHAKE_STATUS,
+    )
+    from lark_oapi.ws.exception import ClientException, ServerException
+
     headers = _resolve_ws_exception_headers(exc)
     if headers is None:
         raise exc
