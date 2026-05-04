@@ -56,6 +56,7 @@ class VerificationEvidenceKind(str, Enum):
     TOOL_RESULT = "tool_result"
     GATE_FINDING = "gate_finding"
     RUNTIME_GUARDRAIL_REPORT = "runtime_guardrail_report"
+    TIMEOUT_HANDOFF = "timeout_handoff"
 
 
 class VerificationEvidenceTarget(str, Enum):
@@ -92,6 +93,15 @@ class WakeupStatus(str, Enum):
     CLAIMED = "claimed"
     COMPLETED = "completed"
     EXPIRED = "expired"
+
+
+class WakeupReason(str, Enum):
+    TIMEOUT_RETRY = "timeout_retry"
+    TASK_COMPLETED = "task_completed"
+    APPROVAL_PASSED = "approval_passed"
+    USER_INPUT = "user_input"
+    DEPENDENCY_RESOLVED = "dependency_resolved"
+    ORPHAN_RECOVERY = "orphan_recovery"
 
 
 class TaskArtifactPhase(str, Enum):

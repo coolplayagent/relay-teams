@@ -92,3 +92,31 @@ def build_injection_message(job: ContextEditJob) -> str:
         parts.append("")
     parts.append(job.diff_description)
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# EP-1: Compact section rendering for context window management
+# ---------------------------------------------------------------------------
+
+_CONTEXT_COMPACT_TRUNCATE_LENGTH = 300
+
+
+def render_compact_section(
+    *,
+    title: str,
+    content: str,
+    max_length: int = _CONTEXT_COMPACT_TRUNCATE_LENGTH,
+) -> str:
+    """Render a compact section suitable for limited context windows.
+
+    Strips leading/trailing whitespace, dedents, and truncates with an
+    ellipsis marker when the rendered content exceeds *max_length*.
+
+    Returns the compacted section string including a header line.
+    """
+    cleaned = content.strip()
+    if not cleaned:
+        return f"{title}: (empty)"
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length] + "..."
+    return f"{title}:\n{cleaned}"

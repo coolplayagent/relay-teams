@@ -75,3 +75,63 @@ def apply_anthropic_cache_markers(
     extra_body["anthropic_beta"] = beta_list
     updated["extra_body"] = extra_body
     return updated
+
+
+# ---------------------------------------------------------------------------
+# EP-1: OpenAI prompt caching support
+# ---------------------------------------------------------------------------
+
+_OPENAI_CACHEABLE_MODEL_PREFIXES = (
+    "gpt-4o",
+    "gpt-4-turbo",
+    "gpt-4-0",
+    "chatgpt-4o",
+    "o1-",
+    "o3-",
+    "o4-",
+)
+
+
+def should_enable_prompt_caching_for_openai(
+    model: str,
+    system_prompt: str,
+) -> bool:
+    """Check whether an OpenAI model supports prompt caching.
+
+    OpenAI prompt caching (formerly called 'cached responses') is
+    available on GPT-4o-class and newer models when the system prompt
+    is at least ~1024 tokens.
+    """
+    model_lower = model.lower().strip()
+    is_cacheable = any(
+        model_lower.startswith(prefix) for prefix in _OPENAI_CACHEABLE_MODEL_PREFIXES
+    )
+    if not is_cacheable:
+        return False
+    estimated_tokens = len(system_prompt) // 4
+    return estimated_tokens >= 1024
+
+
+def apply_openai_cache_markers(
+    model: str,
+    system_prompt: str,
+    model_settings: dict[str, object],
+) -> dict[str, object]:
+    """Apply OpenAI prompt caching hints to model settings.
+
+    When model caching is supported, this sets ``store=True`` in the
+    request ``extra_body`` so the API can reuse cached prompt prefixes.
+    """
+    if not should_enable_prompt_caching_for_openai(model, system_prompt):
+        return dict(model_settings)
+
+    updated = dict(model_settings)
+    existing_extra = updated.get("extra_body")
+    extra_body: dict[str, object]
+    if isinstance(existing_extra, dict):
+        extra_body = dict(existing_extra)
+    else:
+        extra_body = {}
+    extra_body.setdefault("store", True)
+    updated["extra_body"] = extra_body
+    return updated

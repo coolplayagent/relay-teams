@@ -139,3 +139,88 @@ def should_reject(report: ToolDietReport) -> bool:
 
 def has_warnings(report: ToolDietReport) -> bool:
     return any(f.severity == ToolDietSeverity.WARNING for f in report.findings)
+
+
+def suggest_auto_split(
+    *,
+    policy: ToolDietPolicy,
+    tool_names: tuple[str, ...],
+    role_id: str = "",
+    role_name: str = "",
+) -> tuple[tuple[str, ...], ...]:
+    """Suggest role splits when the tool diet exceeds the policy threshold.
+
+    Returns a tuple of string tuples, where each inner tuple contains the
+    suggested tool names for one split role.  Returns an empty tuple when
+    no split is needed.
+    """
+    _ = f"{role_id}:{role_name}"  # consumed by logging downstream
+    if len(tool_names) <= policy.max_tools_per_role:
+        return ()
+
+    _READ_TOOLS = frozenset(
+        {
+            "read",
+            "glob",
+            "grep",
+            "webfetch",
+            "websearch",
+            "office_read_markdown",
+            "load_skill",
+            "list_background_tasks",
+            "list_monitors",
+        }
+    )
+    _WRITE_TOOLS = frozenset(
+        {
+            "edit",
+            "write",
+            "notebook_edit",
+            "shell",
+        }
+    )
+    _ORCHESTRATION_TOOLS = frozenset(
+        {
+            "ask_question",
+            "create_monitor",
+            "stop_monitor",
+            "stop_background_task",
+            "wait_background_task",
+        }
+    )
+
+    readers: list[str] = []
+    writers: list[str] = []
+    orchestrators: list[str] = []
+    other: list[str] = []
+
+    for name in tool_names:
+        lower = name.lower().strip()
+        if lower in _READ_TOOLS:
+            readers.append(name)
+        elif lower in _WRITE_TOOLS:
+            writers.append(name)
+        elif lower in _ORCHESTRATION_TOOLS:
+            orchestrators.append(name)
+        else:
+            other.append(name)
+
+    groups: list[tuple[str, ...]] = []
+    if readers:
+        groups.append(tuple(readers))
+    if writers:
+        groups.append(tuple(writers))
+    if orchestrators:
+        groups.append(tuple(orchestrators))
+    if other:
+        groups.append(tuple(other))
+
+    if not groups:
+        mid = len(tool_names) // 2
+        groups = [tool_names[:mid], tool_names[mid:]]
+    elif len(groups) == 1 and len(groups[0]) > policy.max_tools_per_role:
+        single = groups[0]
+        mid = len(single) // 2
+        groups = [single[:mid], single[mid:]]
+
+    return tuple(groups)

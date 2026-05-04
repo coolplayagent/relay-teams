@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 from json import dumps
 from pathlib import Path
 from typing import Callable
@@ -85,6 +86,11 @@ from relay_teams.tools.runtime.guardrails import (
     runtime_guardrail_report_from_event_payload,
 )
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
+
+from relay_teams.roles.tool_diet_validation import (
+    validate_tool_diet as _validate_tool_diet,
+)
+from relay_teams.roles.tool_diet_policy import ToolDietPolicy as _ToolDietPolicy
 
 LOGGER = get_logger(__name__)
 
@@ -951,6 +957,22 @@ class CoordinatorGraph(BaseModel):
                 records_by_node[upstream_node_id]
                 for upstream_node_id in upstream_node_ids
             )
+            timed_out_upstream = [
+                record
+                for record in upstream_records
+                if record.status == TaskStatus.TIMEOUT
+            ]
+            for timed_out_record in timed_out_upstream:
+                try:
+                    await self._handle_timeout_policy_async(timed_out_record)
+                except (RuntimeError, ValueError, KeyError):
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="coord.graph.timeout_policy_handler_failed",
+                        message="Timeout policy handler failed for upstream dependency",
+                        payload={"task_id": timed_out_record.envelope.task_id},
+                    )
             if any(
                 record.status in {TaskStatus.FAILED, TaskStatus.TIMEOUT}
                 for record in upstream_records
@@ -1398,6 +1420,39 @@ class CoordinatorGraph(BaseModel):
                 payload={"error": str(exc)},
             )
             return True
+        # OP-7: Validate tool diet for delegated task roles.
+        try:
+            diet_report = _validate_tool_diet(
+                policy=_ToolDietPolicy(),
+                tool_count=len(role.tools),
+                objective=role.system_prompt or "",
+                role_id=record.envelope.role_id or "",
+            )
+            from relay_teams.roles.tool_diet_validation import should_reject
+
+            if should_reject(diet_report):
+                diet_messages = "; ".join(
+                    f.message
+                    for f in diet_report.findings
+                    if f.severity.value == "error"
+                )
+                await self._fail_delegated_task_async(
+                    record=record,
+                    reason="tool_diet_exceeded",
+                    error_message=f"Role exceeds tool diet limits: {diet_messages}",
+                    payload={
+                        "diet_findings": [f.message for f in diet_report.findings]
+                    },
+                )
+                return True
+        except (ValueError, KeyError, AttributeError):
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="coord.tool_diet_check_failed",
+                message="Tool diet validation check failed; continuing",
+                payload={"task_id": record.envelope.task_id},
+            )
         failures = role_contract_precondition_failures(
             role=role,
             task=record.envelope,
@@ -1467,6 +1522,108 @@ class CoordinatorGraph(BaseModel):
                 role_id=role_id,
             )
         return self.role_registry.get(role_id)
+
+    async def _handle_timeout_policy_async(
+        self,
+        task_record: TaskRecord,
+    ) -> None:
+        """Handle timeout according to task lifecycle policy.
+
+        Reads ``on_timeout`` from the task envelope lifecycle config and:
+        - RETRY: enqueue a wakeup entry if attempts remain.
+        - HUMAN_GATE: emit an event requesting manual gate activation.
+        - FAIL: do nothing (callers should handle FAIL like normal failure).
+        """
+        from relay_teams.agents.tasks.enums import (
+            TaskTimeoutAction,
+            WakeupReason,
+            WakeupStatus,
+        )
+        from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
+
+        lifecycle = task_record.envelope.lifecycle
+        on_timeout = lifecycle.on_timeout
+
+        if on_timeout == TaskTimeoutAction.RETRY:
+            next_attempt = task_record.envelope.retry_attempt + 1
+            if next_attempt <= lifecycle.max_retry_attempts:
+                wakeup_repo = getattr(self, "wakeup_repo", None)
+                if wakeup_repo is not None:
+                    entry = AgentWakeupEntry(
+                        wakeup_id=f"wk_coord_{task_record.envelope.task_id}_{next_attempt}",
+                        task_id=task_record.envelope.task_id,
+                        trace_id=task_record.envelope.trace_id,
+                        session_id=task_record.envelope.session_id,
+                        coalesce_key=f"{task_record.envelope.task_id}:coord_retry",
+                        timeout_action=TaskTimeoutAction.RETRY,
+                        timeout_seconds=lifecycle.timeout_seconds or 0.0,
+                        attempt=next_attempt,
+                        max_attempts=lifecycle.max_retry_attempts,
+                        status=WakeupStatus.PENDING,
+                        enqueued_at=datetime.now(tz=timezone.utc),
+                        wake_reason=WakeupReason.TIMEOUT_RETRY,
+                        target_role=task_record.envelope.role_id or "",
+                    )
+                    await wakeup_repo.enqueue_async(entry)
+                    log_event(
+                        LOGGER,
+                        logging.INFO,
+                        event="coord.task.timeout_retry_enqueued",
+                        message="Timeout retry wakeup enqueued by coordinator",
+                        payload={
+                            "task_id": task_record.envelope.task_id,
+                            "attempt": next_attempt,
+                            "max_attempts": lifecycle.max_retry_attempts,
+                        },
+                    )
+                else:
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="coord.task.timeout_retry_no_wakeup_repo",
+                        message="Timeout retry requested but no wakeup repo available",
+                        payload={
+                            "task_id": task_record.envelope.task_id,
+                        },
+                    )
+            else:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="coord.task.timeout_retry_exhausted",
+                    message="Timeout retry exhausted, falling through to FAIL",
+                    payload={
+                        "task_id": task_record.envelope.task_id,
+                        "attempt": next_attempt,
+                        "max_attempts": lifecycle.max_retry_attempts,
+                    },
+                )
+
+        elif on_timeout == TaskTimeoutAction.HUMAN_GATE:
+            await self.event_bus.emit_async(
+                EventEnvelope(
+                    event_type=EventType.TASK_TIMEOUT,
+                    trace_id=task_record.envelope.trace_id,
+                    session_id=task_record.envelope.session_id,
+                    task_id=task_record.envelope.task_id,
+                    instance_id=task_record.assigned_instance_id,
+                    payload_json=dumps(
+                        {
+                            "action": "human_gate_requested",
+                            "timeout_seconds": lifecycle.timeout_seconds,
+                        }
+                    ),
+                )
+            )
+            log_event(
+                LOGGER,
+                logging.INFO,
+                event="coord.task.timeout_human_gate",
+                message="Timeout triggered human gate activation",
+                payload={
+                    "task_id": task_record.envelope.task_id,
+                },
+            )
 
     async def _get_root_task_by_trace_async(self, trace_id: str) -> TaskRecord:
         for record in await self.task_repo.list_by_trace_async(trace_id):

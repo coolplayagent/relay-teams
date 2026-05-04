@@ -82,6 +82,7 @@ class WakeupDispatcher:
                 "task_id": entry.task_id,
                 "wakeup_id": entry.wakeup_id,
                 "attempt": entry.attempt,
+                "wake_reason": entry.wake_reason.value,
             },
         )
 

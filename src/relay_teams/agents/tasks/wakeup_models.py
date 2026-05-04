@@ -5,7 +5,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from relay_teams.agents.tasks.enums import TaskTimeoutAction, WakeupStatus
+from relay_teams.agents.tasks.enums import TaskTimeoutAction, WakeupReason, WakeupStatus
 
 
 class AgentWakeupEntry(BaseModel):
@@ -24,3 +24,6 @@ class AgentWakeupEntry(BaseModel):
     enqueued_at: datetime
     claimed_at: datetime | None = None
     completed_at: datetime | None = None
+    wake_reason: WakeupReason = WakeupReason.TIMEOUT_RETRY
+    target_role: str = ""
+    target_instance: str = ""

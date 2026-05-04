@@ -8,7 +8,9 @@ from typing import cast
 from pydantic import JsonValue
 from pydantic_ai.models.anthropic import AnthropicModelSettings
 
-from relay_teams.providers.prompt_caching import apply_anthropic_cache_markers
+from relay_teams.providers.prompt_caching import (
+    apply_anthropic_cache_markers,
+)
 from pydantic_ai.models.openai import OpenAIChatModelSettings
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.messages import (
@@ -343,6 +345,18 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             openai_settings["max_tokens"] = max_tokens
         if request.thinking.enabled and request.thinking.effort is not None:
             openai_settings["openai_reasoning_effort"] = request.thinking.effort
+        # EP-1a: Apply OpenAI prompt caching markers when supported.
+        from relay_teams.providers.prompt_caching import (
+            should_enable_prompt_caching_for_openai,
+        )
+
+        model_name = getattr(self._config, "model", "") or ""
+        if should_enable_prompt_caching_for_openai(model_name, system_prompt):
+            existing_extra = openai_settings.get("extra_body")
+            if isinstance(existing_extra, dict):
+                existing_extra.setdefault("store", True)
+            else:
+                openai_settings["extra_body"] = {"store": True}
         return openai_settings
 
     async def _safe_max_output_tokens(

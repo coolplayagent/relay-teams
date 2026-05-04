@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.tasks.agent_wakeup_repository import AgentWakeupRepository
-from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction, WakeupStatus
+from relay_teams.agents.tasks.enums import (
+    TaskStatus,
+    TaskTimeoutAction,
+    WakeupReason,
+    WakeupStatus,
+)
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
@@ -59,8 +64,16 @@ class OrphanRecoveryService:
                 "failed",
                 "interrupted",
             )
-            if not instance_failed:
+
+            lease_expired = False
+            lease_expires_at = task.envelope.lease_expires_at
+            if lease_expires_at is not None and lease_expires_at < now:
+                lease_expired = True
+
+            if not instance_failed and not lease_expired:
                 continue
+
+            orphan_reason = "instance_failed" if instance_failed else "lease_expired"
 
             log_event(
                 LOGGER,
@@ -71,6 +84,7 @@ class OrphanRecoveryService:
                     "task_id": task.envelope.task_id,
                     "instance_id": instance_id,
                     "instance_status": str(instance.status) if instance else "unknown",
+                    "orphan_reason": orphan_reason,
                 },
             )
 
@@ -107,6 +121,7 @@ class OrphanRecoveryService:
                         max_attempts=max_attempts,
                         status=WakeupStatus.PENDING,
                         enqueued_at=now,
+                        wake_reason=WakeupReason.ORPHAN_RECOVERY,
                     )
                     await self._wakeup_repo.enqueue_async(entry)
                 else:

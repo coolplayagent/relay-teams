@@ -24,6 +24,9 @@ from relay_teams.agents.orchestration.harnesses import (
     TaskPromptHarness,
     truncate_task_memory_result,
 )
+from relay_teams.agents.orchestration.harnesses.control_harness import (
+    TaskControlHarness,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.tasks.agent_wakeup_repository import AgentWakeupRepository
 from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
@@ -159,6 +162,17 @@ class TaskExecutionService(BaseModel):
             reminder_service=getattr(self, "reminder_service", None),
             artifact_repo=getattr(self, "artifact_repo", None),
             runtime_role_resolver=getattr(self, "runtime_role_resolver", None),
+        )
+
+    def _control_harness(self) -> TaskControlHarness:
+        """Construct a TaskControlHarness from current service state."""
+        return TaskControlHarness(
+            task_repo=self.task_repo,
+            agent_repo=self.agent_repo,
+            run_runtime_repo=self.run_runtime_repo,
+            event_bus=self.event_bus,
+            wakeup_repo=getattr(self, "wakeup_repo", None),
+            artifact_repo=getattr(self, "artifact_repo", None),
         )
 
     # ── Public entry point ────────────────────────────────────────────
