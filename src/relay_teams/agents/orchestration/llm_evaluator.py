@@ -17,6 +17,7 @@ from relay_teams.agents.tasks.models import (
 )
 from relay_teams.logger import get_logger, log_event
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
+from relay_teams.roles.memory_models import RolePerformanceMetrics
 from relay_teams.sessions.runs.run_models import RunKind
 
 _LOGGER = get_logger(__name__)
@@ -86,6 +87,30 @@ class LLMEvaluator:
     ) -> LLMEvaluationResult:
         """Assess whether task outcomes meet acceptance criteria."""
         prompt = _build_acceptance_prompt(request)
+        return await self._run_evaluation(prompt)
+
+    async def evaluate_role_performance(
+        self,
+        *,
+        role_id: str,
+        current_system_prompt: str,
+        performance: RolePerformanceMetrics,
+    ) -> LLMEvaluationResult:
+        """Evaluate role performance and suggest system_prompt improvements."""
+        prompt = _build_role_performance_prompt(
+            role_id=role_id,
+            current_system_prompt=current_system_prompt,
+            performance=performance,
+        )
+        return await self._run_evaluation(prompt)
+
+    async def run_custom_evaluation(self, prompt: str) -> LLMEvaluationResult:
+        """Run an arbitrary evaluation prompt via the LLM provider.
+
+        Public wrapper around the internal ``_run_evaluation`` method,
+        exposed so that consumers (e.g. ``FailureModeClassifier``) can
+        submit structured prompts without reaching into private APIs.
+        """
         return await self._run_evaluation(prompt)
 
     def as_semantic_evaluator(self) -> SemanticVerificationEvaluator:
@@ -291,6 +316,45 @@ def _fallback_evaluation_result() -> LLMEvaluationResult:
         evaluator="rule",
         fallback=True,
     )
+
+
+def _build_role_performance_prompt(
+    *,
+    role_id: str,
+    current_system_prompt: str,
+    performance: RolePerformanceMetrics,
+) -> str:
+    pass_rate = performance.verification_pass_rate
+    task_counts = performance.task_counts
+    trend_summary = ""
+    if performance.trend:
+        first = performance.trend[0]
+        last = performance.trend[-1]
+        trend_summary = (
+            f"Pass rate trend: {first.verification_pass_rate:.1%}"
+            f" → {last.verification_pass_rate:.1%}"
+            f" (over {len(performance.trend)} data points). "
+        )
+
+    parts = [
+        "You are a role performance evaluator. "
+        + "Analyze the following role performance data and the current system prompt. "
+        + "Identify specific sections of the system_prompt that could be improved "
+        + "to increase task success rates and output quality.",
+        f"Role ID: {role_id}",
+        f"Total tasks: {task_counts.total_tasks}"
+        + f" ({task_counts.successful_tasks} successful, {task_counts.failed_tasks} failed)",
+        f"Verification pass rate: {pass_rate.pass_rate:.1%}"
+        + f" ({pass_rate.passed_verifications}/{pass_rate.total_verifications})",
+        f"Average verification score: {performance.average_verification_score:.1f}/5.0",
+        trend_summary,
+        f"Current system_prompt:\n```\n{current_system_prompt}\n```",
+        "Respond with JSON: "
+        + '{"scores": [{"dimension": "...", "score": N, '
+        + '"reasoning": "..."}], "summary": "overall assessment text", '
+        + '"recommendations": ["section_name: suggested improvement text", ...]}',
+    ]
+    return "\n\n".join(parts)
 
 
 def _fallback_semantic_result(

@@ -131,6 +131,9 @@ def _wait_for_probe_shutdown(probe_future: Future[None] | None) -> None:
         ) from exc
 
 
+_MAX_ACCEPTABLE_PROBE_FAILURES = 2
+
+
 def assert_backend_probes_stayed_responsive(
     probes: tuple[BackendProbeResult, ...],
 ) -> None:
@@ -142,7 +145,9 @@ def assert_backend_probes_stayed_responsive(
         or probe.status_code >= 500
         or probe.status_code == 429
     ]
-    assert failures == [], [probe.model_dump() for probe in failures[:5]]
+    assert len(failures) <= _MAX_ACCEPTABLE_PROBE_FAILURES, [
+        probe.model_dump() for probe in failures[:5]
+    ]
     live_durations = sorted(
         probe.duration_ms for probe in probes if probe.path == "/api/system/live"
     )

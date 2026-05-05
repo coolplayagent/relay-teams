@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
+from relay_teams.agents.tasks.models import VerificationReport
 from relay_teams.logger import get_logger
 from relay_teams.memory.models import (
     ConsolidationMode,
@@ -48,6 +51,7 @@ class MemoryEventHandler:
         task_id: str,
         objective: str,
         result: str,
+        verification_report: VerificationReport | None = None,
     ) -> None:
         """Create a WORKING memory entry for a completed task.
 
@@ -99,6 +103,21 @@ class MemoryEventHandler:
                     "failed to dual-write task result to role_memories for task %s",
                     task_id,
                     exc_info=True,
+                )
+
+        # RP-2: record verification outcome for role performance metrics
+        if self._role_memory_service is not None and verification_report is not None:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                loop.create_task(
+                    self._role_memory_service.record_verification_outcome(
+                        role_id=role_id,
+                        workspace_id=workspace_id,
+                        verification_report=verification_report,
+                    )
                 )
 
     def on_run_completed(

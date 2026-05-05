@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import logging
 from typing import Protocol
 
@@ -51,6 +51,21 @@ class RunHookPipeline:
         # the class is passed through as an opaque object and cast
         # only at call-sites where the methods are needed.
         self._memory_event_handler = memory_event_handler
+        # RP-2: bound capture_all_for_session callable (optional, best-effort).
+        self._capture_all_for_session: Callable[..., Awaitable[object]] | None = None
+
+    def set_temporary_knowledge_capture_service(
+        self,
+        service: object,
+    ) -> None:
+        """Wire the RP-2 TemporaryRoleKnowledgeCaptureService after construction.
+
+        Extracts the bound ``capture_all_for_session`` method so the pipeline
+        can call it directly without importing the concrete service class.
+        """
+        self._capture_all_for_session = getattr(
+            service, "capture_all_for_session", None
+        )
 
     async def execute_session_start_hooks(
         self,
@@ -124,6 +139,22 @@ class RunHookPipeline:
                         workspace_id,
                         session_id,
                     )
+
+                # RP-2: capture temporary role knowledge before roles expire.
+                if self._capture_all_for_session is not None:
+                    try:
+                        await self._capture_all_for_session(
+                            _session_id=session_id,
+                            _workspace_id=workspace_id,
+                        )
+                    except (ValueError, OSError, RuntimeError):
+                        LOGGER.warning(
+                            "temporary role knowledge capture failed; "
+                            "workspace_id=%s session_id=%s",
+                            workspace_id,
+                            session_id,
+                            exc_info=True,
+                        )
 
         hook_service = self._get_hook_service()
         if hook_service is None:
