@@ -290,6 +290,15 @@ async def test_renew_lease(
 
 
 @pytest.mark.asyncio
+async def test_renew_lease_task_not_found(
+    claim_service: ClaimService, task_repo: TaskRepository
+) -> None:
+    result = await claim_service.renew_lease_async("nonexistent", "token")
+    assert not result.success
+    assert result.error_code == "task_not_found"
+
+
+@pytest.mark.asyncio
 async def test_renew_lease_expired(
     claim_service: ClaimService, task_repo: TaskRepository
 ) -> None:

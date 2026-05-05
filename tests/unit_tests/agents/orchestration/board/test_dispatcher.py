@@ -130,6 +130,7 @@ class TestDispatcherPollTick:
                     if task.state == BoardTaskState.READY:
                         await dispatcher._create_internal_task_from_board(task)
             except (OSError, RuntimeError):
+                # Mirrors dispatcher resilience: ignore transient poll errors
                 pass
 
         await _run_one_poll()

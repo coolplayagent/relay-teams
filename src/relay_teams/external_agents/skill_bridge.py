@@ -94,7 +94,8 @@ class SkillBridgeService:
 
         return SkillBridgeManifest(skills=tuple(bridged), mode=mode)
 
-    def build_inline_reference(self, manifest: SkillBridgeManifest) -> str:
+    @staticmethod
+    def build_inline_reference(manifest: SkillBridgeManifest) -> str:
         """Generate a text block of skill references for injection into prompts."""
         if not manifest.skills:
             return ""
@@ -105,8 +106,8 @@ class SkillBridgeService:
                 lines.append(f"  Usage: {skill.usage_example}")
         return "\n".join(lines)
 
+    @staticmethod
     def populate_config_directory(
-        self,
         manifest: SkillBridgeManifest,
         target_dir: Path,
     ) -> None:

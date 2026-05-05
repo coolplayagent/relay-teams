@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+import urllib.request
 from datetime import datetime
-from typing import cast
 
 from pydantic import JsonValue
 
@@ -30,9 +31,9 @@ _LINEAR_STATE_MAP: dict[str, BoardTaskState] = {
 
 
 def _linear_issue_to_board(issue: dict[str, JsonValue]) -> BoardTask:
-    state_name = str(
-        cast("dict[str, JsonValue]", issue.get("state") or {}).get("name", "backlog")
-    ).lower()
+    state_raw = issue.get("state")
+    state_dict = state_raw if isinstance(state_raw, dict) else {}
+    state_name = str(state_dict.get("name", "backlog")).lower()
     board_state = _LINEAR_STATE_MAP.get(state_name, BoardTaskState.BACKLOG)
 
     assignee_info = issue.get("assignee")
@@ -65,7 +66,7 @@ def _linear_issue_to_board(issue: dict[str, JsonValue]) -> BoardTask:
         source_url=str(issue.get("url", "")),
         created_at=_parse_dt(issue.get("createdAt")),
         updated_at=_parse_dt(issue.get("updatedAt")),
-        raw_payload=cast("dict[str, JsonValue]", dict(issue)),
+        raw_payload=dict(issue),
     )
 
 
@@ -96,10 +97,6 @@ class LinearAdapter(TaskBoardAdapter):
         }
 
     async def list_tasks(self, *, board_id: str) -> tuple[BoardTask, ...]:
-        import json
-
-        import urllib.request
-
         query = """
         query($teamId: String!) {
             team(id: $teamId) {
@@ -127,10 +124,6 @@ class LinearAdapter(TaskBoardAdapter):
         return tuple(_linear_issue_to_board(n) for n in nodes if isinstance(n, dict))
 
     async def get_task(self, *, task_id: str) -> BoardTask:
-        import json
-
-        import urllib.request
-
         query = """
         query($id: String!) {
             issue(id: $id) {
@@ -166,10 +159,6 @@ class LinearAdapter(TaskBoardAdapter):
             }
         }
         """
-        import json
-
-        import urllib.request
-
         payload = json.dumps(
             {
                 "query": mutation,
@@ -183,10 +172,6 @@ class LinearAdapter(TaskBoardAdapter):
             pass
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
-        import json
-
-        import urllib.request
-
         mutation = """
         mutation($id: String!, $assignee: String!) {
             issueUpdate(id: $id, input: { assignee: { name: $assignee } }) {
@@ -207,10 +192,6 @@ class LinearAdapter(TaskBoardAdapter):
             pass
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
-        import json
-
-        import urllib.request
-
         mutation = """
         mutation($id: String!, $body: String!) {
             commentCreate(input: { issueId: $id, body: $body }) {

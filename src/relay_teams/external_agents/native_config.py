@@ -136,8 +136,8 @@ class NativeConfigGenerator:
             worktree_root=None,
         )
 
+    @staticmethod
     def _build_skill_reference_text(
-        self,
         manifest: SkillBridgeManifest | None,
     ) -> str:
         if manifest is None or not manifest.skills:

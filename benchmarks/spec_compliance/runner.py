@@ -36,7 +36,7 @@ class SpecComplianceRunner:
 
         # Aggregate check results by category
         category_results: dict[ComplianceCheckCategory, list[str]] = {
-            cat: [] for cat in ComplianceCheckCategory
+            cat: [] for cat in tuple(ComplianceCheckCategory)
         }
 
         for py_file in py_files:
@@ -46,10 +46,12 @@ class SpecComplianceRunner:
                 continue
             file_results: list[ComplianceCheckResult] = []
             for check_fn in FILE_CHECKS:
-                result = check_fn(py_file, content)
-                if not result.passed:
-                    file_results.append(result)
-                    category_results[result.category].extend(result.violations)
+                check_result = check_fn(py_file, content)
+                if not check_result.passed:
+                    file_results.append(check_result)
+                    category_results[check_result.category].extend(
+                        check_result.violations
+                    )
             if file_results:
                 violations_by_file[str(py_file)] = tuple(file_results)
 

@@ -1219,7 +1219,7 @@ class CoordinatorGraph(BaseModel):
                             "trace_id": trace_id,
                         },
                     )
-            except Exception:
+            except (OSError, ValueError, RuntimeError):
                 log_event(
                     LOGGER,
                     logging.WARNING,

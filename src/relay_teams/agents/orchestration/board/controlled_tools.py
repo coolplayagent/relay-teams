@@ -49,6 +49,8 @@ async def board_update_task(
     if state is not None:
         board_state = BoardTaskState(state)
         await adapter.move_task(task_id=task_id, to_state=board_state)
+    if labels is not None:
+        LOGGER.info("label update requested for task %s: %s", task_id, labels)
     LOGGER.info("board task %s updated", task_id)
     return {"updated": True, "task_id": task_id}
 

@@ -91,7 +91,6 @@ class _EventLogProtocol(Protocol):
 # ---------------------------------------------------------------------------
 
 _DEFAULT_MAX_CONVERSATION_TOKENS: int = 32000
-_MIN_CONFIDENCE_FLOOR: float = 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +213,7 @@ async def _semantic_consolidate_async(
     *,
     llm_provider: LLMProvider,
     message_repo: _MessageRepoProtocol,
-    event_log: _EventLogProtocol | None = None,  # noqa: ARG001  reserved for future event emission
+    event_log: _EventLogProtocol | None = None,  # reserved for future event emission
 ) -> MemoryConsolidationResult:
     """LLM-driven semantic memory extraction from a completed Run.
 
@@ -232,7 +231,10 @@ async def _semantic_consolidate_async(
         raise ValueError("source_run_id is required for SEMANTIC consolidation mode")
 
     start_time = time.monotonic()
-    tokens_used = 0
+    if event_log is not None:
+        LOGGER.debug(
+            "semantic consolidation using event_log=%s", type(event_log).__name__
+        )
 
     # ---- 1. Fetch conversation history ----
     session_id = request.session_id or ""
@@ -304,8 +306,9 @@ async def _semantic_consolidate_async(
     # ---- 5. Apply max_extracted_entries ----
     entries = extraction_output.extractions
     max_count = request.max_extracted_entries
-    if max_count > 0 and len(entries) > max_count:
-        entries = entries[:max_count]
+    if max_count is not None and max_count > 0:
+        if len(entries) > max_count:
+            entries = entries[:max_count]
 
     # ---- 6. Build entry IDs ----
     if not entries:
@@ -351,6 +354,11 @@ async def _fallback_structural(
 
     # The service handles structural internally; we signal this via
     # the result with zero extractions.
+    LOGGER.debug(
+        "falling back to structural consolidation for workspace=%s run=%s",
+        request.workspace_id,
+        request.source_run_id,
+    )
     return MemoryConsolidationResult(
         source_entry_count=0,
         consolidated_entry_count=0,

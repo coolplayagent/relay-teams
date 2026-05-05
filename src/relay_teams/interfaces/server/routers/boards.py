@@ -66,6 +66,7 @@ def list_boards() -> list[BoardSummaryResponse]:
 # GET /api/boards/{board_id}/tasks
 async def list_board_tasks(board_id: str) -> list[BoardTaskResponse]:
     """List tasks on a board."""
+    LOGGER.info("listing tasks for board %s", board_id)
     return []
 
 

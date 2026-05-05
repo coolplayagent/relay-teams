@@ -69,7 +69,8 @@ class SWEBenchRunner:
             total_duration_seconds=(run_end - run_start).total_seconds(),
         )
 
-    def _load_instances(self, config: SWEBenchConfig) -> list[dict[str, object]]:
+    @staticmethod
+    def _load_instances(config: SWEBenchConfig) -> list[dict[str, object]]:
         """Load SWE-bench instances from the dataset path.
 
         Supports JSONL format (one JSON object per line).
@@ -90,8 +91,8 @@ class SWEBenchRunner:
                 instances.append(json.loads(line))
         return instances
 
+    @staticmethod
     async def _run_instance(
-        self,
         instance: dict[str, object],
         config: SWEBenchConfig,
     ) -> SWEBenchInstanceResult:
@@ -102,7 +103,11 @@ class SWEBenchRunner:
         """
         instance_id = str(instance.get("instance_id", "unknown"))
         repo = str(instance.get("repo", ""))
-        logger.info("swebench running instance: %s", instance_id)
+        logger.info(
+            "swebench running instance: %s (parallel_workers=%s)",
+            instance_id,
+            config.parallel_workers,
+        )
 
         # Placeholder: actual execution would invoke relay-teams here
         return SWEBenchInstanceResult(

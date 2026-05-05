@@ -82,7 +82,12 @@ async def list_messages(
     role_id: str | None = None,
 ) -> list[A2aMessageResponse]:
     """Query published A2A messages for a run."""
-    LOGGER.info("A2A messages listed for run %s", run_id)
+    LOGGER.info(
+        "A2A messages listed for run %s topic=%s role=%s",
+        run_id,
+        topic,
+        role_id,
+    )
     return []
 
 

@@ -36,7 +36,7 @@ async def enqueue_dependency_wakeups(
 
     try:
         all_records = await task_repo.list_by_trace_async(trace_id)
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         log_event(
             LOGGER,
             logging.WARNING,
@@ -86,7 +86,7 @@ async def enqueue_dependency_wakeups(
                         "completed_task_id": completed_task_id,
                     },
                 )
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -118,7 +118,7 @@ async def enqueue_blocker_resolved_wakeups(
 
     try:
         all_records = await task_repo.list_by_trace_async(trace_id)
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         log_event(
             LOGGER,
             logging.WARNING,
@@ -177,7 +177,7 @@ async def enqueue_blocker_resolved_wakeups(
                         "completed_task_id": completed_task_id,
                     },
                 )
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -263,7 +263,7 @@ async def enqueue_approval_wakeups(
                 payload={"task_id": task_id, "gate_id": gate_id},
             )
             return 1
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         log_event(
             LOGGER,
             logging.WARNING,

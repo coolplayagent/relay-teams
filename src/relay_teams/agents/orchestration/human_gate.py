@@ -72,7 +72,7 @@ class GateManager:
         for cb in self._on_gate_resolved:
             try:
                 cb(run_id, task_id, action, feedback)
-            except Exception:
+            except (OSError, ValueError, RuntimeError):
                 pass  # best-effort — do not corrupt gate resolution
 
     def wait_for_gate(

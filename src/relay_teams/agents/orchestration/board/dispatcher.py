@@ -83,6 +83,7 @@ class BoardEventDispatcher:
             try:
                 await t
             except asyncio.CancelledError:
+                # Expected during shutdown when tasks are cancelled
                 pass
         self._tasks.clear()
 
@@ -113,7 +114,8 @@ class BoardEventDispatcher:
             except (OSError, RuntimeError) as exc:
                 LOGGER.warning("poll tick failed: %s", exc)
 
-    async def _create_internal_task_from_board(self, board_task: object) -> None:
+    @staticmethod
+    async def _create_internal_task_from_board(board_task: object) -> None:
         """Create a relay-teams internal task from an external board task."""
         from relay_teams.agents.orchestration.board.adapter import BoardTask
 

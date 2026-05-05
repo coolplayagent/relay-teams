@@ -507,8 +507,8 @@ class ExternalAcpSessionManager:
 
         return native_spec, prompt
 
+    @staticmethod
     def _resolve_instruction_resolver(
-        self,
         *,
         workspace_path: Path,
     ):
@@ -517,6 +517,7 @@ class ExternalAcpSessionManager:
             PromptInstructionResolver,
         )
 
+        _ = workspace_path  # reserved for scoped resolver construction
         return PromptInstructionResolver()
 
     async def _prompt_until_output(

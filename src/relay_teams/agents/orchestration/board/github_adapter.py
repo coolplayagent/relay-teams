@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+import urllib.request
 from datetime import datetime
-from typing import cast
 
 from pydantic import JsonValue
 
@@ -29,7 +30,7 @@ def _github_issue_to_board(issue: dict[str, JsonValue]) -> BoardTask:
     labels: tuple[str, ...] = ()
     if isinstance(labels_raw, (list, tuple)):
         labels = tuple(
-            str(cast("dict[str, JsonValue]", lbl).get("name", str(lbl)))
+            str(lbl.get("name", str(lbl)))
             for lbl in labels_raw
             if isinstance(lbl, dict)
         )
@@ -44,23 +45,22 @@ def _github_issue_to_board(issue: dict[str, JsonValue]) -> BoardTask:
                 return None
         return None
 
+    assignee_raw = issue.get("assignee")
+    assignee: str | None = None
+    if isinstance(assignee_raw, dict):
+        assignee = str(assignee_raw.get("login", ""))
+
     return BoardTask(
         board_task_id=str(issue.get("number", "")),
         title=str(issue.get("title", "")),
         description=str(issue.get("body", "") or ""),
         state=board_state,
-        assignee=(
-            str(
-                cast("dict[str, JsonValue]", issue.get("assignee", {})).get("login", "")
-            )
-            if isinstance(issue.get("assignee"), dict)
-            else None
-        ),
+        assignee=assignee,
         labels=labels,
         source_url=str(issue.get("html_url", "")),
         created_at=_parse_dt(created_raw),
         updated_at=_parse_dt(updated_raw),
-        raw_payload=cast("dict[str, JsonValue]", dict(issue)),
+        raw_payload=dict(issue),
     )
 
 
@@ -104,10 +104,6 @@ class GitHubAdapter(TaskBoardAdapter):
         }
 
     async def list_tasks(self, *, board_id: str) -> tuple[BoardTask, ...]:
-        import json
-
-        import urllib.request
-
         url = f"{self._base_url}/repos/{self._repo}/issues"
         req = urllib.request.Request(url, headers=self._headers)
         try:
@@ -125,10 +121,6 @@ class GitHubAdapter(TaskBoardAdapter):
         )
 
     async def get_task(self, *, task_id: str) -> BoardTask:
-        import json
-
-        import urllib.request
-
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
         req = urllib.request.Request(url, headers=self._headers)
         with urllib.request.urlopen(req) as resp:
@@ -136,10 +128,6 @@ class GitHubAdapter(TaskBoardAdapter):
         return _github_issue_to_board(data)
 
     async def move_task(self, *, task_id: str, to_state: BoardTaskState) -> None:
-        import json
-
-        import urllib.request
-
         github_state = _board_state_to_github(to_state)
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
         payload = json.dumps({"state": github_state}).encode()
@@ -153,10 +141,6 @@ class GitHubAdapter(TaskBoardAdapter):
             pass
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
-        import json
-
-        import urllib.request
-
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}/assignees"
         payload = json.dumps({"assignees": [assignee]}).encode()
         req = urllib.request.Request(
@@ -169,10 +153,6 @@ class GitHubAdapter(TaskBoardAdapter):
             pass
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
-        import json
-
-        import urllib.request
-
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}/comments"
         payload = json.dumps({"body": body}).encode()
         req = urllib.request.Request(
