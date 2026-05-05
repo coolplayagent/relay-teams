@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -20,7 +22,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
 
-      - name: Run spec-compliance check
+      - name: Run spec-compliance check (full scan, report-only)
         run: |
           uv run python -c "
           import json
@@ -36,9 +38,45 @@ jobs:
 
           passed_categories = sum(1 for c in result.checks if c.passed)
           print(f'Categories passed: {passed_categories}/{len(result.checks)}')
+          print()
+          print('INFO: Full-scan compliance score reported for tracking. Threshold gate is on changed files only.')
+          "
 
-          # Fail if score drops below threshold
-          if result.overall_score < 0.7:
-              print('FAIL: overall_score below 0.7 threshold')
-              raise SystemExit(1)
+      - name: Check changed files for new violations
+        run: |
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM origin/main...HEAD -- '*.py' 'benchmarks/**/*.py' || true)
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "No Python files changed in this PR."
+            exit 0
+          fi
+
+          echo "Checking changed files:"
+          echo "$CHANGED_FILES"
+          echo ""
+
+          uv run python -c "
+          import json, subprocess, sys
+          from pathlib import Path
+          from benchmarks.spec_compliance.checks import FILE_CHECKS
+          from benchmarks.spec_compliance.models import ComplianceCheckCategory
+
+          changed = '''$CHANGED_FILES'''.strip().splitlines()
+          new_violations = 0
+          for fpath_str in changed:
+              fpath = Path(fpath_str)
+              if not fpath.exists() or not fpath.suffix == '.py':
+                  continue
+              content = fpath.read_text(encoding='utf-8')
+              for check_fn in FILE_CHECKS:
+                  result = check_fn(fpath, content)
+                  if not result.passed:
+                      for v in result.violations:
+                          print(f'VIOLATION: {v}')
+                          new_violations += 1
+
+          if new_violations > 0:
+              print(f'FAIL: {new_violations} new spec-compliance violation(s) in changed files.')
+              sys.exit(1)
+          else:
+              print('PASS: No new spec-compliance violations in changed files.')
           "

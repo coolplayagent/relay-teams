@@ -24,6 +24,7 @@ jobs:
 
       - name: Run micro-benchmarks
         run: |
+          mkdir -p tmp
           uv run pytest benchmarks/micro/ \
             --benchmark-only \
             --benchmark-json=tmp/bench-micro-results.json \
