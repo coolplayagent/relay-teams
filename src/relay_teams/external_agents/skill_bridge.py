@@ -35,6 +35,7 @@ class SkillBridgeManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     skills: tuple[BridgedSkill, ...] = ()
+    mode: str = "inline"
 
 
 class SkillBridgeService:
@@ -91,7 +92,7 @@ class SkillBridgeService:
                 )
             )
 
-        return SkillBridgeManifest(skills=tuple(bridged))
+        return SkillBridgeManifest(skills=tuple(bridged), mode=mode)
 
     def build_inline_reference(self, manifest: SkillBridgeManifest) -> str:
         """Generate a text block of skill references for injection into prompts."""

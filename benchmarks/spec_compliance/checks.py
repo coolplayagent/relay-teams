@@ -17,17 +17,20 @@ from benchmarks.spec_compliance.models import (
 # Emoji detection regex: matches most common emoji codepoints
 # Note: range U+24C2-U+1F251 is split to exclude box-drawing chars (U+2500-U+257F)
 _EMOJI_RE = re.compile(
-    "[\U0001f600-\U0001f64f"  # emoticons
+    "["
+    "\U0001f600-\U0001f64f"  # emoticons
     "\U0001f300-\U0001f5ff"  # symbols & pictographs
     "\U0001f680-\U0001f6ff"  # transport & map
     "\U0001f1e0-\U0001f1ff"  # flags
     "\U00002702-\U000027b0"
-    "\U000024c2-\U000024ff"  # enclosed alphanumerics (stops before box-drawing U+2500)
-    "\U00002580-\U0001f251"  # block elements onward (skips box-drawing U+2500-U+257F)
+    "\U000024c2-\U000024ff"  # enclosed alphanumerics
     "\U0001f900-\U0001f9ff"  # supplemental symbols
     "\U0001fa00-\U0001fa6f"
     "\U0001fa70-\U0001faff"
-    "\U00002600-\U000026ff"
+    "\U00002600-\U000026ff"  # misc symbols
+    "\u2705"  # check mark button
+    "\u2b50"  # star
+    "\u274c"  # cross mark
     "]",
 )
 

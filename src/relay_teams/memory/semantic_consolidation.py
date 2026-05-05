@@ -214,7 +214,7 @@ async def _semantic_consolidate_async(
     *,
     llm_provider: LLMProvider,
     message_repo: _MessageRepoProtocol,
-    event_log: _EventLogProtocol | None = None,
+    event_log: _EventLogProtocol | None = None,  # noqa: ARG001  reserved for future event emission
 ) -> MemoryConsolidationResult:
     """LLM-driven semantic memory extraction from a completed Run.
 
@@ -289,7 +289,6 @@ async def _semantic_consolidate_async(
     ) + _estimate_tokens(raw_response)
 
     # ---- 4. Parse JSON response ----
-    extraction_output: SemanticExtractionOutput | None = None
     try:
         # Strip markdown code fences if present
         clean = _strip_json_code_fences(raw_response)
