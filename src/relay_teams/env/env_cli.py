@@ -290,7 +290,7 @@ def _request_json(
     )
 
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310 - HTTPS URL with user-controlled config
             raw = response.read().decode("utf-8")
             if not raw:
                 return {}

@@ -205,3 +205,29 @@ def test_env_probe_web_supports_json_output(monkeypatch) -> None:
     payload = json.loads(result.output)
     assert payload["ok"] is True
     assert payload["used_method"] == "HEAD"
+
+
+def test_request_json_returns_parsed_dict(monkeypatch) -> None:
+    from unittest.mock import MagicMock, patch
+
+    with patch("relay_teams.env.env_cli.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"status": "ok"}).encode()
+        mock_resp.__enter__ = lambda s: mock_resp
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        result = env_cli._request_json("https://localhost:8080", "GET", "/api/health")
+        assert result == {"status": "ok"}
+
+
+def test_request_json_returns_empty_on_empty_body(monkeypatch) -> None:
+    from unittest.mock import MagicMock, patch
+
+    with patch("relay_teams.env.env_cli.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b""
+        mock_resp.__enter__ = lambda s: mock_resp
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        result = env_cli._request_json("https://localhost:8080", "GET", "/api/health")
+        assert result == {}

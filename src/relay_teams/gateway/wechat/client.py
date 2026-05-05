@@ -607,7 +607,7 @@ class WeChatClient:
     def _encrypt_aes_ecb(plaintext: bytes, key: bytes) -> bytes:
         padder = padding.PKCS7(128).padder()
         padded = padder.update(plaintext) + padder.finalize()
-        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        cipher = Cipher(algorithms.AES(key), modes.ECB())  # nosec B305 - WeChat API mandates ECB mode
         encryptor = cipher.encryptor()
         return encryptor.update(padded) + encryptor.finalize()
 

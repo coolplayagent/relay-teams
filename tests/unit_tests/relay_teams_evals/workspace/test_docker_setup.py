@@ -232,3 +232,37 @@ def test_ensure_instance_image_fails_when_built_image_is_still_missing(
     assert exc.build_error_summary is not None
     assert "pkg_resources" in exc.build_error_summary
     assert "failed to build" in str(exc)
+
+
+def test_wait_for_server_succeeds(monkeypatch) -> None:
+    from unittest.mock import MagicMock, patch
+
+    from relay_teams_evals.workspace.docker_setup import _wait_for_server
+
+    with patch(
+        "relay_teams_evals.workspace.docker_setup.urllib.request.urlopen"
+    ) as mock_urlopen:
+        mock_urlopen.return_value = MagicMock()
+        _wait_for_server("http://localhost:8080", timeout=5.0)
+        mock_urlopen.assert_called_once()
+
+
+def test_wait_for_server_raises_timeout(monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from relay_teams_evals.workspace.docker_setup import _wait_for_server
+
+    with patch(
+        "relay_teams_evals.workspace.docker_setup.urllib.request.urlopen"
+    ) as mock_urlopen:
+        monkeypatch.setattr(
+            "relay_teams_evals.workspace.docker_setup.time.monotonic",
+            lambda: 0.0,
+        )
+        mock_urlopen.side_effect = Exception("not ready")
+        monkeypatch.setattr(
+            "relay_teams_evals.workspace.docker_setup.time.sleep",
+            lambda _: None,
+        )
+        with pytest.raises(TimeoutError, match="not ready"):
+            _wait_for_server("http://localhost:8080", timeout=0.0)

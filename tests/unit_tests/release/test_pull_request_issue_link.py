@@ -91,3 +91,40 @@ def test_ensure_pull_request_links_issue_rejects_missing_link() -> None:
             api_url="https://api.github.com",
             linked_issue_count_fetcher=lambda **_: 0,
         )
+
+
+def test_fetch_linked_issue_count_returns_count() -> None:
+    from unittest.mock import MagicMock, patch
+
+    from relay_teams.release.pull_request_issue_link import (
+        PullRequestIssueLinkContext,
+        fetch_linked_issue_count,
+    )
+
+    context = PullRequestIssueLinkContext(
+        owner="openai",
+        repository_name="agent-teams",
+        pull_request_number=42,
+        base_ref="main",
+    )
+
+    with patch("relay_teams.release.pull_request_issue_link.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {"closingIssuesReferences": {"totalCount": 3}}
+                    }
+                }
+            }
+        ).encode()
+        mock_resp.__enter__ = lambda s: mock_resp
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        count = fetch_linked_issue_count(
+            context=context,
+            token="ghp_secret",
+            graphql_url="https://api.github.com/graphql",
+        )
+        assert count == 3

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
-import urllib.request
 from datetime import datetime
 
+import httpx
 from pydantic import JsonValue
 
 from relay_teams.agents.orchestration.board.adapter import (
@@ -13,6 +13,7 @@ from relay_teams.agents.orchestration.board.adapter import (
     TaskBoardAdapter,
 )
 from relay_teams.logger import get_logger
+from relay_teams.net.clients import create_runtime_sync_http_client
 
 LOGGER = get_logger(__name__)
 
@@ -95,6 +96,7 @@ class GitHubAdapter(TaskBoardAdapter):
         self._repo = github_repo
         self._token = github_token
         self._base_url = "https://api.github.com"
+        self._client = create_runtime_sync_http_client()
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -105,11 +107,10 @@ class GitHubAdapter(TaskBoardAdapter):
 
     async def list_tasks(self, *, board_id: str) -> tuple[BoardTask, ...]:
         url = f"{self._base_url}/repos/{self._repo}/issues"
-        req = urllib.request.Request(url, headers=self._headers)
         try:
-            with urllib.request.urlopen(req) as resp:
-                data = json.loads(resp.read())
-        except (OSError, ValueError) as exc:
+            resp = self._client.request("GET", url, headers=self._headers)
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
             LOGGER.warning("failed to list GitHub issues: %s", exc)
             return ()
         if not isinstance(data, list):
@@ -122,47 +123,40 @@ class GitHubAdapter(TaskBoardAdapter):
 
     async def get_task(self, *, task_id: str) -> BoardTask:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
-        req = urllib.request.Request(url, headers=self._headers)
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read())
+        resp = self._client.request("GET", url, headers=self._headers)
+        data = resp.json()
         return _github_issue_to_board(data)
 
     async def move_task(self, *, task_id: str, to_state: BoardTaskState) -> None:
         github_state = _board_state_to_github(to_state)
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
         payload = json.dumps({"state": github_state}).encode()
-        req = urllib.request.Request(
+        self._client.request(
+            "PATCH",
             url,
-            data=payload,
+            content=payload,
             headers={**self._headers, "Content-Type": "application/json"},
-            method="PATCH",
         )
-        with urllib.request.urlopen(req):
-            pass
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}/assignees"
         payload = json.dumps({"assignees": [assignee]}).encode()
-        req = urllib.request.Request(
+        self._client.request(
+            "POST",
             url,
-            data=payload,
+            content=payload,
             headers={**self._headers, "Content-Type": "application/json"},
-            method="POST",
         )
-        with urllib.request.urlopen(req):
-            pass
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}/comments"
         payload = json.dumps({"body": body}).encode()
-        req = urllib.request.Request(
+        self._client.request(
+            "POST",
             url,
-            data=payload,
+            content=payload,
             headers={**self._headers, "Content-Type": "application/json"},
-            method="POST",
         )
-        with urllib.request.urlopen(req):
-            pass
 
     async def add_artifact(self, *, task_id: str, name: str, url: str) -> None:
         body = f"**{name}**: {url}"

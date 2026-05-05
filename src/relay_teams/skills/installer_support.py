@@ -602,7 +602,7 @@ def _request_bytes(url: str) -> bytes:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:  # nosec B310 - HTTPS URL with user-controlled config
             return response.read()
     except HTTPError as exc:
         raise _RequestHttpError(

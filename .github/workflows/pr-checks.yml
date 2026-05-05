@@ -65,7 +65,7 @@ jobs:
         run: >
           uv run --extra dev bandit -r src
           --configfile pyproject.toml
-          --severity-level high
+          --severity-level medium
           --confidence-level medium
 
       - name: Radon complexity gate

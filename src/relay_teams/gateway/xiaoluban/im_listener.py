@@ -18,7 +18,7 @@ from relay_teams.logger import get_logger, log_event
 
 LOGGER = get_logger(__name__)
 
-DEFAULT_XIAOLUBAN_IM_LISTENER_HOST = "0.0.0.0"
+DEFAULT_XIAOLUBAN_IM_LISTENER_HOST = "0.0.0.0"  # nosec B104 - intentional bind to all interfaces for server
 DEFAULT_XIAOLUBAN_IM_LISTENER_PORT = 9009
 XIAOLUBAN_IM_LISTENER_HOST_ENV = "RELAY_TEAMS_XIAOLUBAN_IM_LISTENER_HOST"
 XIAOLUBAN_IM_LISTENER_PORT_ENV = "RELAY_TEAMS_XIAOLUBAN_IM_LISTENER_PORT"
@@ -309,7 +309,7 @@ def _can_bind(host: str, port: int) -> bool:
 
 def _is_local_or_unspecified_hostname(hostname: str) -> bool:
     normalized = hostname.strip().lower()
-    if normalized in {"localhost", "testserver", "0.0.0.0", "::", ""}:
+    if normalized in {"localhost", "testserver", "0.0.0.0", "::", ""}:  # nosec B104 - intentional bind to all interfaces for server
         return True
     try:
         address = ipaddress.ip_address(normalized)
@@ -342,7 +342,7 @@ def _format_host_for_url(host: str) -> str:
 
 def _is_unspecified_address(hostname: str) -> bool:
     normalized = hostname.strip().lower()
-    if normalized in {"0.0.0.0", "::", ""}:
+    if normalized in {"0.0.0.0", "::", ""}:  # nosec B104 - intentional bind to all interfaces for server
         return True
     try:
         address = ipaddress.ip_address(normalized)

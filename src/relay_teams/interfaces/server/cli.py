@@ -59,7 +59,7 @@ def get_server_process_file_path(project_root: Path | None = None) -> Path:
 
 
 def _health_check_host(host: str) -> str:
-    if host == "0.0.0.0":
+    if host == "0.0.0.0":  # nosec B104 - intentional bind to all interfaces for server
         return "127.0.0.1"
     if host == "::":
         return "::1"

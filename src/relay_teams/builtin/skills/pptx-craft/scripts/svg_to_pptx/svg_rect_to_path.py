@@ -18,16 +18,17 @@ Output:
     - Directory mode: outputs to svg_rounded/ subdirectory
     - File mode: outputs to <filename>_rounded.svg
 """
+from __future__ import annotations
 
 import sys
 import re
 import argparse
 from pathlib import Path
-from typing import Tuple, Dict, List
+from typing import Tuple, List
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).parent))
-from constants import DIR_ALIAS_MAP
+from constants import DIR_ALIAS_MAP  # noqa: E402
 
 
 def rect_to_rounded_path(x: float, y: float, width: float, height: float, 
@@ -97,7 +98,7 @@ def process_svg(content: str, verbose: bool = False) -> Tuple[str, int]:
     ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
     
     try:
-        root = ET.fromstring(content)
+        root = ET.fromstring(content)  # nosec B314 - parsing trusted SVG content only
     except ET.ParseError as e:
         if verbose:
             print(f"    XML parse error: {e}")
@@ -274,7 +275,7 @@ What it does:
             if not quiet:
                 print(f"[DONE] Saved: {output_path}")
         else:
-            print(f"[FAIL] Processing failed")
+            print("[FAIL] Processing failed")
             sys.exit(1)
     
     else:

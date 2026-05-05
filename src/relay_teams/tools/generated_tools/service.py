@@ -1643,7 +1643,7 @@ def _execute_generated_code_sync(
 ) -> JsonValue:
     _validate_generated_code(code)
     globals_map = _build_generated_code_globals()
-    exec(compile(code, "<generated_tool>", "exec"), globals_map, globals_map)
+    exec(compile(code, "<generated_tool>", "exec"), globals_map, globals_map)  # nosec B102 - intentional dynamic code execution for tool harness
     run_callable = globals_map.get("run")
     if not callable(run_callable):
         raise ValueError("Generated tool code did not define callable run")
