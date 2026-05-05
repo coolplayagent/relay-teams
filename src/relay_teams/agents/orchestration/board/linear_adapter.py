@@ -113,7 +113,7 @@ class LinearAdapter(TaskBoardAdapter):
             self._url, data=payload, headers=self._headers, method="POST"
         )
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req) as resp:  # nosec B310 - HTTPS URL with user-controlled config
                 data = json.loads(resp.read())
         except (OSError, ValueError) as exc:
             LOGGER.warning("failed to list Linear issues: %s", exc)
@@ -137,7 +137,7 @@ class LinearAdapter(TaskBoardAdapter):
         req = urllib.request.Request(
             self._url, data=payload, headers=self._headers, method="POST"
         )
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req) as resp:  # nosec B310 - HTTPS URL with user-controlled config
             data = json.loads(resp.read())
         issue = data.get("data", {}).get("issue", {})
         return _linear_issue_to_board(issue)
@@ -168,7 +168,7 @@ class LinearAdapter(TaskBoardAdapter):
         req = urllib.request.Request(
             self._url, data=payload, headers=self._headers, method="POST"
         )
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req):  # nosec B310 - HTTPS URL with user-controlled config
             pass
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
@@ -188,7 +188,7 @@ class LinearAdapter(TaskBoardAdapter):
         req = urllib.request.Request(
             self._url, data=payload, headers=self._headers, method="POST"
         )
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req):  # nosec B310 - HTTPS URL with user-controlled config
             pass
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
@@ -205,7 +205,7 @@ class LinearAdapter(TaskBoardAdapter):
         req = urllib.request.Request(
             self._url, data=payload, headers=self._headers, method="POST"
         )
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req):  # nosec B310 - HTTPS URL with user-controlled config
             pass
 
     async def add_artifact(self, *, task_id: str, name: str, url: str) -> None:

@@ -97,7 +97,7 @@ def process_svg(content: str, verbose: bool = False) -> Tuple[str, int]:
     ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
     
     try:
-        root = ET.fromstring(content)
+        root = ET.fromstring(content)  # nosec B314 - parsing trusted SVG content only
     except ET.ParseError as e:
         if verbose:
             print(f"    XML parse error: {e}")

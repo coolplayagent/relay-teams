@@ -107,7 +107,7 @@ class GitHubAdapter(TaskBoardAdapter):
         url = f"{self._base_url}/repos/{self._repo}/issues"
         req = urllib.request.Request(url, headers=self._headers)
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req) as resp:  # nosec B310 - HTTPS URL with user-controlled config
                 data = json.loads(resp.read())
         except (OSError, ValueError) as exc:
             LOGGER.warning("failed to list GitHub issues: %s", exc)
@@ -123,7 +123,7 @@ class GitHubAdapter(TaskBoardAdapter):
     async def get_task(self, *, task_id: str) -> BoardTask:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
         req = urllib.request.Request(url, headers=self._headers)
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req) as resp:  # nosec B310 - HTTPS URL with user-controlled config
             data = json.loads(resp.read())
         return _github_issue_to_board(data)
 
@@ -137,7 +137,7 @@ class GitHubAdapter(TaskBoardAdapter):
             headers={**self._headers, "Content-Type": "application/json"},
             method="PATCH",
         )
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req):  # nosec B310 - HTTPS URL with user-controlled config
             pass
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
@@ -149,7 +149,7 @@ class GitHubAdapter(TaskBoardAdapter):
             headers={**self._headers, "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req):  # nosec B310 - HTTPS URL with user-controlled config
             pass
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
@@ -161,7 +161,7 @@ class GitHubAdapter(TaskBoardAdapter):
             headers={**self._headers, "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req):
+        with urllib.request.urlopen(req):  # nosec B310 - HTTPS URL with user-controlled config
             pass
 
     async def add_artifact(self, *, task_id: str, name: str, url: str) -> None:

@@ -162,7 +162,7 @@ async def _download_gh(target: Path) -> None:
         _extract_zip(content, target)
 
     if os.name != "nt":
-        os.chmod(target, 0o755)
+        os.chmod(target, 0o755)  # nosec B103 - executable permission needed for downloaded binary
 
 
 def _extract_tarball(content: bytes, target: Path) -> None:

@@ -2058,7 +2058,7 @@ def convert_svg_to_slide_shapes(
         - media_files: Dict of {filename: bytes} for media to write
         - rel_entries: List of relationship entries to add
     """
-    tree = ET.parse(str(svg_path))
+    tree = ET.parse(str(svg_path))  # nosec B314 - parsing trusted SVG content only
     root = tree.getroot()
 
     # Collect defs

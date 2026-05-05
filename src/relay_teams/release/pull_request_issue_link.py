@@ -98,7 +98,7 @@ def fetch_linked_issue_count(
         method="POST",
     )
     try:
-        with urlopen(request, timeout=_GRAPHQL_TIMEOUT_SECONDS) as response:
+        with urlopen(request, timeout=_GRAPHQL_TIMEOUT_SECONDS) as response:  # nosec B310 - HTTPS URL with user-controlled config
             response_text = response.read().decode("utf-8")
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace").strip()

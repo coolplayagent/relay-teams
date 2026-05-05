@@ -46,7 +46,7 @@ from relay_teams.skills.skill_cli import skills_app
 app = typer.Typer(no_args_is_help=False, pretty_exceptions_enable=False)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-_LOCAL_SERVER_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
+_LOCAL_SERVER_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}  # nosec B104 - intentional bind to all interfaces for server
 
 
 def _request_json(

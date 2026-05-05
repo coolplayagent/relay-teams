@@ -74,7 +74,7 @@ def test_pr_checks_gate_changed_line_unit_coverage() -> None:
     assert "ruff check --no-cache --force-exclude ." in pr_workflow
     assert "ruff format --check --no-cache --force-exclude ." in pr_workflow
     assert "bandit -r src" in pr_workflow
-    assert "--severity-level high" in pr_workflow
+    assert "--severity-level medium" in pr_workflow
     assert "xenon" in pr_workflow
     assert "--max-modules C" in pr_workflow
     assert "--cov=src/relay_teams" in pr_workflow

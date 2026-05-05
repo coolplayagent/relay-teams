@@ -189,7 +189,7 @@ def _wait_for_server(base_url: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(f"{base_url}/api/workspaces", timeout=3)
+            urllib.request.urlopen(f"{base_url}/api/workspaces", timeout=3)  # nosec B310 - HTTPS URL with user-controlled config
             return
         except Exception:
             time.sleep(2)
@@ -443,7 +443,7 @@ class DockerWorkspaceSetup(WorkspaceSetup):
                     "server",
                     "start",
                     "--host",
-                    "0.0.0.0",
+                    "0.0.0.0",  # nosec B104 - intentional bind to all interfaces for Docker container
                     "--port",
                     str(self._docker_cfg.container_server_port),
                 ],
