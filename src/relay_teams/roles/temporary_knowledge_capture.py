@@ -100,8 +100,8 @@ class TemporaryRoleKnowledgeCaptureService:
 
         return capture
 
+    @staticmethod
     async def capture_all_for_session(
-        self,
         *,
         _session_id: str,
         _workspace_id: str,
