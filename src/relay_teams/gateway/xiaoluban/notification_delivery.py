@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Protocol, Tuple
+from typing import Protocol
 
 from relay_teams.gateway.xiaoluban.models import (
     XiaolubanAccountRecord,
@@ -20,7 +20,7 @@ class SessionLookup(Protocol):
 
 
 class XiaolubanAccountLookup(Protocol):
-    def list_accounts(self) -> Tuple[XiaolubanAccountRecord, ...]: ...
+    def list_accounts(self) -> tuple[XiaolubanAccountRecord, ...]: ...
 
     def has_usable_credentials(self, account_id: str) -> bool: ...
 
@@ -32,13 +32,13 @@ class XiaolubanAccountLookup(Protocol):
         session_id: str,
         status: str,
         body: str,
-        receiver_uid: Optional[str] = None,
+        receiver_uid: str | None = None,
     ) -> str: ...
 
 
 class XiaolubanTerminalNotificationSuppressor(Protocol):
     def should_suppress_xiaoluban_terminal_notification(
-        self, run_id: Optional[str]
+        self, run_id: str | None
     ) -> bool: ...
 
 
@@ -52,7 +52,7 @@ class CompositeXiaolubanTerminalNotificationSuppressor:
         )
 
     def should_suppress_xiaoluban_terminal_notification(
-        self, run_id: Optional[str]
+        self, run_id: str | None
     ) -> bool:
         return any(
             suppressor.should_suppress_xiaoluban_terminal_notification(run_id)
@@ -66,9 +66,8 @@ class XiaolubanNotificationDispatcher:
         *,
         session_repo: SessionLookup,
         account_lookup: XiaolubanAccountLookup,
-        terminal_notification_suppressor: Optional[
-            XiaolubanTerminalNotificationSuppressor
-        ] = None,
+        terminal_notification_suppressor: XiaolubanTerminalNotificationSuppressor
+        | None = None,
     ) -> None:
         self._session_repo = session_repo
         self._account_lookup = account_lookup

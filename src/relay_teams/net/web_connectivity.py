@@ -5,7 +5,6 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from enum import StrEnum
 from time import perf_counter
-from typing import Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -31,10 +30,10 @@ class WebConnectivityProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: str = Field(min_length=1)
-    timeout_ms: Optional[int] = Field(
-        default=None, ge=1000, le=_MAX_WEB_PROBE_TIMEOUT_MS
-    )
-    proxy_override: Optional[ProxyEnvInput] = None
+    timeout_ms: (
+        int
+    ) | None = Field(default=None, ge=1000, le=_MAX_WEB_PROBE_TIMEOUT_MS)
+    proxy_override: ProxyEnvInput | None = None
 
 
 class WebConnectivityProbeDiagnostics(BaseModel):
@@ -51,14 +50,14 @@ class WebConnectivityProbeResult(BaseModel):
     ok: bool
     url: str = Field(min_length=1)
     final_url: str = Field(min_length=1)
-    status_code: Optional[int] = Field(default=None, ge=100, le=599)
+    status_code: int | None = Field(default=None, ge=100, le=599)
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     used_method: WebProbeMethod
     diagnostics: WebConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class WebConnectivityProbeService:

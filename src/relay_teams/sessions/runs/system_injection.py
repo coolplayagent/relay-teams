@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -27,7 +26,7 @@ class SystemInjectionSink:
         *,
         injection_manager: RunInjectionManager,
         run_event_hub: RunEventHub,
-        message_repo: Optional[MessageRepository] = None,
+        message_repo: MessageRepository | None = None,
     ) -> None:
         self._injection_manager = injection_manager
         self._run_event_hub = run_event_hub
@@ -39,7 +38,7 @@ class SystemInjectionSink:
         session_id: str,
         run_id: str,
         trace_id: str,
-        task_id: Optional[str],
+        task_id: str | None,
         instance_id: str,
         role_id: str,
         content: str,
@@ -71,7 +70,7 @@ class SystemInjectionSink:
         session_id: str,
         run_id: str,
         trace_id: str,
-        task_id: Optional[str],
+        task_id: str | None,
         instance_id: str,
         role_id: str,
         content: str,
@@ -289,7 +288,7 @@ class SystemInjectionSink:
         session_id: str,
         run_id: str,
         trace_id: str,
-        task_id: Optional[str],
+        task_id: str | None,
         instance_id: str,
         role_id: str,
         content: str,
@@ -298,7 +297,7 @@ class SystemInjectionSink:
         internal_kind: str,
         internal_delivery_mode: str,
         internal_issue_key: str,
-    ) -> Optional[InjectionMessage]:
+    ) -> InjectionMessage | None:
         if not self._injection_manager.is_active(run_id):
             return None
         try:
@@ -334,7 +333,7 @@ class SystemInjectionSink:
         session_id: str,
         run_id: str,
         trace_id: str,
-        task_id: Optional[str],
+        task_id: str | None,
         instance_id: str,
         role_id: str,
         content: str,
@@ -343,7 +342,7 @@ class SystemInjectionSink:
         internal_kind: str,
         internal_delivery_mode: str,
         internal_issue_key: str,
-    ) -> Optional[InjectionMessage]:
+    ) -> InjectionMessage | None:
         if not self._injection_manager.is_active(run_id):
             return None
         try:

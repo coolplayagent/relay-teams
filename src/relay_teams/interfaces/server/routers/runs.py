@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Annotated, ClassVar, Literal, Optional, cast
+from typing import Annotated, ClassVar, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -172,12 +172,12 @@ class CreateRunRequest(BaseModel):
     yolo: bool = False
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
-    skills: Optional[tuple[str, ...]] = None
+    skills: tuple[str, ...] | None = None
     orchestration_policy: OrchestrationPolicy | None = None
 
     @field_validator("skills", mode="before")
     @classmethod
-    def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
+    def _normalize_skills(cls, value: object) -> tuple[str, ...] | None:
         return normalize_identifier_tuple(value, field_name="skills")
 
 

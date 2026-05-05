@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -69,7 +68,7 @@ class CommandCatalogWorkspace(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: str
-    root_path: Optional[Path] = None
+    root_path: Path | None = None
     can_create_commands: bool = False
     commands: tuple[CommandDetail, ...] = ()
 
@@ -85,8 +84,8 @@ class CommandCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scope: CommandCreateScope
-    workspace_id: Optional[str] = Field(default=None, min_length=1)
-    source: Optional[CommandCreateSource] = None
+    workspace_id: str | None = Field(default=None, min_length=1)
+    source: CommandCreateSource | None = None
     relative_path: str = Field(min_length=1)
     name: str = Field(min_length=1)
     aliases: tuple[str, ...] = ()
@@ -100,7 +99,7 @@ class CommandCreateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     command: CommandDetail
-    workspace_id: Optional[str] = None
+    workspace_id: str | None = None
 
 
 class CommandUpdateRequest(BaseModel):
@@ -119,7 +118,7 @@ class CommandUpdateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     command: CommandDetail
-    workspace_id: Optional[str] = None
+    workspace_id: str | None = None
 
 
 class CommandResolveRequest(BaseModel):
@@ -128,7 +127,7 @@ class CommandResolveRequest(BaseModel):
     workspace_id: str = Field(min_length=1)
     raw_text: str
     mode: str = "normal"
-    cwd: Optional[str] = None
+    cwd: str | None = None
 
 
 class CommandResolveResponse(BaseModel):
@@ -136,11 +135,11 @@ class CommandResolveResponse(BaseModel):
 
     matched: bool
     raw_text: str
-    parsed_name: Optional[str] = None
-    resolved_name: Optional[str] = None
+    parsed_name: str | None = None
+    resolved_name: str | None = None
     args: str = ""
-    command: Optional[CommandSummary] = None
-    expanded_prompt: Optional[str] = None
+    command: CommandSummary | None = None
+    expanded_prompt: str | None = None
     expanded_prompt_length: int = 0
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Optional, Protocol
+from typing import Protocol
 from uuid import uuid4
 
 from relay_teams.automation.automation_bound_session_queue_repository import (
@@ -790,7 +790,7 @@ class AutomationBoundSessionQueueWorker:
         self._stop_timeout_seconds = stop_timeout_seconds
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
-        self._task: Optional[asyncio.Task[None]] = None
+        self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():

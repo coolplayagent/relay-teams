@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from json import loads
 import logging
 from pathlib import Path
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -672,7 +671,7 @@ def _resolve_profile_codeagent_token(
     env_values: Mapping[str, str],
     field_name: str,
     secret_field_name: str,
-) -> Optional[str]:
+) -> str | None:
     if isinstance(raw_value, str) and raw_value.strip():
         return _resolve_required_config_value(
             raw_value,

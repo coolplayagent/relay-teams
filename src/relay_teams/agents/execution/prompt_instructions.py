@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from glob import glob
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict
@@ -32,7 +31,7 @@ class LoadedPromptInstructionSource(BaseModel):
 
     source: str
     source_type: str
-    local_path: Optional[Path] = None
+    local_path: Path | None = None
     load_reason: str = "initial"
     memory_type: str = ""
 

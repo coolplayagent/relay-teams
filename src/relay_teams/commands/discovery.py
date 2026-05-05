@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 import re
-from typing import Optional
 
 import yaml
 
@@ -46,7 +45,7 @@ class CommandDiscoveryLocation:
 def discover_commands(
     *,
     app_config_dir: Path,
-    workspace_root: Optional[Path],
+    workspace_root: Path | None,
     plugin_sources: tuple[PluginComponentSource, ...] = (),
     max_depth: int = DEFAULT_COMMAND_MAX_DEPTH,
 ) -> tuple[CommandDefinition, ...]:
@@ -81,7 +80,7 @@ def discover_commands(
 def _build_locations(
     *,
     app_config_dir: Path,
-    workspace_root: Optional[Path],
+    workspace_root: Path | None,
     plugin_sources: tuple[PluginComponentSource, ...],
 ) -> tuple[CommandDiscoveryLocation, ...]:
     locations: list[CommandDiscoveryLocation] = [
@@ -163,7 +162,7 @@ def _load_command(
     path: Path,
     rel: Path,
     location: CommandDiscoveryLocation,
-) -> Optional[CommandDefinition]:
+) -> CommandDefinition | None:
     raw = path.read_text(encoding="utf-8")
     try:
         front_matter, body = _split_optional_front_matter(raw)

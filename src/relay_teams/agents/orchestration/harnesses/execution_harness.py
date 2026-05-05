@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
-from typing import Literal, NamedTuple, Optional
+from pathlib import Path
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -399,12 +400,48 @@ class ExecutionHarness(BaseModel):
     # ── LLM / completion guard ────────────────────────────────────────
 
     async def run_with_completion_guard(
-        self, **kw: object
+        self,
+        *,
+        runner: SubAgentRunner,
+        task: TaskEnvelope,
+        instance_id: str,
+        role_id: str,
+        workspace: WorkspaceHandle,
+        conversation_id: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        system_prompt_override: str,
     ) -> str | TaskExecutionResult:
-        return await self._llm_harness().run_with_completion_guard(**kw)  # type: ignore[arg-type]
+        return await self._llm_harness().run_with_completion_guard(
+            runner=runner,
+            task=task,
+            instance_id=instance_id,
+            role_id=role_id,
+            workspace=workspace,
+            conversation_id=conversation_id,
+            shared_state_snapshot=shared_state_snapshot,
+            system_prompt_override=system_prompt_override,
+        )
 
-    async def run_agent_once(self, **kw: object) -> str:
-        return await self._llm_harness().run_agent_once(**kw)  # type: ignore[arg-type]
+    async def run_agent_once(
+        self,
+        *,
+        runner: SubAgentRunner,
+        task: TaskEnvelope,
+        instance_id: str,
+        workspace: WorkspaceHandle,
+        conversation_id: str,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        system_prompt_override: str,
+    ) -> str:
+        return await self._llm_harness().run_agent_once(
+            runner=runner,
+            task=task,
+            instance_id=instance_id,
+            workspace=workspace,
+            conversation_id=conversation_id,
+            shared_state_snapshot=shared_state_snapshot,
+            system_prompt_override=system_prompt_override,
+        )
 
     async def evaluate_completion_guard_async(
         self,
@@ -760,8 +797,26 @@ class ExecutionHarness(BaseModel):
             role_memory_service=self.role_memory_service,
         ).role_with_memory(role=role, role_id=role_id, workspace_id=workspace_id)
 
-    async def prepare_runtime_snapshot(self, **kw: object) -> PreparedRuntimeSnapshot:
-        return await self._prompt_harness().prepare_runtime_snapshot(**kw)  # type: ignore[arg-type]
+    async def prepare_runtime_snapshot(
+        self,
+        *,
+        role: RoleDefinition,
+        task: TaskEnvelope,
+        working_directory: Path | None,
+        worktree_root: Path | None,
+        workspace: WorkspaceHandle | None,
+        shared_state_snapshot: tuple[tuple[str, str], ...],
+        objective: str,
+    ) -> PreparedRuntimeSnapshot:
+        return await self._prompt_harness().prepare_runtime_snapshot(
+            role=role,
+            task=task,
+            working_directory=working_directory,
+            worktree_root=worktree_root,
+            workspace=workspace,
+            shared_state_snapshot=shared_state_snapshot,
+            objective=objective,
+        )
 
     @staticmethod
     def compose_runtime_system_prompt(
@@ -807,19 +862,55 @@ class ExecutionHarness(BaseModel):
             conversation_id=conversation_id,
         )
 
-    def ensure_committed_task_prompt(self, **kw: object) -> None:
+    def ensure_committed_task_prompt(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        instance_id: str,
+        task: TaskEnvelope,
+        user_prompt_text: str,
+        user_prompt_override: str | None,
+    ) -> None:
         TaskPromptHarness.model_construct(
             message_repo=self.message_repo,
             run_intent_repo=self.run_intent_repo,
             media_asset_service=self.media_asset_service,
-        ).ensure_committed_task_prompt(**kw)  # type: ignore[arg-type]
+        ).ensure_committed_task_prompt(
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            instance_id=instance_id,
+            task=task,
+            user_prompt_text=user_prompt_text,
+            user_prompt_override=user_prompt_override,
+        )
 
-    async def ensure_committed_task_prompt_async(self, **kw: object) -> None:
+    async def ensure_committed_task_prompt_async(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        instance_id: str,
+        task: TaskEnvelope,
+        user_prompt_text: str,
+        user_prompt_override: str | None,
+    ) -> None:
         await TaskPromptHarness.model_construct(
             message_repo=self.message_repo,
             run_intent_repo=self.run_intent_repo,
             media_asset_service=self.media_asset_service,
-        ).ensure_committed_task_prompt_async(**kw)  # type: ignore[arg-type]
+        ).ensure_committed_task_prompt_async(
+            role_id=role_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            instance_id=instance_id,
+            task=task,
+            user_prompt_text=user_prompt_text,
+            user_prompt_override=user_prompt_override,
+        )
 
     def build_user_prompt(
         self,
@@ -829,7 +920,7 @@ class ExecutionHarness(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         conversation_context: RuntimePromptConversationContext | None,
         orchestration_prompt: str,
-        skill_names: Optional[tuple[str, ...]] = None,
+        skill_names: tuple[str, ...] | None = None,
     ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
         return TaskPromptHarness.model_construct(
             skill_runtime_service=self.skill_runtime_service,

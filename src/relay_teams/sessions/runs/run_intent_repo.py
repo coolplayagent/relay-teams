@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from sqlite3 import Row
-from typing import Literal, Optional
+from typing import Literal
 
 import aiosqlite
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -760,7 +760,7 @@ def _coerce_generation_config(value: object) -> MediaGenerationConfig | None:
     return _MediaGenerationConfigAdapter.validate_json(value)
 
 
-def _coerce_skills(value: object) -> Optional[tuple[str, ...]]:
+def _coerce_skills(value: object) -> tuple[str, ...] | None:
     if not isinstance(value, str) or not value.strip():
         return None
     skills = tuple(

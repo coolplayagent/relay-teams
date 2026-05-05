@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from json import dumps, loads
 from pathlib import Path
 from time import time
-from typing import Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,16 +31,16 @@ class ModelCatalogModel(BaseModel):
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
-    family: Optional[str] = None
-    release_date: Optional[str] = None
-    last_updated: Optional[str] = None
-    context_window: Optional[int] = Field(default=None, ge=1)
-    output_limit: Optional[int] = Field(default=None, ge=1)
+    family: str | None = None
+    release_date: str | None = None
+    last_updated: str | None = None
+    context_window: int | None = Field(default=None, ge=1)
+    output_limit: int | None = Field(default=None, ge=1)
     attachment: bool = False
     reasoning: bool = False
     temperature: bool = False
     tool_call: bool = False
-    status: Optional[str] = None
+    status: str | None = None
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     input_modalities: tuple[MediaModality, ...] = ()
 
@@ -52,8 +51,8 @@ class ModelCatalogProvider(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     runtime_provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
-    api: Optional[str] = None
-    doc: Optional[str] = None
+    api: str | None = None
+    doc: str | None = None
     env: tuple[str, ...] = ()
     models: tuple[ModelCatalogModel, ...] = ()
 
@@ -63,12 +62,12 @@ class ModelCatalogResult(BaseModel):
 
     ok: bool
     source_url: str = Field(min_length=1)
-    fetched_at: Optional[datetime] = None
-    cache_age_seconds: Optional[int] = Field(default=None, ge=0)
+    fetched_at: datetime | None = None
+    cache_age_seconds: int | None = Field(default=None, ge=0)
     stale: bool = False
     providers: tuple[ModelCatalogProvider, ...] = ()
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class _ModelCatalogCacheEnvelope(BaseModel):
@@ -133,7 +132,7 @@ class ModelCatalogService:
         )
 
     def _fetch_catalog(self) -> ModelCatalogResult:
-        last_error: Optional[ModelCatalogResult] = None
+        last_error: ModelCatalogResult | None = None
         for _attempt in range(_MODEL_CATALOG_FETCH_ATTEMPTS):
             result = self._fetch_catalog_once()
             if result.ok:
@@ -197,7 +196,7 @@ class ModelCatalogService:
             providers=providers,
         )
 
-    def _load_cache(self) -> Optional[_ModelCatalogCacheEnvelope]:
+    def _load_cache(self) -> _ModelCatalogCacheEnvelope | None:
         cache_path = self._cache_path()
         if not cache_path.exists():
             return None
@@ -235,8 +234,8 @@ class ModelCatalogService:
         *,
         ok: bool,
         stale: bool,
-        error_code: Optional[str] = None,
-        error_message: Optional[str] = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
     ) -> ModelCatalogResult:
         age_seconds = max(0, int(time() - envelope.fetched_at.timestamp()))
         return ModelCatalogResult(
@@ -284,7 +283,7 @@ def _parse_catalog_payload(payload: object) -> tuple[ModelCatalogProvider, ...]:
 def _parse_provider(
     provider_id: str,
     payload: Mapping[str, object],
-) -> Optional[ModelCatalogProvider]:
+) -> ModelCatalogProvider | None:
     name = _string_field(payload.get("name")) or provider_id
     runtime_provider = _resolve_catalog_runtime_provider(
         provider_id=provider_id,
@@ -325,7 +324,7 @@ def _parse_model(
     payload: Mapping[str, object],
     *,
     runtime_provider: ProviderType,
-) -> Optional[ModelCatalogModel]:
+) -> ModelCatalogModel | None:
     normalized_model_id = model_id.strip()
     if not normalized_model_id:
         return None
@@ -385,13 +384,13 @@ def _metadata_payload(
     return metadata
 
 
-def _extract_limits(value: object) -> tuple[Optional[int], Optional[int]]:
+def _extract_limits(value: object) -> tuple[int | None, int | None]:
     if not isinstance(value, Mapping):
         return None, None
     return _positive_int(value.get("context")), _positive_int(value.get("output"))
 
 
-def _string_field(value: object) -> Optional[str]:
+def _string_field(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     normalized = value.strip()
@@ -412,7 +411,7 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     return tuple(entries)
 
 
-def _positive_int(value: object) -> Optional[int]:
+def _positive_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int) and value > 0:

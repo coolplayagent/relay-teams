@@ -5,7 +5,7 @@ import asyncio
 from collections.abc import Callable
 import logging
 from pathlib import Path
-from typing import FrozenSet, List, Optional, Protocol, Tuple
+from typing import Protocol
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.audit import AuditEventRepository, AuditService
@@ -269,12 +269,11 @@ class ServerContainer:
         self,
         *,
         config_dir: Path,
-        roles_dir: Optional[Path] = None,
-        db_path: Optional[Path] = None,
+        roles_dir: Path | None = None,
+        db_path: Path | None = None,
         manage_runtime_state: bool = True,
-        session_model_profile_lookup: Optional[
-            Callable[[str], Optional[ModelEndpointConfig]]
-        ] = None,
+        session_model_profile_lookup: (Callable[[str], ModelEndpointConfig | None])
+        | None = None,
     ) -> None:
         runtime = load_runtime_config(
             config_dir=config_dir,
@@ -757,7 +756,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
-        self._provider_factory: Callable[[RoleDefinition, Optional[str]], LLMProvider]
+        self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
@@ -1253,37 +1252,37 @@ class ServerContainer:
             plugin_hook_sources=self.plugin_registry.hook_sources(),
         )
 
-    def _resolve_reflection_model_config(self) -> Optional[ModelEndpointConfig]:
+    def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
         if self.runtime.default_model_profile is not None:
             return self.runtime.llm_profiles.get(self.runtime.default_model_profile)
         for profile in self.runtime.llm_profiles.values():
             return profile
         return None
 
-    def _resolve_reflection_model_profile_name(self) -> Optional[str]:
+    def _resolve_reflection_model_profile_name(self) -> str | None:
         if self.runtime.default_model_profile is not None:
             return self.runtime.default_model_profile
         for profile_name in self.runtime.llm_profiles.keys():
             return profile_name
         return None
 
-    def resolve_reflection_model_config(self) -> Optional[ModelEndpointConfig]:
+    def resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
         return self._resolve_reflection_model_config()
 
-    def resolve_reflection_model_profile_name(self) -> Optional[str]:
+    def resolve_reflection_model_profile_name(self) -> str | None:
         return self._resolve_reflection_model_profile_name()
 
     def create_provider(
         self,
         role_definition: RoleDefinition,
-        session_id: Optional[str],
+        session_id: str | None,
     ) -> LLMProvider:
         return self._provider_factory(role_definition, session_id)
 
     def _resolve_hook_model_config(
         self,
-        model_profile: Optional[str],
-    ) -> Tuple[Optional[ModelEndpointConfig], Optional[str]]:
+        model_profile: str | None,
+    ) -> tuple[ModelEndpointConfig | None, str | None]:
         profile_name = (
             model_profile.strip()
             if model_profile is not None and model_profile.strip()
@@ -1304,7 +1303,7 @@ class ServerContainer:
         self,
         role: RoleDefinition,
         session_id: str | None,
-    ) -> Tuple[Optional[ModelEndpointConfig], Optional[str]]:
+    ) -> tuple[ModelEndpointConfig | None, str | None]:
         runtime_to_use = self.runtime
         if (
             session_id
@@ -1330,7 +1329,7 @@ class ServerContainer:
         self,
         role: RoleDefinition,
         request: LLMRequest,
-    ) -> Optional[ModelEndpointConfig]:
+    ) -> ModelEndpointConfig | None:
         runtime_to_use = self.runtime
         if (
             self._session_model_profile_lookup is not None
@@ -1348,7 +1347,7 @@ class ServerContainer:
 
     def _build_subagent_reflection_service(
         self,
-    ) -> Optional[SubagentReflectionService]:
+    ) -> SubagentReflectionService | None:
         reflection_config = self._resolve_reflection_model_config()
         if reflection_config is None:
             return None
@@ -1607,7 +1606,7 @@ class ServerContainer:
         self._refresh_coordinator_runtime()
         self._refresh_runtime_dependents()
 
-    def _on_app_environment_changed(self, changed_keys: FrozenSet[str]) -> None:
+    def _on_app_environment_changed(self, changed_keys: frozenset[str]) -> None:
         self.model_config_service.reload_model_config()
         proxy_related_keys = {
             "HTTP_PROXY",
@@ -1635,7 +1634,7 @@ class ServerContainer:
 
     def _interrupt_transient_background_tasks(self) -> int:
         interrupted = self.background_task_repository.list_interruptible()
-        interrupted_ids: List[str] = []
+        interrupted_ids: list[str] = []
         for record in interrupted:
             if (
                 record.kind == BackgroundTaskKind.SUBAGENT

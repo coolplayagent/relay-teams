@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from json import dumps
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -102,7 +101,7 @@ def can_issue(
     state: ReminderRunState,
     issue_key: str,
     cooldown_seconds: int,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> bool:
     current_time = now or datetime.now(tz=timezone.utc)
     raw = state.issued_at_by_key.get(issue_key)
@@ -121,7 +120,7 @@ def mark_issued(
     *,
     state: ReminderRunState,
     issue_key: str,
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> ReminderRunState:
     current_time = now or datetime.now(tz=timezone.utc)
     issued_at_by_key = dict(state.issued_at_by_key)

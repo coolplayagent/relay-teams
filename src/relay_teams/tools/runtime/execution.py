@@ -21,7 +21,6 @@ from enum import Enum
 from json import dumps
 from typing import (
     Literal,
-    Optional,
     ParamSpec,
     Protocol,
     TypeVar,
@@ -835,7 +834,7 @@ async def _reusable_tool_result_async(
     tool_call_id: str,
     tool_name: str,
     allow_tool_return: bool,
-) -> Optional[ToolReturn | dict[str, JsonValue]]:
+) -> (ToolReturn | dict[str, JsonValue]) | None:
     state = await load_tool_call_state_async(
         shared_store=ctx.deps.shared_store,
         task_id=ctx.deps.task_id,
@@ -2780,7 +2779,7 @@ def _reported_failure_from_success_envelope(
     *,
     tool_name: str,
     envelope: dict[str, JsonValue],
-) -> Optional[tuple[str, str]]:
+) -> tuple[str, str] | None:
     if envelope.get("ok") is not True:
         return None
     if tool_name != "shell":
@@ -2822,7 +2821,7 @@ async def _handle_tool_approval(
     ctx: ToolContext,
     tool_name: str,
     args_summary: dict[str, JsonValue],
-    approval_args_summary: Optional[dict[str, JsonValue]],
+    approval_args_summary: dict[str, JsonValue] | None,
     meta: dict[str, JsonValue],
     tool_call_id: str,
     approval_request: ToolApprovalRequest | None = None,
@@ -3496,7 +3495,7 @@ def _internal_record(
     *,
     tool_name: str,
     visible_envelope: dict[str, JsonValue],
-    internal_data: Optional[JsonValue],
+    internal_data: JsonValue | None,
     runtime_meta: dict[str, JsonValue],
     tool_content_parts: tuple[ContentPart, ...],
 ) -> dict[str, JsonValue]:

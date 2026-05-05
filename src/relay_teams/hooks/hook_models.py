@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from pydantic import (
     AliasChoices,
@@ -133,7 +132,7 @@ class HookHandlerConfig(BaseModel):
     model: str | None = None
     role_id: str | None = None
     async_rewake: bool = False
-    status_message: Optional[str] = None
+    status_message: str | None = None
 
     @model_validator(mode="after")
     def validate_type_specific_fields(self) -> "HookHandlerConfig":

@@ -108,7 +108,7 @@ def _register_workspace_tools(
     setattr(
         agent,
         _WORKSPACE_REGISTERED_ATTR,
-        tuple(sorted(set(registered) | set(missing_tools))),
+        tuple(sorted(registered | set(missing_tools))),
     )
 
 
