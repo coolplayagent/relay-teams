@@ -13,7 +13,6 @@ def test_root_package_exports_sdk_client_explicitly() -> None:
     )
 
     assert "AsyncAgentTeamsClient" in cast(list[str], namespace["__all__"])
-    assert "SyncAgentTeamsClient" in cast(list[str], namespace["__all__"])
     assert "__getattr__" not in namespace
 
 

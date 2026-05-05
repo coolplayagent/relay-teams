@@ -100,6 +100,18 @@ class AgentWakeupRepository(SharedSqliteRepository):
                 "target_instance",
                 "ALTER TABLE agent_wakeups ADD COLUMN target_instance TEXT NOT NULL DEFAULT ''",
             )
+            _add_column_if_missing(
+                self._conn,
+                "agent_wakeups",
+                "source_event_type",
+                "ALTER TABLE agent_wakeups ADD COLUMN source_event_type TEXT NOT NULL DEFAULT ''",
+            )
+            _add_column_if_missing(
+                self._conn,
+                "agent_wakeups",
+                "source_trigger_id",
+                "ALTER TABLE agent_wakeups ADD COLUMN source_trigger_id TEXT NOT NULL DEFAULT ''",
+            )
 
         self._run_write(
             operation_name="init_agent_wakeups_tables",
@@ -114,8 +126,9 @@ class AgentWakeupRepository(SharedSqliteRepository):
                     wakeup_id, task_id, trace_id, session_id, coalesce_key,
                     timeout_action, timeout_seconds, attempt, max_attempts,
                     status, enqueued_at, claimed_at, completed_at,
-                    wake_reason, target_role, target_instance
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    wake_reason, target_role, target_instance,
+                    source_event_type, source_trigger_id
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     entry.wakeup_id,
@@ -134,6 +147,8 @@ class AgentWakeupRepository(SharedSqliteRepository):
                     entry.wake_reason.value,
                     entry.target_role,
                     entry.target_instance,
+                    entry.source_event_type,
+                    entry.source_trigger_id,
                 ),
             )
             inserted = cursor.rowcount > 0
@@ -297,6 +312,83 @@ class AgentWakeupRepository(SharedSqliteRepository):
         )
         return tuple(_to_entry(row) for row in rows)
 
+    async def coalesce_and_enqueue_async(self, entry: AgentWakeupEntry) -> bool:
+        """Merge-and-enqueue: deduplicate by (task_id, wake_reason).
+
+        If a PENDING entry with the same ``task_id`` and ``wake_reason``
+        already exists, update its ``coalesce_key`` and ``enqueued_at``
+        and return ``False``.  Otherwise, insert a new row and return
+        ``True``.
+        """
+
+        async def _op(conn: aiosqlite.Connection) -> bool:
+            # Check for existing PENDING entry with same task_id + wake_reason
+            cursor = await conn.execute(
+                "SELECT wakeup_id FROM agent_wakeups "
+                "WHERE task_id=? AND wake_reason=? AND status=?",
+                (entry.task_id, entry.wake_reason.value, WakeupStatus.PENDING.value),
+            )
+            row = await cursor.fetchone()
+            await cursor.close()
+            if row is not None:
+                existing_id = str(row["wakeup_id"])
+                now = entry.enqueued_at.isoformat()
+                cursor = await conn.execute(
+                    "UPDATE agent_wakeups "
+                    "SET coalesce_key=?, enqueued_at=?, attempt=?, "
+                    "source_event_type=?, source_trigger_id=? "
+                    "WHERE wakeup_id=?",
+                    (
+                        entry.coalesce_key,
+                        now,
+                        entry.attempt,
+                        entry.source_event_type,
+                        entry.source_trigger_id,
+                        existing_id,
+                    ),
+                )
+                await cursor.close()
+                return False
+            # Insert new
+            cursor = await conn.execute(
+                """\
+                INSERT INTO agent_wakeups(
+                    wakeup_id, task_id, trace_id, session_id, coalesce_key,
+                    timeout_action, timeout_seconds, attempt, max_attempts,
+                    status, enqueued_at, claimed_at, completed_at,
+                    wake_reason, target_role, target_instance,
+                    source_event_type, source_trigger_id
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.wakeup_id,
+                    entry.task_id,
+                    entry.trace_id,
+                    entry.session_id,
+                    entry.coalesce_key,
+                    entry.timeout_action.value,
+                    entry.timeout_seconds,
+                    entry.attempt,
+                    entry.max_attempts,
+                    entry.status.value,
+                    entry.enqueued_at.isoformat(),
+                    entry.claimed_at.isoformat() if entry.claimed_at else None,
+                    entry.completed_at.isoformat() if entry.completed_at else None,
+                    entry.wake_reason.value,
+                    entry.target_role,
+                    entry.target_instance,
+                    entry.source_event_type,
+                    entry.source_trigger_id,
+                ),
+            )
+            await cursor.close()
+            return True
+
+        return await self._run_async_write(
+            operation_name="coalesce_and_enqueue_async",
+            operation=_op,
+        )
+
     async def count_pending_async(self) -> int:
         async def _op(conn: aiosqlite.Connection) -> int:
             row = await async_fetchone(
@@ -316,6 +408,12 @@ def _to_entry(row: aiosqlite.Row) -> AgentWakeupEntry:
     target_role_raw = row["target_role"] if "target_role" in row.keys() else ""
     target_instance_raw = (
         row["target_instance"] if "target_instance" in row.keys() else ""
+    )
+    source_event_type_raw = (
+        row["source_event_type"] if "source_event_type" in row.keys() else ""
+    )
+    source_trigger_id_raw = (
+        row["source_trigger_id"] if "source_trigger_id" in row.keys() else ""
     )
     return AgentWakeupEntry(
         wakeup_id=str(row["wakeup_id"]),
@@ -342,4 +440,6 @@ def _to_entry(row: aiosqlite.Row) -> AgentWakeupEntry:
         wake_reason=WakeupReason(str(wake_reason_raw)),
         target_role=str(target_role_raw),
         target_instance=str(target_instance_raw),
+        source_event_type=str(source_event_type_raw),
+        source_trigger_id=str(source_trigger_id_raw),
     )

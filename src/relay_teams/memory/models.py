@@ -19,6 +19,11 @@ from relay_teams.memory.memory_defaults import (
 # ---------------------------------------------------------------------------
 
 
+class ConsolidationMode(str, Enum):
+    STRUCTURAL = "structural"
+    SEMANTIC = "semantic"
+
+
 class MemoryTier(str, Enum):
     WORKING = "working"
     MEDIUM_TERM = "medium_term"
@@ -311,6 +316,10 @@ class MemoryConsolidationRequest(BaseModel):
     source_run_id: str | None = None
     target_tier: MemoryTier
     target_scope: MemoryScope
+    consolidation_mode: ConsolidationMode = ConsolidationMode.STRUCTURAL
+    max_extracted_entries: int = Field(default=10, ge=1, le=50)
+    extraction_kinds: tuple[MemoryEntryKind, ...] = ()
+    prompt_override: str = ""
     filter_tags: tuple[str, ...] = ()
     filter_kind: MemoryEntryKind | None = None
 
@@ -323,6 +332,17 @@ class MemoryConsolidationRequest(BaseModel):
             raise ValueError(message)
         return self
 
+    @model_validator(mode="after")
+    def _validate_semantic_mode(self) -> MemoryConsolidationRequest:
+        if (
+            self.consolidation_mode == ConsolidationMode.SEMANTIC
+            and self.source_run_id is None
+        ):
+            raise ValueError(
+                "source_run_id is required for SEMANTIC consolidation mode"
+            )
+        return self
+
 
 class MemoryConsolidationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -331,6 +351,8 @@ class MemoryConsolidationResult(BaseModel):
     consolidated_entry_count: int
     superseded_entry_ids: tuple[str, ...]
     new_entry_ids: tuple[str, ...]
+    extraction_tokens_used: int = 0
+    extraction_duration_ms: int = 0
 
 
 # ---------------------------------------------------------------------------

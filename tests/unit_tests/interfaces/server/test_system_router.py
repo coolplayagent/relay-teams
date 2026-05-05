@@ -2681,6 +2681,11 @@ def test_get_agent_runtime_omits_stdio_working_directory() -> None:
         "name": "Codex Local",
         "description": "Runs Codex via stdio",
         "protocol": "acp",
+        "native_config_enabled": False,
+        "native_config_provider": "",
+        "skill_bridge_enabled": False,
+        "skill_bridge_mode": "inline",
+        "skill_bridge_skills": [],
         "transport": {
             "transport": "stdio",
             "command": "codex",

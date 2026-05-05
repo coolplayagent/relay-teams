@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from relay_teams.logger import get_logger
 from relay_teams.memory.models import (
+    ConsolidationMode,
     CreateMemoryEntryRequest,
     MemoryConsolidationRequest,
     MemoryContent,
@@ -106,12 +107,14 @@ class MemoryEventHandler:
         workspace_id: str,
         session_id: str,
         role_id: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         """Consolidate WORKING entries -> MEDIUM_TERM on run completion."""
         request = MemoryConsolidationRequest(
             workspace_id=workspace_id,
             session_id=session_id,
             role_id=role_id,
+            source_run_id=run_id,
             target_tier=MemoryTier.MEDIUM_TERM,
             target_scope=MemoryScope.SESSION if session_id else MemoryScope.ROLE,
         )
@@ -133,6 +136,86 @@ class MemoryEventHandler:
                 session_id,
                 exc_info=True,
             )
+
+    async def on_run_completed_async(
+        self,
+        *,
+        workspace_id: str,
+        session_id: str,
+        role_id: str | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        """Consolidate WORKING entries -> MEDIUM_TERM on run completion.
+
+        Performs structural consolidation (sync) and then additionally
+        triggers SEMANTIC mode consolidation for high-signal extraction.
+        SEMANTIC failures do not affect the structural path.
+        """
+        # 1. Structural consolidation (same as sync version)
+        structural_request = MemoryConsolidationRequest(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            role_id=role_id,
+            source_run_id=run_id,
+            target_tier=MemoryTier.MEDIUM_TERM,
+            target_scope=MemoryScope.SESSION if session_id else MemoryScope.ROLE,
+        )
+        try:
+            result = await self._memory_bank.consolidate_async(structural_request)
+            if result.source_entry_count > 0:
+                LOGGER.info(
+                    "run consolidation: %d WORKING -> %d MEDIUM_TERM "
+                    "workspace=%s session=%s",
+                    result.source_entry_count,
+                    result.consolidated_entry_count,
+                    workspace_id,
+                    session_id,
+                )
+        except (ValueError, OSError, RuntimeError):
+            LOGGER.warning(
+                "failed to consolidate WORKING->MEDIUM_TERM workspace=%s session=%s",
+                workspace_id,
+                session_id,
+                exc_info=True,
+            )
+
+        # 2. Semantic consolidation (best-effort, does not affect structural)
+        if run_id is not None:
+            semantic_request = MemoryConsolidationRequest(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                role_id=role_id,
+                source_run_id=run_id,
+                target_tier=MemoryTier.MEDIUM_TERM,
+                target_scope=MemoryScope.SESSION if session_id else MemoryScope.ROLE,
+                consolidation_mode=ConsolidationMode.SEMANTIC,
+                max_extracted_entries=15,
+                extraction_kinds=(
+                    MemoryEntryKind.DECISION,
+                    MemoryEntryKind.FAILURE_MODE,
+                    MemoryEntryKind.CONSTRAINT,
+                    MemoryEntryKind.INSIGHT,
+                ),
+            )
+            try:
+                semantic_result = await self._memory_bank.consolidate_async(
+                    semantic_request
+                )
+                if semantic_result.consolidated_entry_count > 0:
+                    LOGGER.info(
+                        "semantic consolidation: %d entries extracted"
+                        " from run=%s (tokens=%d, duration=%dms)",
+                        semantic_result.consolidated_entry_count,
+                        run_id,
+                        semantic_result.extraction_tokens_used,
+                        semantic_result.extraction_duration_ms,
+                    )
+            except (ValueError, OSError, RuntimeError):
+                LOGGER.warning(
+                    "semantic consolidation failed for run=%s (non-fatal)",
+                    run_id,
+                    exc_info=True,
+                )
 
     def on_session_completed(
         self,

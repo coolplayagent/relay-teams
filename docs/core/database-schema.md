@@ -827,6 +827,16 @@ Primary query keys used by repositories:
 - `trace_id` (`run_id`): run-level retrieval across `tasks`, `task_spec_artifacts`, `events`, `security_audit_events`, `messages`, `token_usage`, `background_tasks`, `run_todos`.
 - `task_id`: task-level retrieval and task assignment/spec tracking.
 - `artifact_id`: task spec artifact lookup.
+
+### board_configs (Phase 3 OP-11: Task Board as State Machine)
+
+Board configurations are currently held in-memory via `TaskBoardConfig` models. Future persistence may add a `board_configs` table with columns:
+
+- `board_id` (TEXT PK) -- board identifier
+- `adapter` (TEXT NOT NULL) -- adapter type ("internal", "github", "linear")
+- `config_json` (TEXT NOT NULL) -- serialized `TaskBoardConfig`
+- `created_at` (TEXT NOT NULL)
+- `updated_at` (TEXT NOT NULL)
 - `instance_id`: agent-level retrieval and message history.
 - `trigger_id`: Feishu-account scoped retrieval across `external_session_bindings`, `feishu_message_pool`.
 - `event_id`: message/event/audit level retrieval for audit and replay preparation.

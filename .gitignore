@@ -37,3 +37,5 @@ package.json
 logs/
 src/relay_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/dist/
 src/relay_teams/builtin/skills/pptx-craft/designer/lib/html-to-pptx/node/dist/
+.coverage
+coverage.xml

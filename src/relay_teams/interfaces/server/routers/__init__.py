@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from relay_teams.interfaces.server.routers import (
+    a2a_internal,
     artifacts_router,
     audit,
     auto_harness,
     automation,
+    boards,
     commands,
     feishu_gateway,
     gateway,
@@ -27,10 +29,12 @@ from relay_teams.interfaces.server.routers import (
 )
 
 __all__ = [
+    "a2a_internal",
     "artifacts_router",
     "audit",
     "auto_harness",
     "automation",
+    "boards",
     "commands",
     "feishu_gateway",
     "gateway",

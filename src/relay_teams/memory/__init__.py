@@ -17,6 +17,7 @@ from relay_teams.memory.memory_defaults import (
     MEDIUM_TERM_TTL,
 )
 from relay_teams.memory.models import (
+    ConsolidationMode,
     CreateMemoryEntryRequest,
     MemoryConsolidationRequest,
     MemoryConsolidationResult,
@@ -40,6 +41,7 @@ from relay_teams.memory.repository import MemoryBankRepository, generate_memory_
 from relay_teams.memory.service import MemoryBankService
 
 __all__ = [
+    "ConsolidationMode",
     "MemoryEventHandler",
     "CreateMemoryEntryRequest",
     "INJECTION_LIMIT",

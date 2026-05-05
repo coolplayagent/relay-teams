@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -135,15 +134,12 @@ async def test_task_execution_service_publishes_runtime_guardrail_report_to_even
     task = _task()
     event_log = EventLog(tmp_path / "events.db")
     service = TaskExecutionService.model_construct(
-        task_repo=MagicMock(),
-        agent_repo=MagicMock(),
-        run_runtime_repo=MagicMock(),
         shared_store=SharedStateRepository(tmp_path / "state.db"),
         event_bus=event_log,
         run_event_hub=None,
     )
 
-    await service._control_harness().publish_guardrail_report(
+    await service._publish_runtime_guardrail_report_async(
         task=task,
         instance_id="inst-1",
         role_id="gater",
@@ -161,15 +157,12 @@ async def test_task_execution_service_publishes_runtime_guardrail_report_to_hub(
     task = _task()
     hub = _AsyncRunEventHub()
     service = TaskExecutionService.model_construct(
-        task_repo=MagicMock(),
-        agent_repo=MagicMock(),
-        run_runtime_repo=MagicMock(),
         shared_store=SharedStateRepository(tmp_path / "state.db"),
         event_bus=EventLog(tmp_path / "events.db"),
         run_event_hub=hub,
     )
 
-    await service._control_harness().publish_guardrail_report(
+    await service._publish_runtime_guardrail_report_async(
         task=task,
         instance_id="inst-1",
         role_id="gater",

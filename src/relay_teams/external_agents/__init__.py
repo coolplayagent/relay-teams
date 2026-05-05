@@ -16,6 +16,13 @@ from relay_teams.external_agents.models import (
     StdioTransportConfig,
     StreamableHttpTransportConfig,
 )
+from relay_teams.external_agents.native_config import (
+    NativeConfigContent,
+    NativeConfigGenerator,
+    NativeConfigSpec,
+    assemble_native_config_content,
+    resolve_native_config_filename,
+)
 from relay_teams.external_agents.secret_store import (
     ExternalAgentSecretStore,
     get_external_agent_secret_store,
@@ -23,9 +30,23 @@ from relay_teams.external_agents.secret_store import (
 from relay_teams.external_agents.session_repository import (
     ExternalAgentSessionRepository,
 )
+from relay_teams.external_agents.skill_bridge import (
+    BridgedSkill,
+    SkillBridgeManifest,
+    SkillBridgeService,
+)
 
 __all__ = [
+    "BridgedSkill",
     "CustomTransportConfig",
+    "NativeConfigContent",
+    "NativeConfigGenerator",
+    "NativeConfigSpec",
+    "SkillBridgeManifest",
+    "SkillBridgeService",
+    "StdioTransportConfig",
+    "StreamableHttpTransportConfig",
+    "assemble_native_config_content",
     "build_agent_runtimes_app",
     "ExternalAgentConfig",
     "ExternalAgentConfigService",
@@ -39,7 +60,6 @@ __all__ = [
     "ExternalAgentSummary",
     "ExternalAgentTestResult",
     "ExternalAgentTransportType",
-    "StdioTransportConfig",
-    "StreamableHttpTransportConfig",
     "get_external_agent_secret_store",
+    "resolve_native_config_filename",
 ]

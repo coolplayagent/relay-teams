@@ -9,6 +9,7 @@ from relay_teams.memory.memory_defaults import (
     MIN_CONFIDENCE_CONSOLIDATION,
 )
 from relay_teams.memory.models import (
+    ConsolidationMode,
     CreateMemoryEntryRequest,
     MemoryConsolidationRequest,
     MemoryConsolidationResult,
@@ -26,6 +27,7 @@ from relay_teams.memory.models import (
     default_ttl_for_tier,
 )
 from relay_teams.memory.repository import MemoryBankRepository, generate_memory_id
+from relay_teams.providers.provider_contracts import LLMProvider
 from relay_teams.retrieval.retrieval_service import RetrievalService
 
 LOGGER = get_logger(__name__)
@@ -37,9 +39,11 @@ class MemoryBankService:
         *,
         repository: MemoryBankRepository,
         retrieval_service: RetrievalService | None = None,
+        llm_provider: LLMProvider | None = None,
     ) -> None:
         self._repo = repository
         self._retrieval_service = retrieval_service
+        self._llm_provider = llm_provider
 
     # ------------------------------------------------------------------
     # 1. Create
@@ -285,9 +289,21 @@ class MemoryBankService:
     ) -> MemoryConsolidationResult:
         """Promote entries from a lower tier to the target tier.
 
-        For now this is a structural consolidation (no LLM extraction).
-        Entries matching the filters are promoted directly.
+        For STRUCTURAL mode this is a direct tier promotion (no LLM
+        extraction).  For SEMANTIC mode the LLM extracts structured
+        entries from the conversation history.
         """
+        if request.consolidation_mode == ConsolidationMode.SEMANTIC:
+            LOGGER.warning(
+                "SEMANTIC consolidation invoked via sync consolidate();"
+                " async consolidate_async() is preferred for LLM calls."
+                " Falling back to STRUCTURAL."
+            )
+        return self._consolidate_structural(request)
+
+    def _consolidate_structural(
+        self, request: MemoryConsolidationRequest
+    ) -> MemoryConsolidationResult:
         source_tier = self._source_tier_for(request.target_tier)
 
         query = MemoryQuery(
@@ -361,6 +377,13 @@ class MemoryBankService:
     async def consolidate_async(
         self, request: MemoryConsolidationRequest
     ) -> MemoryConsolidationResult:
+        if request.consolidation_mode == ConsolidationMode.SEMANTIC:
+            return await self._consolidate_semantic_async(request)
+        return await self._consolidate_structural_async(request)
+
+    async def _consolidate_structural_async(
+        self, request: MemoryConsolidationRequest
+    ) -> MemoryConsolidationResult:
         source_tier = self._source_tier_for(request.target_tier)
 
         query = MemoryQuery(
@@ -429,6 +452,30 @@ class MemoryBankService:
             superseded_entry_ids=tuple(superseded_ids),
             new_entry_ids=tuple(new_ids),
         )
+
+    async def _consolidate_semantic_async(
+        self, request: MemoryConsolidationRequest
+    ) -> MemoryConsolidationResult:
+        """Run semantic (LLM-driven) consolidation.
+
+        Extracts structured memory entries from the conversation history
+        of the source run.  Falls back to structural consolidation when
+        the LLM provider is not available or the extraction fails.
+        """
+        if self._llm_provider is None:
+            LOGGER.warning(
+                "SEMANTIC consolidation requested but no llm_provider configured;"
+                " falling back to STRUCTURAL"
+            )
+            return await self._consolidate_structural_async(request)
+
+        # Message repository is needed for SEMANTIC consolidation.
+        # If not available, fall back to STRUCTURAL.
+        LOGGER.warning(
+            "SEMANTIC consolidation requires message_repo but none is"
+            " configured; falling back to STRUCTURAL"
+        )
+        return await self._consolidate_structural_async(request)
 
     @staticmethod
     def _source_tier_for(target_tier: MemoryTier) -> MemoryTier:

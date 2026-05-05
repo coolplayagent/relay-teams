@@ -7,6 +7,58 @@ from relay_teams.agents.instances.models import AgentRuntimeRecord, SubAgentInst
 from relay_teams.roles.role_models import RoleDefinition
 
 
+class A2aMessage(BaseModel):
+    """A2A message, bridging RoleCommunicationExchange and A2aBusMessage."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sender_role_id: str = Field(min_length=1)
+    receiver_role_id: str = Field(min_length=1)
+    memory_scope: RoleConversationMemoryScope
+    transition: RoleStateTransition
+    content: str = Field(min_length=1)
+    topic: str = Field(min_length=1)
+    payload_json: str = "{}"
+
+
+def build_a2a_message_from_exchange(
+    exchange: RoleCommunicationExchange,
+    *,
+    topic: str,
+    payload_json: str = "{}",
+) -> A2aMessage:
+    """Build an A2aMessage from a RoleCommunicationExchange."""
+    return A2aMessage(
+        sender_role_id=exchange.sender_role_id,
+        receiver_role_id=exchange.receiver_role_id,
+        memory_scope=exchange.memory_scope,
+        transition=exchange.transition,
+        content=exchange.content,
+        topic=topic,
+        payload_json=payload_json,
+    )
+
+
+def build_a2a_bus_message(
+    a2a_message: A2aMessage,
+    *,
+    message_id: str,
+    sender_instance_id: str,
+) -> object:
+    """Build an A2aBusMessage from an A2aMessage."""
+    from relay_teams.agents.orchestration.a2a_bus_models import A2aBusMessage
+
+    return A2aBusMessage(
+        message_id=message_id,
+        sender_role_id=a2a_message.sender_role_id,
+        sender_instance_id=sender_instance_id,
+        topic=a2a_message.topic,
+        content=a2a_message.content,
+        payload_json=a2a_message.payload_json,
+        target_role_id=a2a_message.receiver_role_id,
+    )
+
+
 class RoleStateTransition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

@@ -12,6 +12,11 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agents.orchestration.claim_service import (
+    BlockersNotResolvedError,
+    ClaimConflictError,
+    ClaimService,
+)
 from relay_teams.agents.orchestration.task_contracts import (
     TaskDraft,
     TaskExecutionServiceLike,
@@ -89,6 +94,7 @@ class TaskOrchestrationService:
         self._assignment_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._assignment_lock_ref_counts: dict[tuple[str, str], int] = {}
         self._assignment_locks_guard = asyncio.Lock()
+        self._claim_service = ClaimService(task_repo)
 
     @property
     def task_repo(self) -> TaskRepository:
@@ -415,17 +421,51 @@ class TaskOrchestrationService:
             task=record, instance_id=instance_id
         )
 
+        # === OP-2: Atomic Claim ===
+        claim_result = await self._claim_service.claim_task_async(
+            task_id=task_id,
+            instance_id=instance_id,
+        )
+        if not claim_result.success:
+            raise ClaimConflictError(
+                task_id=task_id,
+                error_code=claim_result.error_code,
+            )
+
+        # === OP-2: Blocker check ===
+        try:
+            record = await self._task_repo.get_async(task_id)
+        except KeyError:
+            pass
+        else:
+            unresolved_blockers = await self._claim_service.check_blockers_async(
+                record.envelope,
+            )
+            if unresolved_blockers:
+                await self._claim_service.release_task_async(
+                    task_id, claim_result.claim_token
+                )
+                raise BlockersNotResolvedError(
+                    task_id=task_id,
+                    unresolved_blockers=unresolved_blockers,
+                )
+
         effective_prompt = (
             normalized_prompt
             or "Execute this task contract and return the requested result."
         )
 
-        async with self._run_execution_slot(run_id=resolved_run_id):
-            await self._task_execution_service.execute(
-                instance_id=instance_id,
-                role_id=bound_role_id,
-                task=record.envelope,
-                user_prompt_override=effective_prompt,
+        try:
+            async with self._run_execution_slot(run_id=resolved_run_id):
+                await self._task_execution_service.execute(
+                    instance_id=instance_id,
+                    role_id=bound_role_id,
+                    task=record.envelope,
+                    user_prompt_override=effective_prompt,
+                )
+        finally:
+            await self._claim_service.release_task_async(
+                task_id, claim_result.claim_token
             )
         refreshed = await self._task_repo.get_async(task_id)
         return {

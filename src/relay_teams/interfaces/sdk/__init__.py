@@ -1,7 +1,6 @@
-from relay_teams.interfaces.sdk.client import (
-    AsyncAgentTeamsClient,
-    RunHandle,
-    SyncAgentTeamsClient,
-)
+# -*- coding: utf-8 -*-
+from __future__ import annotations
 
-__all__ = ["AsyncAgentTeamsClient", "RunHandle", "SyncAgentTeamsClient"]
+from relay_teams.interfaces.sdk.client import AsyncAgentTeamsClient, RunHandle
+
+__all__ = ["AsyncAgentTeamsClient", "RunHandle"]
