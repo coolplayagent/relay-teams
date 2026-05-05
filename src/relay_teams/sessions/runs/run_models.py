@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal, Optional, TypeAlias
+from typing import Literal, TypeAlias
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -118,7 +118,7 @@ class IntentInput(BaseModel):
     reuse_root_instance: bool = True
     thinking: RunThinkingConfig = Field(default_factory=RunThinkingConfig)
     target_role_id: OptionalIdentifierStr = None
-    skills: Optional[tuple[str, ...]] = None
+    skills: (tuple[str, ...]) | None = None
     orchestration_policy: OrchestrationPolicy | None = None
     session_mode: SessionMode = SessionMode.NORMAL
     topology: RunTopologySnapshot | None = None
@@ -126,7 +126,7 @@ class IntentInput(BaseModel):
 
     @field_validator("skills", mode="before")
     @classmethod
-    def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
+    def _normalize_skills(cls, value: object) -> (tuple[str, ...]) | None:
         return normalize_identifier_tuple(value, field_name="skills")
 
     @property

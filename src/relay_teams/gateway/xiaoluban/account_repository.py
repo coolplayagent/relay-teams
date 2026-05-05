@@ -6,7 +6,6 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import aiosqlite
 from pydantic import JsonValue, ValidationError
@@ -98,11 +97,11 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
             return
         self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
-    def list_accounts(self) -> Tuple[XiaolubanAccountRecord, ...]:
+    def list_accounts(self) -> tuple[XiaolubanAccountRecord, ...]:
         rows = self._conn.execute(
             "SELECT * FROM xiaoluban_accounts ORDER BY created_at DESC"
         ).fetchall()
-        records: List[XiaolubanAccountRecord] = []
+        records: list[XiaolubanAccountRecord] = []
         for row in rows:
             try:
                 records.append(self._to_record(row))
@@ -110,15 +109,15 @@ class XiaolubanAccountRepository(SharedSqliteRepository):
                 _log_invalid_row(row=row, error=exc)
         return tuple(records)
 
-    async def list_accounts_async(self) -> Tuple[XiaolubanAccountRecord, ...]:
+    async def list_accounts_async(self) -> tuple[XiaolubanAccountRecord, ...]:
         async def operation(
             conn: aiosqlite.Connection,
-        ) -> Tuple[XiaolubanAccountRecord, ...]:
+        ) -> tuple[XiaolubanAccountRecord, ...]:
             rows = await async_fetchall(
                 conn,
                 "SELECT * FROM xiaoluban_accounts ORDER BY created_at DESC",
             )
-            records: List[XiaolubanAccountRecord] = []
+            records: list[XiaolubanAccountRecord] = []
             for row in rows:
                 try:
                     records.append(self._to_record(row))
@@ -350,7 +349,7 @@ def _persisted_value_preview(value: object) -> str:
 
 
 def _log_invalid_row(*, row: sqlite3.Row, error: Exception) -> None:
-    payload: Dict[str, JsonValue] = {
+    payload: dict[str, JsonValue] = {
         "account_id": _persisted_value_preview(row["account_id"]),
         "derived_uid": _persisted_value_preview(row["derived_uid"]),
         "notification_workspace_ids_json": _persisted_value_preview(

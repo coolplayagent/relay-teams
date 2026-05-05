@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from json import dumps
-from typing import Optional, Protocol
+from typing import Protocol
 
 from pydantic import JsonValue
 
@@ -79,8 +79,8 @@ class _RunInjectionManager(Protocol):
         source: InjectionSource,
         content: str,
         delivery_mode: InjectionDeliveryMode = InjectionDeliveryMode.QUEUED,
-        sender_instance_id: Optional[str] = None,
-        sender_role_id: Optional[str] = None,
+        sender_instance_id: (str) | None = None,
+        sender_role_id: (str) | None = None,
     ) -> object:
         raise NotImplementedError
 
@@ -625,7 +625,7 @@ def _handler_dedup_key(
     *,
     handler: HookHandlerConfig,
     source: HookSourceInfo,
-) -> Optional[tuple[str, ...]]:
+) -> (tuple[str, ...]) | None:
     source_key = _handler_dedup_source_key(source)
     common = (
         *source_key,

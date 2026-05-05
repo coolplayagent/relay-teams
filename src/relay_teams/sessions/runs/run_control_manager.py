@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timezone
 from json import dumps
 from threading import Lock
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
@@ -44,7 +44,7 @@ class RunControlContext(BaseModel):
 
     manager: "RunControlManager"
     run_id: str
-    instance_id: Optional[str] = None
+    instance_id: (str) | None = None
 
     def is_cancelled(self) -> bool:
         return self.manager.is_cancelled(
@@ -175,9 +175,9 @@ class _SubagentPauseRegistry:
             paused_for_session[instance_id] = paused
         return paused
 
-    def get(
-        self, session_id: str, instance_id: Optional[str] = None
-    ) -> Optional[PausedSubagent]:
+    def get(self, session_id: str, instance_id: (str) | None = None) -> (
+        PausedSubagent
+    ) | None:
         with self._lock:
             paused_for_session = self._paused_by_session.get(session_id)
             if not paused_for_session:
@@ -1050,8 +1050,8 @@ class RunControlManager:
         self,
         *,
         session_id: str,
-        instance_id: Optional[str] = None,
-    ) -> Optional[PausedSubagent]:
+        instance_id: (str) | None = None,
+    ) -> (PausedSubagent) | None:
         if self._run_runtime_repo is None:
             return None
         runtimes = sorted(
@@ -1093,8 +1093,8 @@ class RunControlManager:
         self,
         *,
         session_id: str,
-        instance_id: Optional[str] = None,
-    ) -> Optional[PausedSubagent]:
+        instance_id: (str) | None = None,
+    ) -> (PausedSubagent) | None:
         if self._run_runtime_repo is None or self._task_repo is None:
             return None
         candidates: list[PausedSubagent] = []

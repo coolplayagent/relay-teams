@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 import yaml
@@ -60,8 +59,8 @@ class CommandManagementService:
         allowed_modes = _normalize_allowed_modes(req.allowed_modes)
         if req.scope == CommandCreateScope.GLOBAL:
             target_path = self._resolve_global_target(relative_path)
-            workspace_id: Optional[str] = None
-            workspace_root: Optional[Path] = None
+            workspace_id: (str) | None = None
+            workspace_root: (Path) | None = None
         else:
             workspace = self._resolve_create_workspace(req.workspace_id)
             source = req.source or CommandCreateSource.CLAUDE
@@ -173,7 +172,7 @@ class CommandManagementService:
             raise ValueError("Command target is outside the workspace writable scope")
         return target_path
 
-    def _resolve_create_workspace(self, workspace_id: Optional[str]) -> WorkspaceRecord:
+    def _resolve_create_workspace(self, workspace_id: (str) | None) -> WorkspaceRecord:
         safe_workspace_id = str(workspace_id or "").strip()
         if not safe_workspace_id:
             raise ValueError("Project command creation requires workspace_id")
@@ -208,8 +207,8 @@ class CommandManagementService:
         self,
         *,
         target_path: Path,
-        workspace_root: Optional[Path],
-    ) -> Optional[CommandDefinition]:
+        workspace_root: (Path) | None,
+    ) -> (CommandDefinition) | None:
         return self.registry.get_discovered_command_by_source_path(
             source_path=target_path,
             workspace_root=workspace_root,
@@ -220,8 +219,8 @@ class _CommandUpdateTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_path: Path
-    workspace_id: Optional[str]
-    workspace_root: Optional[Path]
+    workspace_id: (str) | None
+    workspace_root: (Path) | None
 
 
 def _normalize_command_name(name: str) -> str:
@@ -307,7 +306,7 @@ def _workspace_command_base_dirs(root_path: Path) -> tuple[Path, ...]:
     )
 
 
-def _local_command_mount(workspace: WorkspaceRecord) -> Optional[WorkspaceMountRecord]:
+def _local_command_mount(workspace: WorkspaceRecord) -> (WorkspaceMountRecord) | None:
     default_root = workspace.default_mount.local_root_path()
     if default_root is not None:
         return workspace.default_mount
@@ -363,7 +362,7 @@ def _workspace_update_target(
     *,
     workspace: WorkspaceRecord,
     target_path: Path,
-) -> Optional[_CommandUpdateTarget]:
+) -> (_CommandUpdateTarget) | None:
     workspace_root = workspace.root_path
     if workspace_root is None:
         return None
@@ -400,9 +399,9 @@ def _local_mount_owning_path(
     *,
     workspace: WorkspaceRecord,
     target_path: Path,
-) -> Optional[WorkspaceMountRecord]:
-    best_mount: Optional[WorkspaceMountRecord] = None
-    best_root: Optional[Path] = None
+) -> (WorkspaceMountRecord) | None:
+    best_mount: (WorkspaceMountRecord) | None = None
+    best_root: (Path) | None = None
     for mount in workspace.mounts:
         root_path = mount.local_root_path()
         if root_path is None:
@@ -420,7 +419,7 @@ def _is_within_any_root(path: Path, roots: tuple[Path, ...]) -> bool:
     return any(path == root or root in path.parents for root in roots)
 
 
-def _first_path_base(*, path: Path, base_dirs: tuple[Path, ...]) -> Optional[Path]:
+def _first_path_base(*, path: Path, base_dirs: tuple[Path, ...]) -> (Path) | None:
     for base_dir in base_dirs:
         if _is_path_under_base(path=path, base_dir=base_dir):
             return base_dir

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -47,7 +46,7 @@ class XiaolubanAccountRecord(BaseModel):
     notification_workspace_ids: tuple[RequiredIdentifierStr, ...] = ()
     notification_receivers: tuple[str, ...] = ()
     notify_self: bool = True
-    notification_receiver: Optional[str] = None
+    notification_receiver: (str) | None = None
     im_config: XiaolubanImConfig = Field(default_factory=XiaolubanImConfig)
     secret_status: XiaolubanSecretStatus = Field(default_factory=XiaolubanSecretStatus)
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -64,7 +63,7 @@ class XiaolubanAccountRecord(BaseModel):
 
     @field_validator("notification_receiver")
     @classmethod
-    def _normalize_receiver(cls, value: Optional[str]) -> Optional[str]:
+    def _normalize_receiver(cls, value: (str) | None) -> (str) | None:
         return normalize_optional_string(value, field_name="notification_receiver")
 
     @field_validator("notification_receivers", mode="before")
@@ -97,7 +96,7 @@ class XiaolubanAccountCreateInput(BaseModel):
     notification_workspace_ids: tuple[RequiredIdentifierStr, ...] = ()
     notification_receivers: tuple[str, ...] = ()
     notify_self: bool = True
-    notification_receiver: Optional[str] = None
+    notification_receiver: (str) | None = None
     im_config: XiaolubanImConfig = Field(default_factory=XiaolubanImConfig)
 
     @field_validator("display_name", "token", "base_url")
@@ -119,7 +118,7 @@ class XiaolubanAccountCreateInput(BaseModel):
 
     @field_validator("notification_receiver")
     @classmethod
-    def _normalize_receiver(cls, value: Optional[str]) -> Optional[str]:
+    def _normalize_receiver(cls, value: (str) | None) -> (str) | None:
         return normalize_optional_string(value, field_name="notification_receiver")
 
     @field_validator("notification_receivers", mode="before")
@@ -144,24 +143,24 @@ class XiaolubanAccountCreateInput(BaseModel):
 class XiaolubanAccountUpdateInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    display_name: Optional[str] = None
-    token: Optional[str] = None
-    base_url: Optional[str] = None
-    enabled: Optional[bool] = None
-    notification_workspace_ids: Optional[tuple[RequiredIdentifierStr, ...]] = None
-    notification_receivers: Optional[tuple[str, ...]] = None
-    notify_self: Optional[bool] = None
-    notification_receiver: Optional[str] = None
-    im_config: Optional[XiaolubanImConfig] = None
+    display_name: (str) | None = None
+    token: (str) | None = None
+    base_url: (str) | None = None
+    enabled: (bool) | None = None
+    notification_workspace_ids: (tuple[RequiredIdentifierStr, ...]) | None = None
+    notification_receivers: (tuple[str, ...]) | None = None
+    notify_self: (bool) | None = None
+    notification_receiver: (str) | None = None
+    im_config: (XiaolubanImConfig) | None = None
 
     @field_validator("display_name", "token", "base_url", "notification_receiver")
     @classmethod
-    def _normalize_optional_text(cls, value: Optional[str], info) -> Optional[str]:
+    def _normalize_optional_text(cls, value: (str) | None, info) -> (str) | None:
         return normalize_optional_string(value, field_name=info.field_name)
 
     @field_validator("notification_workspace_ids", mode="before")
     @classmethod
-    def _normalize_workspace_ids(cls, value: object) -> Optional[tuple[str, ...]]:
+    def _normalize_workspace_ids(cls, value: object) -> (tuple[str, ...]) | None:
         return normalize_identifier_tuple(
             value,
             field_name="notification_workspace_ids",
@@ -169,7 +168,7 @@ class XiaolubanAccountUpdateInput(BaseModel):
 
     @field_validator("notification_receivers", mode="before")
     @classmethod
-    def _normalize_receivers(cls, value: object) -> Optional[tuple[str, ...]]:
+    def _normalize_receivers(cls, value: object) -> (tuple[str, ...]) | None:
         if value is None:
             return None
         return normalize_xiaoluban_notification_receivers(value)
@@ -210,7 +209,7 @@ class XiaolubanImForwardingCommandResponse(BaseModel):
 class XiaolubanTokenRevealResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    token: Optional[str] = None
+    token: (str) | None = None
 
 
 class XiaolubanInboundMessage(BaseModel):
@@ -245,14 +244,14 @@ class XiaolubanSendTextRequest(BaseModel):
     content: str = Field(min_length=1)
     receiver: str = Field(min_length=1)
     auth: str = Field(min_length=1)
-    sender: Optional[str] = None
+    sender: (str) | None = None
 
 
 class XiaolubanSendTextResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message_id: str = Field(min_length=1)
-    raw_response: Optional[str] = None
+    raw_response: (str) | None = None
 
 
 def normalize_xiaoluban_notification_receivers(value: object) -> tuple[str, ...]:

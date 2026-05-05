@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import JsonValue
@@ -157,7 +157,7 @@ def _resolve_workspace_root(
     *,
     workspace_id: str,
     workspace_service: WorkspaceService,
-) -> Optional[Path]:
+) -> (Path) | None:
     try:
         workspace = workspace_service.get_workspace(workspace_id)
     except KeyError as exc:
@@ -169,7 +169,7 @@ def _log_resolve_result(
     *,
     workspace_id: str,
     result: CommandResolveResponse,
-    rejected_mode: Optional[str] = None,
+    rejected_mode: (str) | None = None,
 ) -> None:
     payload: dict[str, JsonValue] = {
         "workspace_id": workspace_id,

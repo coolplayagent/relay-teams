@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from threading import RLock
-from typing import Awaitable, Callable, Optional, ParamSpec, TypeVar
+from typing import Awaitable, Callable, ParamSpec, TypeVar
 from weakref import WeakKeyDictionary, WeakSet
 
 import aiosqlite
@@ -168,7 +168,7 @@ class SharedSqliteRepository:
         self,
         db_path: Path,
         *,
-        repository_name: Optional[str] = None,
+        repository_name: (str) | None = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._conn = BlockingAsyncSqliteConnection(self)

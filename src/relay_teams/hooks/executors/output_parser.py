@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Optional, TypeGuard
+from typing import TypeGuard
 
 from pydantic import JsonValue
 
@@ -87,7 +87,7 @@ def _parse_hook_specific_output(
     output: Mapping[object, object],
     *,
     event_name: HookEventName,
-) -> Optional[HookDecision]:
+) -> (HookDecision) | None:
     raw_event_name = str(output.get("hookEventName") or "").strip()
     if raw_event_name and raw_event_name != event_name.value:
         return None
@@ -126,7 +126,7 @@ def _parse_hook_specific_output(
     return None
 
 
-def _permission_decision(value: str) -> Optional[HookDecisionType]:
+def _permission_decision(value: str) -> (HookDecisionType) | None:
     if value == "allow":
         return HookDecisionType.ALLOW
     if value == "deny":
@@ -155,7 +155,7 @@ def _context_values(payload: dict[object, object]) -> tuple[str, ...]:
     return tuple(contexts)
 
 
-def _json_value_or_none(value: object) -> Optional[JsonValue]:
+def _json_value_or_none(value: object) -> (JsonValue) | None:
     if value is None:
         return None
     return value if _is_json_value(value) else None

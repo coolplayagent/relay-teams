@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Optional, Protocol, Set
+from typing import Protocol
 
 
 class _HasModelFieldsSet(Protocol):
     @property
-    def model_fields_set(self) -> Set[str]:
+    def model_fields_set(self) -> set[str]:
         raise NotImplementedError
 
 
@@ -36,11 +36,11 @@ def normalize_optional_text_field(
 
 
 def normalize_optional_string(
-    value: Optional[str],
+    value: (str) | None,
     *,
     field_name: str,
     empty_to_none: bool = False,
-) -> Optional[str]:
+) -> (str) | None:
     normalized = normalize_optional_text_field(
         value,
         field_name=field_name,

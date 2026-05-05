@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 from uuid import uuid4
 
 import httpx
@@ -27,7 +26,7 @@ class XiaolubanClient:
         receiver_uid: str,
         auth_token: str,
         base_url: str = DEFAULT_XIAOLUBAN_BASE_URL,
-        sender: Optional[str] = None,
+        sender: (str) | None = None,
     ) -> XiaolubanSendTextResponse:
         request = XiaolubanSendTextRequest(
             content=text,

@@ -5,14 +5,14 @@ from collections.abc import Callable
 from enum import Enum
 import json
 from pathlib import Path
-from typing import Optional, TypeAlias, Union
+from typing import TypeAlias
 from urllib.parse import quote
 
 import typer
 
-RequestJsonResponse: TypeAlias = Union[dict[str, object], list[object]]
+RequestJsonResponse: TypeAlias = dict[str, object] | list[object]
 RequestJsonCallable: TypeAlias = Callable[
-    [str, str, str, Optional[dict[str, object]]], RequestJsonResponse
+    [str, str, str, (dict[str, object]) | None], RequestJsonResponse
 ]
 AutoStartCallable: TypeAlias = Callable[[str, bool], None]
 
@@ -36,7 +36,7 @@ def build_commands_app(
 
     @commands_app.command("list")
     def commands_list(
-        workspace: Optional[str] = typer.Option(
+        workspace: (str) | None = typer.Option(
             None,
             "--workspace",
             help="Workspace path or workspace id. Defaults to the current directory.",
@@ -79,7 +79,7 @@ def build_commands_app(
     @commands_app.command("show")
     def commands_show(
         name: str = typer.Argument(..., help="Command name or alias to inspect."),
-        workspace: Optional[str] = typer.Option(
+        workspace: (str) | None = typer.Option(
             None,
             "--workspace",
             help="Workspace path or workspace id. Defaults to the current directory.",
@@ -128,7 +128,7 @@ def build_commands_app(
 def _resolve_workspace_id(
     *,
     base_url: str,
-    workspace: Optional[str],
+    workspace: (str) | None,
     request_json: RequestJsonCallable,
 ) -> str:
     raw_workspace = workspace.strip() if workspace is not None else ""
@@ -165,7 +165,7 @@ def _try_get_workspace_id(
     base_url: str,
     workspace_id: str,
     request_json: RequestJsonCallable,
-) -> Optional[str]:
+) -> (str) | None:
     try:
         response = request_json(
             base_url,

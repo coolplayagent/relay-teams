@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
 from pydantic import BeforeValidator
 
@@ -70,7 +70,7 @@ def normalize_identifier_tuple(
     value: object,
     *,
     field_name: str,
-) -> Optional[tuple[str, ...]]:
+) -> (tuple[str, ...]) | None:
     if value is None:
         return None
     raw_items: tuple[object, ...]

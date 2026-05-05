@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fnmatch
-from typing import Optional
 
 from relay_teams.hooks.hook_event_models import (
     HookEventInput,
@@ -29,7 +28,7 @@ def get_matcher_target(
     event_input: HookEventInput,
     *,
     tool_name: str = "",
-) -> Optional[str]:
+) -> (str) | None:
     if event_input.event_name in {
         HookEventName.PRE_TOOL_USE,
         HookEventName.PERMISSION_REQUEST,
