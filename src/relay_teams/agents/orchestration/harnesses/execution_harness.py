@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Literal, NamedTuple, Optional
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
