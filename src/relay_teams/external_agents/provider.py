@@ -56,7 +56,7 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelEndpointConfig, ProviderType
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
-from relay_teams.reminders import SystemReminderService
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.enums import RunEventType

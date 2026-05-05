@@ -79,7 +79,7 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.runs.assistant_errors import AssistantRunError
-from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
+from relay_teams.reminders.delivery import SystemReminderDeliveryMode
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )

@@ -6,8 +6,8 @@ from json import dumps
 from relay_teams.media import user_prompt_content_to_text
 from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.run_models import InjectionMessage
-from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
-from relay_teams.system_reminder_text import is_rendered_system_reminder_text
+from relay_teams.reminders.delivery import SystemReminderDeliveryMode
+from relay_teams.reminders.text import is_rendered_system_reminder_text
 
 
 class InjectionDisposition(str, Enum):

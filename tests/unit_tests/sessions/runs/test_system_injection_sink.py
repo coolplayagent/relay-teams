@@ -11,7 +11,7 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.enums import InjectionSource
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.system_injection import SystemInjectionSink
-from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
+from relay_teams.reminders.delivery import SystemReminderDeliveryMode
 
 
 class _CapturingRunEventHub:

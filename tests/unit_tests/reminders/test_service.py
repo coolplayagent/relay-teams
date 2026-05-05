@@ -17,9 +17,9 @@ from relay_teams.reminders import (
     ReminderRunState,
     ReminderStateRepository,
     SystemReminderPolicy,
-    SystemReminderService,
     ToolResultObservation,
 )
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.sessions.runs.system_injection import (
     SystemInjectionResult,
     SystemInjectionSink,

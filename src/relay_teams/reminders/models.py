@@ -4,7 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from relay_teams.system_reminder_delivery import SystemReminderDeliveryMode
+from relay_teams.reminders.delivery import SystemReminderDeliveryMode
 
 
 class ReminderKind(str, Enum):

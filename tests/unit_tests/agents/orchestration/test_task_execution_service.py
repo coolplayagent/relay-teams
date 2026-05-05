@@ -34,7 +34,8 @@ from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.persistence import close_live_sqlite_repositories_async
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.reminders import ReminderStateRepository, SystemReminderService
+from relay_teams.reminders import ReminderStateRepository
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.roles.memory_repository import RoleMemoryRepository
 from relay_teams.roles.memory_service import RoleMemoryService

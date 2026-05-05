@@ -71,8 +71,8 @@ from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.reminders import (
     ContextPressureObservation,
     ReminderKind,
-    SystemReminderService,
 )
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.sessions.runs.assistant_errors import (
     AssistantRunError,
     AssistantRunErrorPayload,

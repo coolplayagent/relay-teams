@@ -16,8 +16,8 @@ from relay_teams.reminders import (
     CompletionAttemptObservation,
     IncompleteTodoItem,
     ReminderDecision,
-    SystemReminderService,
 )
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import RunThinkingConfig
 from relay_teams.sessions.runs.todo_models import TodoItem, TodoStatus
