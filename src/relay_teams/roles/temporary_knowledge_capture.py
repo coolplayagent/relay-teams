@@ -106,7 +106,6 @@ class TemporaryRoleKnowledgeCaptureService:
         _session_id: str,
         _workspace_id: str,
     ) -> tuple[TemporaryKnowledgeCapture, ...]:
-        _engine = self._adjustment_engine  # noqa: F841 — will be used in full impl
         return ()  # placeholder: will iterate temp roles via injected services
 
 
