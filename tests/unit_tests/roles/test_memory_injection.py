@@ -100,6 +100,7 @@ class TestBuildRoleWithMemory:
         role = _make_role()
         mock_role_memory = create_autospec(RoleMemoryService, instance=True)
         mock_role_memory.build_injected_memory.return_value = "Past lessons"
+        mock_role_memory.get_performance_metrics.return_value = None
         result = build_role_with_memory(
             role_registry=registry,
             role_memory_service=mock_role_memory,
@@ -133,6 +134,7 @@ class TestBuildRoleWithMemory:
         role = _make_role()
         mock_role_memory = create_autospec(RoleMemoryService, instance=True)
         mock_role_memory.build_injected_memory.return_value = ""
+        mock_role_memory.get_performance_metrics.return_value = None
         result = build_role_with_memory(
             role_registry=registry,
             role_memory_service=mock_role_memory,

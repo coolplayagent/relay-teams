@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Coroutine
 from typing import Any
-from unittest.mock import MagicMock, create_autospec
+from unittest.mock import AsyncMock, MagicMock, create_autospec
 
 from relay_teams.hooks import HookService
 from relay_teams.memory.event_handler import MemoryEventHandler
@@ -146,6 +146,66 @@ class TestRunHookPipelineMemoryConsolidation:
             )
         )
         handler.on_run_completed.assert_called_once()
+
+
+class TestRunHookPipelineTemporaryKnowledgeCapture:
+    """Tests for RP-2 temporary role knowledge capture wired into execute_session_end_hooks."""
+
+    def test_capture_service_called_when_set(self) -> None:
+        handler = create_autospec(MemoryEventHandler, instance=True)
+        pipeline, _ = _make_pipeline(memory_event_handler=handler)
+
+        capture_svc = MagicMock()
+        capture_svc.capture_all_for_session = AsyncMock(return_value=())
+        pipeline.set_temporary_knowledge_capture_service(capture_svc)
+
+        _run(
+            pipeline.execute_session_end_hooks(
+                run_id="run-1",
+                session_id="sess-1",
+                status="completed",
+                completion_reason="done",
+                output_text="ok",
+            )
+        )
+        capture_svc.capture_all_for_session.assert_called_once()
+
+    def test_capture_service_not_called_when_none(self) -> None:
+        handler = create_autospec(MemoryEventHandler, instance=True)
+        pipeline, _ = _make_pipeline(memory_event_handler=handler)
+        # No capture service set — default is None
+        _run(
+            pipeline.execute_session_end_hooks(
+                run_id="run-1",
+                session_id="sess-1",
+                status="completed",
+                completion_reason="done",
+                output_text="ok",
+            )
+        )
+        # No assertion needed — just verify no error raised
+
+    def test_capture_failure_suppressed(self) -> None:
+        handler = create_autospec(MemoryEventHandler, instance=True)
+        pipeline, _ = _make_pipeline(memory_event_handler=handler)
+
+        capture_svc = MagicMock()
+        capture_svc.capture_all_for_session = AsyncMock(
+            side_effect=RuntimeError("capture error")
+        )
+        pipeline.set_temporary_knowledge_capture_service(capture_svc)
+
+        _run(
+            pipeline.execute_session_end_hooks(
+                run_id="run-1",
+                session_id="sess-1",
+                status="completed",
+                completion_reason="done",
+                output_text="ok",
+            )
+        )
+        # Should not raise — capture failure is suppressed
+        capture_svc.capture_all_for_session.assert_called_once()
 
     def test_resolve_workspace_id_returns_workspace(self) -> None:
         pipeline, _ = _make_pipeline(session_workspace_id="ws-42")
