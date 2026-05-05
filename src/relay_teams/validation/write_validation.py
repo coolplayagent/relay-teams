@@ -36,11 +36,11 @@ def normalize_optional_text_field(
 
 
 def normalize_optional_string(
-    value: (str) | None,
+    value: str | None,
     *,
     field_name: str,
     empty_to_none: bool = False,
-) -> (str) | None:
+) -> str | None:
     normalized = normalize_optional_text_field(
         value,
         field_name=field_name,

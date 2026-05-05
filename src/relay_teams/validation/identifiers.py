@@ -70,7 +70,7 @@ def normalize_identifier_tuple(
     value: object,
     *,
     field_name: str,
-) -> (tuple[str, ...]) | None:
+) -> tuple[str, ...] | None:
     if value is None:
         return None
     raw_items: tuple[object, ...]

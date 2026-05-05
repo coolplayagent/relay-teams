@@ -80,13 +80,13 @@ class XiaolubanGatewayService:
         *,
         config_dir: Path,
         repository: XiaolubanAccountRepository,
-        secret_store: (XiaolubanSecretStore) | None = None,
-        client: (XiaolubanClient) | None = None,
-        workspace_lookup: (WorkspaceLookup) | None = None,
-        gateway_session_service: (GatewaySessionService) | None = None,
-        run_service: (SessionRunService) | None = None,
-        event_log: (EventLog) | None = None,
-        session_ingress_service: (GatewaySessionIngressService) | None = None,
+        secret_store: XiaolubanSecretStore | None = None,
+        client: XiaolubanClient | None = None,
+        workspace_lookup: WorkspaceLookup | None = None,
+        gateway_session_service: GatewaySessionService | None = None,
+        run_service: SessionRunService | None = None,
+        event_log: EventLog | None = None,
+        session_ingress_service: GatewaySessionIngressService | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -386,7 +386,7 @@ class XiaolubanGatewayService:
         *,
         account_id: str,
         text: str,
-        receiver_uid: (str) | None = None,
+        receiver_uid: str | None = None,
     ) -> str:
         account = self._repository.get_account(account_id)
         if account.status != XiaolubanAccountStatus.ENABLED:
@@ -416,7 +416,7 @@ class XiaolubanGatewayService:
         session_id: str,
         status: str,
         body: str,
-        receiver_uid: (str) | None = None,
+        receiver_uid: str | None = None,
     ) -> str:
         text = format_xiaoluban_notification_text(
             workspace_id=workspace_id,
@@ -474,7 +474,7 @@ class XiaolubanGatewayService:
         )
 
     def should_suppress_xiaoluban_terminal_notification(
-        self, run_id: (str) | None
+        self, run_id: str | None
     ) -> bool:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
@@ -1389,7 +1389,7 @@ def _external_session_id(
     return f"xiaoluban:{account_id}:{workspace_id}:{sender}:{receiver}"
 
 
-def _normalize_base_url(value: (str) | None) -> str:
+def _normalize_base_url(value: str | None) -> str:
     normalized = str(value or "").strip()
     if not normalized:
         return DEFAULT_XIAOLUBAN_BASE_URL

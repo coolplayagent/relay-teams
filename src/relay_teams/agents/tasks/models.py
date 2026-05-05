@@ -410,7 +410,7 @@ class TaskEnvelope(BaseModel):
     role_id: OptionalIdentifierStr = "Coordinator"
     title: str | None = None
     objective: str = Field(min_length=1)
-    skills: (tuple[str, ...]) | None = None
+    skills: tuple[str, ...] | None = None
     verification: VerificationPlan
     spec: TaskSpec | None = None
     spec_artifact_id: OptionalIdentifierStr = None
@@ -427,7 +427,7 @@ class TaskEnvelope(BaseModel):
 
     @field_validator("skills", mode="before")
     @classmethod
-    def _normalize_skills(cls, value: object) -> (tuple[str, ...]) | None:
+    def _normalize_skills(cls, value: object) -> tuple[str, ...] | None:
         return normalize_identifier_tuple(value, field_name="skills")
 
     blocked_by_task_ids: tuple[str, ...] = ()

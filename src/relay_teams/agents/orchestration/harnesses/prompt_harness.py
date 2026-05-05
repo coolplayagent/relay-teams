@@ -447,7 +447,7 @@ class TaskPromptHarness(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         conversation_context: RuntimePromptConversationContext | None,
         orchestration_prompt: str,
-        skill_names: (tuple[str, ...]) | None = None,
+        skill_names: tuple[str, ...] | None = None,
     ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
         resolved_objective = objective.strip()
         if self.skill_runtime_service is None:

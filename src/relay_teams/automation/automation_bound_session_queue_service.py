@@ -790,7 +790,7 @@ class AutomationBoundSessionQueueWorker:
         self._stop_timeout_seconds = stop_timeout_seconds
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
-        self._task: (asyncio.Task[None]) | None = None
+        self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():

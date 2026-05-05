@@ -491,7 +491,7 @@ class AutomationProjectRepository(SharedSqliteRepository):
             updated_at=updated_at,
         )
 
-    def _record_or_none(self, row: sqlite3.Row) -> (AutomationProjectRecord) | None:
+    def _record_or_none(self, row: sqlite3.Row) -> AutomationProjectRecord | None:
         try:
             return self._to_record(row)
         except (ValidationError, ValueError, json.JSONDecodeError) as exc:
@@ -499,17 +499,17 @@ class AutomationProjectRepository(SharedSqliteRepository):
             return None
 
 
-def _to_iso(value: (datetime) | None) -> (str) | None:
+def _to_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _binding_to_json(binding: (AutomationDeliveryBinding) | None) -> (str) | None:
+def _binding_to_json(binding: AutomationDeliveryBinding | None) -> str | None:
     if binding is None:
         return None
     return json.dumps(binding.model_dump(mode="json"))
 
 
-def _binding_from_json(value: object) -> (AutomationDeliveryBinding) | None:
+def _binding_from_json(value: object) -> AutomationDeliveryBinding | None:
     if value is None:
         return None
     payload = str(value).strip()
@@ -581,7 +581,7 @@ def _optional_project_timestamp(
     row: sqlite3.Row,
     automation_project_id: str,
     field_name: str,
-) -> (datetime) | None:
+) -> datetime | None:
     raw_value = row[field_name]
     if normalize_persisted_text(raw_value) is None:
         return None

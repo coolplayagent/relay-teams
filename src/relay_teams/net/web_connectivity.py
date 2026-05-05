@@ -33,7 +33,7 @@ class WebConnectivityProbeRequest(BaseModel):
     timeout_ms: (
         int
     ) | None = Field(default=None, ge=1000, le=_MAX_WEB_PROBE_TIMEOUT_MS)
-    proxy_override: (ProxyEnvInput) | None = None
+    proxy_override: ProxyEnvInput | None = None
 
 
 class WebConnectivityProbeDiagnostics(BaseModel):
@@ -50,14 +50,14 @@ class WebConnectivityProbeResult(BaseModel):
     ok: bool
     url: str = Field(min_length=1)
     final_url: str = Field(min_length=1)
-    status_code: (int) | None = Field(default=None, ge=100, le=599)
+    status_code: int | None = Field(default=None, ge=100, le=599)
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     used_method: WebProbeMethod
     diagnostics: WebConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: (str) | None = None
-    error_message: (str) | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class WebConnectivityProbeService:

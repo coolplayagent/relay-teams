@@ -13,9 +13,9 @@ class HookEventInput(BaseModel):
     session_id: str
     run_id: str
     trace_id: str
-    task_id: (str) | None = None
-    instance_id: (str) | None = None
-    role_id: (str) | None = None
+    task_id: str | None = None
+    instance_id: str | None = None
+    role_id: str | None = None
     session_mode: str = ""
     run_kind: str = ""
 
@@ -65,8 +65,8 @@ class NotificationInput(HookEventInput):
     body: str
     channels: tuple[str, ...] = ()
     dedupe_key: str = ""
-    tool_call_id: (str) | None = None
-    tool_name: (str) | None = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
 
 class InstructionsLoadedInput(HookEventInput):
@@ -132,7 +132,7 @@ class SubagentStopInput(HookEventInput):
 
 class TaskCreatedInput(HookEventInput):
     created_task_id: str
-    parent_task_id: (str) | None = None
+    parent_task_id: str | None = None
     title: str = ""
     objective: str = ""
 

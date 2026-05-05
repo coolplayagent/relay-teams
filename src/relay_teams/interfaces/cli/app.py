@@ -52,8 +52,8 @@ def _request_json(
     base_url: str,
     method: str,
     path: str,
-    payload: (dict[str, object]) | None = None,
-    extra_headers: (dict[str, str]) | None = None,
+    payload: dict[str, object] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict[str, object] | list[object]:
     return asyncio.run(
@@ -73,8 +73,8 @@ async def _request_json_async(
     base_url: str,
     method: str,
     path: str,
-    payload: (dict[str, object]) | None = None,
-    extra_headers: (dict[str, str]) | None = None,
+    payload: dict[str, object] | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict[str, object] | list[object]:
     headers = {"Accept": "application/json"}
@@ -121,11 +121,11 @@ async def _is_server_healthy_async(base_url: str) -> bool:
     return health is not None and health.status == "ok"
 
 
-def _get_server_health(base_url: str) -> (ServerHealthPayload) | None:
+def _get_server_health(base_url: str) -> ServerHealthPayload | None:
     return asyncio.run(_get_server_health_async(base_url))
 
 
-async def _get_server_health_async(base_url: str) -> (ServerHealthPayload) | None:
+async def _get_server_health_async(base_url: str) -> ServerHealthPayload | None:
     try:
         health_response = await _request_json_async(
             base_url=base_url,
@@ -234,7 +234,7 @@ def _module_request_json(
     base_url: str,
     method: str,
     path: str,
-    payload: (dict[str, object]) | None = None,
+    payload: dict[str, object] | None = None,
 ) -> dict[str, object] | list[object]:
     return _request_json(
         base_url=base_url,

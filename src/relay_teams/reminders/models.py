@@ -34,7 +34,7 @@ class ToolResultObservation(BaseModel):
     session_id: str
     run_id: str
     trace_id: str
-    task_id: (str) | None = None
+    task_id: str | None = None
     instance_id: str
     role_id: str
     tool_name: str = Field(min_length=1)
@@ -67,7 +67,7 @@ class ContextPressureObservation(BaseModel):
     session_id: str
     run_id: str
     trace_id: str
-    task_id: (str) | None = None
+    task_id: str | None = None
     instance_id: str
     role_id: str
     conversation_id: str
@@ -84,7 +84,7 @@ class ReminderDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     issue: bool = False
-    kind: (ReminderKind) | None = None
+    kind: ReminderKind | None = None
     delivery_mode: SystemReminderDeliveryMode = SystemReminderDeliveryMode.GUIDANCE
     issue_key: str = ""
     content: str = ""

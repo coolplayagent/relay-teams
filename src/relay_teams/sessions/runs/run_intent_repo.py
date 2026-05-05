@@ -760,7 +760,7 @@ def _coerce_generation_config(value: object) -> MediaGenerationConfig | None:
     return _MediaGenerationConfigAdapter.validate_json(value)
 
 
-def _coerce_skills(value: object) -> (tuple[str, ...]) | None:
+def _coerce_skills(value: object) -> tuple[str, ...] | None:
     if not isinstance(value, str) or not value.strip():
         return None
     skills = tuple(

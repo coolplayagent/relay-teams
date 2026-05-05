@@ -132,7 +132,7 @@ class HookHandlerConfig(BaseModel):
     model: str | None = None
     role_id: str | None = None
     async_rewake: bool = False
-    status_message: (str) | None = None
+    status_message: str | None = None
 
     @model_validator(mode="after")
     def validate_type_specific_fields(self) -> "HookHandlerConfig":

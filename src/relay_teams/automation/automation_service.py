@@ -637,7 +637,7 @@ class AutomationService:
 
     def process_due_projects(
         self,
-        now: (datetime) | None = None,
+        now: datetime | None = None,
     ) -> tuple[str, ...]:
         effective_now = now or datetime.now(tz=UTC)
         processed: list[str] = []
@@ -648,7 +648,7 @@ class AutomationService:
 
     async def process_due_projects_async(
         self,
-        now: (datetime) | None = None,
+        now: datetime | None = None,
     ) -> tuple[str, ...]:
         effective_now = now or datetime.now(tz=UTC)
         processed: list[str] = []
@@ -664,7 +664,7 @@ class AutomationService:
         project: AutomationProjectRecord,
         *,
         reason: str,
-        now: (datetime) | None = None,
+        now: datetime | None = None,
     ) -> AutomationExecutionHandle:
         effective_now = now or datetime.now(tz=UTC)
         execution_event = self._record_execution_event(project, reason=reason)
@@ -786,7 +786,7 @@ class AutomationService:
         project: AutomationProjectRecord,
         *,
         reason: str,
-        now: (datetime) | None = None,
+        now: datetime | None = None,
     ) -> AutomationExecutionHandle:
         effective_now = now or datetime.now(tz=UTC)
         execution_event = await self._record_execution_event_async(
@@ -940,10 +940,10 @@ class AutomationService:
 
     def _resolve_delivery_binding(
         self,
-        candidate: (AutomationDeliveryBinding) | None,
+        candidate: AutomationDeliveryBinding | None,
         *,
-        existing_binding: (AutomationDeliveryBinding) | None,
-    ) -> (AutomationDeliveryBinding) | None:
+        existing_binding: AutomationDeliveryBinding | None,
+    ) -> AutomationDeliveryBinding | None:
         binding = candidate if candidate is not None else existing_binding
         if binding is None:
             return None
@@ -959,10 +959,10 @@ class AutomationService:
 
     async def _resolve_delivery_binding_async(
         self,
-        candidate: (AutomationDeliveryBinding) | None,
+        candidate: AutomationDeliveryBinding | None,
         *,
-        existing_binding: (AutomationDeliveryBinding) | None,
-    ) -> (AutomationDeliveryBinding) | None:
+        existing_binding: AutomationDeliveryBinding | None,
+    ) -> AutomationDeliveryBinding | None:
         binding = candidate if candidate is not None else existing_binding
         if binding is None:
             return None
@@ -975,8 +975,8 @@ class AutomationService:
     @staticmethod
     def _resolve_delivery_events(
         *,
-        binding: (AutomationDeliveryBinding) | None,
-        requested_events: (tuple[AutomationDeliveryEvent, ...]) | None,
+        binding: AutomationDeliveryBinding | None,
+        requested_events: tuple[AutomationDeliveryEvent, ...] | None,
         existing_events: tuple[AutomationDeliveryEvent, ...],
     ) -> tuple[AutomationDeliveryEvent, ...]:
         if binding is None:
@@ -1113,7 +1113,7 @@ class AutomationService:
         *,
         project: AutomationProjectRecord,
         reason: str,
-    ) -> (AutomationExecutionHandle) | None:
+    ) -> AutomationExecutionHandle | None:
         if project.delivery_binding is None:
             return None
         if project.delivery_binding.provider != "feishu":
@@ -1132,7 +1132,7 @@ class AutomationService:
         *,
         project: AutomationProjectRecord,
         reason: str,
-    ) -> (AutomationExecutionHandle) | None:
+    ) -> AutomationExecutionHandle | None:
         if project.delivery_binding is None:
             return None
         if project.delivery_binding.provider != "feishu":
@@ -1227,7 +1227,7 @@ def _next_run_at_after_fire(
     *,
     project: AutomationProjectRecord,
     fired_at: datetime,
-) -> (datetime) | None:
+) -> datetime | None:
     if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
         return None
     return _next_run_at(
@@ -1243,10 +1243,10 @@ def _next_run_at(
     *,
     schedule_mode: AutomationScheduleMode,
     cron_expression: str | None,
-    run_at: (datetime) | None,
+    run_at: datetime | None,
     timezone_name: str,
     after: datetime,
-) -> (datetime) | None:
+) -> datetime | None:
     if schedule_mode == AutomationScheduleMode.ONE_SHOT:
         if run_at is None:
             return None

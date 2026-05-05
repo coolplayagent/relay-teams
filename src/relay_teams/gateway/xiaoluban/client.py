@@ -26,7 +26,7 @@ class XiaolubanClient:
         receiver_uid: str,
         auth_token: str,
         base_url: str = DEFAULT_XIAOLUBAN_BASE_URL,
-        sender: (str) | None = None,
+        sender: str | None = None,
     ) -> XiaolubanSendTextResponse:
         request = XiaolubanSendTextRequest(
             content=text,

@@ -23,8 +23,8 @@ from relay_teams.net.github_cli_errors import (
 LOGGER = get_logger(__name__)
 
 VERSION = "2.88.1"
-BIN_DIR: (Path) | None = None
-_gh_path_cache: (Path) | None = None
+BIN_DIR: Path | None = None
+_gh_path_cache: Path | None = None
 _gh_path_lock = asyncio.Lock()
 
 PLATFORM_MAP = {
@@ -93,7 +93,7 @@ def clear_gh_path_cache() -> None:
     _gh_path_cache = None
 
 
-def resolve_existing_gh_path() -> (Path) | None:
+def resolve_existing_gh_path() -> Path | None:
     global _gh_path_cache
 
     try:
@@ -115,7 +115,7 @@ def resolve_existing_gh_path() -> (Path) | None:
     return None
 
 
-def resolve_system_gh_path() -> (Path) | None:
+def resolve_system_gh_path() -> Path | None:
     system_gh = shutil.which("gh")
     if not system_gh:
         return None
@@ -125,7 +125,7 @@ def resolve_system_gh_path() -> (Path) | None:
     return system_path
 
 
-def get_bundled_gh_path() -> (Path) | None:
+def get_bundled_gh_path() -> Path | None:
     local_path = _bundled_gh_target_path()
     if local_path.is_file():
         return local_path

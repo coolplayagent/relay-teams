@@ -28,7 +28,7 @@ def get_matcher_target(
     event_input: HookEventInput,
     *,
     tool_name: str = "",
-) -> (str) | None:
+) -> str | None:
     if event_input.event_name in {
         HookEventName.PRE_TOOL_USE,
         HookEventName.PERMISSION_REQUEST,

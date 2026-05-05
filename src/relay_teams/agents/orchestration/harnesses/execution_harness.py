@@ -920,7 +920,7 @@ class ExecutionHarness(BaseModel):
         shared_state_snapshot: tuple[tuple[str, str], ...],
         conversation_context: RuntimePromptConversationContext | None,
         orchestration_prompt: str,
-        skill_names: (tuple[str, ...]) | None = None,
+        skill_names: tuple[str, ...] | None = None,
     ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
         return TaskPromptHarness.model_construct(
             skill_runtime_service=self.skill_runtime_service,

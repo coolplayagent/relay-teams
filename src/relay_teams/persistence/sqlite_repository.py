@@ -168,7 +168,7 @@ class SharedSqliteRepository:
         self,
         db_path: Path,
         *,
-        repository_name: (str) | None = None,
+        repository_name: str | None = None,
     ) -> None:
         self._db_path = Path(db_path)
         self._conn = BlockingAsyncSqliteConnection(self)

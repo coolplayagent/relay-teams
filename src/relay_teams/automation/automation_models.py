@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -114,8 +114,10 @@ class AutomationXiaolubanBindingCandidate(BaseModel):
     updated_at: datetime
 
 
-AutomationDeliveryBinding = AutomationFeishuBinding | AutomationXiaolubanBinding
-AutomationDeliveryBindingCandidate = (
+AutomationDeliveryBinding: TypeAlias = (
+    AutomationFeishuBinding | AutomationXiaolubanBinding
+)
+AutomationDeliveryBindingCandidate: TypeAlias = (
     AutomationFeishuBindingCandidate | AutomationXiaolubanBindingCandidate
 )
 
@@ -129,10 +131,10 @@ class AutomationProjectCreateInput(BaseModel):
     prompt: str = Field(min_length=1)
     schedule_mode: AutomationScheduleMode
     cron_expression: str | None = None
-    run_at: (datetime) | None = None
+    run_at: datetime | None = None
     timezone: str = Field(default="UTC", min_length=1)
     run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
-    delivery_binding: (AutomationDeliveryBinding) | None = None
+    delivery_binding: AutomationDeliveryBinding | None = None
     delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
     enabled: bool = True
 
@@ -160,13 +162,13 @@ class AutomationProjectUpdateInput(BaseModel):
     display_name: str | None = None
     workspace_id: OptionalIdentifierStr = None
     prompt: str | None = Field(default=None, min_length=1)
-    schedule_mode: (AutomationScheduleMode) | None = None
+    schedule_mode: AutomationScheduleMode | None = None
     cron_expression: str | None = None
-    run_at: (datetime) | None = None
+    run_at: datetime | None = None
     timezone: str | None = Field(default=None, min_length=1)
-    run_config: (AutomationRunConfig) | None = None
-    delivery_binding: (AutomationDeliveryBinding) | None = None
-    delivery_events: (tuple[AutomationDeliveryEvent, ...]) | None = None
+    run_config: AutomationRunConfig | None = None
+    delivery_binding: AutomationDeliveryBinding | None = None
+    delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None
     enabled: bool | None = None
 
     @model_validator(mode="after")
@@ -197,16 +199,16 @@ class AutomationProjectRecord(BaseModel):
     prompt: str = Field(min_length=1)
     schedule_mode: AutomationScheduleMode
     cron_expression: str | None = None
-    run_at: (datetime) | None = None
+    run_at: datetime | None = None
     timezone: str = Field(min_length=1)
     run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
-    delivery_binding: (AutomationDeliveryBinding) | None = None
+    delivery_binding: AutomationDeliveryBinding | None = None
     delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
     trigger_id: RequiredIdentifierStr
     last_session_id: OptionalIdentifierStr = None
-    last_run_started_at: (datetime) | None = None
+    last_run_started_at: datetime | None = None
     last_error: str | None = None
-    next_run_at: (datetime) | None = None
+    next_run_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
@@ -224,7 +226,7 @@ class AutomationRunDeliveryRecord(BaseModel):
     delivery_events: tuple[AutomationDeliveryEvent, ...] = ()
     started_status: AutomationDeliveryStatus = AutomationDeliveryStatus.SKIPPED
     terminal_status: AutomationDeliveryStatus = AutomationDeliveryStatus.SKIPPED
-    terminal_event: (AutomationDeliveryEvent) | None = None
+    terminal_event: AutomationDeliveryEvent | None = None
     started_attempts: int = Field(default=0, ge=0)
     terminal_attempts: int = Field(default=0, ge=0)
     started_message: str | None = None
@@ -232,11 +234,11 @@ class AutomationRunDeliveryRecord(BaseModel):
     reply_to_message_id: OptionalIdentifierStr = None
     started_message_id: OptionalIdentifierStr = None
     terminal_message_id: OptionalIdentifierStr = None
-    started_sent_at: (datetime) | None = None
-    terminal_sent_at: (datetime) | None = None
+    started_sent_at: datetime | None = None
+    terminal_sent_at: datetime | None = None
     started_cleanup_status: AutomationCleanupStatus = AutomationCleanupStatus.SKIPPED
     started_cleanup_attempts: int = Field(default=0, ge=0)
-    started_cleaned_at: (datetime) | None = None
+    started_cleaned_at: datetime | None = None
     last_error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
@@ -268,11 +270,11 @@ class AutomationBoundSessionQueueRecord(BaseModel):
     queue_message_id: OptionalIdentifierStr = None
     queue_cleanup_status: AutomationCleanupStatus = AutomationCleanupStatus.SKIPPED
     queue_cleanup_attempts: int = Field(default=0, ge=0)
-    queue_cleaned_at: (datetime) | None = None
+    queue_cleaned_at: datetime | None = None
     last_error: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
-    completed_at: (datetime) | None = None
+    completed_at: datetime | None = None
 
 
 _DELIVERY_BINDING_ADAPTER = TypeAdapter(AutomationDeliveryBinding)

@@ -344,11 +344,7 @@ class HookLoader:
         for handler_index, raw_handler in enumerate(raw_handlers):
             try:
                 config = HooksConfig.model_validate(
-                    {
-                        "hooks": {
-                            raw_event_name: [dict(raw_group) | {"hooks": [raw_handler]}]
-                        }
-                    }
+                    {"hooks": {raw_event_name: [raw_group | {"hooks": [raw_handler]}]}}
                 )
                 validate_hook_event_capabilities(config=config)
                 filtered_config = self._validate_handler_references(
@@ -694,7 +690,7 @@ def _namespace_plugin_hooks_payload(payload: object, *, plugin_name: str) -> obj
             _namespace_plugin_hook_group(group, plugin_name=plugin_name)
             for group in raw_groups
         ]
-    return dict(payload) | {"hooks": next_hooks}
+    return payload | {"hooks": next_hooks}
 
 
 def _namespace_plugin_hook_group(group: object, *, plugin_name: str) -> object:

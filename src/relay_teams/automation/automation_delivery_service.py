@@ -45,9 +45,10 @@ _CLAIM_STALE_AFTER_SECONDS = 60
 
 
 class FeishuRuntimeConfigLookup(Protocol):
-    def get_runtime_config_by_trigger_id(self, trigger_id: str) -> (
-        FeishuRuntimeConfigLike
-    ) | None: ...
+    def get_runtime_config_by_trigger_id(
+        self, trigger_id: str
+    ) -> FeishuRuntimeConfigLike | None:
+        pass
 
 
 class FeishuRuntimeConfigLike(Protocol):
@@ -62,7 +63,7 @@ class FeishuClientLike(Protocol):
         *,
         chat_id: str,
         text: str,
-        environment: (FeishuEnvironment) | None = None,
+        environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
     def reply_text_message(
@@ -70,7 +71,7 @@ class FeishuClientLike(Protocol):
         *,
         message_id: str,
         text: str,
-        environment: (FeishuEnvironment) | None = None,
+        environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
 
@@ -82,7 +83,7 @@ class NotificationServiceLike(Protocol):
         title: str,
         body: str,
         context: NotificationContext,
-        dedupe_key: (str) | None = None,
+        dedupe_key: str | None = None,
     ) -> bool: ...
 
 
@@ -95,7 +96,7 @@ class XiaolubanGatewayServiceLike(Protocol):
         session_id: str,
         status: str,
         body: str,
-        receiver_uid: (str) | None = None,
+        receiver_uid: str | None = None,
     ) -> str: ...
 
 
@@ -110,11 +111,11 @@ class AutomationDeliveryService:
         repository: AutomationDeliveryRepository,
         runtime_config_lookup: FeishuRuntimeConfigLookup,
         feishu_client: FeishuClientLike,
-        xiaoluban_gateway_service: (XiaolubanGatewayServiceLike) | None = None,
+        xiaoluban_gateway_service: XiaolubanGatewayServiceLike | None = None,
         run_runtime_repo: RunRuntimeRepository,
         event_log: EventLog,
-        notification_service: (NotificationServiceLike) | None = None,
-        session_lookup: (SessionLookup) | None = None,
+        notification_service: NotificationServiceLike | None = None,
+        session_lookup: SessionLookup | None = None,
     ) -> None:
         self._repository = repository
         self._runtime_config_lookup = runtime_config_lookup
@@ -128,17 +129,17 @@ class AutomationDeliveryService:
     def register_run(
         self,
         *,
-        project: (AutomationProjectRecord) | None,
+        project: AutomationProjectRecord | None,
         session_id: str,
         run_id: str,
         reason: str,
-        project_id: (str) | None = None,
-        project_name: (str) | None = None,
-        binding: (AutomationDeliveryBinding) | None = None,
-        delivery_events: (tuple[AutomationDeliveryEvent, ...]) | None = None,
+        project_id: str | None = None,
+        project_name: str | None = None,
+        binding: AutomationDeliveryBinding | None = None,
+        delivery_events: tuple[AutomationDeliveryEvent, ...] | None = None,
         send_started: bool = True,
-        reply_to_message_id: (str) | None = None,
-    ) -> (AutomationRunDeliveryRecord) | None:
+        reply_to_message_id: str | None = None,
+    ) -> AutomationRunDeliveryRecord | None:
         resolved_binding = (
             binding
             if binding is not None
@@ -222,11 +223,11 @@ class AutomationDeliveryService:
         self._repository.delete_by_project(automation_project_id)
 
     def bind_notification_service(
-        self, notification_service: (NotificationServiceLike) | None
+        self, notification_service: NotificationServiceLike | None
     ) -> None:
         self._notification_service = notification_service
 
-    def should_suppress_terminal_notification(self, run_id: (str) | None) -> bool:
+    def should_suppress_terminal_notification(self, run_id: str | None) -> bool:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
             return False
@@ -245,7 +246,7 @@ class AutomationDeliveryService:
         return bool(str(record.terminal_message or "").strip())
 
     def should_suppress_xiaoluban_terminal_notification(
-        self, run_id: (str) | None
+        self, run_id: str | None
     ) -> bool:
         normalized_run_id = str(run_id or "").strip()
         if not normalized_run_id:
@@ -262,7 +263,7 @@ class AutomationDeliveryService:
         self,
         *,
         run_id: str,
-        terminal_message: (str) | None = None,
+        terminal_message: str | None = None,
     ) -> None:
         try:
             record = self._repository.get_by_run_id(run_id)
@@ -468,7 +469,7 @@ class AutomationDeliveryService:
         *,
         binding: AutomationDeliveryBinding,
         text: str,
-        reply_to_message_id: (str) | None = None,
+        reply_to_message_id: str | None = None,
         session_id: str = "",
         status: str = "",
     ) -> str:
@@ -562,7 +563,7 @@ class AutomationDeliveryWorker:
         self._stop_timeout_seconds = stop_timeout_seconds
         self._stop_event = asyncio.Event()
         self._wake_event = asyncio.Event()
-        self._task: (asyncio.Task[None]) | None = None
+        self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -643,7 +644,7 @@ def _build_terminal_message(
     run_id: str,
     runtime_status: RunRuntimeStatus,
     event_log: EventLog,
-    fallback_error: (str) | None,
+    fallback_error: str | None,
     binding: AutomationDeliveryBinding,
 ) -> str:
     output = ""

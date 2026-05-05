@@ -173,8 +173,8 @@ class _BackgroundTaskAgentRepository(Protocol):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: (InstanceLifecycle) | None = None,
-        parent_instance_id: (str) | None = None,
+        lifecycle: InstanceLifecycle | None = None,
+        parent_instance_id: str | None = None,
     ) -> None:
         pass
 
@@ -341,7 +341,7 @@ class BackgroundTaskService:
         session_id: str,
         instance_id: str,
         role_id: str,
-        tool_call_id: (str) | None,
+        tool_call_id: str | None,
         workspace: WorkspaceHandle,
         command: str,
         cwd: Path,
@@ -406,7 +406,7 @@ class BackgroundTaskService:
         session_id: str,
         instance_id: str,
         role_id: str,
-        tool_call_id: (str) | None,
+        tool_call_id: str | None,
         workspace_id: str,
         cwd: Path,
         subagent_role_id: str,

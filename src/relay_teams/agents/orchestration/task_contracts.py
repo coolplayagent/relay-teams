@@ -27,7 +27,7 @@ class TaskDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     objective: str = Field(min_length=1)
-    title: (str) | None = None
+    title: str | None = None
     role_id: OptionalIdentifierStr = None
     orchestration_node_id: OptionalIdentifierStr = None
     depends_on_task_ids: tuple[str, ...] = ()
@@ -54,8 +54,8 @@ class TaskDraft(BaseModel):
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    objective: (str) | None = None
-    title: (str) | None = None
+    objective: str | None = None
+    title: str | None = None
     spec: TaskSpec | None = None
     spec_artifact_id: OptionalIdentifierStr = None
     spec_source_task_id: OptionalIdentifierStr = None
@@ -84,8 +84,8 @@ class TaskExecutionResult(BaseModel):
 
     output: str
     completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
-    error_code: (str) | None = None
-    error_message: (str) | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class TaskOrchestrationServiceLike(Protocol):
@@ -100,7 +100,7 @@ class TaskOrchestrationServiceLike(Protocol):
     async def update_task_async(
         self,
         *,
-        run_id: (str) | None,
+        run_id: str | None,
         task_id: str,
         update: TaskUpdate,
     ) -> dict[str, JsonValue]:
@@ -125,7 +125,7 @@ class TaskOrchestrationServiceLike(Protocol):
     async def dispatch_task(
         self,
         *,
-        run_id: (str) | None,
+        run_id: str | None,
         task_id: str,
         role_id: str,
         prompt: str = "",
@@ -140,6 +140,6 @@ class TaskExecutionServiceLike(Protocol):
         instance_id: str,
         role_id: str,
         task: TaskEnvelope,
-        user_prompt_override: (str) | None = None,
+        user_prompt_override: str | None = None,
     ) -> object:
         raise NotImplementedError  # pragma: no cover

@@ -2779,7 +2779,7 @@ def _reported_failure_from_success_envelope(
     *,
     tool_name: str,
     envelope: dict[str, JsonValue],
-) -> (tuple[str, str]) | None:
+) -> tuple[str, str] | None:
     if envelope.get("ok") is not True:
         return None
     if tool_name != "shell":
@@ -2821,7 +2821,7 @@ async def _handle_tool_approval(
     ctx: ToolContext,
     tool_name: str,
     args_summary: dict[str, JsonValue],
-    approval_args_summary: (dict[str, JsonValue]) | None,
+    approval_args_summary: dict[str, JsonValue] | None,
     meta: dict[str, JsonValue],
     tool_call_id: str,
     approval_request: ToolApprovalRequest | None = None,
@@ -3495,7 +3495,7 @@ def _internal_record(
     *,
     tool_name: str,
     visible_envelope: dict[str, JsonValue],
-    internal_data: (JsonValue) | None,
+    internal_data: JsonValue | None,
     runtime_meta: dict[str, JsonValue],
     tool_content_parts: tuple[ContentPart, ...],
 ) -> dict[str, JsonValue]:

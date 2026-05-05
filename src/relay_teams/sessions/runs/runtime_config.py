@@ -671,7 +671,7 @@ def _resolve_profile_codeagent_token(
     env_values: Mapping[str, str],
     field_name: str,
     secret_field_name: str,
-) -> (str) | None:
+) -> str | None:
     if isinstance(raw_value, str) and raw_value.strip():
         return _resolve_required_config_value(
             raw_value,

@@ -269,8 +269,8 @@ class ServerContainer:
         self,
         *,
         config_dir: Path,
-        roles_dir: (Path) | None = None,
-        db_path: (Path) | None = None,
+        roles_dir: Path | None = None,
+        db_path: Path | None = None,
         manage_runtime_state: bool = True,
         session_model_profile_lookup: (Callable[[str], ModelEndpointConfig | None])
         | None = None,
@@ -756,7 +756,7 @@ class ServerContainer:
             run_runtime_repo=self.run_runtime_repo,
         )
 
-        self._provider_factory: Callable[[RoleDefinition, (str) | None], LLMProvider]
+        self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
         self._build_runtime_services()
@@ -1252,37 +1252,37 @@ class ServerContainer:
             plugin_hook_sources=self.plugin_registry.hook_sources(),
         )
 
-    def _resolve_reflection_model_config(self) -> (ModelEndpointConfig) | None:
+    def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
         if self.runtime.default_model_profile is not None:
             return self.runtime.llm_profiles.get(self.runtime.default_model_profile)
         for profile in self.runtime.llm_profiles.values():
             return profile
         return None
 
-    def _resolve_reflection_model_profile_name(self) -> (str) | None:
+    def _resolve_reflection_model_profile_name(self) -> str | None:
         if self.runtime.default_model_profile is not None:
             return self.runtime.default_model_profile
         for profile_name in self.runtime.llm_profiles.keys():
             return profile_name
         return None
 
-    def resolve_reflection_model_config(self) -> (ModelEndpointConfig) | None:
+    def resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
         return self._resolve_reflection_model_config()
 
-    def resolve_reflection_model_profile_name(self) -> (str) | None:
+    def resolve_reflection_model_profile_name(self) -> str | None:
         return self._resolve_reflection_model_profile_name()
 
     def create_provider(
         self,
         role_definition: RoleDefinition,
-        session_id: (str) | None,
+        session_id: str | None,
     ) -> LLMProvider:
         return self._provider_factory(role_definition, session_id)
 
     def _resolve_hook_model_config(
         self,
-        model_profile: (str) | None,
-    ) -> tuple[(ModelEndpointConfig) | None, (str) | None]:
+        model_profile: str | None,
+    ) -> tuple[ModelEndpointConfig | None, str | None]:
         profile_name = (
             model_profile.strip()
             if model_profile is not None and model_profile.strip()
@@ -1303,7 +1303,7 @@ class ServerContainer:
         self,
         role: RoleDefinition,
         session_id: str | None,
-    ) -> tuple[(ModelEndpointConfig) | None, (str) | None]:
+    ) -> tuple[ModelEndpointConfig | None, str | None]:
         runtime_to_use = self.runtime
         if (
             session_id
@@ -1329,7 +1329,7 @@ class ServerContainer:
         self,
         role: RoleDefinition,
         request: LLMRequest,
-    ) -> (ModelEndpointConfig) | None:
+    ) -> ModelEndpointConfig | None:
         runtime_to_use = self.runtime
         if (
             self._session_model_profile_lookup is not None
@@ -1347,7 +1347,7 @@ class ServerContainer:
 
     def _build_subagent_reflection_service(
         self,
-    ) -> (SubagentReflectionService) | None:
+    ) -> SubagentReflectionService | None:
         reflection_config = self._resolve_reflection_model_config()
         if reflection_config is None:
             return None

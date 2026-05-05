@@ -372,7 +372,7 @@ class ModelProfileConfigPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     provider: ProviderType = ProviderType.OPENAI_COMPATIBLE
-    is_default: (bool) | None = None
+    is_default: bool | None = None
     model: str = Field(min_length=1)
     base_url: str | None = Field(default=None, min_length=1)
     api_key: str | None = Field(default=None, min_length=1)
@@ -384,13 +384,13 @@ class ModelProfileConfigPayload(BaseModel):
     speech_realtime: SpeechRealtimeConfig | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
-    max_tokens: (int) | None = Field(default=None, ge=1)
-    context_window: (int) | None = Field(default=None, ge=1)
-    fallback_policy_id: (str) | None = Field(default=None, min_length=1)
+    max_tokens: int | None = Field(default=None, ge=1)
+    context_window: int | None = Field(default=None, ge=1)
+    fallback_policy_id: str | None = Field(default=None, min_length=1)
     fallback_priority: int = Field(default=0, ge=0, le=1_000_000)
-    catalog_provider_id: (str) | None = Field(default=None, min_length=1)
-    catalog_provider_name: (str) | None = Field(default=None, min_length=1)
-    catalog_model_name: (str) | None = Field(default=None, min_length=1)
+    catalog_provider_id: str | None = Field(default=None, min_length=1)
+    catalog_provider_name: str | None = Field(default=None, min_length=1)
+    catalog_model_name: str | None = Field(default=None, min_length=1)
     connect_timeout_seconds: float = Field(
         default=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
         gt=0.0,
@@ -510,7 +510,7 @@ class ModelFallbackConfig(BaseModel):
             seen_ids.add(normalized_id)
         return self
 
-    def get_policy(self, policy_id: (str) | None) -> (ModelFallbackPolicy) | None:
+    def get_policy(self, policy_id: str | None) -> ModelFallbackPolicy | None:
         if policy_id is None:
             return None
         normalized_id = policy_id.strip().casefold()

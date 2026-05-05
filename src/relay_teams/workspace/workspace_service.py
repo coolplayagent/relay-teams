@@ -190,8 +190,8 @@ class WorkspaceService:
         workspace_id: str,
         root_path: Path | None = None,
         profile: WorkspaceProfile | None = None,
-        mounts: (tuple[WorkspaceMountRecord, ...]) | None = None,
-        default_mount_name: (str) | None = None,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str | None = None,
     ) -> WorkspaceRecord:
         if self._repository.exists(workspace_id):
             raise ValueError(f"Workspace already exists: {workspace_id}")
@@ -261,8 +261,8 @@ class WorkspaceService:
         *,
         root_path: Path | None = None,
         profile: WorkspaceProfile | None = None,
-        mounts: (tuple[WorkspaceMountRecord, ...]) | None = None,
-        default_mount_name: (str) | None = None,
+        mounts: tuple[WorkspaceMountRecord, ...] | None = None,
+        default_mount_name: str | None = None,
     ) -> tuple[tuple[WorkspaceMountRecord, ...], str]:
         if mounts is None:
             if root_path is None:
@@ -368,7 +368,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         *,
-        mount_name: (str) | None = None,
+        mount_name: str | None = None,
     ) -> Path:
         record = self._repository.get(workspace_id)
         target_mount = (
@@ -462,7 +462,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         directory_path: str,
-        mount_name: (str) | None = None,
+        mount_name: str | None = None,
     ) -> WorkspaceTreeListing:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -545,7 +545,7 @@ class WorkspaceService:
         *,
         query: str = "",
         limit: int = 40,
-        mount_name: (str) | None = None,
+        mount_name: str | None = None,
     ) -> WorkspaceSearchResponse:
         record = self._repository.get(workspace_id)
         mount = self._resolve_search_mount(record=record, mount_name=mount_name)
@@ -658,7 +658,7 @@ class WorkspaceService:
         *,
         root_path: Path,
         mount: WorkspaceMountRecord,
-        timeout_seconds: (float) | None = None,
+        timeout_seconds: float | None = None,
     ) -> tuple[WorkspaceSearchResult, ...]:
         ripgrep_candidates = self._build_ripgrep_search_candidates(
             root_path=root_path,
@@ -679,8 +679,8 @@ class WorkspaceService:
         *,
         root_path: Path,
         mount: WorkspaceMountRecord,
-        timeout_seconds: (float) | None,
-    ) -> (tuple[WorkspaceSearchResult, ...]) | None:
+        timeout_seconds: float | None,
+    ) -> tuple[WorkspaceSearchResult, ...] | None:
         ripgrep_binary = shutil.which("rg")
         if ripgrep_binary is None:
             return None
@@ -911,7 +911,7 @@ class WorkspaceService:
         query: str,
         index: int,
         prefer_hidden: bool,
-    ) -> (tuple[int, int, int, int, str]) | None:
+    ) -> tuple[int, int, int, int, str] | None:
         candidate_path = candidate.path.casefold()
         candidate_name = candidate.name.casefold()
         hidden_rank = (
@@ -946,7 +946,7 @@ class WorkspaceService:
         *,
         query: str,
         target: str,
-    ) -> (int) | None:
+    ) -> int | None:
         target_index = 0
         score = 0
         last_match = -1
@@ -1016,7 +1016,7 @@ class WorkspaceService:
         self,
         workspace_id: str,
         *,
-        mount_name: (str) | None = None,
+        mount_name: str | None = None,
     ) -> WorkspaceDiffListing:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -1120,7 +1120,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         path: str,
-        mount_name: (str) | None = None,
+        mount_name: str | None = None,
     ) -> WorkspaceDiffFile:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)
@@ -1178,7 +1178,7 @@ class WorkspaceService:
         workspace_id: str,
         *,
         path: str,
-        mount_name: (str) | None = None,
+        mount_name: str | None = None,
     ) -> tuple[Path, str]:
         record = self._repository.get(workspace_id)
         mount = self._resolve_mount(record, mount_name)

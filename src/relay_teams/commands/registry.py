@@ -42,7 +42,7 @@ class CommandRegistry(BaseModel):
     def list_commands(
         self,
         *,
-        workspace_root: (Path) | None,
+        workspace_root: Path | None,
     ) -> tuple[CommandDefinition, ...]:
         with trace_span(
             LOGGER,
@@ -73,7 +73,7 @@ class CommandRegistry(BaseModel):
     def list_project_commands(
         self,
         *,
-        workspace_root: (Path) | None,
+        workspace_root: Path | None,
     ) -> tuple[CommandDefinition, ...]:
         if workspace_root is None:
             return ()
@@ -99,8 +99,8 @@ class CommandRegistry(BaseModel):
         self,
         *,
         source_path: Path,
-        workspace_root: (Path) | None,
-    ) -> (CommandDefinition) | None:
+        workspace_root: Path | None,
+    ) -> CommandDefinition | None:
         target_path = source_path.resolve()
         for command in discover_commands(
             app_config_dir=self.app_config_dir,
@@ -115,8 +115,8 @@ class CommandRegistry(BaseModel):
         self,
         name: str,
         *,
-        workspace_root: (Path) | None,
-    ) -> (CommandDefinition) | None:
+        workspace_root: Path | None,
+    ) -> CommandDefinition | None:
         with trace_span(
             LOGGER,
             component="commands.registry",
@@ -132,8 +132,8 @@ class CommandRegistry(BaseModel):
         *,
         raw_text: str,
         mode: str,
-        workspace_root: (Path) | None,
-        cwd: (Path) | None,
+        workspace_root: Path | None,
+        cwd: Path | None,
     ) -> CommandResolveResponse:
         parsed_name, args = _parse_command_text(raw_text)
         if parsed_name is None:
@@ -175,7 +175,7 @@ class CommandRegistry(BaseModel):
     def _build_maps(
         self,
         *,
-        workspace_root: (Path) | None,
+        workspace_root: Path | None,
     ) -> tuple[dict[str, CommandDefinition], dict[str, CommandDefinition]]:
         alias_map: dict[str, CommandDefinition] = {}
         effective_commands = _effective_commands(
@@ -229,7 +229,7 @@ def _effective_commands(
     return tuple(effective_commands)
 
 
-def _parse_command_text(raw_text: str) -> tuple[(str) | None, str]:
+def _parse_command_text(raw_text: str) -> tuple[str | None, str]:
     source = str(raw_text or "")
     if not source.startswith("/"):
         return None, ""
@@ -248,8 +248,8 @@ def _expand_template(
     template: str,
     *,
     args: str,
-    workspace_root: (Path) | None,
-    cwd: (Path) | None,
+    workspace_root: Path | None,
+    cwd: Path | None,
 ) -> str:
     workspace_root_text = str(workspace_root.resolve()) if workspace_root else ""
     cwd_text = str(cwd.resolve()) if cwd else workspace_root_text

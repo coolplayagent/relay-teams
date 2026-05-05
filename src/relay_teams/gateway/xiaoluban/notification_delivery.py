@@ -32,13 +32,13 @@ class XiaolubanAccountLookup(Protocol):
         session_id: str,
         status: str,
         body: str,
-        receiver_uid: (str) | None = None,
+        receiver_uid: str | None = None,
     ) -> str: ...
 
 
 class XiaolubanTerminalNotificationSuppressor(Protocol):
     def should_suppress_xiaoluban_terminal_notification(
-        self, run_id: (str) | None
+        self, run_id: str | None
     ) -> bool: ...
 
 
@@ -52,7 +52,7 @@ class CompositeXiaolubanTerminalNotificationSuppressor:
         )
 
     def should_suppress_xiaoluban_terminal_notification(
-        self, run_id: (str) | None
+        self, run_id: str | None
     ) -> bool:
         return any(
             suppressor.should_suppress_xiaoluban_terminal_notification(run_id)

@@ -24,7 +24,7 @@ from relay_teams.logger import configure_logging
 from relay_teams.paths import get_app_config_dir
 
 RequestJsonCallable = Callable[
-    [str, str, str, (dict[str, object]) | None],
+    [str, str, str, dict[str, object] | None],
     dict[str, object] | list[object],
 ]
 AutoStartCallable = Callable[[str, bool], None]
@@ -32,8 +32,8 @@ AutoStartCallable = Callable[[str, bool], None]
 
 def build_gateway_app(
     *,
-    request_json: (RequestJsonCallable) | None = None,
-    auto_start_if_needed: (AutoStartCallable) | None = None,
+    request_json: RequestJsonCallable | None = None,
+    auto_start_if_needed: AutoStartCallable | None = None,
     default_base_url: str = "http://127.0.0.1:8000",
 ) -> typer.Typer:
     root_gateway_app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
@@ -43,7 +43,7 @@ def build_gateway_app(
 
     @acp_app.command("stdio")
     def gateway_acp_stdio(
-        role: (str) | None = typer.Option(
+        role: str | None = typer.Option(
             None,
             "--role",
             help=(
@@ -176,8 +176,8 @@ def build_gateway_app(
 
         @wechat_app.command("connect")
         def wechat_connect(
-            base_url_override: (str) | None = typer.Option(None, "--wechat-base-url"),
-            route_tag: (str) | None = typer.Option(None, "--route-tag"),
+            base_url_override: str | None = typer.Option(None, "--wechat-base-url"),
+            route_tag: str | None = typer.Option(None, "--route-tag"),
             bot_type: str = typer.Option("3", "--bot-type"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
@@ -298,7 +298,7 @@ def build_gateway_app(
     return root_gateway_app
 
 
-def _build_acp_stdio_runtime(*, role_id: (str) | None = None) -> AcpStdioRuntime:
+def _build_acp_stdio_runtime(*, role_id: str | None = None) -> AcpStdioRuntime:
     config_dir = get_app_config_dir()
     ensure_app_config_bootstrap(config_dir)
     sync_app_env_to_process_env(config_dir / ".env")
@@ -326,7 +326,7 @@ def _build_acp_stdio_runtime(*, role_id: (str) | None = None) -> AcpStdioRuntime
 
     def lookup_gateway_session(
         gateway_session_id: str,
-    ) -> (GatewaySessionRecord) | None:
+    ) -> GatewaySessionRecord | None:
         try:
             return gateway_session_service.get_session(gateway_session_id)
         except KeyError:
@@ -363,8 +363,8 @@ def _build_acp_stdio_runtime(*, role_id: (str) | None = None) -> AcpStdioRuntime
 def _resolve_acp_stdio_role_id(
     *,
     container: ServerContainer,
-    role_id: (str) | None,
-) -> (str) | None:
+    role_id: str | None,
+) -> str | None:
     normalized_role_id = str(role_id or "").strip() or None
     if normalized_role_id is None:
         return None

@@ -40,8 +40,8 @@ _DEFAULT_INSTALL_TIMEOUT_SECONDS = 180.0
 class ClawHubConnectivityProbeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    token: (str) | None = None
-    timeout_ms: (int) | None = Field(
+    token: str | None = None
+    timeout_ms: int | None = Field(
         default=None,
         ge=1000,
         le=_MAX_CLAWHUB_PROBE_TIMEOUT_MS,
@@ -55,7 +55,7 @@ class ClawHubConnectivityProbeDiagnostics(BaseModel):
     token_configured: bool
     installation_attempted: bool = False
     installed_during_probe: bool = False
-    registry: (str) | None = None
+    registry: str | None = None
     endpoint_fallback_used: bool = False
 
 
@@ -63,15 +63,15 @@ class ClawHubConnectivityProbeResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ok: bool
-    clawhub_path: (str) | None = None
-    clawhub_version: (str) | None = None
-    exit_code: (int) | None = None
+    clawhub_path: str | None = None
+    clawhub_version: str | None = None
+    exit_code: int | None = None
     latency_ms: int = Field(ge=0)
     checked_at: datetime
     diagnostics: ClawHubConnectivityProbeDiagnostics
     retryable: bool = False
-    error_code: (str) | None = None
-    error_message: (str) | None = None
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class ClawHubConnectivityProbeService:
@@ -166,7 +166,7 @@ class ClawHubConnectivityProbeService:
         env["PATH"] = _prepend_to_path(env.get("PATH"), clawhub_path.parent)
         registry = resolve_clawhub_registry_from_env(env)
         endpoint_fallback_used = False
-        version_text: (str) | None = None
+        version_text: str | None = None
         version_timeout_seconds = _resolve_remaining_timeout_seconds(probe_deadline)
         if version_timeout_seconds is not None:
             version_text = _read_clawhub_version(
@@ -426,16 +426,16 @@ class ClawHubConnectivityProbeService:
         started: float,
         binary_available: bool,
         token_configured: bool,
-        clawhub_path: (Path) | None = None,
-        clawhub_version: (str) | None = None,
-        exit_code: (int) | None = None,
+        clawhub_path: Path | None = None,
+        clawhub_version: str | None = None,
+        exit_code: int | None = None,
         installation_attempted: bool = False,
         installed_during_probe: bool = False,
-        registry: (str) | None = None,
+        registry: str | None = None,
         endpoint_fallback_used: bool = False,
         retryable: bool = False,
-        error_code: (str) | None = None,
-        error_message: (str) | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
     ) -> ClawHubConnectivityProbeResult:
         return ClawHubConnectivityProbeResult(
             ok=ok,
@@ -458,7 +458,7 @@ class ClawHubConnectivityProbeService:
         )
 
 
-def _prepend_to_path(existing_path: (str) | None, directory: Path) -> str:
+def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     path_parts = [str(directory)]
     if existing_path:
         path_parts.append(existing_path)
@@ -470,7 +470,7 @@ def _read_clawhub_version(
     *,
     env: dict[str, str],
     timeout_seconds: float,
-) -> (str) | None:
+) -> str | None:
     try:
         completed = subprocess.run(
             [str(clawhub_path), "--cli-version"],
@@ -491,7 +491,7 @@ def _read_clawhub_version(
     )
 
 
-def _resolve_command_output_text(*candidates: str) -> (str) | None:
+def _resolve_command_output_text(*candidates: str) -> str | None:
     for candidate in candidates:
         non_empty_lines = [
             line.strip() for line in candidate.splitlines() if line.strip()
@@ -501,7 +501,7 @@ def _resolve_command_output_text(*candidates: str) -> (str) | None:
     return None
 
 
-def _normalize_clawhub_version_text(version_text: (str) | None) -> (str) | None:
+def _normalize_clawhub_version_text(version_text: str | None) -> str | None:
     if version_text is None:
         return None
     if version_text.lower().startswith("clawhub "):
@@ -511,17 +511,17 @@ def _normalize_clawhub_version_text(version_text: (str) | None) -> (str) | None:
     return version_text
 
 
-def _resolve_probe_deadline(started: float, timeout_ms: (int) | None) -> float:
+def _resolve_probe_deadline(started: float, timeout_ms: int | None) -> float:
     return started + _resolve_probe_timeout_seconds(timeout_ms)
 
 
-def _resolve_probe_timeout_seconds(timeout_ms: (int) | None) -> float:
+def _resolve_probe_timeout_seconds(timeout_ms: int | None) -> float:
     if timeout_ms is None:
         return _DEFAULT_TIMEOUT_SECONDS
     return timeout_ms / 1000.0
 
 
-def _resolve_remaining_timeout_seconds(deadline: float) -> (float) | None:
+def _resolve_remaining_timeout_seconds(deadline: float) -> float | None:
     remaining_seconds = deadline - perf_counter()
     if remaining_seconds <= 0:
         return None
@@ -529,10 +529,10 @@ def _resolve_remaining_timeout_seconds(deadline: float) -> (float) | None:
 
 
 def _resolve_install_timeout_seconds(
-    timeout_ms: (int) | None,
+    timeout_ms: int | None,
     *,
-    probe_deadline: (float) | None = None,
-) -> (float) | None:
+    probe_deadline: float | None = None,
+) -> float | None:
     if timeout_ms is None:
         return _DEFAULT_INSTALL_TIMEOUT_SECONDS
     if probe_deadline is None:

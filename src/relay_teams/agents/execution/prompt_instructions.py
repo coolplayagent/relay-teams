@@ -31,7 +31,7 @@ class LoadedPromptInstructionSource(BaseModel):
 
     source: str
     source_type: str
-    local_path: (Path) | None = None
+    local_path: Path | None = None
     load_reason: str = "initial"
     memory_type: str = ""
 

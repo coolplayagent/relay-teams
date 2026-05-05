@@ -10,12 +10,12 @@ _FIELD_NAME = "token"
 
 
 class XiaolubanSecretStore:
-    def __init__(self, *, secret_store: (AppSecretStore) | None = None) -> None:
+    def __init__(self, *, secret_store: AppSecretStore | None = None) -> None:
         self._secret_store = (
             get_secret_store() if secret_store is None else secret_store
         )
 
-    def get_token(self, config_dir: Path, account_id: str) -> (str) | None:
+    def get_token(self, config_dir: Path, account_id: str) -> str | None:
         value = self._secret_store.get_secret(
             config_dir,
             namespace=_NAMESPACE,
@@ -28,7 +28,7 @@ class XiaolubanSecretStore:
         self,
         config_dir: Path,
         account_id: str,
-        token: (str) | None,
+        token: str | None,
     ) -> None:
         self._secret_store.set_secret(
             config_dir,
@@ -58,7 +58,7 @@ def get_xiaoluban_secret_store() -> XiaolubanSecretStore:
     return _XIAOLUBAN_SECRET_STORE
 
 
-def _normalize_secret(value: (str) | None) -> (str) | None:
+def _normalize_secret(value: str | None) -> str | None:
     if value is None:
         return None
     normalized = value.strip()

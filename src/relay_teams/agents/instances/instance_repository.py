@@ -102,8 +102,8 @@ class AgentInstanceRepository(SharedSqliteRepository):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: (InstanceLifecycle) | None = None,
-        parent_instance_id: (str) | None = None,
+        lifecycle: InstanceLifecycle | None = None,
+        parent_instance_id: str | None = None,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_conversation_id = conversation_id or build_conversation_id(
@@ -170,8 +170,8 @@ class AgentInstanceRepository(SharedSqliteRepository):
         workspace_id: str,
         conversation_id: str | None = None,
         status: InstanceStatus,
-        lifecycle: (InstanceLifecycle) | None = None,
-        parent_instance_id: (str) | None = None,
+        lifecycle: InstanceLifecycle | None = None,
+        parent_instance_id: str | None = None,
     ) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         resolved_conversation_id = conversation_id or build_conversation_id(
