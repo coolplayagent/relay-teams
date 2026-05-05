@@ -92,6 +92,10 @@ Boundary:
   hooks, reminders, monitor follow-ups, and other runtime wake-up paths.
 - `logger/*`: structured logging and diagnostics.
 - `net/*`: proxy-aware HTTP client construction and transport policy.
+  `urllib.request.urlopen` and `urllib.request.Request` must not be used anywhere
+  in `src/relay_teams/`. All outbound HTTP traffic must use client instances
+  created by `create_async_http_client()`, `create_sync_http_client()`, or
+  `create_runtime_sync_http_client()` from `relay_teams.net.clients`.
 - `secrets/*`: secret persistence and masking.
 - `trace/*`: trace/span context propagation.
 

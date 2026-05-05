@@ -8,11 +8,10 @@ import shutil
 import subprocess
 import sys
 import time
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 from typing import TypedDict
 
+import httpx
 import typer
 
 from relay_teams.env.proxy_env import (
@@ -275,33 +274,38 @@ def _request_json(
     payload: dict[str, object] | None = None,
     timeout_seconds: float = 30.0,
 ) -> dict[str, object]:
-    sync_proxy_env_to_process_env(load_proxy_env_config())
-    body = None
-    headers = {"Accept": "application/json"}
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-
-    request = Request(
-        url=f"{base_url.rstrip('/')}{path}",
-        method=method,
-        data=body,
-        headers=headers,
-    )
-
+    url = f"{base_url.rstrip('/')}{path}"
+    proxy_config = load_proxy_env_config()
+    sync_proxy_env_to_process_env(proxy_config)
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:  # nosec B310 - HTTPS URL with user-controlled config
-            raw = response.read().decode("utf-8")
+        with httpx.Client(timeout=timeout_seconds) as client:
+            if payload is not None:
+                response = client.request(
+                    method,
+                    url,
+                    json=payload,
+                    headers={"Accept": "application/json"},
+                )
+            else:
+                response = client.request(
+                    method,
+                    url,
+                    headers={"Accept": "application/json"},
+                )
+            response.raise_for_status()
+            raw = response.text
             if not raw:
                 return {}
-            data = json.loads(raw)
+            data = response.json()
             if isinstance(data, dict):
                 return data
             return {"data": data}
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code} {method} {path}: {detail}") from exc
-    except URLError as exc:
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text
+        raise RuntimeError(
+            f"HTTP {exc.response.status_code} {method} {path}: {detail}"
+        ) from exc
+    except httpx.TransportError as exc:
         raise RuntimeError(f"Failed to connect to {base_url}: {exc}") from exc
 
 
