@@ -139,7 +139,7 @@ class TaskExecutionService(BaseModel):
     wakeup_repo: AgentWakeupRepository | None = None
     artifact_repo: TaskArtifactRepository | None = None
 
-    # ── Harness factory ───────────────────────────────────────────────
+    # -- Harness factory -----------------------------------------------
 
     def _execution_harness(self) -> ExecutionHarness:
         return ExecutionHarness.model_construct(
@@ -182,7 +182,7 @@ class TaskExecutionService(BaseModel):
             artifact_repo=getattr(self, "artifact_repo", None),
         )
 
-    # ── Public entry point ────────────────────────────────────────────
+    # -- Public entry point --------------------------------------------
 
     async def execute(
         self,
@@ -275,7 +275,7 @@ class TaskExecutionService(BaseModel):
                     instance_id=instance_id,
                 )
 
-    # ── Core execution flow ───────────────────────────────────────────
+    # -- Core execution flow -------------------------------------------
 
     async def _wait_for_worker_with_progress_timeout_async(
         self,
@@ -743,7 +743,7 @@ class TaskExecutionService(BaseModel):
                 error_message=str(exc),
             )
 
-    # ── Guardrail report ──────────────────────────────────────────────
+    # -- Guardrail report ----------------------------------------------
 
     async def _publish_runtime_guardrail_report_async(
         self,
@@ -789,7 +789,7 @@ class TaskExecutionService(BaseModel):
                 },
             )
 
-    # ── Heartbeat ─────────────────────────────────────────────────────
+    # -- Heartbeat -----------------------------------------------------
 
     def _start_task_heartbeat(
         self,
@@ -918,7 +918,7 @@ class TaskExecutionService(BaseModel):
         )
         return True
 
-    # ── Timeout management ────────────────────────────────────────────
+    # -- Timeout management --------------------------------------------
 
     async def _complete_task_timeout_async(
         self,
@@ -1089,7 +1089,7 @@ class TaskExecutionService(BaseModel):
             timeout_seconds=timeout_seconds,
         )
 
-    # ── Cancelled execution persistence ───────────────────────────────
+    # -- Cancelled execution persistence -------------------------------
 
     async def _persist_cancelled_execution_async(
         self,
@@ -1169,7 +1169,7 @@ class TaskExecutionService(BaseModel):
             )
         return stopped, paused_subagent
 
-    # ── Thin wrappers preserving async-wrapper coverage ────────────────
+    # -- Thin wrappers preserving async-wrapper coverage ----------------
 
     async def _thinking_for_run_async(self, run_id: str) -> RunThinkingConfig:
         return await TaskLlmHarness.model_construct(

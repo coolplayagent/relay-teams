@@ -210,8 +210,8 @@ class TestSemanticCreatesCorrectEntries:
         # With EchoProvider and no messages, it falls back to structural
         result = service_with_llm.consolidate(req)
         assert isinstance(result, MemoryConsolidationResult)
-        assert hasattr(result, "extraction_tokens_used")
-        assert hasattr(result, "extraction_duration_ms")
+        assert result.extraction_tokens_used >= 0
+        assert result.extraction_duration_ms >= 0
 
 
 # ---------------------------------------------------------------------------

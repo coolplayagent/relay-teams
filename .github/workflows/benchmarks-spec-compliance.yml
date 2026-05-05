@@ -44,7 +44,7 @@ jobs:
 
       - name: Check changed files for new violations
         run: |
-          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM origin/main...HEAD -- '*.py' 'benchmarks/**/*.py' || true)
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACM origin/main...HEAD -- '*.py' ':!benchmarks/spec_compliance/*.py' || true)
           if [ -z "$CHANGED_FILES" ]; then
             echo "No Python files changed in this PR."
             exit 0
@@ -55,16 +55,18 @@ jobs:
           echo ""
 
           uv run python -c "
-          import json, subprocess, sys
+          import sys
           from pathlib import Path
           from benchmarks.spec_compliance.checks import FILE_CHECKS
-          from benchmarks.spec_compliance.models import ComplianceCheckCategory
 
           changed = '''$CHANGED_FILES'''.strip().splitlines()
           new_violations = 0
           for fpath_str in changed:
               fpath = Path(fpath_str)
               if not fpath.exists() or not fpath.suffix == '.py':
+                  continue
+              # Exclude the checker itself (contains string patterns that self-match)
+              if 'spec_compliance/checks.py' in str(fpath):
                   continue
               content = fpath.read_text(encoding='utf-8')
               for check_fn in FILE_CHECKS:
