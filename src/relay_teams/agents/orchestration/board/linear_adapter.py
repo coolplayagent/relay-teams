@@ -13,9 +13,11 @@ from relay_teams.agents.orchestration.board.adapter import (
     TaskBoardAdapter,
 )
 from relay_teams.logger import get_logger
-from relay_teams.net.clients import create_runtime_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 
 LOGGER = get_logger(__name__)
+
+_HTTP_TIMEOUT_SECONDS = 30.0
 
 _LINEAR_STATE_MAP: dict[str, BoardTaskState] = {
     "unstarted": BoardTaskState.READY,
@@ -89,7 +91,6 @@ class LinearAdapter(TaskBoardAdapter):
         self._api_key = api_key
         self._team_id = team_id
         self._url = "https://api.linear.app/graphql"
-        self._client = create_runtime_sync_http_client()
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -112,11 +113,18 @@ class LinearAdapter(TaskBoardAdapter):
             {"query": query, "variables": {"teamId": board_id}}
         ).encode()
         try:
-            resp = self._client.request(
-                "POST", self._url, content=payload, headers=self._headers
-            )
-            data = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
+            async with create_async_http_client(
+                timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+            ) as client:
+                response = await client.post(
+                    self._url, content=payload, headers=self._headers
+                )
+                data = response.json()
+        except (
+            httpx.HTTPStatusError,
+            httpx.TransportError,
+            json.JSONDecodeError,
+        ) as exc:
             LOGGER.warning("failed to list Linear issues: %s", exc)
             return ()
         nodes = data.get("data", {}).get("team", {}).get("issues", {}).get("nodes", [])
@@ -135,10 +143,14 @@ class LinearAdapter(TaskBoardAdapter):
         }
         """
         payload = json.dumps({"query": query, "variables": {"id": task_id}}).encode()
-        resp = self._client.request(
-            "POST", self._url, content=payload, headers=self._headers
-        )
-        data = resp.json()
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                self._url, content=payload, headers=self._headers
+            )
+            response.raise_for_status()
+            data = response.json()
         issue = data.get("data", {}).get("issue", {})
         return _linear_issue_to_board(issue)
 
@@ -165,7 +177,13 @@ class LinearAdapter(TaskBoardAdapter):
                 "variables": {"id": task_id, "stateName": state_name},
             }
         ).encode()
-        self._client.request("POST", self._url, content=payload, headers=self._headers)
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                self._url, content=payload, headers=self._headers
+            )
+            response.raise_for_status()
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
         mutation = """
@@ -181,7 +199,13 @@ class LinearAdapter(TaskBoardAdapter):
                 "variables": {"id": task_id, "assignee": assignee},
             }
         ).encode()
-        self._client.request("POST", self._url, content=payload, headers=self._headers)
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                self._url, content=payload, headers=self._headers
+            )
+            response.raise_for_status()
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
         mutation = """
@@ -194,7 +218,13 @@ class LinearAdapter(TaskBoardAdapter):
         payload = json.dumps(
             {"query": mutation, "variables": {"id": task_id, "body": body}}
         ).encode()
-        self._client.request("POST", self._url, content=payload, headers=self._headers)
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                self._url, content=payload, headers=self._headers
+            )
+            response.raise_for_status()
 
     async def add_artifact(self, *, task_id: str, name: str, url: str) -> None:
         body = f"**{name}**: {url}"

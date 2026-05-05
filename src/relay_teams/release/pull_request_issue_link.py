@@ -6,8 +6,10 @@ import os
 import sys
 from pathlib import Path
 from typing import NamedTuple, Protocol
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import httpx
+
+from relay_teams.net.clients import create_sync_http_client
 
 _GRAPHQL_TIMEOUT_SECONDS = 30.0
 _GITHUB_GRAPHQL_QUERY = """
@@ -87,28 +89,29 @@ def fetch_linked_issue_count(
             },
         }
     ).encode("utf-8")
-    request = Request(
-        graphql_url,
-        data=request_payload,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
     try:
-        with urlopen(request, timeout=_GRAPHQL_TIMEOUT_SECONDS) as response:  # nosec B310 - HTTPS URL with user-controlled config
-            response_text = response.read().decode("utf-8")
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
+        with create_sync_http_client(
+            timeout_seconds=_GRAPHQL_TIMEOUT_SECONDS,
+        ) as client:
+            response = client.post(
+                graphql_url, content=request_payload, headers=headers
+            )
+            response.raise_for_status()
+            response_text = response.text
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text.strip()
         raise IssueLinkRequirementError(
-            f"GitHub GraphQL request failed with HTTP {exc.code}: "
-            f"{detail or exc.reason}"
+            f"GitHub GraphQL request failed with HTTP {exc.response.status_code}: "
+            f"{detail}"
         ) from exc
-    except URLError as exc:
+    except httpx.TransportError as exc:
         raise IssueLinkRequirementError(
-            f"Failed to reach GitHub GraphQL endpoint: {exc.reason}"
+            f"Failed to reach GitHub GraphQL endpoint: {exc}"
         ) from exc
 
     payload = json.loads(response_text)

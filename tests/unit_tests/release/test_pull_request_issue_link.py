@@ -108,9 +108,12 @@ def test_fetch_linked_issue_count_returns_count() -> None:
         base_ref="main",
     )
 
-    with patch("relay_teams.release.pull_request_issue_link.urlopen") as mock_urlopen:
+    with patch(
+        "relay_teams.release.pull_request_issue_link.create_sync_http_client"
+    ) as mock_factory:
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps(
             {
                 "data": {
                     "repository": {
@@ -118,10 +121,13 @@ def test_fetch_linked_issue_count_returns_count() -> None:
                     }
                 }
             }
-        ).encode()
-        mock_resp.__enter__ = lambda s: mock_resp
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
+        )
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_resp
+        mock_client.__enter__ = lambda s: mock_client
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_factory.return_value = mock_client
         count = fetch_linked_issue_count(
             context=context,
             token="ghp_secret",

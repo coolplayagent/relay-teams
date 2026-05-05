@@ -10,9 +10,9 @@ import re
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+
+import httpx
 import zipfile
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,6 +22,7 @@ from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from relay_teams.paths import get_app_config_dir
 from relay_teams.roles import RoleDocumentDraft, default_memory_profile
 from relay_teams.roles.settings_service import RoleSettingsService
+from relay_teams.net.clients import create_sync_http_client
 from relay_teams.skills.discovery import get_app_skills_dir
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.mcp.mcp_registry import McpRegistry
@@ -145,7 +146,6 @@ def fetch_remote_skill_names(
     ref: str,
     path: str,
 ) -> tuple[str, ...]:
-    sync_network_environment()
     api_url = f"{github_api_base()}/repos/{repo}/contents/{path}?ref={ref}"
     payload = _request_json(api_url)
     if not isinstance(payload, list):
@@ -335,7 +335,6 @@ def _install_via_download(
 ) -> tuple[SkillInstallResult, ...]:
     if not source_specs:
         return ()
-    sync_network_environment()
     archive_bytes = _download_repo_archive(
         repo=source_specs[0].repo,
         ref=source_specs[0].ref,
@@ -596,34 +595,25 @@ def _request_text(url: str) -> str:
 
 
 def _request_bytes(url: str) -> bytes:
-    request = Request(
-        url,
-        headers=_request_headers(),
-        method="GET",
-    )
     try:
-        with urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:  # nosec B310 - HTTPS URL with user-controlled config
-            return response.read()
-    except HTTPError as exc:
+        with create_sync_http_client(timeout_seconds=_HTTP_TIMEOUT_SECONDS) as client:
+            response = client.get(url, headers=_request_headers())
+            response.raise_for_status()
+            return response.content
+    except httpx.HTTPStatusError as exc:
         raise _RequestHttpError(
             url=url,
-            status_code=exc.code,
-            detail=_http_error_detail(exc),
+            status_code=exc.response.status_code,
+            detail=exc.response.text,
         ) from exc
-    except URLError as exc:
-        reason = exc.reason if exc.reason is not None else exc
-        if _is_timeout_error(reason):
-            raise SkillInstallerError(
-                f"Request timed out after {_HTTP_TIMEOUT_SECONDS:.1f}s: "
-                f"{url} ({_format_error_detail(reason)})"
-            ) from exc
-        raise SkillInstallerError(
-            f"Request failed: {url} ({_format_error_detail(reason)})"
-        ) from exc
-    except TimeoutError as exc:
+    except httpx.TimeoutException as exc:
         raise SkillInstallerError(
             f"Request timed out after {_HTTP_TIMEOUT_SECONDS:.1f}s: "
             f"{url} ({_format_exception_detail(exc)})"
+        ) from exc
+    except httpx.TransportError as exc:
+        raise SkillInstallerError(
+            f"Request failed: {url} ({_format_exception_detail(exc)})"
         ) from exc
 
 
@@ -776,28 +766,8 @@ def _merge_names(
     return tuple(merged)
 
 
-def _http_error_detail(error: HTTPError) -> str:
-    reason = str(error.reason).strip()
-    return reason
-
-
 def _format_exception_detail(error: BaseException) -> str:
     detail = str(error).strip()
     if detail:
         return f"{type(error).__name__}: {detail}"
     return type(error).__name__
-
-
-def _format_error_detail(value: object) -> str:
-    if isinstance(value, BaseException):
-        return _format_exception_detail(value)
-    detail = str(value).strip()
-    if detail:
-        return detail
-    return type(value).__name__
-
-
-def _is_timeout_error(value: object) -> bool:
-    if isinstance(value, TimeoutError):
-        return True
-    return "timed out" in str(value).strip().lower()

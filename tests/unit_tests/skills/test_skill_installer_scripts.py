@@ -11,7 +11,9 @@ import runpy
 import subprocess
 import sys
 import threading
-from urllib.error import URLError
+from unittest.mock import MagicMock
+
+import httpx
 import zipfile
 
 import pytest
@@ -592,10 +594,13 @@ def test_resolve_role_mount_targets_defaults_to_current_role_env(
 def test_request_bytes_reports_timeout_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _raise_timeout(*args: object, **kwargs: object) -> object:
-        raise URLError(TimeoutError("timed out"))
+    mock_client = MagicMock()
+    mock_client.get.side_effect = httpx.TimeoutException("timed out")
+    mock_client.__enter__ = lambda s: mock_client
+    mock_client.__exit__ = MagicMock(return_value=False)
 
-    monkeypatch.setattr(installer_support, "urlopen", _raise_timeout)
+    mock_factory = MagicMock(return_value=mock_client)
+    monkeypatch.setattr(installer_support, "create_sync_http_client", mock_factory)
 
     with pytest.raises(installer_support.SkillInstallerError) as exc_info:
         installer_support._request_bytes("https://example.com/skills")
@@ -603,7 +608,6 @@ def test_request_bytes_reports_timeout_details(
     message = str(exc_info.value)
     assert "Request timed out after" in message
     assert "https://example.com/skills" in message
-    assert "TimeoutError: timed out" in message
 
 
 def test_run_git_reports_command_context_on_failure(

@@ -13,9 +13,11 @@ from relay_teams.agents.orchestration.board.adapter import (
     TaskBoardAdapter,
 )
 from relay_teams.logger import get_logger
-from relay_teams.net.clients import create_runtime_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 
 LOGGER = get_logger(__name__)
+
+_HTTP_TIMEOUT_SECONDS = 30.0
 
 _GITHUB_STATE_MAP: dict[str, BoardTaskState] = {
     "open": BoardTaskState.READY,
@@ -96,7 +98,6 @@ class GitHubAdapter(TaskBoardAdapter):
         self._repo = github_repo
         self._token = github_token
         self._base_url = "https://api.github.com"
-        self._client = create_runtime_sync_http_client()
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -108,9 +109,16 @@ class GitHubAdapter(TaskBoardAdapter):
     async def list_tasks(self, *, board_id: str) -> tuple[BoardTask, ...]:
         url = f"{self._base_url}/repos/{self._repo}/issues"
         try:
-            resp = self._client.request("GET", url, headers=self._headers)
-            data = resp.json()
-        except (httpx.HTTPError, ValueError) as exc:
+            async with create_async_http_client(
+                timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+            ) as client:
+                response = await client.get(url, headers=self._headers)
+                data = response.json()
+        except (
+            httpx.HTTPStatusError,
+            httpx.TransportError,
+            json.JSONDecodeError,
+        ) as exc:
             LOGGER.warning("failed to list GitHub issues: %s", exc)
             return ()
         if not isinstance(data, list):
@@ -123,40 +131,53 @@ class GitHubAdapter(TaskBoardAdapter):
 
     async def get_task(self, *, task_id: str) -> BoardTask:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
-        resp = self._client.request("GET", url, headers=self._headers)
-        data = resp.json()
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.get(url, headers=self._headers)
+            response.raise_for_status()
+            data = response.json()
         return _github_issue_to_board(data)
 
     async def move_task(self, *, task_id: str, to_state: BoardTaskState) -> None:
         github_state = _board_state_to_github(to_state)
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}"
         payload = json.dumps({"state": github_state}).encode()
-        self._client.request(
-            "PATCH",
-            url,
-            content=payload,
-            headers={**self._headers, "Content-Type": "application/json"},
-        )
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.patch(
+                url,
+                content=payload,
+                headers={**self._headers, "Content-Type": "application/json"},
+            )
+            response.raise_for_status()
 
     async def assign_task(self, *, task_id: str, assignee: str) -> None:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}/assignees"
         payload = json.dumps({"assignees": [assignee]}).encode()
-        self._client.request(
-            "POST",
-            url,
-            content=payload,
-            headers={**self._headers, "Content-Type": "application/json"},
-        )
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                url,
+                content=payload,
+                headers={**self._headers, "Content-Type": "application/json"},
+            )
+            response.raise_for_status()
 
     async def add_comment(self, *, task_id: str, body: str) -> None:
         url = f"{self._base_url}/repos/{self._repo}/issues/{task_id}/comments"
         payload = json.dumps({"body": body}).encode()
-        self._client.request(
-            "POST",
-            url,
-            content=payload,
-            headers={**self._headers, "Content-Type": "application/json"},
-        )
+        async with create_async_http_client(
+            timeout_seconds=_HTTP_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                url,
+                content=payload,
+                headers={**self._headers, "Content-Type": "application/json"},
+            )
+            response.raise_for_status()
 
     async def add_artifact(self, *, task_id: str, name: str, url: str) -> None:
         body = f"**{name}**: {url}"
