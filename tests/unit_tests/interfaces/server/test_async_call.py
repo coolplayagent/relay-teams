@@ -395,3 +395,15 @@ async def test_call_route_work_supports_async_functions_and_slow_call_logging(
 
     assert result == "ok"
     assert "server.route_work.slow_call" in logged_events
+
+
+@pytest.mark.asyncio
+async def test_call_maybe_async_emits_deprecation_warning() -> None:
+    async def load_value(value: str) -> str:
+        return f"async:{value}"
+
+    with pytest.warns(
+        DeprecationWarning,
+        match="call_maybe_async is deprecated",
+    ):
+        assert await call_maybe_async(load_value, "ok") == "async:ok"

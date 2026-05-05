@@ -548,6 +548,7 @@ def _async_sync_lifecycle_calls() -> tuple[str, ...]:
     scoped_roots = (
         source_root / "automation",
         source_root / "gateway",
+        source_root / "interfaces" / "cli",
         source_root / "interfaces" / "server",
         source_root / "sessions" / "runs",
         source_root / "triggers",
