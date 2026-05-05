@@ -55,12 +55,12 @@ class SpecComplianceRunner:
 
         # Directory-level checks
         for check_fn in DIRECTORY_CHECKS:
-            result = check_fn(self._source_root)
-            if not result.passed:
+            dir_result = check_fn(self._source_root)
+            if not dir_result.passed:
                 violations_by_file[str(self._source_root)] = (
                     violations_by_file.get(str(self._source_root), ())
-                ) + (result,)
-                category_results[result.category].extend(result.violations)
+                ) + (dir_result,)
+                category_results[dir_result.category].extend(dir_result.violations)
 
         # Build aggregate ComplianceCheckResult per category
         all_checks: list[ComplianceCheckResult] = []
