@@ -5,7 +5,7 @@ from threading import Lock
 from relay_teams.media import UserPromptContent, user_prompt_content_to_text
 from relay_teams.sessions.runs.enums import InjectionDeliveryMode, InjectionSource
 from relay_teams.sessions.runs.run_models import InjectionMessage
-from relay_teams.system_reminder_text import is_rendered_system_reminder_text
+from relay_teams.reminders.text import is_rendered_system_reminder_text
 
 
 class RunInjectionManager:

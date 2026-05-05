@@ -46,7 +46,7 @@ from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.system_reminder_text import is_rendered_system_reminder_text
+from relay_teams.reminders.text import is_rendered_system_reminder_text
 
 _SQLITE_SAFE_VARIABLE_LIMIT = 900
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from relay_teams.system_reminder_text import (
+from relay_teams.reminders.text import (
     SYSTEM_REMINDER_INTERNAL_MARKER,
 )
 
