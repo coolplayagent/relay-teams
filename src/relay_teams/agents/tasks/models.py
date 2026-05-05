@@ -430,6 +430,8 @@ class TaskEnvelope(BaseModel):
     def _normalize_skills(cls, value: object) -> Optional[tuple[str, ...]]:
         return normalize_identifier_tuple(value, field_name="skills")
 
+    blocked_by_task_ids: tuple[str, ...] = ()
+
     @field_validator("depends_on_task_ids", mode="before")
     @classmethod
     def _normalize_depends_on_task_ids(cls, value: object) -> tuple[str, ...]:
@@ -437,6 +439,17 @@ class TaskEnvelope(BaseModel):
             normalize_identifier_tuple(
                 value,
                 field_name="depends_on_task_ids",
+            )
+            or ()
+        )
+
+    @field_validator("blocked_by_task_ids", mode="before")
+    @classmethod
+    def _normalize_blocked_by_task_ids(cls, value: object) -> tuple[str, ...]:
+        return (
+            normalize_identifier_tuple(
+                value,
+                field_name="blocked_by_task_ids",
             )
             or ()
         )

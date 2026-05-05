@@ -27,3 +27,5 @@ class AgentWakeupEntry(BaseModel):
     wake_reason: WakeupReason = WakeupReason.TIMEOUT_RETRY
     target_role: str = ""
     target_instance: str = ""
+    source_event_type: str = ""
+    source_trigger_id: str = ""

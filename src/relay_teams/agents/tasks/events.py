@@ -22,6 +22,8 @@ class EventType(str, Enum):
     WAKEUP_ENQUEUED = "wakeup_enqueued"
     WAKEUP_DISPATCHED = "wakeup_dispatched"
     ORPHAN_RECOVERED = "orphan_recovered"
+    A2A_MESSAGE_PUBLISHED = "a2a_message_published"
+    A2A_MESSAGE_DELIVERED = "a2a_message_delivered"
 
 
 class EventEnvelope(BaseModel):

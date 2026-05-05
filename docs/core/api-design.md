@@ -3662,3 +3662,114 @@ methods (`stream_run_events`) are adapted to return plain `list`.
 
 Module: `src/relay_teams/interfaces/sdk/client.py`
 Package export: `from relay_teams import SyncAgentTeamsClient`
+
+---
+
+## Boards
+
+Task board integration for external trackers (GitHub Issues, Linear, internal).
+
+### GET /api/boards
+
+List configured boards.
+
+Response: array of `BoardSummaryResponse`:
+- `board_id`: board identifier
+- `adapter`: adapter type ("internal", "github", "linear")
+- `config`: full board configuration object
+
+### GET /api/boards/{board_id}/tasks
+
+List tasks on a board.
+
+Response: array of `BoardTaskResponse`:
+- `board_task_id`: external tracker task ID
+- `title`: task title
+- `description`: task description
+- `state`: current board state
+- `assignee`: assigned user (nullable)
+- `labels`: array of label strings
+- `source_url`: link to external tracker
+
+### POST /api/boards/{board_id}/sync
+
+Manually trigger a board synchronization.
+
+Response:
+- `synced`: true
+- `board_id`: board identifier
+
+### PUT /api/boards/{board_id}/tasks/{task_id}/state
+
+Manually update a board task's state.
+
+Request body:
+- `state`: new board state (backlog/ready/in_progress/in_review/blocked/completed/cancelled)
+
+Response:
+- `updated`: true
+- `board_id`: board identifier
+- `task_id`: task identifier
+- `state`: new state
+
+### GET /api/boards/state-map
+
+Get the current `TaskBoardStateMap` -- bidirectional mapping between internal `TaskStatus` and board `BoardTaskState`.
+
+Response: `StateMapResponse`
+- `task_status_to_board`: mapping from TaskStatus name to BoardTaskState name
+- `board_state_to_task_status`: mapping from BoardTaskState name to tuple of TaskStatus names
+
+Router: `src/relay_teams/interfaces/server/routers/boards.py`
+
+---
+
+## A2A Internal Bus
+
+Run-scoped internal Agent-to-Agent event bus. Provides real-time
+message passing between peer agents within the same run.
+
+### GET /api/runs/{run_id}/a2a/bus
+
+Get the A2A bus state snapshot for a run.
+
+Response: `A2aBusStateResponse`
+- `run_id`: run identifier
+- `message_count`: total messages published
+- `subscription_count`: active subscriptions
+- `active_topics`: tuple of topic names with active subscribers
+
+### GET /api/runs/{run_id}/a2a/messages
+
+Query published A2A messages for a run.
+
+Query parameters:
+- `topic`: filter by topic (optional)
+- `role_id`: filter by sender/target role (optional)
+
+Response: array of `A2aMessageResponse`
+
+### GET /api/runs/{run_id}/a2a/subscriptions
+
+Query A2A subscriptions for a run.
+
+Response: array of `A2aSubscriptionResponse`
+
+### POST /api/runs/{run_id}/a2a/messages
+
+Manually publish an A2A message (debug/diagnostic).
+
+Request body:
+- `sender_role_id`: role publishing the message
+- `sender_instance_id`: instance publishing the message
+- `topic`: message topic
+- `content`: message body
+- `payload_json`: structured payload (optional, default `{}`)
+- `target_role_id`: target role for direct message (optional, null = broadcast)
+
+Response:
+- `published`: true
+- `run_id`: run identifier
+- `topic`: message topic
+
+Router: `src/relay_teams/interfaces/server/routers/a2a_internal.py`

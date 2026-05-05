@@ -43,6 +43,8 @@ from relay_teams.interfaces.server.routers import (
     audit,
     auto_harness,
     automation,
+    boards,
+    a2a_internal,
     commands,
     feishu_gateway,
     gateway,
@@ -225,6 +227,8 @@ app.include_router(logs.router, prefix="/api")
 app.include_router(workspaces.router, prefix="/api")
 app.include_router(guardrails_router.router, prefix="/api")
 app.include_router(memories.router, prefix="/api")
+app.include_router(boards.router, prefix="/api")
+app.include_router(a2a_internal.router, prefix="/api")
 
 
 @app.middleware("http")

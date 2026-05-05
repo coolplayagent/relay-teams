@@ -78,6 +78,15 @@ class ExternalAgentConfig(BaseModel):
     protocol: ExternalAgentProtocol = ExternalAgentProtocol.ACP
     transport: ExternalAgentTransportConfig = Field(discriminator="transport")
 
+    # OP-4: Provider-native runtime config.
+    native_config_enabled: bool = False
+    native_config_provider: str = ""
+
+    # OP-4: Skill Bridge.
+    skill_bridge_enabled: bool = False
+    skill_bridge_skills: tuple[str, ...] = ()
+    skill_bridge_mode: Literal["inline", "directory"] = "inline"
+
     @model_validator(mode="after")
     def _validate_protocol_transport(self) -> Self:
         if self.protocol == ExternalAgentProtocol.A2A and not isinstance(

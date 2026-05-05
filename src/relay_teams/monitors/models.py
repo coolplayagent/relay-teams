@@ -12,6 +12,7 @@ from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 class MonitorSourceKind(str, Enum):
     BACKGROUND_TASK = "background_task"
     GITHUB = "github"
+    TASK_BOARD = "task_board"
 
 
 class MonitorActionType(str, Enum):

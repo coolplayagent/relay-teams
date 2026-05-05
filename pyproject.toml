@@ -32,6 +32,7 @@ dev = [
   "pytest>=8.2.0",
   "pytest-timeout >= 2.1.0",
   "pytest-asyncio >= 1.2.0",
+  "pytest-benchmark>=5.1.0",
   "coverage >= 7.8.0",
   "diff-cover>=9.0.0",
   "pytest-cov>=6.0.0",
@@ -56,6 +57,7 @@ testpaths = ["tests/unit_tests", "tests/integration_tests"]
 pythonpath = ["src", "tests", "."]
 markers = [
   "timeout: override per-test timeout budget",
+  "benchmark: performance benchmark tests (use --benchmark-only to run)",
 ]
 filterwarnings = [
   'ignore:datetime\.datetime\.utcfromtimestamp\(\) is deprecated.*:DeprecationWarning:lark_oapi\.ws\.pb\.google\.protobuf\.internal\.well_known_types',

@@ -12,7 +12,6 @@ from pydantic import (
     model_validator,
 )
 
-from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     TaskHandoff,
@@ -39,10 +38,17 @@ class TaskDraft(BaseModel):
     verification: VerificationPlan | None = None
     lifecycle: TaskLifecyclePolicy = Field(default_factory=TaskLifecyclePolicy)
 
+    blocked_by_task_ids: tuple[str, ...] = ()
+
     @field_validator("depends_on_task_ids", "depends_on_node_ids", mode="before")
     @classmethod
     def _normalize_dependency_ids(cls, value: object) -> tuple[str, ...]:
         return normalize_identifier_tuple(value, field_name="task dependencies") or ()
+
+    @field_validator("blocked_by_task_ids", mode="before")
+    @classmethod
+    def _normalize_blocked_by_ids(cls, value: object) -> tuple[str, ...]:
+        return normalize_identifier_tuple(value, field_name="blocked_by_task_ids") or ()
 
 
 class TaskUpdate(BaseModel):
@@ -128,8 +134,6 @@ class TaskOrchestrationServiceLike(Protocol):
 
 
 class TaskExecutionServiceLike(Protocol):
-    message_repo: MessageRepository
-
     async def execute(
         self,
         *,

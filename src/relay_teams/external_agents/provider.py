@@ -44,9 +44,11 @@ from relay_teams.external_agents.models import (
     ExternalAgentSessionStatus,
     StdioTransportConfig,
 )
+from relay_teams.external_agents.native_config import NativeConfigGenerator
 from relay_teams.external_agents.session_repository import (
     ExternalAgentSessionRepository,
 )
+from relay_teams.external_agents.skill_bridge import SkillBridgeService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import MediaAssetService
 from relay_teams.monitors import MonitorService
@@ -364,21 +366,32 @@ class ExternalAcpSessionManager:
     ) -> str:
         prompt_text = self._resolve_external_user_prompt(request)
         workspace = self._resolve_workspace(request)
+        workspace_path = workspace.resolve_workdir()
+
+        # OP-4: native config + skill bridge injection
+        native_spec, augmented_prompt = await self._build_native_config_augmentation(
+            agent=agent,
+            role=role,
+            workspace_path=workspace_path,
+            task_objective=prompt_text,
+            base_prompt=_compose_agent_runtime_prompt(
+                protocol=ExternalAgentProtocol.A2A,
+                role=role,
+                request=request,
+                workspace_path=workspace_path,
+                user_prompt=prompt_text,
+            ),
+        )
+
         await self._publish_model_step_started(request)
         try:
             result = await send_a2a_prompt(
                 config=agent,
-                prompt=_compose_agent_runtime_prompt(
-                    protocol=ExternalAgentProtocol.A2A,
-                    role=role,
-                    request=request,
-                    workspace_path=workspace.resolve_workdir(),
-                    user_prompt=prompt_text,
-                ),
+                prompt=augmented_prompt,
                 metadata=_build_external_runtime_metadata(
                     protocol=ExternalAgentProtocol.A2A,
                     request=request,
-                    workspace_path=workspace.resolve_workdir(),
+                    workspace_path=workspace_path,
                 ),
                 timeout_seconds=self._prompt_inactivity_timeout_seconds(),
             )
@@ -389,6 +402,7 @@ class ExternalAcpSessionManager:
             self._append_assistant_message(request=request, content=output)
             return output
         finally:
+            NativeConfigGenerator.cleanup(native_spec.config_dir)
             await self._publish_model_step_finished(request)
 
     async def _prompt_cli(
@@ -400,25 +414,110 @@ class ExternalAcpSessionManager:
     ) -> str:
         prompt_text = self._resolve_external_user_prompt(request)
         workspace = self._resolve_workspace(request)
+        workspace_path = workspace.resolve_workdir()
+
+        # OP-4: native config + skill bridge injection
+        native_spec, augmented_prompt = await self._build_native_config_augmentation(
+            agent=agent,
+            role=role,
+            workspace_path=workspace_path,
+            task_objective=prompt_text,
+            base_prompt=_compose_agent_runtime_prompt(
+                protocol=ExternalAgentProtocol.CLI,
+                role=role,
+                request=request,
+                workspace_path=workspace_path,
+                user_prompt=prompt_text,
+            ),
+        )
+
+        runtime_cwd = (
+            native_spec.config_dir if agent.native_config_enabled else workspace_path
+        )
         await self._publish_model_step_started(request)
         try:
             output = await run_cli_agent_prompt(
                 config=agent,
-                prompt=_compose_agent_runtime_prompt(
-                    protocol=ExternalAgentProtocol.CLI,
-                    role=role,
-                    request=request,
-                    workspace_path=workspace.resolve_workdir(),
-                    user_prompt=prompt_text,
-                ),
-                runtime_cwd=workspace.resolve_workdir(),
+                prompt=augmented_prompt,
+                runtime_cwd=runtime_cwd,
                 timeout_seconds=self._prompt_inactivity_timeout_seconds(),
             )
             await self._publish_text_delta(request=request, text=output)
             self._append_assistant_message(request=request, content=output)
             return output
         finally:
+            NativeConfigGenerator.cleanup(native_spec.config_dir)
             await self._publish_model_step_finished(request)
+
+    async def _build_native_config_augmentation(
+        self,
+        *,
+        agent: ExternalAgentConfig,
+        role: RoleDefinition,
+        workspace_path: Path,
+        task_objective: str,
+        base_prompt: str,
+    ) -> tuple:
+        """Build native config and skill bridge augmentation for external agents."""
+        from relay_teams.external_agents.native_config import NativeConfigGenerator
+
+        skill_bridge_svc: SkillBridgeService | None = None
+        if agent.skill_bridge_enabled:
+            skill_bridge_svc = SkillBridgeService(
+                skill_registry=self._get_skill_registry(),
+            )
+
+        skill_manifest = None
+        if skill_bridge_svc is not None:
+            skill_manifest = skill_bridge_svc.build_manifest(
+                allowed_skills=agent.skill_bridge_skills,
+                mode=agent.skill_bridge_mode,
+            )
+
+        native_spec: NativeConfigSpec | None = None
+        if agent.native_config_enabled:
+            generator = NativeConfigGenerator(
+                instruction_resolver=self._resolve_instruction_resolver(
+                    workspace_path=workspace_path,
+                ),
+            )
+            native_spec = await generator.generate(
+                agent=agent,
+                workspace_path=workspace_path,
+                role=role,
+                task_objective=task_objective,
+                skill_bridge_manifest=skill_manifest,
+            )
+
+        # When skill bridge is enabled but native config is not, inject inline.
+        prompt = base_prompt
+        if skill_bridge_svc is not None and skill_manifest is not None:
+            inline_ref = skill_bridge_svc.build_inline_reference(skill_manifest)
+            if inline_ref:
+                prompt = f"{prompt}\n\n{inline_ref}"
+
+        if native_spec is None:
+            from relay_teams.external_agents.native_config import NativeConfigSpec
+
+            native_spec = NativeConfigSpec(
+                config_dir=workspace_path / "__noop__",
+                provider="",
+                files=(),
+            )
+
+        return native_spec, prompt
+
+    def _resolve_instruction_resolver(
+        self,
+        *,
+        workspace_path: Path,
+    ):
+        """Create a PromptInstructionResolver scoped to the workspace."""
+        from relay_teams.agents.execution.prompt_instructions import (
+            PromptInstructionResolver,
+        )
+
+        return PromptInstructionResolver()
 
     async def _prompt_until_output(
         self,

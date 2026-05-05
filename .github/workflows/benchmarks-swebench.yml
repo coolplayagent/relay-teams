@@ -1,0 +1,57 @@
+name: SWE-bench Continuous Tracking
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      max_instances:
+        description: "Maximum SWE-bench instances to run"
+        required: false
+        default: "10"
+  schedule:
+    - cron: "0 6 * * *"  # Daily at 06:00 UTC
+
+jobs:
+  swebench-tracking:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run SWE-bench tracking
+        env:
+          SWEBENCH_MAX_INSTANCES: ${{ github.event.inputs.max_instances || '10' }}
+        run: |
+          uv run python -c "
+          import asyncio
+          from pathlib import Path
+          from benchmarks.swebench.config import SWEBenchConfig
+          from benchmarks.swebench.runner import SWEBenchRunner
+          from benchmarks.swebench.reporter import generate_report, print_summary
+
+          config = SWEBenchConfig(
+              dataset_path=Path('tmp/swebench-dataset.jsonl'),
+              max_instances=int(__import__('os').environ.get('SWEBENCH_MAX_INSTANCES', '10')),
+              output_dir=Path('benchmarks/swebench/results'),
+          )
+          runner = SWEBenchRunner()
+          result = asyncio.run(runner.run(config))
+          path = generate_report(result, config.output_dir)
+          print_summary(result)
+          "
+
+      - name: Upload SWE-bench results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swebench-results
+          path: benchmarks/swebench/results/

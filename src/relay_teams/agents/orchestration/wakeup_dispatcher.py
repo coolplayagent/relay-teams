@@ -69,7 +69,16 @@ class WakeupDispatcher:
             await self._wakeup_repo.expire_async(entry.wakeup_id)
             return
 
-        if task_record.status not in {TaskStatus.TIMEOUT, TaskStatus.STOPPED}:
+        if task_record.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+            await self._wakeup_repo.expire_async(entry.wakeup_id)
+            return
+
+        if task_record.status not in {
+            TaskStatus.TIMEOUT,
+            TaskStatus.STOPPED,
+            TaskStatus.CREATED,
+            TaskStatus.ASSIGNED,
+        }:
             await self._wakeup_repo.expire_async(entry.wakeup_id)
             return
 

@@ -188,6 +188,11 @@ def test_get_agent_strips_legacy_stdio_workdir_from_saved_config(
             "args": ["--serve"],
             "env": [],
         },
+        "native_config_enabled": False,
+        "native_config_provider": "",
+        "skill_bridge_enabled": False,
+        "skill_bridge_skills": [],
+        "skill_bridge_mode": "inline",
     }
 
 

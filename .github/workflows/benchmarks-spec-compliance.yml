@@ -1,0 +1,44 @@
+name: Spec-Compliance Check
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  spec-compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run spec-compliance check
+        run: |
+          uv run python -c "
+          import json
+          from benchmarks.spec_compliance.runner import SpecComplianceRunner
+
+          runner = SpecComplianceRunner()
+          result = runner.run()
+
+          print(json.dumps(result.model_dump(mode='json'), indent=2, ensure_ascii=False))
+          print()
+          print(f'Overall score: {result.overall_score:.1%}')
+          print(f'Modules checked: {result.modules_checked}')
+
+          passed_categories = sum(1 for c in result.checks if c.passed)
+          print(f'Categories passed: {passed_categories}/{len(result.checks)}')
+
+          # Fail if score drops below threshold
+          if result.overall_score < 0.7:
+              print('FAIL: overall_score below 0.7 threshold')
+              raise SystemExit(1)
+          "

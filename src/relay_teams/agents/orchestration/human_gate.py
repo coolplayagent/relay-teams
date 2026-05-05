@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
 GateAction = Literal["approve", "revise"]
+GateResolvedCallback = Callable[[str, str, GateAction, str], None]
+"""Callback signature: (run_id, task_id, action, feedback) -> None."""
 
 
 class _GateEntry(BaseModel):
@@ -21,9 +24,20 @@ class _GateEntry(BaseModel):
 
 
 class GateManager:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        on_gate_resolved: list[GateResolvedCallback] | None = None,
+    ) -> None:
         self._lock = threading.Lock()
         self._gates: dict[str, dict[str, _GateEntry]] = {}
+        self._on_gate_resolved: list[GateResolvedCallback] = (
+            list(on_gate_resolved) if on_gate_resolved else []
+        )
+
+    def add_resolved_callback(self, cb: GateResolvedCallback) -> None:
+        """Register a callback invoked when *any* gate is resolved."""
+        with self._lock:
+            self._on_gate_resolved.append(cb)
 
     def open_gate(
         self,
@@ -54,6 +68,12 @@ class GateManager:
         entry.action = action
         entry.feedback = feedback
         entry.event.set()
+        # OP-1: Fire callbacks so callers can enqueue approval wakes
+        for cb in self._on_gate_resolved:
+            try:
+                cb(run_id, task_id, action, feedback)
+            except Exception:
+                pass  # best-effort — do not corrupt gate resolution
 
     def wait_for_gate(
         self,

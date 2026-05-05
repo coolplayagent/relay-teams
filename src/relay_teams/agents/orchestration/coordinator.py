@@ -781,6 +781,15 @@ class CoordinatorGraph(BaseModel):
                 break
             if graph_status.completed:
                 break
+
+            # OP-1: Enqueue dependency-resolved wakes for tasks that are
+            # stuck (TIMEOUT/STOPPED) but whose dependencies are now satisfied.
+            if created_any or ran_any:
+                await self._enqueue_graph_dependency_wakeups_async(
+                    trace_id=trace_id,
+                    root_task_id=root_task.task_id,
+                )
+
             if not created_any and not ran_any:
                 error_message = "Graph execution made no progress."
                 await self._fail_root_task_async(
@@ -881,9 +890,8 @@ class CoordinatorGraph(BaseModel):
         )
         instance = await self.agent_repo.get_instance_async(assigned_instance_id)
         role_id = _require_task_role_id(root_task)
-        message_repo = self.task_execution_service.message_repo
-        if message_repo is not None:
-            await message_repo.append_async(
+        if isinstance(self.task_execution_service, TaskExecutionService):
+            await self.task_execution_service.message_repo.append_async(
                 session_id=root_task.session_id,
                 workspace_id=instance.workspace_id,
                 conversation_id=instance.conversation_id,
@@ -1149,6 +1157,77 @@ class CoordinatorGraph(BaseModel):
             graph=graph,
         )
         return _GraphStatus(graph=graph, records_by_node=records_by_node)
+
+    async def _enqueue_graph_dependency_wakeups_async(
+        self,
+        *,
+        trace_id: str,
+        root_task_id: str,
+    ) -> int:
+        """OP-1: Scan tasks in this trace that are stuck (TIMEOUT/STOPPED)
+        but whose dependencies are now satisfied, and enqueue
+        ``DEPENDENCY_RESOLVED`` wakes so the WakeupDispatcher can
+        re-dispatch them."""
+        wakeup_repo = getattr(self, "wakeup_repo", None)
+        if wakeup_repo is None:
+            return 0
+        records = await self.task_repo.list_by_trace_async(trace_id)
+        records_by_task_id = {r.envelope.task_id: r for r in records}
+        enqueued = 0
+        now = datetime.now(tz=timezone.utc)
+        for record in records:
+            if record.envelope.task_id == root_task_id:
+                continue
+            if record.status in {TaskStatus.ASSIGNED, TaskStatus.CREATED}:
+                continue
+            if record.status not in {TaskStatus.TIMEOUT, TaskStatus.STOPPED}:
+                continue
+            if not _dependencies_completed(
+                record=record, records_by_task_id=records_by_task_id
+            ):
+                continue
+            task_id = record.envelope.task_id
+            coalesce_key = f"{task_id}:dep_resolved"
+            entry = AgentWakeupEntry(
+                wakeup_id=f"wk_graph_{task_id}_{int(now.timestamp())}",
+                task_id=task_id,
+                trace_id=trace_id,
+                session_id=record.envelope.session_id or "",
+                coalesce_key=coalesce_key,
+                timeout_action=TaskTimeoutAction.RETRY,
+                timeout_seconds=0.0,
+                attempt=1,
+                max_attempts=3,
+                status=WakeupStatus.PENDING,
+                enqueued_at=now,
+                wake_reason=WakeupReason.DEPENDENCY_RESOLVED,
+                target_role=record.envelope.role_id or "",
+                source_event_type="dependency_resolved",
+                source_trigger_id="",
+            )
+            try:
+                inserted = await wakeup_repo.coalesce_and_enqueue_async(entry)
+                if inserted:
+                    enqueued += 1
+                    log_event(
+                        LOGGER,
+                        logging.INFO,
+                        event="coord.graph.dependency_wake_enqueued",
+                        message="Dependency-resolved wake enqueued for stuck graph task",
+                        payload={
+                            "task_id": task_id,
+                            "trace_id": trace_id,
+                        },
+                    )
+            except Exception:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="coord.graph.dependency_wake_failed",
+                    message="Failed to enqueue dependency wakeup",
+                    payload={"task_id": task_id},
+                )
+        return enqueued
 
     def _missing_graph_role_ids(self, graph: OrchestrationGraph) -> tuple[str, ...]:
         missing_role_ids: list[str] = []
@@ -2382,6 +2461,10 @@ def _dependencies_completed(
     for dependency_task_id in record.envelope.depends_on_task_ids:
         dependency = records_by_task_id.get(dependency_task_id)
         if dependency is None or dependency.status != TaskStatus.COMPLETED:
+            return False
+    for blocker_id in record.envelope.blocked_by_task_ids:
+        blocker = records_by_task_id.get(blocker_id)
+        if blocker is None or blocker.status != TaskStatus.COMPLETED:
             return False
     return True
 
