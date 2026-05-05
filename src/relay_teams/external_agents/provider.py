@@ -474,7 +474,7 @@ class ExternalAcpSessionManager:
                 mode=agent.skill_bridge_mode,
             )
 
-        native_spec: NativeConfigSpec | None = None
+        native_spec = None
         if agent.native_config_enabled:
             generator = NativeConfigGenerator(
                 instruction_resolver=self._resolve_instruction_resolver(

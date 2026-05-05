@@ -449,3 +449,82 @@ class TestMemoryConsolidationResultFields:
         )
         assert result.extraction_tokens_used == 1500
         assert result.extraction_duration_ms == 3200
+
+
+# ---------------------------------------------------------------------------
+# AC: consolidate_async coverage on service.py changed lines
+# ---------------------------------------------------------------------------
+
+
+class TestConsolidateAsync:
+    """Cover the async consolidation dispatch in MemoryBankService."""
+
+    @pytest.mark.asyncio
+    async def test_structural_async_dispatches(
+        self, service: MemoryBankService
+    ) -> None:
+        """consolidate_async with STRUCTURAL mode hits
+        _consolidate_structural_async."""
+        service.create_entry(
+            _create_entry_request(
+                tier=MemoryTier.WORKING,
+                confidence_score=0.85,
+            )
+        )
+        req = MemoryConsolidationRequest(
+            workspace_id="ws-test",
+            target_tier=MemoryTier.MEDIUM_TERM,
+            target_scope=MemoryScope.SESSION,
+            session_id="sess-1",
+        )
+        result = await service.consolidate_async(req)
+        assert result.consolidated_entry_count == 1
+        assert len(result.superseded_entry_ids) == 1
+
+    @pytest.mark.asyncio
+    async def test_semantic_async_no_llm_falls_back(
+        self, service: MemoryBankService
+    ) -> None:
+        """consolidate_async with SEMANTIC + no llm_provider falls back
+        to structural."""
+        service.create_entry(
+            _create_entry_request(
+                tier=MemoryTier.WORKING,
+                confidence_score=0.85,
+            )
+        )
+        req = MemoryConsolidationRequest(
+            workspace_id="ws-test",
+            target_tier=MemoryTier.MEDIUM_TERM,
+            target_scope=MemoryScope.SESSION,
+            session_id="sess-1",
+            consolidation_mode=ConsolidationMode.SEMANTIC,
+            source_run_id="run-1",
+        )
+        # No llm_provider configured -> falls back to structural
+        result = await service.consolidate_async(req)
+        assert result.consolidated_entry_count == 1
+
+    @pytest.mark.asyncio
+    async def test_semantic_async_with_llm_falls_back_to_structural(
+        self, service_with_llm: MemoryBankService
+    ) -> None:
+        """consolidate_async with SEMANTIC + llm_provider but no
+        message_repo still falls back to structural."""
+        service_with_llm.create_entry(
+            _create_entry_request(
+                tier=MemoryTier.WORKING,
+                confidence_score=0.85,
+            )
+        )
+        req = MemoryConsolidationRequest(
+            workspace_id="ws-test",
+            target_tier=MemoryTier.MEDIUM_TERM,
+            target_scope=MemoryScope.SESSION,
+            session_id="sess-1",
+            consolidation_mode=ConsolidationMode.SEMANTIC,
+            source_run_id="run-1",
+        )
+        # llm_provider set but no message_repo -> falls back
+        result = await service_with_llm.consolidate_async(req)
+        assert result.consolidated_entry_count == 1
