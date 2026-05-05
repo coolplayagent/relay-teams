@@ -53,7 +53,7 @@ from relay_teams.providers.provider_contracts import (
     ProviderCapabilities,
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.reminders import SystemReminderService
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService

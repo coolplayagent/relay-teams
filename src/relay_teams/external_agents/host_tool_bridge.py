@@ -42,7 +42,7 @@ from relay_teams.monitors import MonitorService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelCapabilities, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
-from relay_teams.reminders import SystemReminderService
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry

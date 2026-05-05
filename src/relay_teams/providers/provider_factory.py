@@ -61,7 +61,7 @@ from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.reminders import SystemReminderService
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import (
     GatewaySessionLookupLike,

@@ -206,7 +206,8 @@ from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.sessions.runs.system_injection import SystemInjectionSink
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.reminders import ReminderStateRepository, SystemReminderService
+from relay_teams.reminders import ReminderStateRepository
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository

@@ -42,7 +42,8 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.media import MediaAssetService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.reminders import ReminderDecision, SystemReminderService
+from relay_teams.reminders import ReminderDecision
+from relay_teams.reminders.service import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.roles.role_models import RoleDefinition
