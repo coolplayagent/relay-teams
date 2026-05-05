@@ -13,6 +13,9 @@ from pydantic_ai.messages import ModelResponse, TextPart
 from relay_teams.agents.orchestration import (
     task_execution_service as task_execution_module,
 )
+from relay_teams.agents.orchestration.harnesses import (
+    control_harness as control_harness_module,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction
@@ -168,7 +171,7 @@ async def test_lifecycle_timeout_wait_extends_after_persisted_progress(
 
     worker = asyncio.create_task(_worker())
 
-    completed = await service._wait_for_worker_with_progress_timeout_async(
+    completed = await service._control_harness().wait_for_worker_with_progress_timeout(
         task=task,
         instance_id=instance_id,
         role_id="time",
@@ -346,7 +349,7 @@ async def test_execute_external_cancel_during_timeout_finalization_keeps_timeout
             update={"lifecycle": TaskLifecyclePolicy(timeout_seconds=0.01)}
         ),
     ).envelope
-    original_cancel_and_wait = task_execution_module._cancel_and_wait
+    original_cancel_and_wait = task_execution_module.cancel_and_wait
     interrupted = False
     execution: asyncio.Task[TaskExecutionResult]
 
@@ -373,7 +376,7 @@ async def test_execute_external_cancel_during_timeout_finalization_keeps_timeout
 
     monkeypatch.setattr(
         task_execution_module,
-        "_cancel_and_wait",
+        "cancel_and_wait",
         _interrupting_cancel_and_wait,
     )
     execution = asyncio.create_task(
@@ -402,6 +405,11 @@ async def test_execute_applies_timeout_when_worker_cancel_wait_expires(
 ) -> None:
     monkeypatch.setattr(
         task_execution_module,
+        "TIMEOUT_WORKER_CANCEL_GRACE_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        control_harness_module,
         "TIMEOUT_WORKER_CANCEL_GRACE_SECONDS",
         0.01,
     )
@@ -454,6 +462,11 @@ async def test_timeout_finalizer_applies_timeout_when_worker_cancel_wait_expires
         "TIMEOUT_WORKER_CANCEL_GRACE_SECONDS",
         0.01,
     )
+    monkeypatch.setattr(
+        control_harness_module,
+        "TIMEOUT_WORKER_CANCEL_GRACE_SECONDS",
+        0.01,
+    )
     provider = _CancellationResistantProvider()
     service, task_repo, agent_repo, message_repo = _build_service(
         tmp_path / "task_execution_cancel_wait_timeout_finalizer.db",
@@ -473,7 +486,7 @@ async def test_timeout_finalizer_applies_timeout_when_worker_cancel_wait_expires
     await provider.started.wait()
 
     try:
-        result = await service._complete_timeout_after_worker_cancel_async(
+        result = await service._control_harness().complete_timeout_after_worker_cancel(
             task=task,
             instance_id=instance_id,
             role_id="time",
@@ -532,12 +545,12 @@ async def test_timeout_finalizer_preserves_worker_result_if_cancel_returns_one(
 
     monkeypatch.setattr(
         task_execution_module,
-        "_cancel_and_wait",
+        "cancel_and_wait",
         _return_result_from_cancel,
     )
 
     try:
-        result = await service._complete_timeout_after_worker_cancel_async(
+        result = await service._control_harness().complete_timeout_after_worker_cancel(
             task=task,
             instance_id=instance_id,
             role_id="time",

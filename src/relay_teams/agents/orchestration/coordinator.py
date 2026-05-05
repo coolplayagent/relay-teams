@@ -881,8 +881,9 @@ class CoordinatorGraph(BaseModel):
         )
         instance = await self.agent_repo.get_instance_async(assigned_instance_id)
         role_id = _require_task_role_id(root_task)
-        if isinstance(self.task_execution_service, TaskExecutionService):
-            await self.task_execution_service.message_repo.append_async(
+        message_repo = self.task_execution_service.message_repo
+        if message_repo is not None:
+            await message_repo.append_async(
                 session_id=root_task.session_id,
                 workspace_id=instance.workspace_id,
                 conversation_id=instance.conversation_id,

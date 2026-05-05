@@ -83,6 +83,7 @@ from relay_teams.agents.tasks.models import (
 class _RecordingTaskExecutionService:
     def __init__(self, task_repo: TaskRepository) -> None:
         self._task_repo = task_repo
+        self.message_repo: MessageRepository | None = None
         self.runtime_role_resolver: RuntimeRoleResolver | None = None
         self.workspace_manager: WorkspaceManager | None = None
         self.run_intent_repo: RunIntentRepository | None = None
@@ -106,6 +107,7 @@ class _RecordingTaskExecutionService:
 class _FailingTaskExecutionService:
     def __init__(self, task_repo: TaskRepository) -> None:
         self._task_repo = task_repo
+        self.message_repo: MessageRepository | None = None
         self.calls: list[str] = []
 
     async def execute(
@@ -222,6 +224,7 @@ class _FailingRunIntentRepository(RunIntentRepository):
 class _SlowRecordingTaskExecutionService:
     def __init__(self, task_repo: TaskRepository) -> None:
         self._task_repo = task_repo
+        self.message_repo: MessageRepository | None = None
         self.calls: list[str] = []
         self.spans: dict[str, tuple[float, float]] = {}
         self.active_count = 0
@@ -252,6 +255,7 @@ class _SlowRecordingTaskExecutionService:
 
 class _CancellingTaskExecutionService:
     def __init__(self) -> None:
+        self.message_repo: MessageRepository | None = None
         self.calls: list[str] = []
 
     async def execute(

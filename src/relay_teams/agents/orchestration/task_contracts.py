@@ -12,6 +12,7 @@ from pydantic import (
     model_validator,
 )
 
+from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.tasks.models import (
     TaskEnvelope,
     TaskHandoff,
@@ -127,6 +128,8 @@ class TaskOrchestrationServiceLike(Protocol):
 
 
 class TaskExecutionServiceLike(Protocol):
+    message_repo: MessageRepository
+
     async def execute(
         self,
         *,
