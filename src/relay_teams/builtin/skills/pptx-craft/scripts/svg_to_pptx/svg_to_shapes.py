@@ -15,14 +15,16 @@ Usage:
     from svg_to_shapes import convert_svg_to_slide_shapes
     slide_xml, media_files, rel_entries = convert_svg_to_slide_shapes(svg_path, slide_num=1)
 """
+from __future__ import annotations
 
 import math
 import re
 import base64
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import NamedTuple, Optional, Tuple, List, Dict, Any
 from xml.etree import ElementTree as ET
-from dataclasses import dataclass, field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -140,22 +142,22 @@ DASH_PRESETS = {
 # Data classes
 # ---------------------------------------------------------------------------
 
-@dataclass
-class ConvertContext:
-    """Shared context passed through the conversion pipeline."""
-    defs: Dict[str, ET.Element] = field(default_factory=dict)
-    id_counter: int = 2  # start at 2 (1 is reserved for spTree root)
-    slide_num: int = 1  # slide number for unique media filenames
+class ConvertContext(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    defs: Dict[str, ET.Element] = Field(default_factory=dict)
+    id_counter: int = 2
+    slide_num: int = 1
     translate_x: float = 0.0
     translate_y: float = 0.0
     scale_x: float = 1.0
     scale_y: float = 1.0
-    filter_id: Optional[str] = None  # inherited filter from parent <g>
-    media_files: Dict[str, bytes] = field(default_factory=dict)  # filename -> data
-    rel_entries: List[Dict[str, str]] = field(default_factory=list)
-    rel_id_counter: int = 2  # rId1 reserved for slideLayout
-    svg_dir: Optional[Path] = None  # directory of the source SVG file
-    inherited_styles: Dict[str, str] = field(default_factory=dict)
+    filter_id: Optional[str] = None
+    media_files: Dict[str, bytes] = Field(default_factory=dict)
+    rel_entries: List[Dict[str, str]] = Field(default_factory=list)
+    rel_id_counter: int = 2
+    svg_dir: Optional[Path] = None
+    inherited_styles: Dict[str, str] = Field(default_factory=dict)
 
     def next_id(self) -> int:
         cid = self.id_counter
@@ -680,10 +682,9 @@ def get_stroke_opacity(elem: ET.Element, ctx: Optional[ConvertContext] = None) -
 # SVG Path Parser
 # ---------------------------------------------------------------------------
 
-@dataclass
-class PathCommand:
-    cmd: str  # M, L, C, Z, etc. (uppercase = absolute)
-    args: List[float] = field(default_factory=list)
+class PathCommand(NamedTuple):
+    cmd: str
+    args: List[float]
 
 
 def parse_svg_path(d: str) -> List[PathCommand]:
@@ -1542,7 +1543,7 @@ def convert_polyline(elem: ET.Element, ctx: ConvertContext) -> str:
 
     fill_op = get_fill_opacity(elem, ctx)
     stroke_op = get_stroke_opacity(elem, ctx)
-    fill = build_fill_xml(elem, ctx, fill_op)
+    build_fill_xml(elem, ctx, fill_op)
     stroke = build_stroke_xml(elem, ctx, stroke_op)
 
     shape_id = ctx.next_id()
@@ -1698,15 +1699,8 @@ def convert_text(elem: ET.Element, ctx: ConvertContext) -> str:
     box_w = text_width + padding * 2
     box_h = text_height + padding
 
-    # Letter spacing
-    spc_attr = ''
     letter_spacing = _get_attr(elem, 'letter-spacing', ctx)
-    if letter_spacing:
-        try:
-            spc_val = float(letter_spacing) * 100
-            spc_attr = f' spc="{int(spc_val)}"'
-        except ValueError:
-            pass
+    del letter_spacing
 
     # Text rotation
     text_rot = 0

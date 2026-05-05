@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -171,15 +170,15 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps([]).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = []
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             result = await adapter.list_tasks(board_id="org/repo")
             assert result == ()
 
@@ -189,15 +188,12 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = b"{}"
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             await adapter.move_task(task_id="1", to_state=BoardTaskState.COMPLETED)
 
     @pytest.mark.asyncio
@@ -206,15 +202,12 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = b"{}"
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             await adapter.add_comment(task_id="1", body="LGTM")
 
     @pytest.mark.asyncio
@@ -223,12 +216,16 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
-        with patch.object(
-            adapter, "add_comment", new_callable=AsyncMock
-        ) as mock_comment:
-            await adapter.add_artifact(task_id="1", name="PR", url="https://pr/1")
-            mock_comment.assert_called_once()
+        with patch(
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_factory.return_value = MagicMock()
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
+            with patch.object(
+                adapter, "add_comment", new_callable=AsyncMock
+            ) as mock_comment:
+                await adapter.add_artifact(task_id="1", name="PR", url="https://pr/1")
+                mock_comment.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_list_tasks_with_issues(self) -> None:
@@ -236,29 +233,27 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                [
-                    {
-                        "number": 42,
-                        "title": "Bug fix",
-                        "body": "Fix the broken thing",
-                        "state": "open",
-                        "labels": [{"name": "bug"}],
-                        "assignee": {"login": "dev"},
-                        "html_url": "https://github.com/org/repo/issues/42",
-                        "created_at": "2026-01-01T00:00:00Z",
-                        "updated_at": "2026-01-02T00:00:00Z",
-                    }
-                ]
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = [
+                {
+                    "number": 42,
+                    "title": "Bug fix",
+                    "body": "Fix the broken thing",
+                    "state": "open",
+                    "labels": [{"name": "bug"}],
+                    "assignee": {"login": "dev"},
+                    "html_url": "https://github.com/org/repo/issues/42",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                }
+            ]
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             result = await adapter.list_tasks(board_id="org/repo")
             assert len(result) == 1
             assert result[0].board_task_id == "42"
@@ -270,12 +265,15 @@ class TestGithubAdapter:
         from relay_teams.agents.orchestration.board.github_adapter import (
             GitHubAdapter,
         )
+        import httpx
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_urlopen.side_effect = OSError("network error")
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_client.request.side_effect = httpx.ConnectError("network error")
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             result = await adapter.list_tasks(board_id="org/repo")
             assert result == ()
 
@@ -285,15 +283,15 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps({"message": "error"}).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"message": "error"}
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             result = await adapter.list_tasks(board_id="org/repo")
             assert result == ()
 
@@ -303,22 +301,20 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                {
-                    "number": 1,
-                    "title": "Test issue",
-                    "body": "body",
-                    "state": "open",
-                }
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "number": 1,
+                "title": "Test issue",
+                "body": "body",
+                "state": "open",
+            }
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             bt = await adapter.get_task(task_id="1")
             assert bt.board_task_id == "1"
 
@@ -328,14 +324,12 @@ class TestGithubAdapter:
             GitHubAdapter,
         )
 
-        adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.github_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_factory.return_value = mock_client
+            adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
             await adapter.assign_task(task_id="1", assignee="dev")
 
     def test_github_issue_to_board_full(self) -> None:
@@ -493,17 +487,17 @@ class TestLinearAdapter:
             LinearAdapter,
         )
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                {"data": {"team": {"issues": {"nodes": []}}}}
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "data": {"team": {"issues": {"nodes": []}}}
+            }
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
             result = await adapter.list_tasks(board_id="team-1")
             assert result == ()
 
@@ -512,12 +506,15 @@ class TestLinearAdapter:
         from relay_teams.agents.orchestration.board.linear_adapter import (
             LinearAdapter,
         )
+        import httpx
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_urlopen.side_effect = OSError("network error")
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_client.request.side_effect = httpx.ConnectError("network error")
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
             result = await adapter.list_tasks(board_id="team-1")
             assert result == ()
 
@@ -527,13 +524,17 @@ class TestLinearAdapter:
             LinearAdapter,
         )
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
-        with patch.object(
-            adapter, "add_comment", new_callable=AsyncMock
-        ) as mock_comment:
-            await adapter.add_artifact(task_id="L-1", name="CI", url="https://ci/1")
-            mock_comment.assert_called_once()
-            assert "CI" in mock_comment.call_args.kwargs["body"]
+        with patch(
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_factory.return_value = MagicMock()
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
+            with patch.object(
+                adapter, "add_comment", new_callable=AsyncMock
+            ) as mock_comment:
+                await adapter.add_artifact(task_id="L-1", name="CI", url="https://ci/1")
+                mock_comment.assert_called_once()
+                assert "CI" in mock_comment.call_args.kwargs["body"]
 
     @pytest.mark.asyncio
     async def test_list_tasks_with_items(self) -> None:
@@ -541,35 +542,61 @@ class TestLinearAdapter:
             LinearAdapter,
         )
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                {
-                    "data": {
-                        "team": {
-                            "issues": {
-                                "nodes": [
-                                    {
-                                        "id": "L-1",
-                                        "title": "Test",
-                                        "description": "desc",
-                                        "state": {"name": "todo"},
-                                    }
-                                ]
-                            }
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "data": {
+                    "team": {
+                        "issues": {
+                            "nodes": [
+                                {
+                                    "id": "L-1",
+                                    "title": "Test",
+                                    "description": "desc",
+                                    "state": {"name": "todo"},
+                                }
+                            ]
                         }
                     }
                 }
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            }
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
             result = await adapter.list_tasks(board_id="team-1")
             assert len(result) == 1
             assert result[0].board_task_id == "L-1"
+
+    @pytest.mark.asyncio
+    async def test_get_task(self) -> None:
+        from relay_teams.agents.orchestration.board.linear_adapter import (
+            LinearAdapter,
+        )
+
+        with patch(
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "data": {
+                    "issue": {
+                        "id": "L-42",
+                        "title": "Found",
+                        "description": "desc",
+                        "state": {"name": "started"},
+                    }
+                }
+            }
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
+            bt = await adapter.get_task(task_id="L-42")
+            assert bt.board_task_id == "L-42"
+            assert bt.state == BoardTaskState.IN_PROGRESS
 
     @pytest.mark.asyncio
     async def test_move_task(self) -> None:
@@ -577,17 +604,15 @@ class TestLinearAdapter:
             LinearAdapter,
         )
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                {"data": {"issueUpdate": {}}}
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"data": {"issueUpdate": {}}}
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
             await adapter.move_task(task_id="L-1", to_state=BoardTaskState.COMPLETED)
 
     @pytest.mark.asyncio
@@ -596,17 +621,15 @@ class TestLinearAdapter:
             LinearAdapter,
         )
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                {"data": {"issueUpdate": {"issue": {}}}}
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {"data": {"issueUpdate": {"issue": {}}}}
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
             await adapter.assign_task(task_id="L-1", assignee="alice")
 
     @pytest.mark.asyncio
@@ -615,15 +638,15 @@ class TestLinearAdapter:
             LinearAdapter,
         )
 
-        adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.urllib.request.urlopen"
-        ) as mock_urlopen:
-            mock_resp = MagicMock()
-            mock_resp.read.return_value = json.dumps(
-                {"data": {"commentCreate": {"success": True}}}
-            ).encode()
-            mock_resp.__enter__ = lambda s: mock_resp
-            mock_resp.__exit__ = MagicMock(return_value=False)
-            mock_urlopen.return_value = mock_resp
+            "relay_teams.agents.orchestration.board.linear_adapter.create_runtime_sync_http_client"
+        ) as mock_factory:
+            mock_client = MagicMock()
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "data": {"commentCreate": {"success": True}}
+            }
+            mock_client.request.return_value = mock_response
+            mock_factory.return_value = mock_client
+            adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
             await adapter.add_comment(task_id="L-1", body="LGTM")
