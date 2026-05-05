@@ -66,7 +66,7 @@ class XiaolubanNotificationDispatcher:
         *,
         session_repo: SessionLookup,
         account_lookup: XiaolubanAccountLookup,
-        terminal_notification_suppressor: (XiaolubanTerminalNotificationSuppressor)
+        terminal_notification_suppressor: XiaolubanTerminalNotificationSuppressor
         | None = None,
     ) -> None:
         self._session_repo = session_repo
