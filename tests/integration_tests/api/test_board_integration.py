@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTaskState,
     TaskBoardStateMap,
 )

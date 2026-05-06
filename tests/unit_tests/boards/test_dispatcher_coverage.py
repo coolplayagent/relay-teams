@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTask,
     BoardTaskState,
     TaskBoardAdapter,
     TaskBoardConfig,
 )
-from relay_teams.agents.orchestration.board.dispatcher import (
+from relay_teams.boards.dispatcher import (
     BoardEventDispatcher,
 )
 from relay_teams.agents.tasks.enums import TaskStatus

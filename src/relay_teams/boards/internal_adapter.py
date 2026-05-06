@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTask,
     BoardTaskState,
     TaskBoardAdapter,

@@ -7,7 +7,7 @@ from datetime import datetime
 import httpx
 from pydantic import JsonValue
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTask,
     BoardTaskState,
     TaskBoardAdapter,

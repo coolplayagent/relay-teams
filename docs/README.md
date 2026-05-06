@@ -6,6 +6,7 @@ This directory is organized by documentation purpose and runtime module.
 
 - [API design](core/api-design.md)
 - [Database schema](core/database-schema.md)
+- [Project layout](core/project-layout.md)
 - [Security boundary](core/security.md)
 - [System module boundaries](core/system-module-boundaries.md)
 

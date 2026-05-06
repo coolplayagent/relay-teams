@@ -3720,6 +3720,8 @@ Response: `StateMapResponse`
 - `task_status_to_board`: mapping from TaskStatus name to BoardTaskState name
 - `board_state_to_task_status`: mapping from BoardTaskState name to tuple of TaskStatus names
 
+Domain module: `src/relay_teams/boards/`
+
 Router: `src/relay_teams/interfaces/server/routers/boards.py`
 
 ---

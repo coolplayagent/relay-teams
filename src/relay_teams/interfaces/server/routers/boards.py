@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTaskState,
     TaskBoardConfig,
     TaskBoardStateMap,
