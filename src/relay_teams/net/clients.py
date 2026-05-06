@@ -100,6 +100,24 @@ def create_async_http_client(
     )
 
 
+def create_runtime_async_http_client(
+    *,
+    ssl_verify: bool | None = None,
+    timeout_seconds: float = DEFAULT_HTTP_TIMEOUT,
+    connect_timeout_seconds: float = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
+    follow_redirects: bool = False,
+    request_limiter: AsyncRequestLimiter | None = None,
+) -> httpx.AsyncClient:
+    return create_async_http_client(
+        proxy_config=load_proxy_env_config(),
+        ssl_verify=ssl_verify,
+        timeout_seconds=timeout_seconds,
+        connect_timeout_seconds=connect_timeout_seconds,
+        follow_redirects=follow_redirects,
+        request_limiter=request_limiter,
+    )
+
+
 def _resolve_proxy_config(
     *,
     merged_env: Mapping[str, str] | None,
