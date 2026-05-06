@@ -645,7 +645,9 @@ def test_root_cli_autostart_rejects_mismatched_local_runtime(monkeypatch) -> Non
     )
 
     try:
-        cli_app._auto_start_if_needed("http://127.0.0.1:8000", autostart=True)
+        cli_app._auto_start_if_needed(
+            "http://127.0.0.1:8000", autostart=True, daemon=False, force=False
+        )
     except RuntimeError as exc:
         assert "runtime mismatch" in str(exc)
         assert "Stop the conflicting server first" in str(exc)
@@ -677,7 +679,9 @@ def test_root_cli_autostart_rejects_mismatched_builtin_roles_dir(monkeypatch) ->
     )
 
     try:
-        cli_app._auto_start_if_needed("http://127.0.0.1:8000", autostart=True)
+        cli_app._auto_start_if_needed(
+            "http://127.0.0.1:8000", autostart=True, daemon=False, force=False
+        )
     except RuntimeError as exc:
         assert "runtime mismatch" in str(exc)
         assert "builtin roles" in str(exc)

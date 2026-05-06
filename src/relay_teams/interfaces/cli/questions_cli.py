@@ -10,7 +10,7 @@ import typer
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+type AutoStartCallable = Callable[[str, bool, bool, bool], None]
 
 
 class QuestionsOutputFormat(str, Enum):
@@ -37,8 +37,19 @@ def build_questions_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         result = request_json(base_url, "GET", f"/api/runs/{run_id}/questions", None)
         items = _extract_question_items(result)
         if output_format == QuestionsOutputFormat.JSON:
@@ -60,8 +71,19 @@ def build_questions_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         try:
             decoded = json.loads(answers_json)
         except ValueError as exc:

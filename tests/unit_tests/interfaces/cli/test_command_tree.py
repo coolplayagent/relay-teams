@@ -34,7 +34,9 @@ def test_root_message_runs_single_prompt(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
     streamed: dict[str, object] = {}
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         streamed["base_url"] = base_url
         streamed["autostart"] = autostart
 
@@ -99,7 +101,9 @@ def test_root_message_supports_workspace_selection(monkeypatch, tmp_path: Path) 
     calls: list[tuple[str, str, dict[str, object] | None]] = []
     streamed: dict[str, object] = {}
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -157,7 +161,9 @@ def test_root_message_resolves_registered_slash_command(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -234,7 +240,9 @@ def test_root_message_falls_back_to_slash_text_when_command_expands_empty(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -290,7 +298,9 @@ def test_root_message_falls_back_to_slash_text_when_command_expands_empty(
 def test_commands_list_uses_backend(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -343,7 +353,9 @@ def test_commands_list_json_with_workspace_id_skips_pick(
     calls: list[tuple[str, str, dict[str, object] | None]] = []
     (tmp_path / "workspace-1").mkdir()
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -399,7 +411,9 @@ def test_commands_list_bare_relative_workspace_path_uses_pick(
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -441,7 +455,9 @@ def test_commands_list_bare_relative_workspace_path_uses_pick(
 
 
 def test_commands_list_empty_table(monkeypatch, tmp_path: Path) -> None:
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -471,7 +487,9 @@ def test_commands_list_empty_table(monkeypatch, tmp_path: Path) -> None:
 def test_commands_show_table_and_json(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -555,7 +573,9 @@ def test_root_message_supports_normal_role_selection(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -630,7 +650,9 @@ def test_root_message_supports_orchestration_mode(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -710,7 +732,9 @@ def test_root_message_supports_orchestration_mode(
 def test_root_message_allows_no_yolo_override(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -789,7 +813,9 @@ def test_root_message_invalid_role_lists_available_ids(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -864,7 +890,9 @@ def test_root_message_invalid_orchestration_id_lists_available_ids(
 ) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -943,7 +971,9 @@ def test_run_module_removed() -> None:
 def test_runs_module_todo_command(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(

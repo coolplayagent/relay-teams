@@ -27,7 +27,7 @@ RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None],
     dict[str, object] | list[object],
 ]
-AutoStartCallable = Callable[[str, bool], None]
+AutoStartCallable = Callable[[str, bool, bool, bool], None]
 
 
 def build_gateway_app(
@@ -61,8 +61,19 @@ def build_gateway_app(
         def feishu_list(
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(base_url, "GET", "/api/gateway/feishu/accounts", None)
             typer.echo(json.dumps(result, ensure_ascii=False))
 
@@ -71,12 +82,23 @@ def build_gateway_app(
             payload_json: str = typer.Option(..., "--payload-json"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
             payload = _parse_json_object_option(
                 payload_json,
                 option_name="--payload-json",
             )
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -91,12 +113,23 @@ def build_gateway_app(
             payload_json: str = typer.Option(..., "--payload-json"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
             payload = _parse_json_object_option(
                 payload_json,
                 option_name="--payload-json",
             )
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "PATCH",
@@ -110,8 +143,19 @@ def build_gateway_app(
             account_id: str = typer.Option(..., "--account-id"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -125,8 +169,19 @@ def build_gateway_app(
             account_id: str = typer.Option(..., "--account-id"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -138,16 +193,27 @@ def build_gateway_app(
         @feishu_app.command("delete")
         def feishu_delete(
             account_id: str = typer.Option(..., "--account-id"),
-            force: bool = typer.Option(True, "--force/--no-force"),
+            force_delete: bool = typer.Option(True, "--force-delete/--no-force-delete"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "DELETE",
                 f"/api/gateway/feishu/accounts/{account_id}",
-                {"force": force},
+                {"force": force_delete},
             )
             typer.echo(json.dumps(result, ensure_ascii=False))
 
@@ -155,8 +221,19 @@ def build_gateway_app(
         def feishu_reload(
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -169,8 +246,19 @@ def build_gateway_app(
         def wechat_list(
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(base_url, "GET", "/api/gateway/wechat/accounts", None)
             typer.echo(json.dumps(result, ensure_ascii=False))
 
@@ -181,13 +269,24 @@ def build_gateway_app(
             bot_type: str = typer.Option("3", "--bot-type"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
             payload: dict[str, object] = {"bot_type": bot_type}
             if base_url_override is not None:
                 payload["base_url"] = base_url_override
             if route_tag is not None:
                 payload["route_tag"] = route_tag
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -202,8 +301,19 @@ def build_gateway_app(
             timeout_ms: int = typer.Option(480000, "--timeout-ms"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -218,12 +328,23 @@ def build_gateway_app(
             payload_json: str = typer.Option(..., "--payload-json"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
             payload = _parse_json_object_option(
                 payload_json,
                 option_name="--payload-json",
             )
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "PATCH",
@@ -237,8 +358,19 @@ def build_gateway_app(
             account_id: str = typer.Option(..., "--account-id"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -252,8 +384,19 @@ def build_gateway_app(
             account_id: str = typer.Option(..., "--account-id"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",
@@ -265,16 +408,27 @@ def build_gateway_app(
         @wechat_app.command("delete")
         def wechat_delete(
             account_id: str = typer.Option(..., "--account-id"),
-            force: bool = typer.Option(True, "--force/--no-force"),
+            force_delete: bool = typer.Option(True, "--force-delete/--no-force-delete"),
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "DELETE",
                 f"/api/gateway/wechat/accounts/{account_id}",
-                {"force": force},
+                {"force": force_delete},
             )
             typer.echo(json.dumps(result, ensure_ascii=False))
 
@@ -282,8 +436,19 @@ def build_gateway_app(
         def wechat_reload(
             base_url: str = typer.Option(default_base_url, "--base-url"),
             autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+            daemon: bool = typer.Option(
+                False,
+                "--daemon",
+                "-d",
+                help="Run the server as a background process when autostarting.",
+            ),
+            force: bool = typer.Option(
+                False,
+                "--force",
+                help="Force kill any existing server process before autostarting.",
+            ),
         ) -> None:
-            auto_start_if_needed(base_url, autostart)
+            auto_start_if_needed(base_url, autostart, daemon, force)
             result = request_json(
                 base_url,
                 "POST",

@@ -10,7 +10,7 @@ import typer
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+type AutoStartCallable = Callable[[str, bool, bool, bool], None]
 
 
 class ClawHubOutputFormat(str, Enum):
@@ -38,8 +38,19 @@ def build_clawhub_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(base_url, "GET", "/api/system/configs/clawhub", None)
         data = _require_object_response(payload, "/api/system/configs/clawhub")
         if output_format == ClawHubOutputFormat.JSON:
@@ -63,6 +74,17 @@ def build_clawhub_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
         if token is not None and clear_token:
             raise typer.BadParameter(
@@ -70,7 +92,7 @@ def build_clawhub_app(
             )
         if token is None and not clear_token:
             raise typer.BadParameter("Pass --token to save or --clear-token to remove")
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload: dict[str, object] = {"token": None if clear_token else token}
         result = request_json(
             base_url,
@@ -95,8 +117,19 @@ def build_clawhub_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "GET",
@@ -120,8 +153,19 @@ def build_clawhub_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "GET",
@@ -146,8 +190,19 @@ def build_clawhub_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = _parse_config_json(config_json)
         result = request_json(
             base_url,
@@ -169,8 +224,19 @@ def build_clawhub_app(
         skill_id: str = typer.Argument(..., help="ClawHub skill directory id."),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         result = request_json(
             base_url,
             "DELETE",

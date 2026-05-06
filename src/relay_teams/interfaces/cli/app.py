@@ -28,7 +28,10 @@ from relay_teams.interfaces.cli.run_prompt_cli import (
     run_single_prompt as _run_single_prompt_impl,
     stream_events as _stream_events_impl,
 )
-from relay_teams.interfaces.server.cli import build_server_app
+from relay_teams.interfaces.server.cli import (
+    build_server_app,
+    stop_managed_server_process,
+)
 from relay_teams.interfaces.server.runtime_identity import (
     ServerHealthPayload,
     build_server_runtime_identity,
@@ -139,7 +142,7 @@ async def _get_server_health_async(base_url: str) -> ServerHealthPayload | None:
         return None
 
 
-def _start_server_daemon(host: str, port: int) -> None:
+def _start_server_daemon(host: str, port: int, *, daemon: bool = False) -> None:
     sync_proxy_env_to_process_env(load_proxy_env_config())
     command = [
         sys.executable,
@@ -152,6 +155,8 @@ def _start_server_daemon(host: str, port: int) -> None:
         "--port",
         str(port),
     ]
+    if daemon:
+        command.append("--daemon")
 
     if sys.platform.startswith("win"):
         create_new_process_group = int(
@@ -199,7 +204,9 @@ async def _wait_until_healthy_async(
     return False
 
 
-def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
+def _auto_start_if_needed(
+    base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+) -> None:
     parsed = urlparse(base_url)
     host = parsed.hostname or "127.0.0.1"
     live_health = _get_server_health(base_url)
@@ -225,7 +232,10 @@ def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
             f"Refusing to autostart server for non-local base URL: {base_url}"
         )
 
-    _start_server_daemon(host=host, port=port)
+    if force:
+        stop_managed_server_process(force=True)
+
+    _start_server_daemon(host=host, port=port, daemon=daemon)
     if not _wait_until_healthy(base_url):
         raise RuntimeError("Failed to start local Agent Teams server")
 
@@ -244,8 +254,10 @@ def _module_request_json(
     )
 
 
-def _module_auto_start(base_url: str, autostart: bool) -> None:
-    _auto_start_if_needed(base_url, autostart=autostart)
+def _module_auto_start(
+    base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+) -> None:
+    _auto_start_if_needed(base_url, autostart=autostart, daemon=daemon, force=force)
 
 
 server_app = build_server_app()
@@ -357,6 +369,17 @@ def root_command(
         "--yolo/--no-yolo",
         help="Skip tool approvals for the run.",
     ),
+    daemon: bool = typer.Option(
+        False,
+        "--daemon",
+        "-d",
+        help="Run the server as a background process when autostarting.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force kill any existing server process before autostarting.",
+    ),
 ) -> None:
     _root_command_impl(
         ctx,
@@ -366,6 +389,8 @@ def root_command(
         role,
         orchestration,
         workspace,
+        daemon,
+        force,
         run_single_prompt=_run_single_prompt,
     )
 
@@ -377,6 +402,8 @@ def _run_single_prompt(
     normal_root_role_id: str | None,
     orchestration_id: str | None,
     workspace: Path | None,
+    daemon: bool,
+    force: bool,
 ) -> None:
     _run_single_prompt_impl(
         message,
@@ -385,6 +412,8 @@ def _run_single_prompt(
         normal_root_role_id,
         orchestration_id,
         workspace,
+        daemon,
+        force,
         default_base_url=DEFAULT_BASE_URL,
         execute_prompt=_execute_prompt,
     )
@@ -402,6 +431,8 @@ def _execute_prompt(
     orchestration_id: str | None = None,
     workspace: Path | None = None,
     autostart: bool = True,
+    daemon: bool = False,
+    force: bool = False,
     debug: bool = False,
 ) -> None:
     _execute_prompt_impl(
@@ -415,6 +446,8 @@ def _execute_prompt(
         orchestration_id,
         workspace,
         autostart,
+        daemon,
+        force,
         debug,
         auto_start_if_needed=_module_auto_start,
         request_json=_module_request_json,

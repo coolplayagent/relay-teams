@@ -25,6 +25,8 @@ Highlights:
 
 Start the server with `uv run relay-teams server start` and open http://127.0.0.1:8000 in your browser.
 Use `uv run relay-teams server restart` to restart the managed server, and `uv run relay-teams server stop --force` to force stop it.
+Add `--daemon` to `server start` to run the server as a background process: `uv run relay-teams server start --daemon`.
+All CLI commands that support `--autostart` now also accept `--daemon` (`-d`) and `--force` to control background autostart behavior and force-restart an existing server.
 The web UI now includes a language toggle beside the settings button so you can switch between English and Simplified Chinese in-page.
 
 Frontend assets are now decoupled under `frontend/dist` and served by the backend.

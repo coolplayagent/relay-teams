@@ -13,7 +13,9 @@ runner = CliRunner()
 def test_agent_runtimes_list_supports_json_output(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -54,7 +56,9 @@ def test_agent_runtimes_list_supports_json_output(monkeypatch) -> None:
 def test_agent_runtimes_save_and_delete_call_expected_endpoints(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -122,7 +126,9 @@ def test_agent_runtimes_commands_encode_agent_id_path(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
     agent_id = "team/codex runtime?#1"
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -213,7 +219,9 @@ def test_agent_runtimes_commands_encode_agent_id_path(monkeypatch) -> None:
 
 
 def test_agent_runtimes_test_supports_table_output(monkeypatch) -> None:
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(

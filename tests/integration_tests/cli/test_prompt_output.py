@@ -92,7 +92,9 @@ def test_root_message_uses_current_directory_as_default_workspace(
 def test_root_message_uses_yolo_by_default(monkeypatch, tmp_path: Path) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
