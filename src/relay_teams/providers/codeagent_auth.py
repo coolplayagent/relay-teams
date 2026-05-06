@@ -366,7 +366,8 @@ class CodeAgentTokenService:
             )
         return _build_polled_token_result(response)
 
-    async def poll_token(
+    # noinspection PyMethodMayBeStatic
+    async def poll_token(  # noqa: PLR6301
         self,
         *,
         session: CodeAgentOAuthSession,

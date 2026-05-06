@@ -449,3 +449,264 @@ def test_model_catalog_without_cache_reports_fetch_error(
     assert result.ok is False
     assert result.providers == ()
     assert result.error_code == "network_error"
+
+
+# -- async catalog client helper and tests --
+
+
+class _FakeAsyncCatalogClient:
+    def __init__(self, response: httpx.Response | Exception) -> None:
+        self._response = response
+        self.requested_urls: list[str] = []
+
+    async def __aenter__(self) -> _FakeAsyncCatalogClient:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> None:
+        return None
+
+    async def get(self, url: str) -> httpx.Response:
+        self.requested_urls.append(url)
+        if isinstance(self._response, Exception):
+            raise self._response
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_fetches_from_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncCatalogClient(
+        httpx.Response(
+            200,
+            json={
+                "openai": {
+                    "name": "OpenAI",
+                    "api": "https://api.openai.com/v1",
+                    "env": ["OPENAI_API_KEY"],
+                    "models": {
+                        "gpt-4o": {
+                            "name": "GPT-4o",
+                        },
+                    },
+                },
+            },
+        )
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=ProxyEnvConfig,
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is True
+    assert len(result.providers) == 1
+    assert result.providers[0].id == "openai"
+    assert client.requested_urls == ["https://models.dev/api.json"]
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_returns_cached_without_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async_client = _FakeAsyncCatalogClient(
+        httpx.Response(
+            200,
+            json={
+                "openai": {
+                    "name": "OpenAI",
+                    "models": {"gpt-4o": {"name": "GPT-4o"}},
+                },
+            },
+        )
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: async_client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+        ttl_seconds=0,
+    )
+
+    first = await service.get_catalog_async(refresh=True)
+    assert first.ok is True
+
+    def fail_async(**_kwargs: object) -> None:
+        raise AssertionError("should use cache")
+
+    monkeypatch.setattr(model_catalog, "create_async_http_client", fail_async)
+
+    cached = await service.get_catalog_async()
+    assert cached.ok is True
+    assert cached.stale is True
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_handles_network_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncCatalogClient(httpx.ConnectError("offline"))
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is False
+    assert result.error_code == "network_error"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_handles_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncCatalogClient(httpx.ReadTimeout("timeout"))
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is False
+    assert result.error_code == "network_timeout"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_handles_http_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncCatalogClient(httpx.Response(500))
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is False
+    assert result.error_code == "http_error"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_handles_invalid_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncCatalogClient(
+        httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_handles_empty_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeAsyncCatalogClient(httpx.Response(200, json={}))
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: client,
+    )
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_async_returns_stale_on_fetch_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ModelCatalogService(
+        config_dir=tmp_path,
+        get_proxy_config=lambda: ProxyEnvConfig(),
+        ttl_seconds=0,
+    )
+    success_client = _FakeAsyncCatalogClient(
+        httpx.Response(
+            200,
+            json={
+                "openai": {
+                    "name": "OpenAI",
+                    "models": {"gpt-4o": {"name": "GPT-4o"}},
+                },
+            },
+        )
+    )
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: success_client,
+    )
+    assert (await service.get_catalog_async(refresh=True)).ok is True
+
+    failed_client = _FakeAsyncCatalogClient(httpx.ConnectError("offline"))
+    monkeypatch.setattr(
+        model_catalog,
+        "create_async_http_client",
+        lambda **_kwargs: failed_client,
+    )
+
+    result = await service.get_catalog_async(refresh=True)
+
+    assert result.ok is False
+    assert result.stale is True
+    assert result.error_code == "network_error"
+    assert result.providers[0].models[0].id == "gpt-4o"
