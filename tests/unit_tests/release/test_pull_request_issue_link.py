@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -109,11 +110,10 @@ def test_fetch_linked_issue_count_returns_count() -> None:
     )
 
     with patch(
-        "relay_teams.release.pull_request_issue_link.create_sync_http_client"
-    ) as mock_factory:
+        "relay_teams.release.pull_request_issue_link.urllib.request.urlopen"
+    ) as mock_urlopen:
         mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = json.dumps(
+        mock_resp.read.return_value = json.dumps(
             {
                 "data": {
                     "repository": {
@@ -121,16 +121,75 @@ def test_fetch_linked_issue_count_returns_count() -> None:
                     }
                 }
             }
-        )
-        mock_resp.raise_for_status = MagicMock()
-        mock_client = MagicMock()
-        mock_client.post.return_value = mock_resp
-        mock_client.__enter__ = lambda s: mock_client
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_factory.return_value = mock_client
+        ).encode("utf-8")
+        mock_resp.__enter__ = lambda s: mock_resp
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
         count = fetch_linked_issue_count(
             context=context,
             token="ghp_secret",
             graphql_url="https://api.github.com/graphql",
         )
         assert count == 3
+
+
+def test_fetch_linked_issue_count_raises_on_http_error() -> None:
+    from unittest.mock import patch
+    import urllib.error
+
+    from relay_teams.release.pull_request_issue_link import (
+        PullRequestIssueLinkContext,
+        fetch_linked_issue_count,
+    )
+
+    context = PullRequestIssueLinkContext(
+        owner="openai",
+        repository_name="agent-teams",
+        pull_request_number=42,
+        base_ref="main",
+    )
+
+    with patch(
+        "relay_teams.release.pull_request_issue_link.urllib.request.urlopen"
+    ) as mock_urlopen:
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.github.com/graphql",
+            code=401,
+            msg="Unauthorized",
+            hdrs=Message(),
+            fp=None,
+        )
+        with pytest.raises(IssueLinkRequirementError, match="HTTP 401"):
+            fetch_linked_issue_count(
+                context=context,
+                token="ghp_secret",
+                graphql_url="https://api.github.com/graphql",
+            )
+
+
+def test_fetch_linked_issue_count_raises_on_url_error() -> None:
+    from unittest.mock import patch
+    import urllib.error
+
+    from relay_teams.release.pull_request_issue_link import (
+        PullRequestIssueLinkContext,
+        fetch_linked_issue_count,
+    )
+
+    context = PullRequestIssueLinkContext(
+        owner="openai",
+        repository_name="agent-teams",
+        pull_request_number=42,
+        base_ref="main",
+    )
+
+    with patch(
+        "relay_teams.release.pull_request_issue_link.urllib.request.urlopen"
+    ) as mock_urlopen:
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+        with pytest.raises(IssueLinkRequirementError, match="Failed to reach"):
+            fetch_linked_issue_count(
+                context=context,
+                token="ghp_secret",
+                graphql_url="https://api.github.com/graphql",
+            )

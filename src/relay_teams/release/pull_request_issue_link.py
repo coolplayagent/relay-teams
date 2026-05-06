@@ -4,12 +4,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import NamedTuple, Protocol
-
-import httpx
-
-from relay_teams.net.clients import create_sync_http_client
 
 _GRAPHQL_TIMEOUT_SECONDS = 30.0
 _GITHUB_GRAPHQL_QUERY = """
@@ -95,21 +93,22 @@ def fetch_linked_issue_count(
         "Content-Type": "application/json",
     }
     try:
-        with create_sync_http_client(
-            timeout_seconds=_GRAPHQL_TIMEOUT_SECONDS,
-        ) as client:
-            response = client.post(
-                graphql_url, content=request_payload, headers=headers
-            )
-            response.raise_for_status()
-            response_text = response.text
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.text.strip()
+        req = urllib.request.Request(
+            graphql_url,
+            data=request_payload,
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(  # nosec B310: HTTPS-only GitHub GraphQL endpoint
+            req, timeout=_GRAPHQL_TIMEOUT_SECONDS
+        ) as resp:
+            response_text = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
         raise IssueLinkRequirementError(
-            f"GitHub GraphQL request failed with HTTP {exc.response.status_code}: "
-            f"{detail}"
+            f"GitHub GraphQL request failed with HTTP {exc.code}: {detail}"
         ) from exc
-    except httpx.TransportError as exc:
+    except urllib.error.URLError as exc:
         raise IssueLinkRequirementError(
             f"Failed to reach GitHub GraphQL endpoint: {exc}"
         ) from exc
