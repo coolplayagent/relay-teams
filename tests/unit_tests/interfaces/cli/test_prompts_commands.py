@@ -121,7 +121,9 @@ class _FakeAsyncByteStream(httpx.AsyncByteStream):
 def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         captured["base_url"] = base_url
         captured["autostart"] = autostart
 
@@ -189,7 +191,9 @@ def test_roles_prompt_builds_preview_payload(monkeypatch) -> None:
 def test_roles_prompt_without_role_id_shows_available_roles(monkeypatch) -> None:
     captured: list[str] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -219,7 +223,9 @@ def test_roles_prompt_without_role_id_shows_available_roles(monkeypatch) -> None
 
 
 def test_roles_prompt_default_output_prints_full_prompt(monkeypatch) -> None:
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(

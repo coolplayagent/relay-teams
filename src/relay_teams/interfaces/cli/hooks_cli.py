@@ -9,7 +9,7 @@ import typer
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+type AutoStartCallable = Callable[[str, bool, bool, bool], None]
 
 
 class HooksOutputFormat(str, Enum):
@@ -34,8 +34,19 @@ def build_hooks_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(base_url, "GET", "/api/system/configs/hooks", None)
         response = _require_object_response(payload, "/api/system/configs/hooks")
         if output_format == HooksOutputFormat.JSON:
@@ -47,8 +58,19 @@ def build_hooks_app(
     def validate_hooks(
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(base_url, "GET", "/api/system/configs/hooks", None)
         response = _require_object_response(payload, "/api/system/configs/hooks")
         _ = request_json(
@@ -68,8 +90,19 @@ def build_hooks_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(base_url, "GET", "/api/system/configs/hooks", None)
         response = _require_object_response(payload, "/api/system/configs/hooks")
         if output_format == HooksOutputFormat.JSON:

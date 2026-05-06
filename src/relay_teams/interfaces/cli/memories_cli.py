@@ -10,7 +10,7 @@ import typer
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+type AutoStartCallable = Callable[[str, bool, bool, bool], None]
 
 
 class MemoriesOutputFormat(str, Enum):
@@ -43,8 +43,19 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         params: dict[str, object] = {}
         if tier is not None:
             params["tier"] = tier
@@ -77,8 +88,19 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "GET",
@@ -109,8 +131,19 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         body: dict[str, object] = {
             "content": {"title": title or content[:80], "body": content},
             "tier": tier,
@@ -139,8 +172,19 @@ def build_memories_app(
         memory_id: str = typer.Option(..., "--memory-id"),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         request_json(
             base_url,
             "DELETE",
@@ -160,8 +204,19 @@ def build_memories_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "POST",
@@ -183,8 +238,19 @@ def build_memories_app(
         target_scope: str = typer.Option("workspace", "--target-scope"),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "POST",

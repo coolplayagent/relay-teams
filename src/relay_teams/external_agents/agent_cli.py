@@ -11,7 +11,7 @@ import typer
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+type AutoStartCallable = Callable[[str, bool, bool, bool], None]
 
 
 class AgentOutputFormat(str, Enum):
@@ -40,8 +40,19 @@ def build_agent_runtimes_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "GET",
@@ -65,8 +76,19 @@ def build_agent_runtimes_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "GET",
@@ -89,8 +111,19 @@ def build_agent_runtimes_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = _parse_config_json(config_json)
         result = request_json(
             base_url,
@@ -110,8 +143,19 @@ def build_agent_runtimes_app(
         agent_id: str = typer.Argument(..., help="Agent runtime id."),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         result = request_json(
             base_url,
             "DELETE",
@@ -136,8 +180,19 @@ def build_agent_runtimes_app(
         ),
         base_url: str = typer.Option(default_base_url, "--base-url"),
         autostart: bool = typer.Option(True, "--autostart/--no-autostart"),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         payload = request_json(
             base_url,
             "POST",

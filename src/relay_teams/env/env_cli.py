@@ -88,8 +88,19 @@ def proxy_reload(
         "--autostart/--no-autostart",
         help="Auto-start local server when not already running.",
     ),
+    daemon: bool = typer.Option(
+        False,
+        "--daemon",
+        "-d",
+        help="Run the server as a background process when autostarting.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force kill any existing server process before autostarting.",
+    ),
 ) -> None:
-    _auto_start_if_needed(base_url, autostart)
+    _auto_start_if_needed(base_url, autostart, daemon, force)
     payload = _request_json(base_url, "POST", "/api/system/configs/proxy:reload")
     typer.echo(json.dumps(payload, ensure_ascii=False))
 
@@ -118,8 +129,19 @@ def probe_web(
         "--autostart/--no-autostart",
         help="Auto-start local server when not already running.",
     ),
+    daemon: bool = typer.Option(
+        False,
+        "--daemon",
+        "-d",
+        help="Run the server as a background process when autostarting.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Force kill any existing server process before autostarting.",
+    ),
 ) -> None:
-    _auto_start_if_needed(base_url, autostart)
+    _auto_start_if_needed(base_url, autostart, daemon, force)
     payload: dict[str, object] = {"url": url}
     if timeout_ms is not None:
         payload["timeout_ms"] = timeout_ms
@@ -322,7 +344,12 @@ def _is_server_healthy(base_url: str) -> bool:
         return False
 
 
-def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
+def _auto_start_if_needed(
+    base_url: str,
+    autostart: bool,
+    daemon: bool = False,
+    force: bool = False,
+) -> None:
     if _is_server_healthy(base_url):
         return
     if not autostart:
@@ -338,12 +365,17 @@ def _auto_start_if_needed(base_url: str, autostart: bool) -> None:
             f"Refusing to autostart server for non-local base URL: {base_url}"
         )
 
-    _start_server_daemon(host=host, port=port)
+    if force:
+        from relay_teams.interfaces.server.cli import stop_managed_server_process
+
+        stop_managed_server_process(force=True)
+
+    _start_server_daemon(host=host, port=port, daemon=daemon)
     if not _wait_until_healthy(base_url):
         raise RuntimeError("Failed to start local Agent Teams server")
 
 
-def _start_server_daemon(host: str, port: int) -> None:
+def _start_server_daemon(host: str, port: int, *, daemon: bool = False) -> None:
     sync_proxy_env_to_process_env(load_proxy_env_config())
     command = [
         sys.executable,
@@ -356,6 +388,8 @@ def _start_server_daemon(host: str, port: int) -> None:
         "--port",
         str(port),
     ]
+    if daemon:
+        command.append("--daemon")
     if sys.platform.startswith("win"):
         create_new_process_group = int(
             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)

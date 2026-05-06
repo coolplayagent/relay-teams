@@ -29,10 +29,12 @@ class _CapturingAutoStart:
     """Records calls to auto_start_if_needed without launching a server."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, bool]] = []
+        self.calls: list[tuple[str, bool, bool, bool]] = []
 
-    def __call__(self, base_url: str, autostart: bool) -> None:
-        self.calls.append((base_url, autostart))
+    def __call__(
+        self, base_url: str, autostart: bool, daemon: bool, force: bool
+    ) -> None:
+        self.calls.append((base_url, autostart, daemon, force))
 
 
 class _FakeRequestJson:

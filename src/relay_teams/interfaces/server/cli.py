@@ -433,6 +433,14 @@ def _clear_managed_server(expected_pid: int | None = None) -> None:
     process_file.unlink(missing_ok=True)
 
 
+def stop_managed_server_process(
+    *,
+    force: bool = False,
+    timeout_seconds: float = 10.0,
+) -> ManagedServerProcess | None:
+    return _stop_managed_server(force=force, timeout_seconds=timeout_seconds)
+
+
 def _stop_managed_server(
     force: bool,
     timeout_seconds: float = 10.0,

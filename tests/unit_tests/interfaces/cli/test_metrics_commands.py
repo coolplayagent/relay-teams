@@ -17,7 +17,9 @@ def _normalized_output(text: str) -> str:
 def test_metrics_overview_command_renders_prettylog(monkeypatch) -> None:
     calls: list[tuple[str, str, str]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         assert base_url == cli_app.DEFAULT_BASE_URL
         assert autostart is True
 
@@ -68,7 +70,9 @@ def test_metrics_breakdowns_command_requires_scope_id() -> None:
 
 
 def test_metrics_breakdowns_command_renders_gateway_rows(monkeypatch) -> None:
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(

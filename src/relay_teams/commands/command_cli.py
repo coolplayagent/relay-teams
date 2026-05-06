@@ -14,7 +14,7 @@ RequestJsonResponse: TypeAlias = dict[str, object] | list[object]
 RequestJsonCallable: TypeAlias = Callable[
     [str, str, str, dict[str, object] | None], RequestJsonResponse
 ]
-AutoStartCallable: TypeAlias = Callable[[str, bool], None]
+AutoStartCallable: TypeAlias = Callable[[str, bool, bool, bool], None]
 
 
 class CommandOutputFormat(str, Enum):
@@ -57,8 +57,19 @@ def build_commands_app(
             "--autostart/--no-autostart",
             help="Start the local server if it is not running.",
         ),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         workspace_id = _resolve_workspace_id(
             base_url=base_url,
             workspace=workspace,
@@ -100,8 +111,19 @@ def build_commands_app(
             "--autostart/--no-autostart",
             help="Start the local server if it is not running.",
         ),
+        daemon: bool = typer.Option(
+            False,
+            "--daemon",
+            "-d",
+            help="Run the server as a background process when autostarting.",
+        ),
+        force: bool = typer.Option(
+            False,
+            "--force",
+            help="Force kill any existing server process before autostarting.",
+        ),
     ) -> None:
-        auto_start_if_needed(base_url, autostart)
+        auto_start_if_needed(base_url, autostart, daemon, force)
         workspace_id = _resolve_workspace_id(
             base_url=base_url,
             workspace=workspace,

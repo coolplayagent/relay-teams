@@ -10,7 +10,9 @@ runner = CliRunner()
 def test_questions_list_renders_table_by_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         captured["base_url"] = base_url
         captured["autostart"] = autostart
 
@@ -59,7 +61,9 @@ def test_questions_list_renders_table_by_default(monkeypatch) -> None:
 
 
 def test_questions_list_supports_json_output(monkeypatch) -> None:
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(

@@ -17,10 +17,10 @@ from relay_teams.sessions.session_models import SessionMode
 type RequestJsonCallable = Callable[
     [str, str, str, dict[str, object] | None], dict[str, object] | list[object]
 ]
-type AutoStartCallable = Callable[[str, bool], None]
+type AutoStartCallable = Callable[[str, bool, bool, bool], None]
 type StreamEventsCallable = Callable[[str, str, bool], None]
 type RunSinglePromptCallable = Callable[
-    [str, bool, SessionMode, str | None, str | None, Path | None], None
+    [str, bool, SessionMode, str | None, str | None, Path | None, bool, bool], None
 ]
 type ExecutePromptCallable = Callable[..., None]
 
@@ -40,13 +40,17 @@ def root_command(
     role: str | None,
     orchestration: str | None,
     workspace: Path | None,
+    daemon: bool,
+    force: bool,
     *,
     run_single_prompt: RunSinglePromptCallable,
 ) -> None:
     if message is not None:
         if ctx.invoked_subcommand is not None:
             raise typer.BadParameter("Cannot combine --message with subcommands")
-        run_single_prompt(message, yolo, mode, role, orchestration, workspace)
+        run_single_prompt(
+            message, yolo, mode, role, orchestration, workspace, daemon, force
+        )
         return
 
     if (
@@ -71,6 +75,8 @@ def run_single_prompt(
     role_id: str | None,
     orchestration_id: str | None,
     workspace: Path | None,
+    daemon: bool,
+    force: bool,
     *,
     default_base_url: str,
     execute_prompt: ExecutePromptCallable,
@@ -113,6 +119,8 @@ def run_single_prompt(
         orchestration_id=normalized_orchestration_id,
         workspace=workspace,
         autostart=True,
+        daemon=daemon,
+        force=force,
         debug=False,
     )
 
@@ -128,13 +136,15 @@ def execute_prompt(
     orchestration_id: str | None,
     workspace: Path | None,
     autostart: bool,
+    daemon: bool,
+    force: bool,
     debug: bool,
     *,
     auto_start_if_needed: AutoStartCallable,
     request_json: RequestJsonCallable,
     stream_events: StreamEventsCallable,
 ) -> None:
-    auto_start_if_needed(base_url, autostart)
+    auto_start_if_needed(base_url, autostart, daemon, force)
 
     workspace_id = _resolve_workspace_id(
         base_url=base_url,

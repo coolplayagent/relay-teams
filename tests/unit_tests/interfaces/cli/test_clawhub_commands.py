@@ -13,7 +13,9 @@ runner = CliRunner()
 def test_clawhub_config_commands_call_expected_endpoints(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -51,7 +53,9 @@ def test_clawhub_config_commands_call_expected_endpoints(monkeypatch) -> None:
 def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
@@ -108,7 +112,9 @@ def test_clawhub_skill_commands_call_expected_endpoints(monkeypatch) -> None:
 def test_clawhub_config_save_requires_token_or_clear(monkeypatch) -> None:
     calls: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def fake_autostart(base_url: str, autostart: bool) -> None:
+    def fake_autostart(
+        base_url: str, autostart: bool, daemon: bool = False, force: bool = False
+    ) -> None:
         _ = (base_url, autostart)
 
     def fake_request_json(
