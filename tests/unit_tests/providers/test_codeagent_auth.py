@@ -1537,3 +1537,60 @@ async def test_build_codeagent_openai_client_exposes_custom_auth() -> None:
         assert client.custom_auth is not None
     finally:
         await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_poll_token_posts_client_code_json_async(monkeypatch) -> None:
+    session = create_codeagent_oauth_session(
+        base_url=DEFAULT_CODEAGENT_BASE_URL,
+        client_id=DEFAULT_CODEAGENT_CLIENT_ID,
+        scope=DEFAULT_CODEAGENT_SCOPE,
+        scope_resource=DEFAULT_CODEAGENT_SCOPE_RESOURCE,
+    )
+    captured: dict[str, object] = {}
+
+    class _FakeAsyncHttpClient:
+        async def __aenter__(self) -> _FakeAsyncHttpClient:
+            return self
+
+        async def __aexit__(self, *exc_info: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: object,
+            headers: dict[str, str],
+        ) -> httpx.Response:
+            captured["url"] = url
+            captured["json"] = json
+            captured["headers"] = headers
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "expires_in": "3600",
+                },
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
+        lambda **kwargs: _FakeAsyncHttpClient(),
+    )
+
+    token_result = await CodeAgentTokenService().poll_token(
+        session=session,
+        ssl_verify=None,
+        connect_timeout_seconds=15.0,
+    )
+
+    assert token_result is not None
+    assert token_result.access_token == "access-token"
+    assert captured["url"] == f"{DEFAULT_CODEAGENT_BASE_URL}/codeAgent/oauth/getToken"
+    assert captured["json"] == {
+        "clientCode": session.client_code,
+        "redirectUrl": session.callback_url,
+    }
+    assert captured["headers"] == {"Content-Type": "application/json"}

@@ -366,6 +366,29 @@ class CodeAgentTokenService:
             )
         return _build_polled_token_result(response)
 
+    # noinspection PyMethodMayBeStatic
+    async def poll_token(  # noqa: PLR6301
+        self,
+        *,
+        session: CodeAgentOAuthSession,
+        ssl_verify: bool | None,
+        connect_timeout_seconds: float,
+    ) -> CodeAgentOAuthTokenResult | None:
+        async with create_async_http_client(
+            ssl_verify=ssl_verify,
+            timeout_seconds=connect_timeout_seconds,
+            connect_timeout_seconds=connect_timeout_seconds,
+        ) as client:
+            response = await client.post(
+                _get_token_url(session.base_url),
+                json={
+                    "clientCode": session.client_code,
+                    "redirectUrl": session.callback_url,
+                },
+                headers={"Content-Type": "application/json"},
+            )
+        return _build_polled_token_result(response)
+
     @staticmethod
     def _cache_key(*, base_url: str, auth_config: CodeAgentAuthConfig) -> str:
         cache_discriminator = (

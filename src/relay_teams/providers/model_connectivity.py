@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from time import perf_counter
 from typing import Literal, cast
+import asyncio
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -364,6 +365,32 @@ class ModelConnectivityProbeService:
         return self._verify_codeagent_auth_config(
             config=config,
             checked_at=checked_at,
+        )
+
+    # -- async bridge methods --
+
+    async def probe_async(
+        self,
+        request: ModelConnectivityProbeRequest,
+    ) -> ModelConnectivityProbeResult:
+        """Async version of :meth:`probe`."""
+        return await asyncio.to_thread(self.probe, request)
+
+    async def discover_models_async(
+        self,
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResult:
+        """Async version of :meth:`discover_models`."""
+        return await asyncio.to_thread(self.discover_models, request)
+
+    async def verify_codeagent_auth_async(
+        self,
+        *,
+        profile_name: str,
+    ) -> CodeAgentAuthVerifyResult:
+        """Async version of :meth:`verify_codeagent_auth`."""
+        return await asyncio.to_thread(
+            self.verify_codeagent_auth, profile_name=profile_name
         )
 
     def _verify_codeagent_auth_config(
