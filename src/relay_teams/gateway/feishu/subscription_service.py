@@ -5,7 +5,6 @@ import asyncio
 import logging
 import random
 from contextlib import suppress
-from threading import Event, Lock, Thread
 from typing import NoReturn, Protocol, runtime_checkable
 from urllib.parse import parse_qs, urlparse
 
@@ -51,9 +50,9 @@ class FeishuTriggerHandlerLike(Protocol):
 
 
 class EventRunnerLike(Protocol):
-    def start(self) -> None: ...
+    async def start(self) -> None: ...
 
-    def stop(self) -> None: ...
+    async def stop(self) -> None: ...
 
     def is_alive(self) -> bool: ...
 
@@ -69,7 +68,7 @@ class EventRunnerFactory(Protocol):
 
 @runtime_checkable
 class ShutdownableRunnerFactory(Protocol):
-    def shutdown(self) -> None: ...
+    async def shutdown(self) -> None: ...
 
 
 class WsConnectionLike(Protocol):
@@ -139,35 +138,31 @@ class FeishuSubscriptionService:
         self._runner_factory = (
             _SharedFeishuRunnerFactory() if runner_factory is None else runner_factory
         )
-        self._lock = Lock()
+        self._lock = asyncio.Lock()
         self._runners: dict[
             str, tuple[FeishuTriggerRuntimeConfig, EventRunnerLike]
         ] = {}
 
-    def start(self) -> None:
-        self.reload()
+    async def start(self) -> None:
+        await self.reload()
 
-    def stop(self) -> None:
-        with self._lock:
+    async def stop(self) -> None:
+        async with self._lock:
             trigger_ids = tuple(self._runners.keys())
             for trigger_id in trigger_ids:
-                self._stop_runner_locked(trigger_id=trigger_id, reason="shutdown")
+                await self._stop_runner_locked(trigger_id=trigger_id, reason="shutdown")
         if isinstance(self._runner_factory, ShutdownableRunnerFactory):
-            self._runner_factory.shutdown()
+            await self._runner_factory.shutdown()
 
-    async def reload_async(self) -> None:
-
-        await asyncio.to_thread(self.reload)
-
-    def reload(self) -> None:
-        with self._lock:
+    async def reload(self) -> None:
+        async with self._lock:
             runtime_configs = self._runtime_config_lookup.list_enabled_runtime_configs()
             desired = {config.trigger_id: config for config in runtime_configs}
             current_ids = set(self._runners.keys())
             desired_ids = set(desired.keys())
 
             for trigger_id in sorted(current_ids - desired_ids):
-                self._stop_runner_locked(
+                await self._stop_runner_locked(
                     trigger_id=trigger_id,
                     reason="disabled_or_missing_credentials",
                 )
@@ -181,13 +176,15 @@ class FeishuSubscriptionService:
                         and current_config.signature == runtime_config.signature
                     ):
                         continue
-                    self._stop_runner_locked(trigger_id=trigger_id, reason="reload")
+                    await self._stop_runner_locked(
+                        trigger_id=trigger_id, reason="reload"
+                    )
                 try:
                     runner = self._runner_factory(
                         runtime_config=runtime_config,
                         event_handler=self._event_handler,
                     )
-                    runner.start()
+                    await runner.start()
                 except Exception as exc:
                     log_event(
                         logger,
@@ -213,12 +210,12 @@ class FeishuSubscriptionService:
                     },
                 )
 
-    def _stop_runner_locked(self, *, trigger_id: str, reason: str) -> None:
+    async def _stop_runner_locked(self, *, trigger_id: str, reason: str) -> None:
         existing = self._runners.pop(trigger_id, None)
         if existing is None:
             return
         _runtime_config, runner = existing
-        runner.stop()
+        await runner.stop()
         log_event(
             logger,
             logging.INFO,
@@ -248,8 +245,8 @@ class _SharedFeishuRunnerFactory:
             event_handler=event_handler,
         )
 
-    def shutdown(self) -> None:
-        self._hub.shutdown()
+    async def shutdown(self) -> None:
+        await self._hub.shutdown()
 
 
 class _HubBackedRunner:
@@ -264,14 +261,14 @@ class _HubBackedRunner:
         self._runtime_config = runtime_config
         self._event_handler = event_handler
 
-    def start(self) -> None:
-        self._hub.start_client(
+    async def start(self) -> None:
+        await self._hub.start_client(
             runtime_config=self._runtime_config,
             event_handler=self._event_handler,
         )
 
-    def stop(self) -> None:
-        self._hub.stop_client(self._runtime_config.trigger_id)
+    async def stop(self) -> None:
+        await self._hub.stop_client(self._runtime_config.trigger_id)
 
     def is_alive(self) -> bool:
         return self._hub.is_client_active(self._runtime_config.trigger_id)
@@ -287,131 +284,54 @@ class _FeishuWsHub:
             _create_ws_controller if controller_factory is None else controller_factory
         )
         self._controllers: dict[str, FeishuWsControllerLike] = {}
-        self._lock = Lock()
-        self._ready = Event()
-        self._thread: Thread | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._lock = asyncio.Lock()
+        self._sdk_loop_initialized = False
 
-    def start_client(
+    async def start_client(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
         event_handler: FeishuTriggerHandlerLike,
     ) -> None:
-        with self._lock:
-            self._ensure_thread_locked()
-            loop = self._loop
-        if loop is None:
-            raise RuntimeError("Feishu subscription hub loop is unavailable")
-        future = asyncio.run_coroutine_threadsafe(
-            self._start_client_async(
-                runtime_config=runtime_config,
-                event_handler=event_handler,
-            ),
-            loop,
-        )
-        future.result(timeout=10)
+        async with self._lock:
+            self._ensure_sdk_loop()
+            controller = self._controllers.get(runtime_config.trigger_id)
+            if controller is None:
+                controller = self._controller_factory(
+                    runtime_config=runtime_config,
+                    event_handler=event_handler,
+                )
+                self._controllers[runtime_config.trigger_id] = controller
+            await controller.start()
 
-    def stop_client(self, trigger_id: str) -> None:
-        with self._lock:
-            loop = self._loop
-        if loop is None:
-            return
-        future = asyncio.run_coroutine_threadsafe(
-            self._stop_client_async(trigger_id),
-            loop,
-        )
-        future.result(timeout=10)
-
-    def is_client_active(self, trigger_id: str) -> bool:
-        with self._lock:
-            loop = self._loop
-        if loop is None:
-            return False
-        future = asyncio.run_coroutine_threadsafe(
-            self._is_client_active_async(trigger_id),
-            loop,
-        )
-        return bool(future.result(timeout=5))
-
-    def shutdown(self) -> None:
-        with self._lock:
-            loop = self._loop
-            thread = self._thread
-        if loop is None or thread is None:
-            return
-        future = asyncio.run_coroutine_threadsafe(self._shutdown_async(), loop)
-        future.result(timeout=15)
-        thread.join(timeout=15)
-        with self._lock:
-            self._thread = None
-            self._loop = None
-            self._ready.clear()
-
-    async def _start_client_async(
-        self,
-        runtime_config: FeishuTriggerRuntimeConfig,
-        event_handler: FeishuTriggerHandlerLike,
-    ) -> None:
-        controller = self._controllers.get(runtime_config.trigger_id)
-        if controller is None:
-            controller = self._controller_factory(
-                runtime_config=runtime_config,
-                event_handler=event_handler,
-            )
-            self._controllers[runtime_config.trigger_id] = controller
-        await controller.start()
-
-    async def _stop_client_async(self, trigger_id: str) -> None:
-        controller = self._controllers.pop(trigger_id, None)
+    async def stop_client(self, trigger_id: str) -> None:
+        async with self._lock:
+            controller = self._controllers.pop(trigger_id, None)
         if controller is None:
             return
         await controller.stop()
 
-    async def _is_client_active_async(self, trigger_id: str) -> bool:
+    def is_client_active(self, trigger_id: str) -> bool:
         controller = self._controllers.get(trigger_id)
         return controller is not None and controller.is_running()
 
-    async def _shutdown_async(self) -> None:
-        trigger_ids = tuple(self._controllers.keys())
-        for trigger_id in trigger_ids:
-            controller = self._controllers.pop(trigger_id, None)
-            if controller is not None:
-                await controller.stop()
-        asyncio.get_running_loop().call_soon(asyncio.get_running_loop().stop)
+    async def shutdown(self) -> None:
+        async with self._lock:
+            trigger_ids = tuple(self._controllers.keys())
+            controllers_to_stop = [
+                self._controllers.pop(tid)
+                for tid in trigger_ids
+                if tid in self._controllers
+            ]
+        for controller in controllers_to_stop:
+            await controller.stop()
 
-    def _ensure_thread_locked(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+    def _ensure_sdk_loop(self) -> None:
+        if self._sdk_loop_initialized:
             return
-        self._ready.clear()
-        thread = Thread(
-            target=self._run_loop,
-            name="feishu-sdk-subscription-hub",
-            daemon=True,
-        )
-        self._thread = thread
-        thread.start()
-        if not self._ready.wait(timeout=10):
-            raise RuntimeError("Timed out waiting for Feishu subscription hub loop")
-
-    def _run_loop(self) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         ws_client_module = import_lark_ws_client_module()
-        setattr(ws_client_module, "loop", loop)
-        self._loop = loop
-        self._ready.set()
-        try:
-            loop.run_forever()
-        finally:
-            pending = tuple(task for task in asyncio.all_tasks(loop) if not task.done())
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
-            loop.close()
+        setattr(ws_client_module, "loop", asyncio.get_running_loop())
+        self._sdk_loop_initialized = True
 
 
 class _FeishuWsController:

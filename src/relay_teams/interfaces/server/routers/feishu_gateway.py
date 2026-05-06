@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -20,8 +21,6 @@ from relay_teams.interfaces.server.deps import (
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.interfaces.server.write_models import DeleteRequest
 from relay_teams.validation import RequiredIdentifierStr
-
-import asyncio
 
 router = APIRouter(prefix="/gateway/feishu", tags=["Gateway"])
 
@@ -45,7 +44,7 @@ async def create_feishu_account(
 ) -> FeishuGatewayAccountRecord:
     try:
         created = await service.create_account_async(req)
-        await subscription_service.reload_async()
+        await subscription_service.reload()
         return created
     except (FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
@@ -66,18 +65,19 @@ async def update_feishu_account(
 ) -> FeishuGatewayAccountRecord:
     try:
 
-        def _update_feishu_account() -> FeishuGatewayAccountRecord:
+        def _update_feishu_account() -> tuple[FeishuGatewayAccountRecord, bool]:
             existing = service.get_account(account_id)
             reload_required = service.subscription_runtime_changed_for_update(
                 existing=existing,
                 request=req,
             )
             updated = service.update_account(account_id, req)
-            if reload_required:
-                subscription_service.reload()
-            return updated
+            return updated, reload_required
 
-        return await asyncio.to_thread(_update_feishu_account)
+        updated, reload_required = await asyncio.to_thread(_update_feishu_account)
+        if reload_required:
+            await subscription_service.reload()
+        return updated
     except (KeyError, FeishuAccountNameConflictError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -96,7 +96,7 @@ async def enable_feishu_account(
 ) -> FeishuGatewayAccountRecord:
     try:
         updated = await service.set_account_enabled_async(account_id, True)
-        await subscription_service.reload_async()
+        await subscription_service.reload()
         return updated
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
@@ -118,7 +118,7 @@ async def disable_feishu_account(
 ) -> FeishuGatewayAccountRecord:
     try:
         updated = await service.set_account_enabled_async(account_id, False)
-        await subscription_service.reload_async()
+        await subscription_service.reload()
         return updated
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -139,7 +139,7 @@ async def delete_feishu_account(
             account_id,
             force=req.force if req is not None else False,
         )
-        await subscription_service.reload_async()
+        await subscription_service.reload()
         return {"status": "ok"}
     except (KeyError, RuntimeError) as exc:
         raise http_exception_for(
@@ -155,5 +155,5 @@ async def reload_feishu_gateway(
         Depends(get_feishu_subscription_service),
     ],
 ) -> dict[str, str]:
-    await subscription_service.reload_async()
+    await subscription_service.reload()
     return {"status": "ok"}

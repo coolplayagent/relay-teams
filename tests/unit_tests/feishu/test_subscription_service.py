@@ -73,10 +73,10 @@ class _FakeRunner:
         self.started = False
         self.stopped = False
 
-    def start(self) -> None:
+    async def start(self) -> None:
         self.started = True
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self.stopped = True
 
     def is_alive(self) -> bool:
@@ -101,7 +101,7 @@ class _FakeShutdownableRunnerFactory:
     def __call__(self, **_kwargs: object) -> _FakeRunner:
         return self._runner
 
-    def shutdown(self) -> None:
+    async def shutdown(self) -> None:
         self.shutdown_calls += 1
 
 
@@ -124,7 +124,8 @@ class _FakeAsyncController:
         return self.started and not self.stopped
 
 
-def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
+@pytest.mark.asyncio
+async def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
     runtime_a = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
@@ -148,7 +149,7 @@ def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
         runner_factory=lambda **_kwargs: runners.pop(0),
     )
 
-    service.start()
+    await service.start()
 
     assert runner_a.started is True
     assert runner_b.started is True
@@ -156,7 +157,8 @@ def test_subscription_service_starts_one_runner_per_enabled_bot() -> None:
     assert runner_b.stopped is False
 
 
-def test_subscription_service_reloads_only_changed_bot_runner() -> None:
+@pytest.mark.asyncio
+async def test_subscription_service_reloads_only_changed_bot_runner() -> None:
     first_runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
@@ -180,10 +182,10 @@ def test_subscription_service_reloads_only_changed_bot_runner() -> None:
         runner_factory=lambda **_kwargs: first_runner,
     )
 
-    service.start()
+    await service.start()
     lookup.runtime_configs = (second_runtime,)
     service._runner_factory = lambda **_kwargs: second_runner
-    service.reload()
+    await service.reload()
 
     assert first_runner.started is True
     assert first_runner.stopped is True
@@ -191,7 +193,8 @@ def test_subscription_service_reloads_only_changed_bot_runner() -> None:
     assert second_runner.stopped is False
 
 
-def test_subscription_service_stops_runner_when_bot_no_longer_enabled() -> None:
+@pytest.mark.asyncio
+async def test_subscription_service_stops_runner_when_bot_no_longer_enabled() -> None:
     runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
@@ -207,15 +210,16 @@ def test_subscription_service_stops_runner_when_bot_no_longer_enabled() -> None:
         runner_factory=lambda **_kwargs: runner,
     )
 
-    service.start()
+    await service.start()
     lookup.runtime_configs = ()
-    service.reload()
+    await service.reload()
 
     assert runner.started is True
     assert runner.stopped is True
 
 
-def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
+@pytest.mark.asyncio
+async def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
     runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
@@ -231,15 +235,16 @@ def test_subscription_service_stop_shuts_down_shared_runner_factory() -> None:
         runner_factory=runner_factory,
     )
 
-    service.start()
-    service.stop()
+    await service.start()
+    await service.stop()
 
     assert runner.started is True
     assert runner.stopped is True
     assert runner_factory.shutdown_calls == 1
 
 
-def test_subscription_service_reload_tolerates_runner_start_failure() -> None:
+@pytest.mark.asyncio
+async def test_subscription_service_reload_tolerates_runner_start_failure() -> None:
     runtime = _build_runtime(
         trigger_id="trg_a",
         name="bot_a",
@@ -249,10 +254,10 @@ def test_subscription_service_reload_tolerates_runner_start_failure() -> None:
     )
 
     class _FailingRunner:
-        def start(self) -> None:
+        async def start(self) -> None:
             raise RuntimeError("sdk unavailable")
 
-        def stop(self) -> None:
+        async def stop(self) -> None:
             return None
 
         def is_alive(self) -> bool:
@@ -264,12 +269,13 @@ def test_subscription_service_reload_tolerates_runner_start_failure() -> None:
         runner_factory=lambda **_kwargs: _FailingRunner(),
     )
 
-    service.start()
+    await service.start()
 
     assert service._runners == {}
 
 
-def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots(
+@pytest.mark.asyncio
+async def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime_a = _build_runtime(
@@ -304,28 +310,25 @@ def test_feishu_ws_hub_reuses_single_thread_for_multiple_bots(
     )
     hub = _FeishuWsHub(controller_factory=_controller_factory)
 
-    hub.start_client(runtime_config=runtime_a, event_handler=_FakeHandler())
-    thread = hub._thread
-    hub.start_client(runtime_config=runtime_b, event_handler=_FakeHandler())
+    await hub.start_client(runtime_config=runtime_a, event_handler=_FakeHandler())
+    await hub.start_client(runtime_config=runtime_b, event_handler=_FakeHandler())
 
-    assert thread is not None
-    assert hub._thread is thread
+    assert hub._sdk_loop_initialized is True
     assert hub.is_client_active("trg_a") is True
     assert hub.is_client_active("trg_b") is True
     assert created_controllers["trg_a"].started is True
     assert created_controllers["trg_b"].started is True
 
-    hub.stop_client("trg_a")
+    await hub.stop_client("trg_a")
 
     assert hub.is_client_active("trg_a") is False
     assert hub.is_client_active("trg_b") is True
     assert created_controllers["trg_a"].stopped is True
     assert created_controllers["trg_b"].stopped is False
 
-    hub.shutdown()
+    await hub.shutdown()
 
     assert created_controllers["trg_b"].stopped is True
-    assert hub._thread is None
 
 
 class _FakeWsConnection:

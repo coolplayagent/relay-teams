@@ -1369,7 +1369,7 @@ class ServerContainer:
         self.background_task_service.bind_completion_sink(self.run_service)
         self.wechat_gateway_service.start()
         self.xiaoluban_im_listener_service.start()
-        self.feishu_subscription_service.start()
+        await self.feishu_subscription_service.start()
         self.feishu_message_pool_service.start()
         await self.automation_delivery_worker.start()
         await self.automation_bound_session_queue_worker.start()
@@ -1383,7 +1383,7 @@ class ServerContainer:
         await self.automation_bound_session_queue_worker.stop()
         await self.automation_delivery_worker.stop()
         self.feishu_message_pool_service.stop()
-        self.feishu_subscription_service.stop()
+        await self.feishu_subscription_service.stop()
         self.xiaoluban_im_listener_service.stop()
         self.wechat_gateway_service.stop()
         self.localhost_run_tunnel_service.stop()
@@ -1526,7 +1526,12 @@ class ServerContainer:
         self._on_mcp_reloaded(
             self.mcp_config_manager.load_registry(extra_specs=self._plugin_mcp_specs)
         )
-        self.feishu_subscription_service.reload()
+        loop = self.run_service.bound_event_loop
+        if loop is not None and not loop.is_closed():
+            asyncio.run_coroutine_threadsafe(
+                self.feishu_subscription_service.reload(),
+                loop,
+            )
         self.wechat_gateway_service.reload()
 
     def _reload_mcp_runtime_after_app_env_change(self) -> None:

@@ -139,10 +139,7 @@ class _FakeSubscriptionService:
     def __init__(self) -> None:
         self.reload_calls = 0
 
-    async def reload_async(self) -> None:
-        self.reload()
-
-    def reload(self) -> None:
+    async def reload(self) -> None:
         self.reload_calls += 1
 
 

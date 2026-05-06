@@ -442,7 +442,8 @@ def test_saving_app_environment_variable_reloads_mcp_and_skills_runtime(
     assert skill_reload_calls == ["skills"]
 
 
-def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
+@pytest.mark.asyncio
+async def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -455,10 +456,13 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     mcp_reload_calls: list[str] = []
     skill_reload_calls: list[str] = []
 
+    async def _fake_feishu_reload() -> None:
+        feishu_reload_calls.append("feishu")
+
     monkeypatch.setattr(
         container.feishu_subscription_service,
         "reload",
-        lambda: feishu_reload_calls.append("feishu"),
+        _fake_feishu_reload,
     )
     monkeypatch.setattr(
         container.wechat_gateway_service,
@@ -476,11 +480,19 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
         lambda: skill_reload_calls.append("skills"),
     )
 
+    monkeypatch.setattr(
+        type(container.run_service),
+        "bound_event_loop",
+        property(lambda self: asyncio.get_running_loop()),
+    )
+
     container.environment_variable_service.save_environment_variable(
         scope=EnvironmentVariableScope.APP,
         key="HTTP_PROXY",
         request=EnvironmentVariableSaveRequest(value="http://proxy.example:8080"),
     )
+
+    await asyncio.sleep(0.1)
 
     assert os.environ["HTTP_PROXY"] == "http://proxy.example:8080"
     assert container.proxy_config_service.get_proxy_config().http_proxy == (
@@ -531,10 +543,14 @@ async def test_container_binds_background_completion_sink_during_start(
         "start",
         lambda: start_calls.append("wechat"),
     )
+
+    async def _fake_feishu_subscription_start() -> None:
+        start_calls.append("feishu-subscription")
+
     monkeypatch.setattr(
         container.feishu_subscription_service,
         "start",
-        lambda: start_calls.append("feishu-subscription"),
+        _fake_feishu_subscription_start,
     )
     monkeypatch.setattr(
         container.feishu_message_pool_service,
