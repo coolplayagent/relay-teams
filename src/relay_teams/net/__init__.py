@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from relay_teams.net.clients import (
     create_async_http_client,
+    create_runtime_async_http_client,
     create_runtime_sync_http_client,
     create_sync_http_client,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "clear_llm_http_client_cache_async",
     "reset_llm_http_client_cache_entry",
     "create_async_http_client",
+    "create_runtime_async_http_client",
     "create_runtime_sync_http_client",
     "create_sync_http_client",
     "get_gh_path",

@@ -10,6 +10,7 @@ import pytest
 import relay_teams.net.clients as clients_module
 from relay_teams.env.proxy_env import ProxyEnvConfig
 from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.proxy_transports import AsyncRequestLimiter
 
 _SSL_VERIFY_DISABLED = 0
 _SSL_VERIFY_REQUIRED = 2
@@ -100,3 +101,105 @@ def test_create_runtime_sync_http_client_uses_hydrated_proxy_config(
     _ = clients_module.create_runtime_sync_http_client()
 
     assert captured_proxy_configs == [proxy_config]
+
+
+def test_create_runtime_async_http_client_uses_hydrated_proxy_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy_config = ProxyEnvConfig(https_proxy="http://user:secret@proxy.example:8443")
+    captured_proxy_configs: list[ProxyEnvConfig | None] = []
+    captured_limiters: list[AsyncRequestLimiter | None] = []
+
+    def fake_create_async_http_client(
+        *,
+        merged_env: Mapping[str, str] | None = None,
+        proxy_config: ProxyEnvConfig | None = None,
+        ssl_verify: bool | None = None,
+        timeout_seconds: float = 0.0,
+        connect_timeout_seconds: float = 0.0,
+        follow_redirects: bool = False,
+        request_limiter: AsyncRequestLimiter | None = None,
+    ) -> httpx.AsyncClient:
+        _ = (
+            merged_env,
+            ssl_verify,
+            timeout_seconds,
+            connect_timeout_seconds,
+            follow_redirects,
+        )
+        captured_proxy_configs.append(proxy_config)
+        captured_limiters.append(request_limiter)
+        return cast(httpx.AsyncClient, object())
+
+    monkeypatch.setattr(
+        clients_module,
+        "load_proxy_env_config",
+        lambda: proxy_config,
+    )
+    monkeypatch.setattr(
+        clients_module,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    _ = clients_module.create_runtime_async_http_client()
+
+    assert captured_proxy_configs == [proxy_config]
+    assert captured_limiters == [None]
+
+
+def test_create_runtime_async_http_client_forwards_all_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: list[dict[str, object]] = []
+
+    def fake_create_async_http_client(
+        *,
+        merged_env: Mapping[str, str] | None = None,
+        proxy_config: ProxyEnvConfig | None = None,
+        ssl_verify: bool | None = None,
+        timeout_seconds: float = 0.0,
+        connect_timeout_seconds: float = 0.0,
+        follow_redirects: bool = False,
+        request_limiter: AsyncRequestLimiter | None = None,
+    ) -> httpx.AsyncClient:
+        captured_kwargs.append(
+            {
+                "proxy_config": proxy_config,
+                "ssl_verify": ssl_verify,
+                "timeout_seconds": timeout_seconds,
+                "connect_timeout_seconds": connect_timeout_seconds,
+                "follow_redirects": follow_redirects,
+                "request_limiter": request_limiter,
+            }
+        )
+        return cast(httpx.AsyncClient, object())
+
+    monkeypatch.setattr(
+        clients_module,
+        "load_proxy_env_config",
+        lambda: ProxyEnvConfig(),
+    )
+    monkeypatch.setattr(
+        clients_module,
+        "create_async_http_client",
+        fake_create_async_http_client,
+    )
+
+    sentinel_limiter: AsyncRequestLimiter | None = None
+
+    _ = clients_module.create_runtime_async_http_client(
+        ssl_verify=True,
+        timeout_seconds=99.0,
+        connect_timeout_seconds=5.0,
+        follow_redirects=True,
+        request_limiter=sentinel_limiter,
+    )
+
+    assert len(captured_kwargs) == 1
+    kw = captured_kwargs[0]
+    assert kw["ssl_verify"] is True
+    assert kw["timeout_seconds"] == 99.0
+    assert kw["connect_timeout_seconds"] == 5.0
+    assert kw["follow_redirects"] is True
+    assert kw["request_limiter"] is sentinel_limiter

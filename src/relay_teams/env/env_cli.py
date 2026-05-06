@@ -366,9 +366,11 @@ def _auto_start_if_needed(
         )
 
     if force:
-        from relay_teams.interfaces.server.cli import stop_managed_server_process
-
-        stop_managed_server_process(force=True)
+        subprocess.run(
+            [sys.executable, "-m", "relay_teams", "server", "stop", "--force"],
+            check=False,
+            timeout=30,
+        )
 
     _start_server_daemon(host=host, port=port, daemon=daemon)
     if not _wait_until_healthy(base_url):
