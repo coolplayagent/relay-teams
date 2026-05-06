@@ -9,16 +9,16 @@ import pytest
 
 from pydantic import JsonValue
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTaskState,
 )
-from relay_teams.agents.orchestration.board.internal_adapter import (
+from relay_teams.boards.internal_adapter import (
     InternalBoardAdapter,
     _board_to_task_status,
     _record_to_board_task,
     _task_status_to_board,
 )
-from relay_teams.agents.orchestration.board.linear_adapter import (
+from relay_teams.boards.linear_adapter import (
     _linear_issue_to_board,
 )
 from relay_teams.agents.tasks.enums import TaskStatus
@@ -189,13 +189,13 @@ class TestInternalAdapter:
 class TestGithubAdapter:
     @pytest.mark.asyncio
     async def test_list_tasks_empty(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client([])
             result = await adapter.list_tasks(board_id="org/repo")
@@ -203,33 +203,33 @@ class TestGithubAdapter:
 
     @pytest.mark.asyncio
     async def test_move_task(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client({})
             await adapter.move_task(task_id="1", to_state=BoardTaskState.COMPLETED)
 
     @pytest.mark.asyncio
     async def test_add_comment(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client({})
             await adapter.add_comment(task_id="1", body="LGTM")
 
     @pytest.mark.asyncio
     async def test_add_artifact_uses_comment(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
@@ -242,13 +242,13 @@ class TestGithubAdapter:
 
     @pytest.mark.asyncio
     async def test_list_tasks_with_issues(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client(
                 [
@@ -273,13 +273,13 @@ class TestGithubAdapter:
 
     @pytest.mark.asyncio
     async def test_list_tasks_error(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             mock_client = AsyncMock()
             mock_client.get = AsyncMock(
@@ -293,13 +293,13 @@ class TestGithubAdapter:
 
     @pytest.mark.asyncio
     async def test_list_tasks_non_list_response(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client({"message": "error"})
             result = await adapter.list_tasks(board_id="org/repo")
@@ -307,13 +307,13 @@ class TestGithubAdapter:
 
     @pytest.mark.asyncio
     async def test_get_task(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client(
                 {
@@ -328,19 +328,19 @@ class TestGithubAdapter:
 
     @pytest.mark.asyncio
     async def test_assign_task(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             GitHubAdapter,
         )
 
         adapter = GitHubAdapter(github_repo="org/repo", github_token="fake_token")
         with patch(
-            "relay_teams.agents.orchestration.board.github_adapter.create_async_http_client"
+            "relay_teams.boards.github_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client({})
             await adapter.assign_task(task_id="1", assignee="dev")
 
     def test_github_issue_to_board_full(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             _github_issue_to_board,
         )
 
@@ -365,7 +365,7 @@ class TestGithubAdapter:
         assert bt.updated_at is not None
 
     def test_github_issue_to_board_empty_labels(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             _github_issue_to_board,
         )
 
@@ -378,7 +378,7 @@ class TestGithubAdapter:
         assert bt.labels == ()
 
     def test_github_issue_to_board_closed_state(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             _github_issue_to_board,
         )
 
@@ -391,7 +391,7 @@ class TestGithubAdapter:
         assert bt.state.value == "completed"
 
     def test_github_issue_to_board_invalid_date(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             _github_issue_to_board,
         )
 
@@ -404,7 +404,7 @@ class TestGithubAdapter:
         assert bt.created_at is None
 
     def test_github_issue_to_board_non_string_labels(self) -> None:
-        from relay_teams.agents.orchestration.board.github_adapter import (
+        from relay_teams.boards.github_adapter import (
             _github_issue_to_board,
         )
 
@@ -490,13 +490,13 @@ class TestLinearConversion:
 class TestLinearAdapter:
     @pytest.mark.asyncio
     async def test_list_tasks_empty(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
         adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.create_async_http_client"
+            "relay_teams.boards.linear_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client(
                 {"data": {"team": {"issues": {"nodes": []}}}}
@@ -506,13 +506,13 @@ class TestLinearAdapter:
 
     @pytest.mark.asyncio
     async def test_list_tasks_error(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
         adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.create_async_http_client"
+            "relay_teams.boards.linear_adapter.create_async_http_client"
         ) as factory:
             mock_client = AsyncMock()
             mock_client.post = AsyncMock(
@@ -526,7 +526,7 @@ class TestLinearAdapter:
 
     @pytest.mark.asyncio
     async def test_add_artifact_delegates(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
@@ -540,13 +540,13 @@ class TestLinearAdapter:
 
     @pytest.mark.asyncio
     async def test_list_tasks_with_items(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
         adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.create_async_http_client"
+            "relay_teams.boards.linear_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client(
                 {
@@ -572,26 +572,26 @@ class TestLinearAdapter:
 
     @pytest.mark.asyncio
     async def test_move_task(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
         adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.create_async_http_client"
+            "relay_teams.boards.linear_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client({"data": {"issueUpdate": {}}})
             await adapter.move_task(task_id="L-1", to_state=BoardTaskState.COMPLETED)
 
     @pytest.mark.asyncio
     async def test_assign_task(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
         adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.create_async_http_client"
+            "relay_teams.boards.linear_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client(
                 {"data": {"issueUpdate": {"issue": {}}}}
@@ -600,13 +600,13 @@ class TestLinearAdapter:
 
     @pytest.mark.asyncio
     async def test_add_comment(self) -> None:
-        from relay_teams.agents.orchestration.board.linear_adapter import (
+        from relay_teams.boards.linear_adapter import (
             LinearAdapter,
         )
 
         adapter = LinearAdapter(api_key="fake_key", team_id="team-1")
         with patch(
-            "relay_teams.agents.orchestration.board.linear_adapter.create_async_http_client"
+            "relay_teams.boards.linear_adapter.create_async_http_client"
         ) as factory:
             factory.return_value = _mock_async_client(
                 {"data": {"commentCreate": {"success": True}}}

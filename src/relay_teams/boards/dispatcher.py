@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTaskState,
     TaskBoardAdapter,
     TaskBoardConfig,
@@ -117,7 +117,7 @@ class BoardEventDispatcher:
     @staticmethod
     async def _create_internal_task_from_board(board_task: object) -> None:
         """Create a relay-teams internal task from an external board task."""
-        from relay_teams.agents.orchestration.board.adapter import BoardTask
+        from relay_teams.boards.adapter import BoardTask
 
         assert isinstance(board_task, BoardTask)
         LOGGER.info(

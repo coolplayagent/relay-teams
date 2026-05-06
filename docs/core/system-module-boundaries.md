@@ -24,6 +24,10 @@ With the current layout, that means:
 - `sessions/runs/*` owns run lifecycle, recovery, injection, and SSE event projection.
 - `sessions/runs/background_tasks/*` owns subprocess execution and local process event
   production.
+- `boards/*` owns task-board contracts, tracker adapters, board-state mapping,
+  and board-controlled tools. It may project existing tasks or external tracker
+  issues, but it must not own run-local todo state or core orchestration
+  scheduling decisions.
 - `triggers/*` owns external provider ingress, webhook verification, repository
   subscriptions, and provider-triggered automation behavior.
 - `monitors/*` owns the event-driven substrate itself: normalized envelopes,

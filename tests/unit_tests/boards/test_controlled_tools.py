@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from relay_teams.agents.orchestration.board.adapter import TaskBoardAdapter
-from relay_teams.agents.orchestration.board.controlled_tools import (
+from relay_teams.boards.adapter import TaskBoardAdapter
+from relay_teams.boards.controlled_tools import (
     board_add_comment,
     board_attach_evidence,
     board_link_pr,

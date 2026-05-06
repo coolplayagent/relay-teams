@@ -6,16 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from relay_teams.agents.orchestration.board.adapter import (
+from relay_teams.boards.adapter import (
     BoardTask,
     BoardTaskState,
     TaskBoardAdapter,
     TaskBoardConfig,
 )
-from relay_teams.agents.orchestration.board.dispatcher import (
+from relay_teams.boards.dispatcher import (
     BoardEventDispatcher,
 )
-from relay_teams.agents.orchestration.board.internal_adapter import (
+from relay_teams.boards.internal_adapter import (
     InternalBoardAdapter,
 )
 from relay_teams.agents.tasks.enums import TaskStatus
@@ -166,7 +166,7 @@ class TestDispatcherWorkerOutcome:
         records = await mock_repo.list_running_async()
         for record in records:
             if record.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-                from relay_teams.agents.orchestration.board.adapter import (
+                from relay_teams.boards.adapter import (
                     TaskBoardStateMap,
                 )
 
