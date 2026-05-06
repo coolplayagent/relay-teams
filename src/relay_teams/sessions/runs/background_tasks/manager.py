@@ -1723,7 +1723,7 @@ class BackgroundTaskManager:
     @staticmethod
     def _append_log(log_path: Path, *, stream_name: str, chunk: str) -> None:
         prefix = "" if stream_name == "stdout" else "[stderr] "
-        with log_path.open("a", encoding="utf-8") as handle:
+        with log_path.open("a", encoding="utf-8", newline="") as handle:
             if prefix:
                 handle.write(prefix)
             handle.write(chunk)
