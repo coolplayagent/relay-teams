@@ -248,6 +248,36 @@ class _WaitableTransport(_FakeTransport):
         self._terminated.set()
 
 
+def test_append_log_opens_file_with_explicit_newline() -> None:
+    captured: dict[str, object] = {}
+    writes: list[str] = []
+
+    class _FakeHandle:
+        def __enter__(self) -> _FakeHandle:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            _ = args
+
+        def write(self, value: str) -> int:
+            writes.append(value)
+            return len(value)
+
+    class _FakePath:
+        def open(self, *args: object, **kwargs: object) -> _FakeHandle:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+            return _FakeHandle()
+
+    BackgroundTaskManager._append_log(
+        cast(Path, _FakePath()), stream_name="stderr", chunk="hello\n"
+    )
+
+    assert captured["args"] == ("a",)
+    assert captured["kwargs"] == {"encoding": "utf-8", "newline": ""}
+    assert writes == ["[stderr] ", "hello\n"]
+
+
 class _CloseFailingWaitableTransport(_WaitableTransport):
     def __init__(self, *, tty: bool = False) -> None:
         super().__init__(tty=tty)
