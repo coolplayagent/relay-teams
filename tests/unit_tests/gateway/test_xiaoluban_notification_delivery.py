@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 
 from relay_teams.gateway.xiaoluban import (
@@ -16,6 +18,8 @@ from relay_teams.notifications import (
     NotificationType,
 )
 from relay_teams.sessions.session_models import SessionRecord
+
+pytestmark = pytest.mark.asyncio
 
 
 class _FakeSessionRepo:
@@ -43,7 +47,7 @@ class _FakeXiaolubanAccountLookup:
             for account in self._accounts
         )
 
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,
@@ -82,7 +86,7 @@ class _Suppressor:
         return self._should_suppress
 
 
-def test_composite_suppressor_delegates_to_all_members() -> None:
+async def test_composite_suppressor_delegates_to_all_members() -> None:
     suppressing = _Suppressor()
     non_suppressing = _Suppressor(should_suppress=False)
     composite = CompositeXiaolubanTerminalNotificationSuppressor(
@@ -93,7 +97,7 @@ def test_composite_suppressor_delegates_to_all_members() -> None:
     assert composite.should_suppress_xiaoluban_terminal_notification("run-1") is True
 
 
-def test_composite_suppressor_handles_none_members() -> None:
+async def test_composite_suppressor_handles_none_members() -> None:
     composite = CompositeXiaolubanTerminalNotificationSuppressor(
         None,
         _Suppressor(should_suppress=False),
@@ -103,7 +107,9 @@ def test_composite_suppressor_handles_none_members() -> None:
     assert composite.should_suppress_xiaoluban_terminal_notification("run-1") is False
 
 
-def test_dispatcher_sends_completed_run_to_configured_workspace_accounts() -> None:
+async def test_dispatcher_sends_completed_run_to_configured_workspace_accounts() -> (
+    None
+):
     accounts = (
         _account("xlb_1", ("workspace-1",), "group-1"),
         _account(
@@ -122,7 +128,7 @@ def test_dispatcher_sends_completed_run_to_configured_workspace_accounts() -> No
         account_lookup=lookup,
     )
 
-    dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
+    await dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
 
     assert lookup.sent_messages == [
         {
@@ -138,14 +144,14 @@ def test_dispatcher_sends_completed_run_to_configured_workspace_accounts() -> No
     ]
 
 
-def test_dispatcher_uses_title_and_run_id_when_body_is_blank() -> None:
+async def test_dispatcher_uses_title_and_run_id_when_body_is_blank() -> None:
     lookup = _FakeXiaolubanAccountLookup((_account("xlb_1", ("workspace-1",), None),))
     dispatcher = XiaolubanNotificationDispatcher(
         session_repo=_FakeSessionRepo((_session("session-1", "workspace-1"),)),
         account_lookup=lookup,
     )
 
-    dispatcher.dispatch(
+    await dispatcher.dispatch(
         _request(
             NotificationType.RUN_COMPLETED,
             body="   ",
@@ -168,7 +174,7 @@ def test_dispatcher_uses_title_and_run_id_when_body_is_blank() -> None:
     ]
 
 
-def test_dispatcher_skips_non_completed_and_suppressed_notifications() -> None:
+async def test_dispatcher_skips_non_completed_and_suppressed_notifications() -> None:
     lookup = _FakeXiaolubanAccountLookup((_account("xlb_1", ("workspace-1",), None),))
     dispatcher = XiaolubanNotificationDispatcher(
         session_repo=_FakeSessionRepo((_session("session-1", "workspace-1"),)),
@@ -176,20 +182,22 @@ def test_dispatcher_skips_non_completed_and_suppressed_notifications() -> None:
         terminal_notification_suppressor=_Suppressor(),
     )
 
-    dispatcher.dispatch(_request(NotificationType.RUN_FAILED))
-    dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
+    await dispatcher.dispatch(_request(NotificationType.RUN_FAILED))
+    await dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
 
     assert lookup.sent_messages == []
 
 
-def test_dispatcher_skips_missing_session_blank_workspace_and_blank_payload() -> None:
+async def test_dispatcher_skips_missing_session_blank_workspace_and_blank_payload() -> (
+    None
+):
     lookup = _FakeXiaolubanAccountLookup((_account("xlb_1", ("workspace-1",), None),))
 
     missing_session_dispatcher = XiaolubanNotificationDispatcher(
         session_repo=_FakeSessionRepo(()),
         account_lookup=lookup,
     )
-    missing_session_dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
+    await missing_session_dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
 
     blank_workspace_dispatcher = XiaolubanNotificationDispatcher(
         session_repo=_FakeSessionRepo(
@@ -202,13 +210,13 @@ def test_dispatcher_skips_missing_session_blank_workspace_and_blank_payload() ->
         ),
         account_lookup=lookup,
     )
-    blank_workspace_dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
+    await blank_workspace_dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
 
     blank_payload_dispatcher = XiaolubanNotificationDispatcher(
         session_repo=_FakeSessionRepo((_session("session-1", "workspace-1"),)),
         account_lookup=lookup,
     )
-    blank_payload_dispatcher.dispatch(
+    await blank_payload_dispatcher.dispatch(
         NotificationRequest.model_construct(
             notification_type=NotificationType.RUN_COMPLETED,
             title=" ",
@@ -226,7 +234,7 @@ def test_dispatcher_skips_missing_session_blank_workspace_and_blank_payload() ->
     assert lookup.sent_messages == []
 
 
-def test_dispatcher_logs_and_continues_when_send_fails() -> None:
+async def test_dispatcher_logs_and_continues_when_send_fails() -> None:
     lookup = _FakeXiaolubanAccountLookup((_account("xlb_1", ("workspace-1",), None),))
     lookup.fail_send_account_ids.add("xlb_1")
     dispatcher = XiaolubanNotificationDispatcher(
@@ -234,7 +242,7 @@ def test_dispatcher_logs_and_continues_when_send_fails() -> None:
         account_lookup=lookup,
     )
 
-    dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
+    await dispatcher.dispatch(_request(NotificationType.RUN_COMPLETED))
 
     assert lookup.sent_messages == []
 

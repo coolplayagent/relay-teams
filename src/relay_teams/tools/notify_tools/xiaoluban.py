@@ -63,7 +63,7 @@ def resolve_xiaoluban_notify_targets(
     )
 
 
-def send_xiaoluban_notify(
+async def send_xiaoluban_notify(
     ctx: ToolContext,
     *,
     message: str,
@@ -87,7 +87,7 @@ def send_xiaoluban_notify(
     failed: list[NotifySendAttempt] = []
     for recipient in resolution.recipients:
         try:
-            message_id = service.send_notification_message(
+            message_id = await service.send_notification_message(
                 account_id=resolution.account.account_id,
                 workspace_id=ctx.deps.workspace_id,
                 session_id=ctx.deps.session_id,

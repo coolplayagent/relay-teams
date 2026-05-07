@@ -341,7 +341,7 @@ class _FakeEndpointClient:
         self.response = response
         self.requests: list[tuple[str, dict[str, str], dict[str, str]]] = []
 
-    def post(
+    async def post(
         self,
         url: str,
         *,
@@ -350,6 +350,13 @@ class _FakeEndpointClient:
     ) -> httpx.Response:
         self.requests.append((url, headers, json))
         return self.response
+
+    async def __aenter__(self) -> _FakeEndpointClient:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _ = (exc_type, exc, tb)
+        return None
 
 
 class _FakeWsClient:
@@ -388,7 +395,10 @@ class _FakeWsClient:
             self.configured_ping_interval = ping_interval
 
 
-def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_feishu_ws_controller_get_conn_url_uses_net_http_client(
+    monkeypatch,
+) -> None:
     controller = _FeishuWsController(
         runtime_config=_build_runtime(
             trigger_id="trg_a",
@@ -459,7 +469,7 @@ def test_feishu_ws_controller_get_conn_url_uses_net_http_client(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, "lark_oapi.ws.model", model_module)
     ws_client = _FakeWsClient()
 
-    conn_url = controller._get_conn_url(cast(WsClientLike, ws_client))
+    conn_url = await controller._get_conn_url(cast(WsClientLike, ws_client))
 
     assert conn_url == "wss://open.feishu.cn/ws?device_id=device-1&service_id=7"
     assert fake_http_client.requests == [
@@ -485,16 +495,16 @@ def test_feishu_ws_controller_http_client_uses_runtime_net_proxy_loader(
         ),
         event_handler=_FakeHandler(),
     )
-    fake_http_client = httpx.Client(trust_env=False)
+    fake_http_client = httpx.AsyncClient(trust_env=False)
     monkeypatch.setattr(
-        "relay_teams.gateway.feishu.subscription_service.create_runtime_sync_http_client",
+        "relay_teams.gateway.feishu.subscription_service.create_runtime_async_http_client",
         lambda: fake_http_client,
     )
 
     try:
         assert controller._create_feishu_http_client() is fake_http_client
     finally:
-        fake_http_client.close()
+        asyncio.run(fake_http_client.aclose())
 
 
 def test_import_lark_ws_client_module_suppresses_known_deprecations(

@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -39,6 +43,8 @@ from relay_teams.sessions.session_models import SessionMode, SessionRecord
 from relay_teams.automation.automation_bound_session_queue_repository import (
     AutomationBoundSessionQueueRepository,
 )
+
+pytestmark = pytest.mark.asyncio
 
 
 class _FakeSessionService:
@@ -116,10 +122,16 @@ class _FakeRunService:
         self.created.append(intent)
         return f"run-{len(self.created)}", intent.session_id
 
+    async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_detached_run(intent)
+
     def ensure_run_started(self, run_id: str) -> None:
         if self.fail_start_error is not None:
             raise self.fail_start_error
         self.started.append(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
 
     def stop_run(self, run_id: str) -> None:
         self.stopped.append(run_id)
@@ -145,7 +157,7 @@ class _FakeFeishuClient:
         self.reactions: list[tuple[str, str]] = []
         self.user_names: dict[str, str] = {}
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -156,7 +168,7 @@ class _FakeFeishuClient:
         self.sent_messages.append((chat_id, text))
         return f"om_{len(self.sent_messages)}"
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -167,7 +179,7 @@ class _FakeFeishuClient:
         self.reply_messages.append((message_id, text))
         return f"om_reply_{len(self.reply_messages)}"
 
-    def create_message_reaction(
+    async def create_message_reaction(
         self,
         *,
         message_id: str,
@@ -177,7 +189,7 @@ class _FakeFeishuClient:
         _ = environment
         self.reactions.append((message_id, reaction_type))
 
-    def resolve_user_name(
+    async def resolve_user_name(
         self,
         *,
         open_id: str,
@@ -214,6 +226,7 @@ def _build_message(
     text: str,
     chat_id: str = "oc_group_1",
     chat_type: str = "group",
+    sender_open_id: str | None = None,
 ) -> FeishuNormalizedMessage:
     return FeishuNormalizedMessage(
         event_id=event_id,
@@ -225,6 +238,7 @@ def _build_message(
         trigger_text=text,
         payload={"raw_text": text, "message_text": text},
         metadata={"provider": "feishu", "message_id": message_id},
+        sender_open_id=sender_open_id,
     )
 
 
@@ -265,7 +279,7 @@ def _build_service(
     return service, repo, feishu_client, run_runtime_repo, event_log, run_service
 
 
-def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
+async def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
     service, repo, feishu_client, _run_runtime_repo, _event_log, _run_service = (
         _build_service(tmp_path)
     )
@@ -287,6 +301,8 @@ def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
     )
     assert first.status == "accepted"
     assert second.status == "accepted"
+    _ = await service._retry_pending_reactions()
+    _ = await service._retry_pending_queue_replies()
     assert feishu_client.reactions == [("om_1", "OK"), ("om_2", "OK")]
     assert feishu_client.reply_messages == [("om_2", _build_queue_reply_text(1))]
     assert feishu_client.sent_messages == []
@@ -306,7 +322,49 @@ def test_enqueue_message_uses_queue_aware_ack(tmp_path: Path) -> None:
     assert second_record.reaction_status == FeishuMessageDeliveryStatus.SENT
 
 
-def test_enqueue_p2p_message_uses_reaction_and_queue_text(tmp_path: Path) -> None:
+async def test_wake_signal_is_thread_safe(tmp_path: Path) -> None:
+    service, _repo, _feishu_client, _run_runtime_repo, _event_log, _run_service = (
+        _build_service(tmp_path)
+    )
+
+    service._loop = asyncio.get_running_loop()
+    service._wake_event.clear()
+    await asyncio.to_thread(service._wake)
+    await asyncio.wait_for(service._wake_event.wait(), timeout=1)
+    service._loop = None
+
+
+async def test_wake_signal_sets_event_without_running_loop(tmp_path: Path) -> None:
+    service, _repo, _feishu_client, _run_runtime_repo, _event_log, _run_service = (
+        _build_service(tmp_path)
+    )
+
+    service._wake_event.clear()
+    service._wake()
+
+    assert service._wake_event.is_set()
+
+
+async def test_start_reuses_running_task_and_stop_clears_loop(tmp_path: Path) -> None:
+    service, _repo, _feishu_client, _run_runtime_repo, _event_log, _run_service = (
+        _build_service(tmp_path)
+    )
+
+    await service.start()
+    first_task = service._task
+    assert first_task is not None
+    assert service._loop is asyncio.get_running_loop()
+
+    await service.start()
+    assert service._task is first_task
+
+    await service.stop()
+
+    assert service._task is None
+    assert service._loop is None
+
+
+async def test_enqueue_p2p_message_uses_reaction_and_queue_text(tmp_path: Path) -> None:
     service, repo, feishu_client, _run_runtime_repo, _event_log, _run_service = (
         _build_service(tmp_path)
     )
@@ -340,6 +398,8 @@ def test_enqueue_p2p_message_uses_reaction_and_queue_text(tmp_path: Path) -> Non
     )
     assert first.status == "accepted"
     assert second.status == "accepted"
+    _ = await service._retry_pending_reactions()
+    _ = await service._retry_pending_queue_replies()
     assert feishu_client.reactions == [("om_p2p_1", "OK"), ("om_p2p_2", "OK")]
     assert feishu_client.reply_messages == [("om_p2p_2", _build_queue_reply_text(1))]
     assert feishu_client.sent_messages == []
@@ -359,7 +419,45 @@ def test_enqueue_p2p_message_uses_reaction_and_queue_text(tmp_path: Path) -> Non
     assert second_record.ack_status == FeishuMessageDeliveryStatus.SENT
 
 
-def test_process_and_finalize_p2p_message_run_uses_reply(tmp_path: Path) -> None:
+async def test_queue_reply_uses_chat_send_without_message_id(tmp_path: Path) -> None:
+    service, repo, feishu_client, _run_runtime_repo, _event_log, _run_service = (
+        _build_service(tmp_path)
+    )
+    runtime = _build_runtime()
+
+    _ = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(event_id="evt-1", message_id="om_1", text="first"),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+    _ = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(event_id="evt-2", message_id="om_2", text="second"),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+    queued_record = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_2",
+    )
+    _ = repo.update(queued_record.message_pool_id, message_id=None)
+
+    assert await service._retry_pending_queue_replies() is True
+
+    updated = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_2",
+    )
+    assert updated.ack_status == FeishuMessageDeliveryStatus.SENT
+    assert feishu_client.sent_messages == [("oc_group_1", _build_queue_reply_text(1))]
+
+
+async def test_process_and_finalize_p2p_message_run_uses_reply(tmp_path: Path) -> None:
     (
         service,
         repo,
@@ -383,7 +481,7 @@ def test_process_and_finalize_p2p_message_run_uses_reply(tmp_path: Path) -> None
         remote_addr=None,
     )
 
-    assert service._process_queued_messages() is True
+    assert await service._process_queued_messages() is True
     record = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -415,7 +513,7 @@ def test_process_and_finalize_p2p_message_run_uses_reply(tmp_path: Path) -> None
         )
     )
 
-    assert service._finalize_waiting_results() is True
+    assert await service._finalize_waiting_results() is True
     updated = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -427,7 +525,65 @@ def test_process_and_finalize_p2p_message_run_uses_reply(tmp_path: Path) -> None
     assert feishu_client.sent_messages == []
 
 
-def test_process_and_finalize_message_run(tmp_path: Path) -> None:
+async def test_terminal_reply_uses_chat_send_without_message_id(tmp_path: Path) -> None:
+    (
+        service,
+        repo,
+        feishu_client,
+        run_runtime_repo,
+        event_log,
+        _run_service,
+    ) = _build_service(tmp_path)
+    runtime = _build_runtime()
+    _ = service.enqueue_message(
+        runtime_config=runtime,
+        normalized=_build_message(event_id="evt-1", message_id="om_1", text="hello"),
+        raw_body="{}",
+        headers={},
+        remote_addr=None,
+    )
+    record = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_1",
+    )
+    _ = repo.update(record.message_pool_id, message_id=None)
+
+    assert await service._process_queued_messages() is True
+    _ = run_runtime_repo.ensure(
+        run_id="run-1",
+        session_id="session-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.COORDINATOR_RUNNING,
+    )
+    _ = run_runtime_repo.update(
+        "run-1",
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+        last_error=None,
+    )
+    _ = event_log.emit_run_event(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            event_type=RunEventType.RUN_COMPLETED,
+            payload_json='{"status":"completed","output":"final answer"}',
+        )
+    )
+
+    assert await service._finalize_waiting_results() is True
+    updated = repo.get_by_message_key(
+        trigger_id="trg_feishu",
+        tenant_key="tenant-1",
+        message_key="om_1",
+    )
+    assert updated.final_reply_status == FeishuMessageDeliveryStatus.SENT
+    assert feishu_client.sent_messages[-1] == ("oc_group_1", "final answer")
+
+
+async def test_process_and_finalize_message_run(tmp_path: Path) -> None:
     (
         service,
         repo,
@@ -445,7 +601,7 @@ def test_process_and_finalize_message_run(tmp_path: Path) -> None:
         remote_addr=None,
     )
 
-    assert service._process_queued_messages() is True
+    assert await service._process_queued_messages() is True
     record = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -478,7 +634,7 @@ def test_process_and_finalize_message_run(tmp_path: Path) -> None:
         )
     )
 
-    assert service._finalize_waiting_results() is True
+    assert await service._finalize_waiting_results() is True
     updated = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -489,7 +645,28 @@ def test_process_and_finalize_message_run(tmp_path: Path) -> None:
     assert feishu_client.reply_messages[-1] == ("om_1", "final answer")
 
 
-def test_process_and_finalize_message_run_with_structured_output(
+async def test_enrich_sender_name_for_group_message(tmp_path: Path) -> None:
+    service, _repo, feishu_client, _run_runtime_repo, _event_log, _run_service = (
+        _build_service(tmp_path)
+    )
+    runtime = _build_runtime()
+    feishu_client.user_names["ou_sender"] = "Sender Name"
+
+    enriched = await service._enrich_sender_name(
+        normalized=_build_message(
+            event_id="evt-1",
+            message_id="om_1",
+            text="hello",
+            sender_open_id="ou_sender",
+        ),
+        runtime_config=runtime,
+    )
+
+    assert enriched.sender_name == "Sender Name"
+    assert enriched.metadata["sender_name"] == "Sender Name"
+
+
+async def test_process_and_finalize_message_run_with_structured_output(
     tmp_path: Path,
 ) -> None:
     (
@@ -509,7 +686,7 @@ def test_process_and_finalize_message_run_with_structured_output(
         remote_addr=None,
     )
 
-    assert service._process_queued_messages() is True
+    assert await service._process_queued_messages() is True
 
     _ = run_runtime_repo.ensure(
         run_id="run-1",
@@ -539,7 +716,7 @@ def test_process_and_finalize_message_run_with_structured_output(
         )
     )
 
-    assert service._finalize_waiting_results() is True
+    assert await service._finalize_waiting_results() is True
     updated = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -550,7 +727,7 @@ def test_process_and_finalize_message_run_with_structured_output(
     assert feishu_client.reply_messages[-1] == ("om_1", "final answer")
 
 
-def test_finalize_waiting_result_sends_recovery_pause_notice_once(
+async def test_finalize_waiting_result_sends_recovery_pause_notice_once(
     tmp_path: Path,
 ) -> None:
     (
@@ -570,7 +747,7 @@ def test_finalize_waiting_result_sends_recovery_pause_notice_once(
         remote_addr=None,
     )
 
-    assert service._process_queued_messages() is True
+    assert await service._process_queued_messages() is True
 
     _ = run_runtime_repo.ensure(
         run_id="run-1",
@@ -589,7 +766,7 @@ def test_finalize_waiting_result_sends_recovery_pause_notice_once(
         )
     )
 
-    assert service._finalize_waiting_results() is True
+    assert await service._finalize_waiting_results() is True
     record = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -600,10 +777,10 @@ def test_finalize_waiting_result_sends_recovery_pause_notice_once(
         "om_1",
         _build_pause_reply(run_id="run-1", error_message="stream interrupted"),
     )
-    assert service._finalize_waiting_results() is False
+    assert await service._finalize_waiting_results() is False
 
 
-def test_stalled_waiting_result_is_requeued(tmp_path: Path) -> None:
+async def test_stalled_waiting_result_is_requeued(tmp_path: Path) -> None:
     service, repo, _feishu_client, _run_runtime_repo, _event_log, run_service = (
         _build_service(tmp_path)
     )
@@ -617,7 +794,7 @@ def test_stalled_waiting_result_is_requeued(tmp_path: Path) -> None:
         headers={},
         remote_addr=None,
     )
-    assert service._process_queued_messages() is True
+    assert await service._process_queued_messages() is True
     record = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -627,7 +804,7 @@ def test_stalled_waiting_result_is_requeued(tmp_path: Path) -> None:
     assert record.last_error == "no running event loop"
 
 
-def test_waiting_message_without_runtime_is_retried(tmp_path: Path) -> None:
+async def test_waiting_message_without_runtime_is_retried(tmp_path: Path) -> None:
     service, repo, _feishu_client, _run_runtime_repo, _event_log, _run_service = (
         _build_service(tmp_path)
     )
@@ -639,7 +816,7 @@ def test_waiting_message_without_runtime_is_retried(tmp_path: Path) -> None:
         headers={},
         remote_addr=None,
     )
-    _ = service._process_queued_messages()
+    _ = await service._process_queued_messages()
     record = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -650,7 +827,7 @@ def test_waiting_message_without_runtime_is_retried(tmp_path: Path) -> None:
         updated_at=datetime.now(tz=timezone.utc) - timedelta(seconds=20),
     )
 
-    assert service._finalize_waiting_results() is True
+    assert await service._finalize_waiting_results() is True
     retried = repo.get_by_message_key(
         trigger_id="trg_feishu",
         tenant_key="tenant-1",
@@ -660,7 +837,7 @@ def test_waiting_message_without_runtime_is_retried(tmp_path: Path) -> None:
     assert retried.last_error == "run_runtime_not_visible"
 
 
-def test_get_chat_summary_and_clear_chat(tmp_path: Path) -> None:
+async def test_get_chat_summary_and_clear_chat(tmp_path: Path) -> None:
     (
         service,
         repo,
@@ -685,7 +862,7 @@ def test_get_chat_summary_and_clear_chat(tmp_path: Path) -> None:
         headers={},
         remote_addr=None,
     )
-    _ = service._process_queued_messages()
+    _ = await service._process_queued_messages()
     _ = run_runtime_repo.ensure(
         run_id="run-1",
         session_id="session-1",

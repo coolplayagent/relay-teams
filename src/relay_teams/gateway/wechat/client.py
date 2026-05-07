@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 from collections.abc import Iterable
 from pathlib import Path
 import json
@@ -9,7 +10,6 @@ import hashlib
 import mimetypes
 from datetime import datetime, timedelta, timezone
 import secrets
-import time
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import httpx
 
 from relay_teams.logger import get_logger
-from relay_teams.net import create_sync_http_client
+from relay_teams.net import create_async_http_client
 from relay_teams.gateway.wechat.models import (
     DEFAULT_WECHAT_BOT_TYPE,
     WeChatAccountRecord,
@@ -49,14 +49,14 @@ LOGGER = get_logger(__name__)
 
 
 class WeChatClient:
-    def start_qr_login(
+    async def start_qr_login(
         self,
         *,
         base_url: str,
         route_tag: str | None = None,
         bot_type: str = DEFAULT_WECHAT_BOT_TYPE,
     ) -> WeChatQrCodeResponse:
-        response = self._request(
+        response = await self._request(
             base_url=base_url,
             path=f"ilink/bot/get_bot_qrcode?bot_type={bot_type}",
             route_tag=route_tag,
@@ -74,7 +74,7 @@ class WeChatClient:
         )
         return parsed
 
-    def wait_qr_login(
+    async def wait_qr_login(
         self,
         *,
         login_session: WeChatLoginSession,
@@ -83,7 +83,7 @@ class WeChatClient:
         deadline = datetime.now(tz=timezone.utc) + timedelta(milliseconds=timeout_ms)
         while datetime.now(tz=timezone.utc) < deadline:
             try:
-                response = self._request(
+                response = await self._request(
                     base_url=login_session.base_url,
                     path=f"ilink/bot/get_qrcode_status?qrcode={login_session.qrcode}",
                     route_tag=login_session.route_tag,
@@ -94,7 +94,7 @@ class WeChatClient:
                     extra_headers={"iLink-App-ClientVersion": "1"},
                 )
             except httpx.ReadTimeout:
-                time.sleep(1.0)
+                await asyncio.sleep(1.0)
                 continue
             parsed = WeChatQrStatusResponse.model_validate(response)
             self._raise_if_provider_error(
@@ -105,10 +105,10 @@ class WeChatClient:
             )
             if parsed.status in {"confirmed", "expired"}:
                 return parsed
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
         return WeChatQrStatusResponse(status="expired")
 
-    def get_updates(
+    async def get_updates(
         self,
         *,
         account: WeChatAccountRecord,
@@ -116,7 +116,7 @@ class WeChatClient:
         timeout_ms: int = _DEFAULT_LONG_POLL_TIMEOUT_MS,
     ) -> WeChatGetUpdatesResponse:
         timeout_seconds = max(timeout_ms / 1000.0 + 5.0, _DEFAULT_API_TIMEOUT_SECONDS)
-        response = self._request(
+        response = await self._request(
             base_url=account.base_url,
             path="ilink/bot/getupdates",
             route_tag=account.route_tag,
@@ -137,7 +137,7 @@ class WeChatClient:
         )
         return parsed
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         account: WeChatAccountRecord,
@@ -146,7 +146,7 @@ class WeChatClient:
         text: str,
         context_token: str | None,
     ) -> None:
-        response = self._request(
+        response = await self._request(
             base_url=account.base_url,
             path="ilink/bot/sendmessage",
             route_tag=account.route_tag,
@@ -170,7 +170,7 @@ class WeChatClient:
             operation="send_text_message",
         )
 
-    def send_file(
+    async def send_file(
         self,
         *,
         account: WeChatAccountRecord,
@@ -180,14 +180,14 @@ class WeChatClient:
         context_token: str | None,
     ) -> str:
         media_type = self._resolve_media_type(file_path)
-        uploaded = self._upload_media(
+        uploaded = await self._upload_media(
             account=account,
             token=token,
             to_user_id=to_user_id,
             file_path=file_path,
             media_type=media_type,
         )
-        self._send_media_message(
+        await self._send_media_message(
             account=account,
             token=token,
             to_user_id=to_user_id,
@@ -202,7 +202,7 @@ class WeChatClient:
             return f"video sent ({file_path.name})"
         return f"file sent ({file_path.name})"
 
-    def get_typing_ticket(
+    async def get_typing_ticket(
         self,
         *,
         account: WeChatAccountRecord,
@@ -210,7 +210,7 @@ class WeChatClient:
         peer_user_id: str,
         context_token: str | None,
     ) -> str | None:
-        response = self._request(
+        response = await self._request(
             base_url=account.base_url,
             path="ilink/bot/getconfig",
             route_tag=account.route_tag,
@@ -232,7 +232,7 @@ class WeChatClient:
         )
         return parsed.typing_ticket
 
-    def send_typing(
+    async def send_typing(
         self,
         *,
         account: WeChatAccountRecord,
@@ -241,7 +241,7 @@ class WeChatClient:
         typing_ticket: str,
         status: int,
     ) -> None:
-        response = self._request(
+        response = await self._request(
             base_url=account.base_url,
             path="ilink/bot/sendtyping",
             route_tag=account.route_tag,
@@ -263,7 +263,7 @@ class WeChatClient:
             operation="send_typing",
         )
 
-    def _request(
+    async def _request(
         self,
         *,
         base_url: str,
@@ -283,8 +283,8 @@ class WeChatClient:
             route_tag=route_tag,
             extra_headers=extra_headers,
         )
-        with create_sync_http_client(timeout_seconds=timeout_seconds) as client:
-            response = client.request(
+        async with create_async_http_client(timeout_seconds=timeout_seconds) as client:
+            response = await client.request(
                 method=method,
                 url=url,
                 content=body.encode("utf-8") if body is not None else None,
@@ -357,7 +357,7 @@ class WeChatClient:
             message["context_token"] = context_token
         return message
 
-    def _upload_media(
+    async def _upload_media(
         self,
         *,
         account: WeChatAccountRecord,
@@ -372,7 +372,7 @@ class WeChatClient:
         aes_key_bytes = secrets.token_bytes(16)
         filekey = secrets.token_hex(16)
         encrypted_bytes = self._encrypt_aes_ecb(plaintext, aes_key_bytes)
-        upload_response = self._request(
+        upload_response = await self._request(
             base_url=account.base_url,
             path="ilink/bot/getuploadurl",
             route_tag=account.route_tag,
@@ -428,7 +428,7 @@ class WeChatClient:
                 f"upload_param_paths={upload_param_paths}, "
                 f"response_size={response_size})"
             )
-        download_query_param = self._upload_to_cdn(
+        download_query_param = await self._upload_to_cdn(
             upload_url=upload_url,
             filekey=filekey,
             encrypted_bytes=encrypted_bytes,
@@ -441,7 +441,7 @@ class WeChatClient:
             file_size_ciphertext=len(encrypted_bytes),
         )
 
-    def _send_media_message(
+    async def _send_media_message(
         self,
         *,
         account: WeChatAccountRecord,
@@ -452,7 +452,7 @@ class WeChatClient:
         uploaded: WeChatUploadedMedia,
         context_token: str | None,
     ) -> None:
-        response = self._request(
+        response = await self._request(
             base_url=account.base_url,
             path="ilink/bot/sendmessage",
             route_tag=account.route_tag,
@@ -532,7 +532,7 @@ class WeChatClient:
             message["context_token"] = context_token
         return message
 
-    def _upload_to_cdn(
+    async def _upload_to_cdn(
         self,
         *,
         upload_url: str,
@@ -542,10 +542,10 @@ class WeChatClient:
         last_exception: Exception | None = None
         for attempt in range(1, _CDN_UPLOAD_MAX_RETRIES + 1):
             try:
-                with create_sync_http_client(
+                async with create_async_http_client(
                     timeout_seconds=_DEFAULT_CDN_TIMEOUT_SECONDS
                 ) as client:
-                    response = client.request(
+                    response = await client.request(
                         method="POST",
                         url=upload_url,
                         content=encrypted_bytes,

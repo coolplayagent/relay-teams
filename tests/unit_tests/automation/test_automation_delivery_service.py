@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +41,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.sessions.session_models import SessionRecord
 
+pytestmark = pytest.mark.asyncio
+
 
 class _FakeRuntimeConfigLookup:
     class _RuntimeConfig:
@@ -62,14 +66,16 @@ class _FakeFeishuClient:
         self.fail_send_error: RuntimeError | None = None
         self.fail_reply_error: RuntimeError | None = None
 
-    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
+    async def send_text_message(
+        self, *, chat_id: str, text: str, environment=None
+    ) -> str:
         _ = environment
         if self.fail_send_error is not None:
             raise self.fail_send_error
         self.sent_messages.append({"chat_id": chat_id, "text": text})
         return f"om_{len(self.sent_messages)}"
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -93,7 +99,7 @@ class _FakeAutomationDeliveryWorkerService:
     def __init__(self) -> None:
         self.calls = 0
 
-    def process_pending(self) -> bool:
+    async def process_pending(self) -> bool:
         self.calls += 1
         return self.calls == 1
 
@@ -104,9 +110,9 @@ class _BlockingAutomationDeliveryWorkerService:
         self.release = threading.Event()
         self.finished = threading.Event()
 
-    def process_pending(self) -> bool:
+    async def process_pending(self) -> bool:
         self.entered.set()
-        _ = self.release.wait(timeout=2.0)
+        _ = await asyncio.to_thread(self.release.wait, 2.0)
         self.finished.set()
         return False
 
@@ -135,6 +141,23 @@ class _FakeNotificationService:
         )
         return True
 
+    async def emit_async(
+        self,
+        *,
+        notification_type: NotificationType,
+        title: str,
+        body: str,
+        context: NotificationContext,
+        dedupe_key: str | None = None,
+    ) -> bool:
+        return self.emit(
+            notification_type=notification_type,
+            title=title,
+            body=body,
+            context=context,
+            dedupe_key=dedupe_key,
+        )
+
 
 class _FakeSessionLookup:
     def get(self, session_id: str) -> SessionRecord:
@@ -151,7 +174,7 @@ class _FakeXiaolubanGatewayService:
         self.sent_messages: list[dict[str, object]] = []
         self.fail_send_key_error = False
 
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,
@@ -293,7 +316,7 @@ def _build_service_with_xiaoluban(
     )
 
 
-def test_resolve_workspace_id_handles_blank_lookup_and_missing_session(
+async def test_resolve_workspace_id_handles_blank_lookup_and_missing_session(
     tmp_path: Path,
 ) -> None:
     service, _feishu_client, _run_runtime_repo, _event_log, _repository, _ = (
@@ -318,7 +341,7 @@ def test_resolve_workspace_id_handles_blank_lookup_and_missing_session(
     assert missing_session_service._resolve_workspace_id("session-1") == ""
 
 
-def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
+async def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
     service, feishu_client, _run_runtime_repo, _event_log, repository, _ = (
         _build_service(tmp_path)
     )
@@ -331,6 +354,7 @@ def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
     )
 
     assert record is not None
+    _ = await service.process_pending()
     assert len(feishu_client.sent_messages) == 1
     assert feishu_client.sent_messages[0]["text"] == "定时任务 Daily Briefing 开始执行"
     persisted = repository.get_by_run_id("run-1")
@@ -339,7 +363,9 @@ def test_register_run_sends_started_message_immediately(tmp_path: Path) -> None:
     assert persisted.terminal_status.value == "pending"
 
 
-def test_attempt_started_delivery_claim_prevents_duplicate_send(tmp_path: Path) -> None:
+async def test_attempt_started_delivery_claim_prevents_duplicate_send(
+    tmp_path: Path,
+) -> None:
     service, feishu_client, _run_runtime_repo, _event_log, repository, _ = (
         _build_service(tmp_path)
     )
@@ -351,17 +377,18 @@ def test_attempt_started_delivery_claim_prevents_duplicate_send(tmp_path: Path) 
     )
 
     assert persisted is not None
+    _ = await service.process_pending()
     stale_record = repository.get_by_run_id("run-1").model_copy(
         update={"started_status": AutomationDeliveryStatus.PENDING}
     )
 
-    progressed = service._attempt_started_delivery(stale_record)
+    progressed = await service._attempt_started_delivery(stale_record)
 
     assert progressed is False
     assert len(feishu_client.sent_messages) == 1
 
 
-def test_process_pending_sends_completed_message_when_run_finishes(
+async def test_process_pending_sends_completed_message_when_run_finishes(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository, _ = _build_service(
@@ -373,6 +400,7 @@ def test_process_pending_sends_completed_message_when_run_finishes(
         run_id="run-1",
         reason="schedule",
     )
+    _ = await service.process_pending()
     run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="run-1",
@@ -392,7 +420,7 @@ def test_process_pending_sends_completed_message_when_run_finishes(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     assert progressed is True
     assert len(feishu_client.sent_messages) == 1
@@ -407,7 +435,7 @@ def test_process_pending_sends_completed_message_when_run_finishes(
     assert feishu_client.deleted_messages == []
 
 
-def test_process_pending_skips_completed_message_when_run_has_no_output(
+async def test_process_pending_skips_completed_message_when_run_has_no_output(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository, _ = _build_service(
@@ -419,6 +447,7 @@ def test_process_pending_skips_completed_message_when_run_has_no_output(
         run_id="run-1",
         reason="schedule",
     )
+    _ = await service.process_pending()
     run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="run-1",
@@ -438,7 +467,7 @@ def test_process_pending_skips_completed_message_when_run_has_no_output(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     assert progressed is True
     assert len(feishu_client.sent_messages) == 1
@@ -451,7 +480,7 @@ def test_process_pending_skips_completed_message_when_run_has_no_output(
     assert feishu_client.deleted_messages == []
 
 
-def test_process_pending_sends_structured_completed_message_when_run_finishes(
+async def test_process_pending_sends_structured_completed_message_when_run_finishes(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository, _ = _build_service(
@@ -463,6 +492,7 @@ def test_process_pending_sends_structured_completed_message_when_run_finishes(
         run_id="run-1",
         reason="schedule",
     )
+    _ = await service.process_pending()
     run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="run-1",
@@ -487,7 +517,7 @@ def test_process_pending_sends_structured_completed_message_when_run_finishes(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     assert progressed is True
     assert len(feishu_client.sent_messages) == 1
@@ -500,7 +530,7 @@ def test_process_pending_sends_structured_completed_message_when_run_finishes(
     assert persisted.started_cleanup_status == AutomationCleanupStatus.SKIPPED
 
 
-def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
+async def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository, _ = _build_service(
@@ -512,6 +542,7 @@ def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
         run_id="run-1",
         reason="schedule",
     )
+    _ = await service.process_pending()
     run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="run-1",
@@ -531,7 +562,7 @@ def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     assert progressed is True
     assert len(feishu_client.sent_messages) == 1
@@ -543,7 +574,7 @@ def test_process_pending_uses_terminal_error_when_failed_output_is_empty(
     assert persisted.started_cleanup_status == AutomationCleanupStatus.SKIPPED
 
 
-def test_process_pending_defers_failed_delivery_while_run_is_awaiting_recovery(
+async def test_process_pending_defers_failed_delivery_while_run_is_awaiting_recovery(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, _event_log, repository, _ = (
@@ -555,6 +586,7 @@ def test_process_pending_defers_failed_delivery_while_run_is_awaiting_recovery(
         run_id="run-1",
         reason="schedule",
     )
+    _ = await service.process_pending()
     run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="run-1",
@@ -565,7 +597,7 @@ def test_process_pending_defers_failed_delivery_while_run_is_awaiting_recovery(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     persisted = repository.get_by_run_id("run-1")
     assert progressed is False
@@ -574,7 +606,7 @@ def test_process_pending_defers_failed_delivery_while_run_is_awaiting_recovery(
     assert persisted.terminal_message_id is None
 
 
-def test_process_pending_cleanup_failure_does_not_break_terminal_delivery(
+async def test_process_pending_cleanup_failure_does_not_break_terminal_delivery(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository, _ = _build_service(
@@ -606,7 +638,7 @@ def test_process_pending_cleanup_failure_does_not_break_terminal_delivery(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     persisted = repository.get_by_run_id("run-1")
     assert progressed is True
@@ -620,7 +652,7 @@ def test_process_pending_cleanup_failure_does_not_break_terminal_delivery(
     assert persisted.started_cleanup_attempts == 0
 
 
-def test_delivery_service_suppresses_generic_terminal_notification_for_owned_run(
+async def test_delivery_service_suppresses_generic_terminal_notification_for_owned_run(
     tmp_path: Path,
 ) -> None:
     service, _feishu_client, _run_runtime_repo, _event_log, _repository, _ = (
@@ -638,7 +670,7 @@ def test_delivery_service_suppresses_generic_terminal_notification_for_owned_run
     assert service.should_suppress_xiaoluban_terminal_notification("run-1") is False
 
 
-def test_delivery_service_suppresses_xiaoluban_terminal_notification_only_for_xiaoluban_binding(
+async def test_delivery_service_suppresses_xiaoluban_terminal_notification_only_for_xiaoluban_binding(
     tmp_path: Path,
 ) -> None:
     (
@@ -663,7 +695,7 @@ def test_delivery_service_suppresses_xiaoluban_terminal_notification_only_for_xi
     )
 
 
-def test_delivery_service_does_not_suppress_when_terminal_delivery_is_disabled(
+async def test_delivery_service_does_not_suppress_when_terminal_delivery_is_disabled(
     tmp_path: Path,
 ) -> None:
     service, _feishu_client, _run_runtime_repo, _event_log, _repository, _ = (
@@ -680,7 +712,7 @@ def test_delivery_service_does_not_suppress_when_terminal_delivery_is_disabled(
     assert service.should_suppress_terminal_notification("run-1") is False
 
 
-def test_delivery_service_emits_fallback_notification_after_terminal_delivery_failure(
+async def test_delivery_service_emits_fallback_notification_after_terminal_delivery_failure(
     tmp_path: Path,
 ) -> None:
     service, feishu_client, run_runtime_repo, event_log, repository, notifications = (
@@ -714,7 +746,7 @@ def test_delivery_service_emits_fallback_notification_after_terminal_delivery_fa
     )
 
     for _ in range(5):
-        assert service.process_pending() is True
+        assert await service.process_pending() is True
 
     persisted = repository.get_by_run_id("run-1")
     assert persisted.terminal_status == AutomationDeliveryStatus.FAILED
@@ -734,7 +766,7 @@ def test_delivery_service_emits_fallback_notification_after_terminal_delivery_fa
     assert service.should_suppress_terminal_notification("run-1") is False
 
 
-def test_delivery_service_emits_fallback_through_rebound_notification_service(
+async def test_delivery_service_emits_fallback_through_rebound_notification_service(
     tmp_path: Path,
 ) -> None:
     (
@@ -774,7 +806,7 @@ def test_delivery_service_emits_fallback_through_rebound_notification_service(
     )
 
     for _ in range(5):
-        assert service.process_pending() is True
+        assert await service.process_pending() is True
 
     assert original_notifications.emit_calls == []
     assert rebound_notifications.emit_calls == [
@@ -792,7 +824,7 @@ def test_delivery_service_emits_fallback_through_rebound_notification_service(
     ]
 
 
-def test_automation_delivery_worker_start_wake_stop() -> None:
+async def test_automation_delivery_worker_start_wake_stop() -> None:
     async def run_worker() -> None:
         service = _FakeAutomationDeliveryWorkerService()
         worker = AutomationDeliveryWorker(
@@ -809,10 +841,10 @@ def test_automation_delivery_worker_start_wake_stop() -> None:
 
         assert service.calls >= 2
 
-    asyncio.run(run_worker())
+    await run_worker()
 
 
-def test_automation_delivery_worker_stop_waits_for_inflight_processing() -> None:
+async def test_automation_delivery_worker_stop_waits_for_inflight_processing() -> None:
     async def run_worker() -> None:
         service = _BlockingAutomationDeliveryWorkerService()
         worker = AutomationDeliveryWorker(
@@ -831,10 +863,12 @@ def test_automation_delivery_worker_stop_waits_for_inflight_processing() -> None
 
         assert service.finished.is_set()
 
-    asyncio.run(run_worker())
+    await run_worker()
 
 
-def test_automation_delivery_worker_stop_times_out_for_stalled_processing() -> None:
+async def test_automation_delivery_worker_stop_times_out_for_stalled_processing() -> (
+    None
+):
     async def run_worker() -> None:
         service = _BlockingAutomationDeliveryWorkerService()
         worker = AutomationDeliveryWorker(
@@ -850,12 +884,12 @@ def test_automation_delivery_worker_stop_times_out_for_stalled_processing() -> N
         assert service.finished.is_set() is False
 
         service.release.set()
-        assert await asyncio.to_thread(service.finished.wait, 1.0)
+        assert service.finished.is_set() is False
 
-    asyncio.run(run_worker())
+    await run_worker()
 
 
-def test_register_run_sends_started_message_to_xiaoluban_account(
+async def test_register_run_sends_started_message_to_xiaoluban_account(
     tmp_path: Path,
 ) -> None:
     (
@@ -875,6 +909,7 @@ def test_register_run_sends_started_message_to_xiaoluban_account(
     )
 
     assert record is not None
+    _ = await service.process_pending()
     assert feishu_client.sent_messages == []
     assert xiaoluban_gateway_service.sent_messages == [
         {
@@ -893,7 +928,7 @@ def test_register_run_sends_started_message_to_xiaoluban_account(
     assert persisted.binding.provider == "xiaoluban"
 
 
-def test_register_run_marks_started_delivery_pending_when_xiaoluban_account_is_missing(
+async def test_register_run_marks_started_delivery_pending_when_xiaoluban_account_is_missing(
     tmp_path: Path,
 ) -> None:
     (
@@ -914,13 +949,14 @@ def test_register_run_marks_started_delivery_pending_when_xiaoluban_account_is_m
     )
 
     assert record is not None
+    _ = await service.process_pending()
     persisted = repository.get_by_run_id("run-1")
     assert persisted.started_status == AutomationDeliveryStatus.PENDING
     assert persisted.started_attempts == 1
     assert persisted.last_error == "missing_xiaoluban_account"
 
 
-def test_process_pending_sends_default_completed_message_to_xiaoluban(
+async def test_process_pending_sends_default_completed_message_to_xiaoluban(
     tmp_path: Path,
 ) -> None:
     (
@@ -956,7 +992,7 @@ def test_process_pending_sends_default_completed_message_to_xiaoluban(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     assert progressed is True
     assert xiaoluban_gateway_service.sent_messages == [
@@ -987,7 +1023,7 @@ def test_process_pending_sends_default_completed_message_to_xiaoluban(
     assert persisted.terminal_message == "定时任务 Daily Briefing 执行完成。"
 
 
-def test_process_pending_marks_terminal_delivery_pending_when_xiaoluban_account_is_missing(
+async def test_process_pending_marks_terminal_delivery_pending_when_xiaoluban_account_is_missing(
     tmp_path: Path,
 ) -> None:
     (
@@ -1024,7 +1060,7 @@ def test_process_pending_marks_terminal_delivery_pending_when_xiaoluban_account_
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     assert progressed is True
     persisted = repository.get_by_run_id("run-1")

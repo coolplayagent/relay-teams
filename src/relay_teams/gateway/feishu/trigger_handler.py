@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
 import logging
 import re
+from collections.abc import Coroutine
 from json import JSONDecodeError, loads
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -228,8 +231,38 @@ class FeishuTriggerHandler:
         text: str,
         runtime_config: FeishuTriggerRuntimeConfig,
     ) -> None:
+        self._run_or_schedule_command_response(
+            self._send_command_response_async(
+                chat_id=chat_id,
+                chat_type=chat_type,
+                message_id=message_id,
+                text=text,
+                runtime_config=runtime_config,
+            )
+        )
+
+    @staticmethod
+    def _run_or_schedule_command_response(
+        coroutine: Coroutine[object, object, None],
+    ) -> None:
         try:
-            self._im_tool_service.send_text_to_feishu_chat(
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coroutine)
+            return
+        _ = loop.create_task(coroutine)
+
+    async def _send_command_response_async(
+        self,
+        *,
+        chat_id: str,
+        chat_type: str,
+        message_id: str,
+        text: str,
+        runtime_config: FeishuTriggerRuntimeConfig,
+    ) -> None:
+        try:
+            await self._im_tool_service.send_text_to_feishu_chat(
                 chat_id=chat_id,
                 text=text,
                 environment=runtime_config.environment,

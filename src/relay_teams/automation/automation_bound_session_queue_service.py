@@ -67,6 +67,9 @@ class RunServiceLike(Protocol):
 
     def resume_run(self, run_id: str) -> str: ...
 
+    async def resume_run_async(self, run_id: str) -> str:
+        raise NotImplementedError
+
 
 class FeishuRuntimeConfigLookup(Protocol):
     def get_runtime_config_by_trigger_id(
@@ -81,7 +84,7 @@ class FeishuRuntimeConfigLike(Protocol):
 
 
 class FeishuClientLike(Protocol):
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -89,7 +92,7 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -128,7 +131,7 @@ class AutomationBoundSessionQueueService:
         self._project_repository = project_repository
         self._session_ingress_service = session_ingress_service
 
-    def materialize_execution(
+    async def materialize_execution(
         self,
         *,
         project: AutomationProjectRecord,
@@ -181,7 +184,7 @@ class AutomationBoundSessionQueueService:
                     ),
                 )
             )
-            queue_message_id = self._send_direct_text(
+            queue_message_id = await self._send_direct_text(
                 record.binding.trigger_id,
                 record.binding.chat_id,
                 record.queue_message,
@@ -241,10 +244,10 @@ class AutomationBoundSessionQueueService:
             queued=False,
         )
 
-    def process_pending(self, *, limit: int = 20) -> bool:
+    async def process_pending(self, *, limit: int = 20) -> bool:
         progress = False
-        progress = self._finalize_waiting_results(limit=limit) or progress
-        progress = self._start_queued_runs(limit=limit) or progress
+        progress = await self._finalize_waiting_results(limit=limit) or progress
+        progress = await self._start_queued_runs(limit=limit) or progress
         progress = self._cleanup_queue_receipts(limit=limit) or progress
         return progress
 
@@ -254,7 +257,7 @@ class AutomationBoundSessionQueueService:
     def delete_project_queue(self, automation_project_id: str) -> None:
         self._repository.delete_by_project(automation_project_id)
 
-    def _finalize_waiting_results(self, *, limit: int) -> bool:
+    async def _finalize_waiting_results(self, *, limit: int) -> bool:
         progress = False
         now = _utc_now()
         for record in self._repository.list_waiting_for_result(limit=limit):
@@ -290,7 +293,7 @@ class AutomationBoundSessionQueueService:
                 progress = True
                 continue
             if self._should_auto_resume(runtime):
-                updated_record, changed = self._handle_recoverable_runtime(
+                updated_record, changed = await self._handle_recoverable_runtime(
                     record=record,
                     runtime=runtime,
                 )
@@ -313,7 +316,7 @@ class AutomationBoundSessionQueueService:
                     project_name=record.automation_project_name,
                     error=str(runtime.last_error or "").strip(),
                 )
-                _ = self._send_record_text(
+                _ = await self._send_record_text(
                     record=record,
                     text=failure_message,
                 )
@@ -328,7 +331,7 @@ class AutomationBoundSessionQueueService:
                 progress = True
         return progress
 
-    def _start_queued_runs(self, *, limit: int) -> bool:
+    async def _start_queued_runs(self, *, limit: int) -> bool:
         progress = False
         now = _utc_now()
         stale_before = now - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
@@ -364,7 +367,7 @@ class AutomationBoundSessionQueueService:
                     reply_to_message_id=claimed.queue_message_id,
                 )
             except RuntimeError as exc:
-                self._handle_start_failure(claimed, error=str(exc))
+                await self._handle_start_failure(claimed, error=str(exc))
                 continue
             started_at = _utc_now()
             started_record = self._repository.update(
@@ -450,7 +453,7 @@ class AutomationBoundSessionQueueService:
         )
         return run_id
 
-    def _handle_start_failure(
+    async def _handle_start_failure(
         self,
         record: AutomationBoundSessionQueueRecord,
         *,
@@ -470,7 +473,7 @@ class AutomationBoundSessionQueueService:
                     }
                 )
             )
-            _ = self._send_record_text(
+            _ = await self._send_record_text(
                 record=record,
                 text=_build_start_failure_message(
                     project_name=record.automation_project_name,
@@ -508,7 +511,7 @@ class AutomationBoundSessionQueueService:
                 return runtime.run_id
         return None
 
-    def _handle_recoverable_runtime(
+    async def _handle_recoverable_runtime(
         self,
         *,
         record: AutomationBoundSessionQueueRecord,
@@ -546,7 +549,7 @@ class AutomationBoundSessionQueueService:
                 project_name=record.automation_project_name,
                 error=str(runtime.last_error or record.last_error or "").strip(),
             )
-            _ = self._send_record_text(
+            _ = await self._send_record_text(
                 record=record,
                 text=failure_message,
             )
@@ -561,7 +564,7 @@ class AutomationBoundSessionQueueService:
             return failed_record, True
         attempts = record.resume_attempts + 1
         try:
-            _ = self._run_service.resume_run(runtime.run_id)
+            _ = await self._run_service.resume_run_async(runtime.run_id)
         except RuntimeError as exc:
             if attempts >= _RESUME_MAX_ATTEMPTS:
                 failed_record = self._repository.update(
@@ -579,7 +582,7 @@ class AutomationBoundSessionQueueService:
                     project_name=record.automation_project_name,
                     error=str(exc),
                 )
-                _ = self._send_record_text(
+                _ = await self._send_record_text(
                     record=record,
                     text=failure_message,
                 )
@@ -712,19 +715,19 @@ class AutomationBoundSessionQueueService:
             )
         )
 
-    def _send_direct_text(self, trigger_id: str, chat_id: str, text: str) -> str:
+    async def _send_direct_text(self, trigger_id: str, chat_id: str, text: str) -> str:
         runtime_config = self._runtime_config_lookup.get_runtime_config_by_trigger_id(
             trigger_id
         )
         if runtime_config is None:
             raise RuntimeError("missing_runtime_config")
-        return self._feishu_client.send_text_message(
+        return await self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,
             environment=runtime_config.environment,
         )
 
-    def _send_record_text(
+    async def _send_record_text(
         self,
         *,
         record: AutomationBoundSessionQueueRecord,
@@ -737,12 +740,12 @@ class AutomationBoundSessionQueueService:
             raise RuntimeError("missing_runtime_config")
         reply_to_message_id = str(record.queue_message_id or "").strip()
         if reply_to_message_id:
-            return self._feishu_client.reply_text_message(
+            return await self._feishu_client.reply_text_message(
                 message_id=reply_to_message_id,
                 text=text,
                 environment=runtime_config.environment,
             )
-        return self._feishu_client.send_text_message(
+        return await self._feishu_client.send_text_message(
             chat_id=record.binding.chat_id,
             text=text,
             environment=runtime_config.environment,
@@ -835,7 +838,7 @@ class AutomationBoundSessionQueueWorker:
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                progress = await asyncio.to_thread(self._queue_service.process_pending)
+                progress = await self._queue_service.process_pending()
                 if progress:
                     continue
             except Exception as exc:

@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Mapping
 from concurrent.futures import Future
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from typing import cast
 
 import pytest
@@ -27,10 +27,15 @@ from relay_teams.gateway.wechat.inbound_queue_repository import (
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
+    WeChatGetUpdatesResponse,
     WeChatInboundMessage,
     WeChatInboundQueueRecord,
     WeChatInboundQueueStatus,
+    WeChatLoginStartRequest,
+    WeChatLoginWaitRequest,
     WeChatMessageItem,
+    WeChatQrCodeResponse,
+    WeChatQrStatusResponse,
 )
 from relay_teams.gateway.wechat.secret_store import WeChatSecretStore
 from relay_teams.gateway.wechat.service import WeChatGatewayService
@@ -127,6 +132,74 @@ async def test_await_terminal_and_reply_records_success() -> None:
     assert snapshot.last_event_at == snapshot.last_outbound_at
     assert snapshot.last_outbound_at.isoformat() == channel_state["last_outbound_at"]
     assert "run-1" not in service._watched_runs
+
+
+@pytest.mark.asyncio
+async def test_start_and_wait_login_use_async_client() -> None:
+    (
+        service,
+        _gateway_session_service,
+        _run_service,
+        _im_tool_service,
+        _command_service,
+    ) = _build_service(events=())
+
+    start_response = await service.start_login(
+        WeChatLoginStartRequest(
+            base_url="https://login.example.test",
+            route_tag="route-a",
+            bot_type="bot-a",
+        )
+    )
+    wait_response = await service.wait_login(
+        WeChatLoginWaitRequest(session_key=start_response.session_key, timeout_ms=1000)
+    )
+
+    client = cast(_FakeWeChatClient, service._client)
+    assert client.start_login_calls == [
+        {
+            "base_url": "https://login.example.test",
+            "route_tag": "route-a",
+            "bot_type": "bot-a",
+        }
+    ]
+    assert client.wait_login_calls == [1000]
+    assert wait_response.connected is False
+
+
+def test_run_monitor_uses_async_monitor_wrapper() -> None:
+    (
+        service,
+        _gateway_session_service,
+        _run_service,
+        _im_tool_service,
+        _command_service,
+    ) = _build_service(events=())
+    stop_event = Event()
+    stop_event.set()
+
+    service._run_monitor("wx-account-1", stop_event)
+
+    assert service._status("wx-account-1").running is True
+
+
+@pytest.mark.asyncio
+async def test_run_monitor_async_polls_updates_until_stopped() -> None:
+    (
+        service,
+        _gateway_session_service,
+        _run_service,
+        _im_tool_service,
+        _command_service,
+    ) = _build_service(events=())
+    stop_event = Event()
+    client = cast(_FakeWeChatClient, service._client)
+    client.stop_event = stop_event
+
+    await service._run_monitor_async("wx-account-1", stop_event)
+
+    assert client.get_updates_calls == [("wx-account-1", "bot-token", 35000)]
+    assert service._status("wx-account-1").last_event_at is not None
 
 
 @pytest.mark.asyncio
@@ -623,6 +696,61 @@ def test_drain_inbound_queue_skips_missing_account_and_starts_later_record() -> 
     assert run_service.created_intents[0]["session_id"] == "session-1"
 
 
+@pytest.mark.asyncio
+async def test_send_typing_schedules_when_event_loop_is_running() -> None:
+    service, _gateway_session_service, _run_service, _im_tool_service, _ = (
+        _build_service(events=())
+    )
+    client = cast(_FakeWeChatClient, service._client)
+
+    service._send_typing(
+        _account(),
+        "bot-token",
+        "wx-peer-1",
+        "ctx-1",
+        1,
+    )
+    await asyncio.sleep(0)
+
+    assert client.typing_calls == [
+        {
+            "account_id": "wx-account-1",
+            "token": "bot-token",
+            "peer_user_id": "wx-peer-1",
+            "typing_ticket": "typing-ticket",
+            "status": 1,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_intermediate_text_schedules_when_event_loop_is_running() -> None:
+    service, gateway_session_service, _run_service, im_tool_service, _ = _build_service(
+        events=()
+    )
+
+    service._send_intermediate_text(
+        account_id="wx-account-1",
+        gateway_session_id="gws-1",
+        peer_user_id="wx-peer-1",
+        context_token="ctx-1",
+        text="queued",
+        event_name="wechat.test",
+        failure_message="failed",
+    )
+    await asyncio.sleep(0)
+
+    assert im_tool_service.send_text_calls == [
+        {
+            "account_id": "wx-account-1",
+            "peer_user_id": "wx-peer-1",
+            "text": "queued",
+            "context_token": "ctx-1",
+        }
+    ]
+    assert gateway_session_service.update_calls[0]["gateway_session_id"] == "gws-1"
+
+
 def test_build_receipt_text_returns_failure_receipt_for_failed_record() -> None:
     service, _gateway_session_service, _run_service, _im_tool_service, _ = (
         _build_service(
@@ -669,8 +797,46 @@ class _FakeSecretStore:
 class _FakeWeChatClient:
     def __init__(self) -> None:
         self.typing_calls: list[dict[str, object]] = []
+        self.start_login_calls: list[dict[str, str | None]] = []
+        self.wait_login_calls: list[int] = []
+        self.get_updates_calls: list[tuple[str, str, int]] = []
+        self.stop_event: Event | None = None
 
-    def get_typing_ticket(
+    async def start_qr_login(
+        self,
+        *,
+        base_url: str,
+        route_tag: str | None = None,
+        bot_type: str,
+    ) -> WeChatQrCodeResponse:
+        self.start_login_calls.append(
+            {"base_url": base_url, "route_tag": route_tag, "bot_type": bot_type}
+        )
+        return WeChatQrCodeResponse(qrcode="qr-token", qrcode_img_content="iVBORw0")
+
+    async def wait_qr_login(
+        self,
+        *,
+        login_session: object,
+        timeout_ms: int,
+    ) -> WeChatQrStatusResponse:
+        _ = login_session
+        self.wait_login_calls.append(timeout_ms)
+        return WeChatQrStatusResponse(status="expired")
+
+    async def get_updates(
+        self,
+        *,
+        account: WeChatAccountRecord,
+        token: str,
+        timeout_ms: int,
+    ) -> WeChatGetUpdatesResponse:
+        self.get_updates_calls.append((account.account_id, token, timeout_ms))
+        if self.stop_event is not None:
+            self.stop_event.set()
+        return WeChatGetUpdatesResponse()
+
+    async def get_typing_ticket(
         self,
         *,
         account: WeChatAccountRecord,
@@ -681,7 +847,7 @@ class _FakeWeChatClient:
         _ = (account, token, peer_user_id, context_token)
         return "typing-ticket"
 
-    def send_typing(
+    async def send_typing(
         self,
         *,
         account: WeChatAccountRecord,
@@ -706,7 +872,7 @@ class _FakeImToolService:
         self._send_text_error = send_text_error
         self.send_text_calls: list[dict[str, str | None]] = []
 
-    def send_text_to_wechat_peer(
+    async def send_text_to_wechat_peer(
         self,
         *,
         account_id: str,

@@ -35,7 +35,7 @@ class FeishuRuntimeConfigLookup(Protocol):
 class FeishuMessageSender(Protocol):
     def is_configured(self, environment: FeishuEnvironment | None = None) -> bool: ...
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -43,7 +43,7 @@ class FeishuMessageSender(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def send_card_message(
+    async def send_card_message(
         self,
         *,
         chat_id: str,
@@ -86,7 +86,7 @@ class FeishuNotificationDispatcher:
         self._feishu_client = feishu_client
         self._terminal_notification_suppressor = terminal_notification_suppressor
 
-    def dispatch(self, request: NotificationRequest) -> None:
+    async def dispatch(self, request: NotificationRequest) -> None:
         if NotificationChannel.FEISHU not in request.channels:
             return
         if (
@@ -117,13 +117,13 @@ class FeishuNotificationDispatcher:
         if not chat_id:
             return
         if request.feishu_format == FeishuMessageFormat.CARD:
-            self._feishu_client.send_card_message(
+            await self._feishu_client.send_card_message(
                 chat_id=chat_id,
                 card=_build_card_payload(request, metadata),
                 environment=environment,
             )
             return
-        self._feishu_client.send_text_message(
+        await self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=_build_text_payload(request),
             environment=environment,

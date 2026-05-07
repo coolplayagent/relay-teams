@@ -526,20 +526,29 @@ async def test_container_binds_background_completion_sink_during_start(
         _record_bind_completion_sink,
     )
 
+    def _fake_wechat_start() -> None:
+        start_calls.append("wechat")
+
+    def _fake_feishu_subscription_start() -> None:
+        start_calls.append("feishu-subscription")
+
+    async def _fake_feishu_message_pool_start() -> None:
+        start_calls.append("feishu-message-pool")
+
     monkeypatch.setattr(
         container.wechat_gateway_service,
         "start",
-        lambda: start_calls.append("wechat"),
+        _fake_wechat_start,
     )
     monkeypatch.setattr(
         container.feishu_subscription_service,
         "start",
-        lambda: start_calls.append("feishu-subscription"),
+        _fake_feishu_subscription_start,
     )
     monkeypatch.setattr(
         container.feishu_message_pool_service,
         "start",
-        lambda: start_calls.append("feishu-message-pool"),
+        _fake_feishu_message_pool_start,
     )
 
     async def _fake_automation_delivery_start() -> None:

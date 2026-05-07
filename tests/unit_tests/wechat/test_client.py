@@ -15,13 +15,15 @@ from relay_teams.gateway.wechat.models import (
     WeChatLoginSession,
 )
 
+pytestmark = pytest.mark.asyncio
+
 
 class _FakeSyncHttpClient:
     def __init__(self, responses: list[httpx.Response | Exception]) -> None:
         self._responses = list(responses)
         self.requests: list[tuple[str, str, bytes | None, dict[str, str]]] = []
 
-    def request(
+    async def request(
         self,
         method: str,
         url: str,
@@ -46,6 +48,13 @@ class _FakeSyncHttpClient:
         _ = (exc_type, exc, tb)
         return None
 
+    async def __aenter__(self) -> _FakeSyncHttpClient:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        _ = (exc_type, exc, tb)
+        return None
+
 
 def _response(
     status_code: int,
@@ -63,7 +72,7 @@ def _response(
     )
 
 
-def test_start_qr_login_accepts_success_payload_with_ret(
+async def test_start_qr_login_accepts_success_payload_with_ret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
@@ -84,18 +93,18 @@ def test_start_qr_login_accepts_success_payload_with_ret(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
 
-    response = WeChatClient().start_qr_login(base_url=base_url)
+    response = await WeChatClient().start_qr_login(base_url=base_url)
 
     assert response.ret == 0
     assert response.qrcode == "qr-token"
     assert response.qrcode_img_content == "https://example.test/qr.png"
 
 
-def test_start_qr_login_raises_runtime_error_for_provider_failure(
+async def test_start_qr_login_raises_runtime_error_for_provider_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
@@ -116,15 +125,17 @@ def test_start_qr_login_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
 
     with pytest.raises(RuntimeError, match="WeChat start_qr_login failed"):
-        WeChatClient().start_qr_login(base_url=base_url)
+        await WeChatClient().start_qr_login(base_url=base_url)
 
 
-def test_wait_qr_login_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_wait_qr_login_retries_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
     request_url = f"{base_url}/ilink/bot/get_qrcode_status?qrcode=qr-token"
     fake_client = _FakeSyncHttpClient(
@@ -145,12 +156,16 @@ def test_wait_qr_login_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> 
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
-    monkeypatch.setattr("relay_teams.gateway.wechat.client.time.sleep", lambda _: None)
 
-    result = WeChatClient().wait_qr_login(
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr("relay_teams.gateway.wechat.client.asyncio.sleep", _fake_sleep)
+
+    result = await WeChatClient().wait_qr_login(
         login_session=WeChatLoginSession(
             session_key="wechat-login-1",
             qrcode="qr-token",
@@ -166,7 +181,7 @@ def test_wait_qr_login_retries_read_timeout(monkeypatch: pytest.MonkeyPatch) -> 
     assert len(fake_client.requests) == 2
 
 
-def test_send_text_message_builds_wechat_bot_message_payload(
+async def test_send_text_message_builds_wechat_bot_message_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
@@ -183,11 +198,11 @@ def test_send_text_message_builds_wechat_bot_message_payload(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
 
-    WeChatClient().send_text_message(
+    await WeChatClient().send_text_message(
         account=_account_record(base_url=base_url),
         token="bot-token",
         to_user_id="wx-peer",
@@ -215,7 +230,7 @@ def test_send_text_message_builds_wechat_bot_message_payload(
     assert client_id.startswith("agent-teams-wechat-")
 
 
-def test_send_text_message_raises_runtime_error_for_provider_failure(
+async def test_send_text_message_raises_runtime_error_for_provider_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
@@ -235,12 +250,12 @@ def test_send_text_message_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
 
     with pytest.raises(RuntimeError, match="WeChat send_text_message failed"):
-        WeChatClient().send_text_message(
+        await WeChatClient().send_text_message(
             account=_account_record(base_url=base_url),
             token="bot-token",
             to_user_id="wx-peer",
@@ -249,7 +264,7 @@ def test_send_text_message_raises_runtime_error_for_provider_failure(
         )
 
 
-def test_send_file_uploads_to_cdn_and_sends_file_message(
+async def test_send_file_uploads_to_cdn_and_sends_file_message(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -287,7 +302,7 @@ def test_send_file_uploads_to_cdn_and_sends_file_message(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
@@ -299,7 +314,7 @@ def test_send_file_uploads_to_cdn_and_sends_file_message(
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
-    result = WeChatClient().send_file(
+    result = await WeChatClient().send_file(
         account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
         token="bot-token",
         to_user_id="wx-peer",
@@ -351,7 +366,7 @@ def test_send_file_uploads_to_cdn_and_sends_file_message(
     ]
 
 
-def test_send_file_routes_image_as_image_message(
+async def test_send_file_routes_image_as_image_message(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -387,7 +402,7 @@ def test_send_file_routes_image_as_image_message(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
@@ -399,7 +414,7 @@ def test_send_file_routes_image_as_image_message(
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
-    result = WeChatClient().send_file(
+    result = await WeChatClient().send_file(
         account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
         token="bot-token",
         to_user_id="wx-peer",
@@ -432,7 +447,7 @@ def test_send_file_routes_image_as_image_message(
     ]
 
 
-def test_send_file_extracts_nested_upload_param(
+async def test_send_file_extracts_nested_upload_param(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -468,7 +483,7 @@ def test_send_file_extracts_nested_upload_param(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
@@ -480,7 +495,7 @@ def test_send_file_extracts_nested_upload_param(
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
-    result = WeChatClient().send_file(
+    result = await WeChatClient().send_file(
         account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
         token="bot-token",
         to_user_id="wx-peer",
@@ -492,7 +507,7 @@ def test_send_file_extracts_nested_upload_param(
     assert len(fake_client.requests) == 3
 
 
-def test_send_file_extracts_nested_camel_case_upload_param(
+async def test_send_file_extracts_nested_camel_case_upload_param(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -528,7 +543,7 @@ def test_send_file_extracts_nested_camel_case_upload_param(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
@@ -540,7 +555,7 @@ def test_send_file_extracts_nested_camel_case_upload_param(
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
-    result = WeChatClient().send_file(
+    result = await WeChatClient().send_file(
         account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
         token="bot-token",
         to_user_id="wx-peer",
@@ -552,7 +567,7 @@ def test_send_file_extracts_nested_camel_case_upload_param(
     assert len(fake_client.requests) == 3
 
 
-def test_send_file_uses_upload_full_url_when_present(
+async def test_send_file_uses_upload_full_url_when_present(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -589,7 +604,7 @@ def test_send_file_uses_upload_full_url_when_present(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
@@ -601,7 +616,7 @@ def test_send_file_uses_upload_full_url_when_present(
         lambda _: bytes.fromhex("00112233445566778899aabbccddeeff"),
     )
 
-    result = WeChatClient().send_file(
+    result = await WeChatClient().send_file(
         account=_account_record(base_url=base_url, cdn_base_url=cdn_base_url),
         token="bot-token",
         to_user_id="wx-peer",
@@ -614,7 +629,7 @@ def test_send_file_uses_upload_full_url_when_present(
     assert fake_client.requests[1][1] == upload_full_url
 
 
-def test_send_file_raises_diagnostic_error_when_upload_param_missing(
+async def test_send_file_raises_diagnostic_error_when_upload_param_missing(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -633,7 +648,7 @@ def test_send_file_raises_diagnostic_error_when_upload_param_missing(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
     monkeypatch.setattr(
@@ -646,7 +661,7 @@ def test_send_file_raises_diagnostic_error_when_upload_param_missing(
     )
 
     with pytest.raises(RuntimeError, match="top_level_keys"):
-        WeChatClient().send_file(
+        await WeChatClient().send_file(
             account=_account_record(base_url=base_url),
             token="bot-token",
             to_user_id="wx-peer",
@@ -655,7 +670,7 @@ def test_send_file_raises_diagnostic_error_when_upload_param_missing(
         )
 
 
-def test_send_typing_raises_runtime_error_for_provider_failure(
+async def test_send_typing_raises_runtime_error_for_provider_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base_url = "https://ilinkai.weixin.qq.com"
@@ -675,12 +690,12 @@ def test_send_typing_raises_runtime_error_for_provider_failure(
     )
 
     monkeypatch.setattr(
-        "relay_teams.gateway.wechat.client.create_sync_http_client",
+        "relay_teams.gateway.wechat.client.create_async_http_client",
         lambda **_: fake_client,
     )
 
     with pytest.raises(RuntimeError, match="WeChat send_typing failed"):
-        WeChatClient().send_typing(
+        await WeChatClient().send_typing(
             account=_account_record(base_url=base_url),
             token="bot-token",
             peer_user_id="wx-peer",

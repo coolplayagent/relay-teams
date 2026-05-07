@@ -32,7 +32,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 raise ValueError("Provide at least one of text or file_path.")
             results: list[JsonValue] = []
             if text is not None:
-                result = service.send_text(
+                result = await service.send_text(
                     session_id=ctx.deps.session_id,
                     text=text,
                     run_id=ctx.deps.run_id,
@@ -43,7 +43,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     file_path=file_path,
                     workspace=ctx.deps.workspace,
                 )
-                result = service.send_file(
+                result = await service.send_file(
                     session_id=ctx.deps.session_id,
                     file_path=resolved_path,
                     run_id=ctx.deps.run_id,

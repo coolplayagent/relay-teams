@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Protocol, cast
@@ -60,7 +61,6 @@ from relay_teams.sessions.runs.terminal_payload import (
 )
 from relay_teams.sessions.session_models import SessionRecord
 from relay_teams.validation import require_force_delete
-import asyncio
 
 LOGGER = get_logger(__name__)
 _IM_REPLY_POLL_INTERVAL_SECONDS = 2.0
@@ -298,8 +298,18 @@ class XiaolubanGatewayService:
         account_id: str,
         message: XiaolubanInboundMessage,
     ) -> None:
+        asyncio.run(
+            self.handle_im_inbound_async(account_id=account_id, message=message)
+        )
+
+    async def handle_im_inbound_async(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+    ) -> None:
         try:
-            self._handle_im_inbound(account_id, message)
+            await self._handle_im_inbound(account_id, message)
         except Exception as exc:
             log_event(
                 LOGGER,
@@ -328,7 +338,7 @@ class XiaolubanGatewayService:
                             "error": str(lookup_exc),
                         },
                     )
-                self.send_notification_message(
+                await self.send_notification_message(
                     account_id=account_id,
                     workspace_id=workspace_id,
                     session_id=session_id,
@@ -381,7 +391,7 @@ class XiaolubanGatewayService:
 
         return await asyncio.to_thread(self.delete_account, account_id, force=force)
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         account_id: str,
@@ -400,7 +410,7 @@ class XiaolubanGatewayService:
             or (default_targets[0] if default_targets else "")
             or account.derived_uid
         ).strip() or account.derived_uid
-        response = self._client.send_text_message(
+        response = await self._client.send_text_message(
             text=text,
             receiver_uid=target,
             auth_token=token,
@@ -408,7 +418,7 @@ class XiaolubanGatewayService:
         )
         return response.message_id
 
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,
@@ -435,7 +445,7 @@ class XiaolubanGatewayService:
         for target in targets:
             try:
                 sent_message_ids.append(
-                    self.send_text_message(
+                    await self.send_text_message(
                         account_id=account_id,
                         text=text,
                         receiver_uid=target,
@@ -611,7 +621,7 @@ class XiaolubanGatewayService:
             message=message,
         )
 
-    def _try_handle_command(
+    async def _try_handle_command(
         self,
         *,
         account_id: str,
@@ -622,7 +632,7 @@ class XiaolubanGatewayService:
     ) -> str | None:
         normalized_command_text = text.lstrip("/").strip()
         if not normalized_command_text:
-            self._handle_help_command(
+            await self._handle_help_command(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -632,7 +642,7 @@ class XiaolubanGatewayService:
         command = command_text[0].lower()
         arg = command_text[1] if len(command_text) > 1 else ""
         if command == "new":
-            return self._handle_new_command(
+            return await self._handle_new_command(
                 account_id=account_id,
                 message=message,
                 workspace_id=workspace_id,
@@ -640,7 +650,7 @@ class XiaolubanGatewayService:
                 task_text=arg,
             )
         if command == "resume":
-            return self._handle_resume_command(
+            return await self._handle_resume_command(
                 account_id=account_id,
                 message=message,
                 workspace_id=workspace_id,
@@ -648,7 +658,7 @@ class XiaolubanGatewayService:
                 arg=arg,
             )
         if command == "help":
-            self._handle_help_command(
+            await self._handle_help_command(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -656,7 +666,7 @@ class XiaolubanGatewayService:
             return None
         return text
 
-    def _handle_new_command(
+    async def _handle_new_command(
         self,
         *,
         account_id: str,
@@ -666,7 +676,7 @@ class XiaolubanGatewayService:
         task_text: str,
     ) -> str | None:
         if self._gateway_session_service is None:
-            self._send_im_reply(
+            await self._send_im_reply(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -713,7 +723,7 @@ class XiaolubanGatewayService:
         short_id = gateway_session.internal_session_id
         if task_text:
             return task_text
-        self._send_im_reply(
+        await self._send_im_reply(
             account_id=account_id,
             message=message,
             reply_target=reply_target,
@@ -722,7 +732,7 @@ class XiaolubanGatewayService:
         )
         return None
 
-    def _handle_resume_command(
+    async def _handle_resume_command(
         self,
         *,
         account_id: str,
@@ -732,7 +742,7 @@ class XiaolubanGatewayService:
         arg: str,
     ) -> str | None:
         if self._gateway_session_service is None:
-            self._send_im_reply(
+            await self._send_im_reply(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -756,7 +766,7 @@ class XiaolubanGatewayService:
                 sessions=items,
                 total_count=len(items),
             )
-            self._send_im_reply(
+            await self._send_im_reply(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -772,7 +782,7 @@ class XiaolubanGatewayService:
             message=message,
         )
         if matched is None:
-            self._send_im_reply(
+            await self._send_im_reply(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -786,7 +796,7 @@ class XiaolubanGatewayService:
         )
         with self._im_active_session_lock:
             self._im_active_session[conversation_key] = matched.gateway_session_id
-        self._send_im_reply(
+        await self._send_im_reply(
             account_id=account_id,
             message=message,
             reply_target=reply_target,
@@ -795,14 +805,14 @@ class XiaolubanGatewayService:
         )
         return None
 
-    def _handle_help_command(
+    async def _handle_help_command(
         self,
         *,
         account_id: str,
         message: XiaolubanInboundMessage,
         reply_target: str,
     ) -> None:
-        self._send_im_reply(
+        await self._send_im_reply(
             account_id=account_id,
             message=message,
             reply_target=reply_target,
@@ -939,7 +949,7 @@ class XiaolubanGatewayService:
 
         return tuple(gateway_sessions), internal_sessions
 
-    def _send_im_reply(
+    async def _send_im_reply(
         self,
         *,
         account_id: str,
@@ -949,7 +959,7 @@ class XiaolubanGatewayService:
         session_id: str = "",
     ) -> None:
         effective_session_id = str(session_id or "").strip() or message.session_id
-        self.send_text_message(
+        await self.send_text_message(
             account_id=account_id,
             text=format_im_command_reply(
                 body=text,
@@ -958,7 +968,7 @@ class XiaolubanGatewayService:
             receiver_uid=reply_target,
         )
 
-    def _handle_im_inbound(
+    async def _handle_im_inbound(
         self,
         account_id: str,
         message: XiaolubanInboundMessage,
@@ -977,11 +987,11 @@ class XiaolubanGatewayService:
         token = self._secret_store.get_token(self._config_dir, account_id)
         if token is None:
             raise RuntimeError("missing_xiaoluban_token")
-        self._keep_alive_if_possible(account, token, message)
+        await self._keep_alive_if_possible(account, token, message)
         reply_target = message.receiver or message.sender or account.derived_uid
         text = _extract_im_text(message.content)
         if not text:
-            self.send_notification_message(
+            await self.send_notification_message(
                 account_id=account_id,
                 workspace_id=workspace_id,
                 session_id=message.session_id
@@ -996,7 +1006,7 @@ class XiaolubanGatewayService:
             )
             return
         if text.startswith("/"):
-            result = self._try_handle_command(
+            result = await self._try_handle_command(
                 account_id=account_id,
                 message=message,
                 text=text,
@@ -1064,7 +1074,7 @@ class XiaolubanGatewayService:
             },
         )
         if self._active_run_id(gateway_session.internal_session_id) is not None:
-            self.send_notification_message(
+            await self.send_notification_message(
                 account_id=account_id,
                 workspace_id=workspace_id,
                 session_id=gateway_session.internal_session_id,
@@ -1084,7 +1094,7 @@ class XiaolubanGatewayService:
         )
         run_id = self._start_im_run(intent)
         if run_id is None:
-            self.send_notification_message(
+            await self.send_notification_message(
                 account_id=account_id,
                 workspace_id=workspace_id,
                 session_id=gateway_session.internal_session_id,
@@ -1124,7 +1134,7 @@ class XiaolubanGatewayService:
             },
         )
         try:
-            self._send_im_reply(
+            await self._send_im_reply(
                 account_id=account_id,
                 message=message,
                 reply_target=reply_target,
@@ -1145,7 +1155,7 @@ class XiaolubanGatewayService:
                 },
             )
 
-    def _keep_alive_if_possible(
+    async def _keep_alive_if_possible(
         self,
         account: XiaolubanAccountRecord,
         token: str,
@@ -1154,7 +1164,7 @@ class XiaolubanGatewayService:
         if not message.receiver or not message.session_id:
             return
         try:
-            self._client.keep_alive(
+            await self._client.keep_alive(
                 uid=message.receiver,
                 session_id=message.session_id,
                 auth_token=token,
@@ -1240,13 +1250,15 @@ class XiaolubanGatewayService:
                 terminal_text = self._terminal_text_for_run(run_id)
                 if not terminal_text:
                     continue
-                self.send_notification_message(
-                    account_id=ctx.account_id,
-                    workspace_id=ctx.workspace_id,
-                    session_id=ctx.session_id,
-                    status="completed",
-                    body=terminal_text,
-                    receiver_uid=ctx.reply_target,
+                asyncio.run(
+                    self.send_notification_message(
+                        account_id=ctx.account_id,
+                        workspace_id=ctx.workspace_id,
+                        session_id=ctx.session_id,
+                        status="completed",
+                        body=terminal_text,
+                        receiver_uid=ctx.reply_target,
+                    )
                 )
                 with self._pending_im_replies_lock:
                     self._pending_im_replies.pop(run_id, None)

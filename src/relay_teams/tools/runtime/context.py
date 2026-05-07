@@ -48,7 +48,7 @@ from relay_teams.hooks import HookService
 
 
 class ImToolServiceLike(Protocol):
-    def send_text(
+    async def send_text(
         self,
         *,
         session_id: str,
@@ -56,7 +56,7 @@ class ImToolServiceLike(Protocol):
         run_id: str | None = None,
     ) -> str: ...
 
-    def send_file(
+    async def send_file(
         self,
         *,
         session_id: str,
@@ -101,7 +101,7 @@ class XiaolubanNotifyServiceLike(Protocol):
     def has_usable_credentials(account_id: str) -> bool:
         raise NotImplementedError  # pragma: no cover
 
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,

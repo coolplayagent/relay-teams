@@ -28,6 +28,8 @@ from relay_teams.sessions.session_metadata import (
 )
 from relay_teams.sessions.session_models import SessionMode, SessionRecord
 
+pytestmark = pytest.mark.asyncio
+
 
 class _FakeSessionService:
     def __init__(self) -> None:
@@ -102,8 +104,14 @@ class _FakeRunService:
         self.created.append(intent)
         return f"run-{len(self.created)}", intent.session_id
 
+    async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_detached_run(intent)
+
     def ensure_run_started(self, run_id: str) -> None:
         self.started.append(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
 
     def stop_run(self, run_id: str) -> None:
         self.started.append(f"stopped:{run_id}")
@@ -114,7 +122,7 @@ class _FakeFeishuClient:
         self.chat_names: dict[str, str] = {}
         self.user_names: dict[str, str] = {}
 
-    def get_chat_name(
+    async def get_chat_name(
         self,
         *,
         chat_id: str,
@@ -123,7 +131,7 @@ class _FakeFeishuClient:
         _ = environment
         return self.chat_names.get(chat_id)
 
-    def get_user_name(
+    async def get_user_name(
         self,
         *,
         open_id: str,
@@ -132,7 +140,7 @@ class _FakeFeishuClient:
         _ = environment
         return self.user_names.get(open_id)
 
-    def resolve_user_name(
+    async def resolve_user_name(
         self,
         *,
         open_id: str,
@@ -204,7 +212,7 @@ def _build_message(
 
 
 @pytest.mark.timeout(5)
-def test_start_run_creates_group_session_and_run(tmp_path: Path) -> None:
+async def test_start_run_creates_group_session_and_run(tmp_path: Path) -> None:
     session_service = _FakeSessionService()
     run_service = _FakeRunService()
     feishu_client = _FakeFeishuClient()
@@ -218,7 +226,7 @@ def test_start_run_creates_group_session_and_run(tmp_path: Path) -> None:
         feishu_client=feishu_client,
     )
 
-    session_id, run_id = runtime.start_run(
+    session_id, run_id = await runtime.start_run_async(
         runtime_config=_build_runtime(
             trigger_id="trg_feishu",
             trigger_name="feishu_ops",
@@ -266,7 +274,7 @@ def test_start_run_creates_group_session_and_run(tmp_path: Path) -> None:
     assert run_service.created[0].conversation_context.feishu_chat_type == "group"
 
 
-def test_resolve_session_id_uses_user_name_for_p2p(tmp_path: Path) -> None:
+async def test_resolve_session_id_uses_user_name_for_p2p(tmp_path: Path) -> None:
     session_service = _FakeSessionService()
     run_service = _FakeRunService()
     feishu_client = _FakeFeishuClient()
@@ -280,7 +288,7 @@ def test_resolve_session_id_uses_user_name_for_p2p(tmp_path: Path) -> None:
         feishu_client=feishu_client,
     )
 
-    session_id = runtime.resolve_session_id(
+    session_id = await runtime.resolve_session_id(
         runtime_config=_build_runtime(
             trigger_id="trg_dm",
             trigger_name="feishu_dm",
@@ -306,7 +314,7 @@ def test_resolve_session_id_uses_user_name_for_p2p(tmp_path: Path) -> None:
     )
 
 
-def test_resolve_session_id_preserves_manual_title(tmp_path: Path) -> None:
+async def test_resolve_session_id_preserves_manual_title(tmp_path: Path) -> None:
     session_service = _FakeSessionService()
     run_service = _FakeRunService()
     feishu_client = _FakeFeishuClient()
@@ -334,7 +342,7 @@ def test_resolve_session_id_preserves_manual_title(tmp_path: Path) -> None:
         session_id=session.session_id,
     )
 
-    session_id = runtime.resolve_session_id(
+    session_id = await runtime.resolve_session_id(
         runtime_config=_build_runtime(
             trigger_id="trg_manual",
             trigger_name="bot_manual",

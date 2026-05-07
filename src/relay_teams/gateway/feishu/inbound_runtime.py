@@ -77,20 +77,26 @@ class RunServiceLike(Protocol):
 
     def create_detached_run(self, intent: IntentInput) -> tuple[str, str]: ...
 
+    async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        raise NotImplementedError
+
     def ensure_run_started(self, run_id: str) -> None: ...
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        raise NotImplementedError
 
     def stop_run(self, run_id: str) -> None: ...
 
 
 class FeishuClientLike(Protocol):
-    def get_chat_name(
+    async def get_chat_name(
         self,
         *,
         chat_id: str,
         environment: FeishuEnvironment | None = None,
     ) -> str | None: ...
 
-    def resolve_user_name(
+    async def resolve_user_name(
         self,
         *,
         open_id: str,
@@ -115,13 +121,13 @@ class FeishuInboundRuntime:
         self._feishu_client = feishu_client
         self._session_ingress_service = session_ingress_service
 
-    def start_run(
+    async def start_run_async(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
         message: FeishuNormalizedMessage,
     ) -> tuple[str, str]:
-        session_id = self.resolve_session_id(
+        session_id = await self.resolve_session_id(
             runtime_config=runtime_config,
             message=message,
         )
@@ -134,17 +140,17 @@ class FeishuInboundRuntime:
             conversation_context=self._build_conversation_context(message=message),
         )
         if self._session_ingress_service is not None:
-            result = self._session_ingress_service.require_started(
+            result = await self._session_ingress_service.require_started_async(
                 GatewaySessionIngressRequest(intent=intent)
             )
             if result.run_id is None:
                 raise RuntimeError("session_busy")
             return session_id, result.run_id
-        run_id, _session_id = self._run_service.create_detached_run(intent)
-        self._run_service.ensure_run_started(run_id)
+        run_id, _session_id = await self._run_service.create_detached_run_async(intent)
+        await self._run_service.ensure_run_started_async(run_id)
         return session_id, run_id
 
-    def resolve_session_id(
+    async def resolve_session_id(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
@@ -156,7 +162,7 @@ class FeishuInboundRuntime:
             tenant_key=message.tenant_key,
             external_chat_id=message.chat_id,
         )
-        metadata = self._build_session_metadata(
+        metadata = await self._build_session_metadata(
             runtime_config=runtime_config,
             message=message,
         )
@@ -212,13 +218,13 @@ class FeishuInboundRuntime:
             orchestration_preset_id=runtime_config.target.orchestration_preset_id,
         )
 
-    def _build_session_metadata(
+    async def _build_session_metadata(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
         message: FeishuNormalizedMessage,
     ) -> dict[str, str]:
-        source_label = self._resolve_source_label(
+        source_label = await self._resolve_source_label(
             runtime_config=runtime_config,
             message=message,
         )
@@ -248,7 +254,7 @@ class FeishuInboundRuntime:
             metadata.pop(FEISHU_METADATA_SENDER_OPEN_ID_KEY, None)
         return metadata
 
-    def _resolve_source_label(
+    async def _resolve_source_label(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
@@ -256,7 +262,7 @@ class FeishuInboundRuntime:
     ) -> str:
         chat_type = message.chat_type.strip().lower()
         if chat_type == "group":
-            chat_name = self._lookup_chat_name(
+            chat_name = await self._lookup_chat_name(
                 runtime_config=runtime_config,
                 chat_id=message.chat_id,
             )
@@ -264,7 +270,7 @@ class FeishuInboundRuntime:
                 return chat_name
             return _build_fallback_source_label("group", message.chat_id)
         if chat_type == "p2p":
-            user_name = self._lookup_user_name(
+            user_name = await self._lookup_user_name(
                 runtime_config=runtime_config,
                 open_id=message.sender_open_id,
                 chat_id=message.chat_id,
@@ -274,7 +280,7 @@ class FeishuInboundRuntime:
             return _build_fallback_source_label("p2p", message.chat_id)
         return _build_fallback_source_label(chat_type, message.chat_id)
 
-    def _lookup_chat_name(
+    async def _lookup_chat_name(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
@@ -283,7 +289,7 @@ class FeishuInboundRuntime:
         if self._feishu_client is None:
             return None
         try:
-            resolved = self._feishu_client.get_chat_name(
+            resolved = await self._feishu_client.get_chat_name(
                 chat_id=chat_id,
                 environment=runtime_config.environment,
             )
@@ -303,7 +309,7 @@ class FeishuInboundRuntime:
         normalized = str(resolved or "").strip()
         return normalized or None
 
-    def _lookup_user_name(
+    async def _lookup_user_name(
         self,
         *,
         runtime_config: FeishuTriggerRuntimeConfig,
@@ -314,7 +320,7 @@ class FeishuInboundRuntime:
         if self._feishu_client is None or not normalized_open_id:
             return None
         try:
-            resolved = self._feishu_client.resolve_user_name(
+            resolved = await self._feishu_client.resolve_user_name(
                 open_id=normalized_open_id,
                 chat_id=chat_id,
                 environment=runtime_config.environment,

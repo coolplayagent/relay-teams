@@ -10,7 +10,7 @@ import httpx
 
 from relay_teams.env.runtime_env import load_merged_env_vars
 from relay_teams.gateway.feishu.models import FeishuEnvironment
-from relay_teams.net import create_sync_http_client
+from relay_teams.net import create_async_http_client
 
 _IMAGE_EXTENSIONS: frozenset[str] = frozenset(
     {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
@@ -75,7 +75,6 @@ class FeishuClient:
     ) -> None:
         self._merged_env = None if merged_env is None else dict(merged_env.items())
         self._base_url = base_url.rstrip("/")
-        self._http_client: httpx.Client | None = None
         self._token_cache: dict[tuple[str, str, str], _CachedTenantAccessToken] = {}
         self._chat_name_cache: dict[tuple[str, str, str], str] = {}
         self._user_name_cache: dict[tuple[str, str, str], str] = {}
@@ -95,21 +94,21 @@ class FeishuClient:
             )
         return resolved_environment
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
     ) -> str:
-        return self._send_message(
+        return await self._send_message(
             chat_id=chat_id,
             msg_type="text",
             content={"text": text},
             environment=environment,
         )
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -119,7 +118,7 @@ class FeishuClient:
         normalized_message_id = str(message_id).strip()
         if not normalized_message_id:
             raise RuntimeError("Feishu reply requires a message_id.")
-        response_json = self._request_json(
+        response_json = await self._request_json(
             method="POST",
             path=f"/open-apis/im/v1/messages/{normalized_message_id}/reply",
             json_body={
@@ -138,7 +137,7 @@ class FeishuClient:
             raise RuntimeError("Feishu API failed to reply message: missing message_id")
         return reply_message_id
 
-    def create_message_reaction(
+    async def create_message_reaction(
         self,
         *,
         message_id: str,
@@ -151,7 +150,7 @@ class FeishuClient:
             raise RuntimeError("Feishu reaction requires a message_id.")
         if not normalized_reaction_type:
             raise RuntimeError("Feishu reaction requires a reaction_type.")
-        self._request_json(
+        await self._request_json(
             method="POST",
             path=f"/open-apis/im/v1/messages/{normalized_message_id}/reactions",
             json_body={
@@ -161,21 +160,21 @@ class FeishuClient:
             error_context="create message reaction",
         )
 
-    def send_card_message(
+    async def send_card_message(
         self,
         *,
         chat_id: str,
         card: dict[str, object],
         environment: FeishuEnvironment | None = None,
     ) -> str:
-        return self._send_message(
+        return await self._send_message(
             chat_id=chat_id,
             msg_type="interactive",
             content={"card": card},
             environment=environment,
         )
 
-    def get_chat_name(
+    async def get_chat_name(
         self,
         *,
         chat_id: str,
@@ -193,7 +192,7 @@ class FeishuClient:
         existing = self._chat_name_cache.get(cache_key)
         if existing is not None:
             return existing
-        response_json = self._request_json(
+        response_json = await self._request_json(
             method="GET",
             path=f"/open-apis/im/v1/chats/{normalized_chat_id}",
             environment=resolved_environment,
@@ -209,7 +208,7 @@ class FeishuClient:
         self._chat_name_cache[cache_key] = chat_name
         return chat_name
 
-    def get_user_name(
+    async def get_user_name(
         self,
         *,
         open_id: str,
@@ -227,7 +226,7 @@ class FeishuClient:
         existing = self._user_name_cache.get(cache_key)
         if existing is not None:
             return existing
-        response_json = self._request_json(
+        response_json = await self._request_json(
             method="GET",
             path=f"/open-apis/contact/v3/users/{normalized_open_id}",
             params={"user_id_type": "open_id"},
@@ -248,7 +247,7 @@ class FeishuClient:
         self._user_name_cache[cache_key] = user_name
         return user_name
 
-    def get_chat_member_name(
+    async def get_chat_member_name(
         self,
         *,
         chat_id: str,
@@ -277,7 +276,7 @@ class FeishuClient:
             }
             if page_token is not None:
                 params["page_token"] = page_token
-            response_json = self._request_json(
+            response_json = await self._request_json(
                 method="GET",
                 path=f"/open-apis/im/v1/chats/{normalized_chat_id}/members",
                 params=params,
@@ -310,7 +309,7 @@ class FeishuClient:
                 return None
             page_token = next_page_token
 
-    def resolve_user_name(
+    async def resolve_user_name(
         self,
         *,
         open_id: str,
@@ -318,7 +317,9 @@ class FeishuClient:
         environment: FeishuEnvironment | None = None,
     ) -> str | None:
         try:
-            user_name = self.get_user_name(open_id=open_id, environment=environment)
+            user_name = await self.get_user_name(
+                open_id=open_id, environment=environment
+            )
         except RuntimeError:
             user_name = None
         if user_name is not None:
@@ -326,19 +327,19 @@ class FeishuClient:
         normalized_chat_id = str(chat_id or "").strip()
         if not normalized_chat_id:
             return None
-        return self.get_chat_member_name(
+        return await self.get_chat_member_name(
             chat_id=normalized_chat_id,
             open_id=open_id,
             environment=environment,
         )
 
-    def upload_image(
+    async def upload_image(
         self,
         *,
         image_path: Path,
         environment: FeishuEnvironment | None = None,
     ) -> str:
-        return self._upload_asset(
+        return await self._upload_asset(
             path="/open-apis/im/v1/images",
             file_path=image_path,
             form_data={"image_type": "message"},
@@ -348,14 +349,14 @@ class FeishuClient:
             environment=environment,
         )
 
-    def upload_file(
+    async def upload_file(
         self,
         *,
         file_path: Path,
         file_type: str,
         environment: FeishuEnvironment | None = None,
     ) -> str:
-        return self._upload_asset(
+        return await self._upload_asset(
             path="/open-apis/im/v1/files",
             file_path=file_path,
             form_data={"file_type": file_type, "file_name": file_path.name},
@@ -365,21 +366,21 @@ class FeishuClient:
             environment=environment,
         )
 
-    def send_image_message(
+    async def send_image_message(
         self,
         *,
         chat_id: str,
         image_key: str,
         environment: FeishuEnvironment | None = None,
     ) -> str:
-        return self._send_message(
+        return await self._send_message(
             chat_id=chat_id,
             msg_type="image",
             content={"image_key": image_key},
             environment=environment,
         )
 
-    def send_file_message(
+    async def send_file_message(
         self,
         *,
         chat_id: str,
@@ -387,14 +388,14 @@ class FeishuClient:
         file_name: str,
         environment: FeishuEnvironment | None = None,
     ) -> str:
-        return self._send_message(
+        return await self._send_message(
             chat_id=chat_id,
             msg_type="file",
             content={"file_key": file_key, "file_name": file_name},
             environment=environment,
         )
 
-    def delete_message(
+    async def delete_message(
         self,
         *,
         message_id: str,
@@ -403,14 +404,14 @@ class FeishuClient:
         normalized_message_id = str(message_id).strip()
         if not normalized_message_id:
             raise RuntimeError("Feishu delete requires a message_id.")
-        _ = self._request_json(
+        _ = await self._request_json(
             method="DELETE",
             path=f"/open-apis/im/v1/messages/{normalized_message_id}",
             environment=self.require_environment(environment),
             error_context="delete message",
         )
 
-    def send_file(
+    async def send_file(
         self,
         *,
         chat_id: str,
@@ -420,22 +421,22 @@ class FeishuClient:
         resolved_environment = self.require_environment(environment)
         suffix = file_path.suffix.lower()
         if suffix in _IMAGE_EXTENSIONS:
-            image_key = self.upload_image(
+            image_key = await self.upload_image(
                 image_path=file_path, environment=resolved_environment
             )
-            self.send_image_message(
+            await self.send_image_message(
                 chat_id=chat_id,
                 image_key=image_key,
                 environment=resolved_environment,
             )
             return f"image sent ({file_path.name})"
         file_type = _FILE_TYPE_MAP.get(suffix, "stream")
-        file_key = self.upload_file(
+        file_key = await self.upload_file(
             file_path=file_path,
             file_type=file_type,
             environment=resolved_environment,
         )
-        self.send_file_message(
+        await self.send_file_message(
             chat_id=chat_id,
             file_key=file_key,
             file_name=file_path.name,
@@ -443,7 +444,7 @@ class FeishuClient:
         )
         return f"file sent ({file_path.name})"
 
-    def _send_message(
+    async def _send_message(
         self,
         *,
         chat_id: str,
@@ -451,7 +452,7 @@ class FeishuClient:
         content: dict[str, object],
         environment: FeishuEnvironment | None,
     ) -> str:
-        response_json = self._request_json(
+        response_json = await self._request_json(
             method="POST",
             path="/open-apis/im/v1/messages",
             params={"receive_id_type": "chat_id"},
@@ -472,7 +473,7 @@ class FeishuClient:
             raise RuntimeError("Feishu API failed to send message: missing message_id")
         return message_id
 
-    def _upload_asset(
+    async def _upload_asset(
         self,
         *,
         path: str,
@@ -484,14 +485,15 @@ class FeishuClient:
         environment: FeishuEnvironment | None,
     ) -> str:
         resolved_environment = self.require_environment(environment)
-        token = self._get_tenant_access_token(resolved_environment)
+        token = await self._get_tenant_access_token(resolved_environment)
         with file_path.open("rb") as fp:
-            response = self._client().post(
-                url=f"{self._base_url}{path}",
-                headers={"Authorization": f"Bearer {token}"},
-                data=dict(form_data.items()),
-                files={file_field_name: (file_path.name, fp)},
-            )
+            async with self._create_client() as client:
+                response = await client.post(
+                    url=f"{self._base_url}{path}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    data=dict(form_data.items()),
+                    files={file_field_name: (file_path.name, fp)},
+                )
         response_json = _parse_json_response(response, error_context=error_context)
         response_data = _require_json_object(
             response_json.get("data"), error_context=error_context
@@ -503,7 +505,7 @@ class FeishuClient:
             )
         return uploaded_key
 
-    def _request_json(
+    async def _request_json(
         self,
         *,
         method: str,
@@ -517,15 +519,16 @@ class FeishuClient:
         headers: dict[str, str] = {"Content-Type": "application/json; charset=utf-8"}
         if include_access_token:
             headers["Authorization"] = (
-                f"Bearer {self._get_tenant_access_token(environment)}"
+                f"Bearer {await self._get_tenant_access_token(environment)}"
             )
-        response = self._client().request(
-            method=method,
-            url=f"{self._base_url}{path}",
-            headers=headers,
-            params=None if params is None else dict(params.items()),
-            json=None if json_body is None else dict(json_body.items()),
-        )
+        async with self._create_client() as client:
+            response = await client.request(
+                method=method,
+                url=f"{self._base_url}{path}",
+                headers=headers,
+                params=None if params is None else dict(params.items()),
+                json=None if json_body is None else dict(json_body.items()),
+            )
         response_json = _parse_json_response(response, error_context=error_context)
         response_code = response_json.get("code")
         if response_code not in (0, "0", None):
@@ -534,7 +537,7 @@ class FeishuClient:
             raise RuntimeError(f"Feishu API failed to {error_context}: {message}")
         return response_json
 
-    def _get_tenant_access_token(self, environment: FeishuEnvironment) -> str:
+    async def _get_tenant_access_token(self, environment: FeishuEnvironment) -> str:
         cache_key = (
             environment.app_id,
             environment.app_secret,
@@ -546,7 +549,7 @@ class FeishuClient:
             now_epoch_seconds=now_epoch_seconds
         ):
             return cached.value
-        response_json = self._request_json(
+        response_json = await self._request_json(
             method="POST",
             path="/open-apis/auth/v3/tenant_access_token/internal",
             environment=environment,
@@ -572,10 +575,8 @@ class FeishuClient:
         )
         return access_token
 
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = create_sync_http_client(merged_env=self._merged_env)
-        return self._http_client
+    def _create_client(self) -> httpx.AsyncClient:
+        return create_async_http_client(merged_env=self._merged_env)
 
     def _load_environment(self) -> FeishuEnvironment | None:
         return load_feishu_environment(self._merged_env)

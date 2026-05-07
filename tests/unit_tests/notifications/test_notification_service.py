@@ -41,14 +41,14 @@ class _FakeRunEventHub:
 
 class _FakeDispatcher:
     def __init__(self) -> None:
-        self.requests: list[object] = []
+        self.requests: list[NotificationRequest] = []
 
-    def dispatch(self, request: object) -> None:
+    async def dispatch(self, request: NotificationRequest) -> None:
         self.requests.append(request)
 
 
 class _FailingDispatcher:
-    def dispatch(self, request: object) -> None:
+    async def dispatch(self, request: NotificationRequest) -> None:
         _ = request
         raise RuntimeError("dispatcher boom")
 

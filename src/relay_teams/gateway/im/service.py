@@ -20,7 +20,7 @@ from relay_teams.automation.automation_models import AutomationRunDeliveryRecord
 
 
 class _FeishuSender(Protocol):
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -28,7 +28,7 @@ class _FeishuSender(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -36,7 +36,7 @@ class _FeishuSender(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def send_file(
+    async def send_file(
         self,
         *,
         chat_id: str,
@@ -54,7 +54,7 @@ class _WeChatSecretStore(Protocol):
 
 
 class _WeChatSender(Protocol):
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         account: WeChatAccountRecord,
@@ -64,7 +64,7 @@ class _WeChatSender(Protocol):
         context_token: str | None,
     ) -> None: ...
 
-    def send_file(
+    async def send_file(
         self,
         *,
         account: WeChatAccountRecord,
@@ -111,7 +111,7 @@ class ImToolService:
         self._wechat_secret_store = wechat_secret_store
         self._wechat_client = wechat_client
 
-    def send_text(
+    async def send_text(
         self,
         *,
         session_id: str,
@@ -121,10 +121,10 @@ class ImToolService:
         ctx = self._resolve_context(session_id, run_id=run_id)
         if ctx is None:
             return "Session is not linked to an IM chat."
-        self.send_text_to_context(ctx=ctx, text=text)
+        await self.send_text_to_context(ctx=ctx, text=text)
         return "Message sent."
 
-    def send_file(
+    async def send_file(
         self,
         *,
         session_id: str,
@@ -137,21 +137,21 @@ class ImToolService:
         if not file_path.is_file():
             raise FileNotFoundError(f"File not found: {file_path}")
         if isinstance(ctx, FeishuChatContext):
-            return self._feishu_client.send_file(
+            return await self._feishu_client.send_file(
                 chat_id=ctx.chat_id,
                 file_path=file_path,
                 environment=ctx.environment,
             )
-        return self._send_wechat_file(ctx=ctx, file_path=file_path)
+        return await self._send_wechat_file(ctx=ctx, file_path=file_path)
 
-    def send_text_to_context(
+    async def send_text_to_context(
         self,
         *,
         ctx: FeishuChatContext | WeChatChatContext,
         text: str,
     ) -> None:
         if isinstance(ctx, FeishuChatContext):
-            self.send_text_to_feishu_chat(
+            await self.send_text_to_feishu_chat(
                 chat_id=ctx.chat_id,
                 text=text,
                 environment=ctx.environment,
@@ -160,14 +160,14 @@ class ImToolService:
                 ),
             )
             return
-        self.send_text_to_wechat_peer(
+        await self.send_text_to_wechat_peer(
             account_id=ctx.account_id,
             peer_user_id=ctx.peer_user_id,
             text=text,
             context_token=ctx.context_token,
         )
 
-    def send_text_to_feishu_chat(
+    async def send_text_to_feishu_chat(
         self,
         *,
         chat_id: str,
@@ -177,19 +177,19 @@ class ImToolService:
     ) -> None:
         normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
         if normalized_reply_to_message_id:
-            self._feishu_client.reply_text_message(
+            await self._feishu_client.reply_text_message(
                 message_id=normalized_reply_to_message_id,
                 text=text,
                 environment=environment,
             )
             return
-        self._feishu_client.send_text_message(
+        await self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,
             environment=environment,
         )
 
-    def send_text_to_wechat_peer(
+    async def send_text_to_wechat_peer(
         self,
         *,
         account_id: str,
@@ -197,7 +197,7 @@ class ImToolService:
         text: str,
         context_token: str | None,
     ) -> None:
-        self._send_wechat_text(
+        await self._send_wechat_text(
             ctx=WeChatChatContext(
                 account_id=account_id,
                 peer_user_id=peer_user_id,
@@ -296,7 +296,7 @@ class ImToolService:
         reply_to_message_id = str(context.im_reply_to_message_id or "").strip()
         return reply_to_message_id or None
 
-    def _send_wechat_text(
+    async def _send_wechat_text(
         self,
         *,
         ctx: WeChatChatContext,
@@ -311,7 +311,7 @@ class ImToolService:
             raise RuntimeError(
                 "WeChat send is unavailable because the bot token is missing."
             )
-        self._wechat_client.send_text_message(
+        await self._wechat_client.send_text_message(
             account=account,
             token=token,
             to_user_id=ctx.peer_user_id,
@@ -319,7 +319,7 @@ class ImToolService:
             context_token=ctx.context_token,
         )
 
-    def _send_wechat_file(
+    async def _send_wechat_file(
         self,
         *,
         ctx: WeChatChatContext,
@@ -334,7 +334,7 @@ class ImToolService:
             raise RuntimeError(
                 "WeChat send is unavailable because the bot token is missing."
             )
-        return self._wechat_client.send_file(
+        return await self._wechat_client.send_file(
             account=account,
             token=token,
             to_user_id=ctx.peer_user_id,
