@@ -63,6 +63,13 @@ def _append_error_detail(message: str, detail: str) -> str:
     return f"{message} Details: {normalized_detail}"
 
 
+def _append_error_detail_block(message: str, detail: str) -> str:
+    normalized_detail = detail.strip()
+    if not normalized_detail:
+        return message
+    return f"{message}\n\nDetails:\n```text\n{normalized_detail}\n```"
+
+
 def _build_recovery_guidance_message(
     error_code: str,
     *,
@@ -87,6 +94,12 @@ def _build_recovery_guidance_message(
         return _append_error_detail(
             "The request failed before a usable response was received from the model endpoint. "
             "Check DNS resolution, outbound network connectivity, proxy or NO_PROXY settings, and whether the configured base_url is reachable at all.",
+            detail,
+        )
+    if error_code == "proxy_blocked":
+        return _append_error_detail_block(
+            "The model request reached an enterprise proxy block page instead of the model endpoint. "
+            "Check the configured base_url, HTTP_PROXY/HTTPS_PROXY routing, proxy credentials, and NO_PROXY entries for the model host.",
             detail,
         )
     if error_code == "auth_invalid":

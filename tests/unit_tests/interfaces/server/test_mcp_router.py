@@ -8,6 +8,7 @@ from relay_teams.interfaces.server.deps import get_mcp_service
 from relay_teams.interfaces.server.routers import mcp
 from relay_teams.mcp.mcp_models import (
     McpConfigScope,
+    McpDiscoveryStatus,
     McpServerAddResult,
     McpServerConfigResult,
     McpServerConnectionTestResult,
@@ -118,6 +119,16 @@ class _FakeMcpService:
             ),
         )
 
+    def refresh_server_tools(self, name: str) -> McpServerToolsSummary:
+        if name != "filesystem":
+            raise ValueError(f"Unknown MCP server: {name}")
+        return McpServerToolsSummary(
+            server="filesystem",
+            source=McpConfigScope.APP,
+            transport="stdio",
+            status=McpDiscoveryStatus.LOADING,
+        )
+
 
 def _create_test_client(fake_service: object) -> TestClient:
     app = FastAPI()
@@ -138,6 +149,10 @@ def test_list_mcp_servers() -> None:
             "source": "app",
             "transport": "stdio",
             "enabled": True,
+            "discovery_status": "pending",
+            "tool_count": 0,
+            "last_checked_at": None,
+            "error": None,
         }
     ]
 
@@ -161,6 +176,10 @@ def test_add_mcp_server() -> None:
             "source": "app",
             "transport": "stdio",
             "enabled": True,
+            "discovery_status": "pending",
+            "tool_count": 0,
+            "last_checked_at": None,
+            "error": None,
         },
         "config_path": "C:/Users/test/.relay-teams/mcp.json",
     }
@@ -231,6 +250,10 @@ def test_set_mcp_server_enabled() -> None:
         "source": "app",
         "transport": "stdio",
         "enabled": False,
+        "discovery_status": "pending",
+        "tool_count": 0,
+        "last_checked_at": None,
+        "error": None,
     }
 
 
@@ -275,6 +298,10 @@ def test_get_mcp_server_config() -> None:
             "source": "app",
             "transport": "stdio",
             "enabled": True,
+            "discovery_status": "pending",
+            "tool_count": 0,
+            "last_checked_at": None,
+            "error": None,
         },
         "config": {
             "transport": "stdio",
@@ -364,22 +391,20 @@ def test_list_mcp_server_tools() -> None:
         "transport": "stdio",
         "enabled": True,
         "tools": [{"name": "filesystem_read_file", "description": "Read a file"}],
+        "status": "pending",
+        "last_checked_at": None,
+        "error": None,
     }
 
 
-def test_list_mcp_server_tools_surfaces_connection_failures() -> None:
-    class _BrokenMcpService(_FakeMcpService):
-        async def list_server_tools(self, name: str) -> McpServerToolsSummary:
-            raise RuntimeError("Connection closed")
+def test_refresh_mcp_server_tools() -> None:
+    client = _create_test_client(_FakeMcpService())
 
-    client = _create_test_client(_BrokenMcpService())
+    response = client.post("/api/mcp/servers/filesystem/tools:refresh")
 
-    response = client.get("/api/mcp/servers/filesystem/tools")
-
-    assert response.status_code == 502
-    assert response.json() == {
-        "detail": "Failed to load MCP tools for 'filesystem': Connection closed"
-    }
+    assert response.status_code == 200
+    assert response.json()["server"] == "filesystem"
+    assert response.json()["status"] == "loading"
 
 
 def test_test_mcp_server_connection() -> None:

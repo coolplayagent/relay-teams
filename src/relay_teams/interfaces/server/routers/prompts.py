@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel, model_v
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
 from relay_teams.interfaces.server.deps import (
+    get_mcp_discovery_service,
     get_mcp_registry,
     get_role_registry,
     get_skill_registry,
@@ -25,6 +26,7 @@ from relay_teams.agents.execution.system_prompts import (
     compose_provider_system_prompt,
     compose_runtime_system_prompt,
 )
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.paths import get_app_config_dir
 from relay_teams.roles.role_models import RoleDefinition
@@ -98,6 +100,9 @@ async def preview_prompts(
     role_registry: Annotated[RoleRegistry, Depends(get_role_registry)],
     tool_registry: Annotated[ToolRegistry, Depends(get_tool_registry)],
     mcp_registry: Annotated[McpRegistry, Depends(get_mcp_registry)],
+    mcp_discovery_service: Annotated[
+        McpDiscoveryService, Depends(get_mcp_discovery_service)
+    ],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
     skill_runtime_service: Annotated[
         SkillRuntimeService, Depends(get_skill_runtime_service)
@@ -162,6 +167,7 @@ async def preview_prompts(
     runtime_prompt_sections = await RuntimePromptBuilder(
         role_registry=role_registry,
         mcp_registry=mcp_registry,
+        mcp_discovery_service=mcp_discovery_service,
         instruction_resolver=PromptInstructionResolver(
             app_config_dir=get_app_config_dir()
         ),

@@ -53,6 +53,7 @@ from relay_teams.providers.model_fallback import (
     DisabledLlmFallbackMiddleware,
     LlmFallbackMiddleware,
 )
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.reminders.service import SystemReminderService
 from relay_teams.roles.memory_service import RoleMemoryService
@@ -123,6 +124,7 @@ class AgentLlmSession(
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
+        mcp_discovery_service: McpDiscoveryService | None,
         allowed_tools: tuple[str, ...],
         allowed_mcp_servers: tuple[str, ...],
         allowed_skills: tuple[str, ...],
@@ -178,6 +180,7 @@ class AgentLlmSession(
         self._conversation_microcompact_service = conversation_microcompact_service
         self._tool_registry = tool_registry
         self._mcp_registry = mcp_registry
+        self._mcp_discovery_service = mcp_discovery_service
         self._skill_registry = skill_registry
         self._allowed_tools = allowed_tools
         self._allowed_mcp_servers = allowed_mcp_servers

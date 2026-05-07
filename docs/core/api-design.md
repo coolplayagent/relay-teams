@@ -684,11 +684,22 @@ Response fields:
 Reloads effective proxy env into runtime.
 The reload source is the current effective merged environment, not only app-saved `.env` values.
 This updates process-level proxy variables for future HTTP requests and shell/MCP subprocesses, clears removed proxy keys, and refreshes MCP runtime state.
+Remote MCP discovery and connection clients use the per-server effective `env`
+proxy values instead of reading process-global proxy variables at connection
+time.
 
 ### `POST /system/configs/mcp:reload`
 
 Reloads MCP config into runtime.
 For stdio MCP servers launched through `uvx` or `uv tool run`, the backend clears the relevant `uv` package cache before rebuilding runtime state so newly added MCP tools are visible on the next load.
+Reloading MCP config reconciles the MCP discovery cache by server fingerprint:
+unchanged `ready`, `loading`, and `failed` entries are preserved, while new,
+enabled, or changed entries queue asynchronous tool discovery. The reload
+response does not wait for remote `initialize` or `tools/list` calls.
+The server also watches the app `mcp.json` file for external edits and triggers
+the same reload path after a debounced `mtime` / size change. Invalid JSON file
+edits are logged and ignored so the previous runtime registry and discovery
+cache stay active.
 If persisted MCP config is semantically invalid, the backend returns `400`.
 
 ### `POST /system/configs/skills:reload`
@@ -2982,10 +2993,44 @@ Response:
 ### `GET /mcp/servers`
 
 Lists effective MCP servers from app scope.
+Each server summary includes MCP discovery cache fields:
+- `discovery_status`: one of `disabled`, `pending`, `loading`, `ready`, or `failed`
+- `tool_count`
+- `last_checked_at`
+- `error`
 
 ### `GET /mcp/servers/{server_name}/tools`
 
-Lists tools exposed by one MCP server. Returned tool names are the effective callable names registered at runtime in the form `<server_name>_<tool_name>` so tools from different MCP servers cannot collide.
+Returns cached discovery state and cached tools for one MCP server. This endpoint
+does not open a live MCP connection. Unknown servers return `404`; known servers
+return `200` for `pending`, `loading`, `ready`, `failed`, and `disabled` states.
+Returned tool names are the effective callable names registered at runtime in
+the form `<server_name>_<tool_name>` so tools from different MCP servers cannot
+collide.
+
+Response fields:
+- `server`
+- `source`
+- `transport`
+- `enabled`
+- `tools`
+- `status`: one of `disabled`, `pending`, `loading`, `ready`, or `failed`
+- `last_checked_at`
+- `error`
+
+### `POST /mcp/servers/{server_name}/tools:refresh`
+
+Queues background discovery for one enabled MCP server and returns the current
+cached tool summary. This endpoint does not wait for `initialize` or
+`tools/list` to complete. It forces rediscovery even when the cached status is
+already `ready`. Unknown servers return `404`.
+
+### `POST /mcp/servers/{server_name}/test`
+
+Runs an explicit live connection test for one MCP server and may block while the
+server initializes and lists tools. This endpoint is intended for the user's
+manual "Test" action and is separate from the settings page's cached tool
+display.
 
 ## Gateway APIs
 

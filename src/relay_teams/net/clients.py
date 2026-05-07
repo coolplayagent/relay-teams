@@ -25,7 +25,9 @@ def create_async_http_client(
     *,
     merged_env: Mapping[str, str] | None = None,
     proxy_config: ProxyEnvConfig | None = None,
+    headers: Mapping[str, str] | None = None,
     ssl_verify: bool | None = None,
+    timeout: httpx.Timeout | None = None,
     timeout_seconds: float = DEFAULT_HTTP_TIMEOUT,
     connect_timeout_seconds: float = DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS,
     follow_redirects: bool = False,
@@ -39,9 +41,17 @@ def create_async_http_client(
         proxy_config=resolved_proxy_config,
         explicit_ssl_verify=ssl_verify,
     )
+    resolved_headers = _resolve_headers(headers)
     return httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout=timeout_seconds, connect=connect_timeout_seconds),
-        headers={"User-Agent": get_user_agent()},
+        timeout=(
+            timeout
+            if timeout is not None
+            else httpx.Timeout(
+                timeout=timeout_seconds,
+                connect=connect_timeout_seconds,
+            )
+        ),
+        headers=resolved_headers,
         trust_env=False,
         verify=resolved_ssl_verify,
         transport=AsyncProxyRoutingTransport(
@@ -83,3 +93,10 @@ def _resolve_proxy_config(
     if resolved_env is None:
         return resolve_proxy_env_config(base_env)
     return resolve_proxy_env_config(resolved_env)
+
+
+def _resolve_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
+    resolved_headers = {"User-Agent": get_user_agent()}
+    if headers is not None:
+        resolved_headers.update(dict(headers))
+    return resolved_headers

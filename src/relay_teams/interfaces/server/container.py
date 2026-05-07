@@ -101,6 +101,8 @@ from relay_teams.interfaces.server.config_status_service import ConfigStatusServ
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from relay_teams.mcp.mcp_config_manager import McpConfigManager
 from relay_teams.mcp.config_reload_service import McpConfigReloadService
+from relay_teams.mcp.mcp_config_watcher import McpConfigFileWatcher
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.mcp.mcp_service import McpService
 from relay_teams.metrics import (
@@ -379,6 +381,10 @@ class ServerContainer:
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             app_config_dir=app_config_dir
         )
+        self.mcp_config_file_watcher: McpConfigFileWatcher = McpConfigFileWatcher(
+            config_path=self.mcp_config_manager.config_file_path(),
+            on_changed=self._reload_mcp_config_after_file_change,
+        )
         self.tool_registry: ToolRegistry = build_default_registry()
         self.auto_harness_service = AutoHarnessService(
             config_dir=app_config_dir,
@@ -397,11 +403,15 @@ class ServerContainer:
         self.mcp_registry: McpRegistry = self.mcp_config_manager.load_registry(
             extra_specs=self._plugin_mcp_specs
         )
+        self.mcp_discovery_service: McpDiscoveryService = McpDiscoveryService(
+            self.mcp_registry
+        )
         self.mcp_service: McpService = McpService(
             registry=self.mcp_registry,
             config_manager=self.mcp_config_manager,
             on_registry_changed=self.replace_mcp_registry,
             extra_specs=self._plugin_mcp_specs,
+            discovery_service=self.mcp_discovery_service,
         )
         self.command_registry: CommandRegistry = CommandRegistry(
             app_config_dir=app_config_dir,
@@ -785,6 +795,7 @@ class ServerContainer:
             prompt_builder=RuntimePromptBuilder(
                 role_registry=self.role_registry,
                 mcp_registry=self.mcp_registry,
+                mcp_discovery_service=self.mcp_discovery_service,
                 instruction_resolver=PromptInstructionResolver(
                     app_config_dir=runtime.paths.config_dir,
                     instructions=runtime.prompt_instructions.instructions,
@@ -1169,6 +1180,7 @@ class ServerContainer:
             subagent_reflection_service=self.subagent_reflection_service,
             tool_registry=self.tool_registry,
             mcp_registry=self.mcp_registry,
+            mcp_discovery_service=self.mcp_discovery_service,
             skill_registry=self.skill_registry,
             message_repo=self.message_repo,
             session_history_marker_repo=self.session_history_marker_repo,
@@ -1221,6 +1233,7 @@ class ServerContainer:
             skill_registry=self.skill_registry,
             skill_runtime_service=self.skill_runtime_service,
             mcp_registry=self.mcp_registry,
+            mcp_discovery_service=self.mcp_discovery_service,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
@@ -1365,6 +1378,8 @@ class ServerContainer:
         )
 
     async def start(self) -> None:
+        self.mcp_discovery_service.start_warmup(self.mcp_registry)
+        self.mcp_config_file_watcher.start()
         self.run_service.bind_event_loop(asyncio.get_running_loop())
         self.background_task_service.bind_completion_sink(self.run_service)
         self.wechat_gateway_service.start()
@@ -1398,6 +1413,8 @@ class ServerContainer:
             )
         await self.external_acp_session_manager.close()
         await self.background_task_manager.close()
+        await self.mcp_config_file_watcher.stop()
+        await self.mcp_discovery_service.close()
         await self._close_async_repositories()
         await clear_llm_http_client_cache_async()
         return None
@@ -1454,6 +1471,7 @@ class ServerContainer:
         self.meta_agent.coordinator.prompt_builder = RuntimePromptBuilder(
             role_registry=self.role_registry,
             mcp_registry=self.mcp_registry,
+            mcp_discovery_service=self.mcp_discovery_service,
             instruction_resolver=PromptInstructionResolver(
                 app_config_dir=self.runtime.paths.config_dir,
                 instructions=self.runtime.prompt_instructions.instructions,
@@ -1508,6 +1526,9 @@ class ServerContainer:
 
     def _on_mcp_reloaded(self, mcp_registry: McpRegistry) -> None:
         self.replace_mcp_registry(mcp_registry)
+
+    def _reload_mcp_config_after_file_change(self) -> None:
+        self.mcp_config_reload_service.reload_mcp_config()
 
     def _reload_skills_config(self) -> None:
         self.skills_config_reload_service.reload_skills_config()

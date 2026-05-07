@@ -1900,6 +1900,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 None,
             ),
             mcp_registry=getattr(self, "_mcp_registry", McpRegistry()),
+            mcp_discovery_service=getattr(self, "_mcp_discovery_service", None),
             mcp_tool_context_token_cache=mcp_tool_context_token_cache,
             media_asset_service=getattr(self, "_media_asset_service", None),
             hook_service=getattr(self, "_hook_service", None),

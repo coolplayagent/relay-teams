@@ -35,6 +35,17 @@ from relay_teams.sessions.runs.recoverable_pause import (
 
 LOGGER = get_logger(__name__)
 
+_ENTERPRISE_PROXY_BLOCK_MARKERS = (
+    "<title>his proxy",
+    "his proxy notification",
+    "netentsec",
+    "swg,proxy",
+    "proxy notification",
+    "proxycontrolwarn",
+    "httpwarning_2907",
+    "blocked-by-allowlist",
+)
+
 
 class FailureMessageRepository(Protocol):
     def prune_conversation_history_to_safe_boundary(
@@ -403,6 +414,13 @@ class FailureHandlingService:
                 f"{error.message} Proxy authentication failed (HTTP 407). "
                 "Check HTTP_PROXY/HTTPS_PROXY credentials or set NO_PROXY for the model endpoint."
             )
+        if self.is_enterprise_proxy_block_failure(chain):
+            return (
+                "The model request was blocked by an enterprise proxy. "
+                "Check base_url, HTTP_PROXY/HTTPS_PROXY routing, proxy credentials, "
+                "or set NO_PROXY for the model endpoint.\n\n"
+                f"{self.model_api_proxy_block_detail(error)}"
+            )
         if self.is_connect_timeout(chain):
             return (
                 f"{error.message} Connection to the model endpoint timed out. "
@@ -572,6 +590,25 @@ class FailureHandlingService:
         return False
 
     @staticmethod
+    def is_enterprise_proxy_block_failure(chain: Sequence[BaseException]) -> bool:
+        for error in chain:
+            body = getattr(error, "body", None)
+            scan_values = [str(error)]
+            if isinstance(body, str):
+                scan_values.append(body)
+            elif isinstance(body, bytes):
+                scan_values.append(body.decode("utf-8", errors="ignore"))
+            elif body is not None:
+                scan_values.append(str(body))
+            if any(
+                marker in scan_value.casefold()
+                for scan_value in scan_values
+                for marker in _ENTERPRISE_PROXY_BLOCK_MARKERS
+            ):
+                return True
+        return False
+
+    @staticmethod
     def is_connect_timeout(chain: Sequence[BaseException]) -> bool:
         for error in chain:
             if error.__class__.__name__ == "ConnectTimeout":
@@ -591,6 +628,31 @@ class FailureHandlingService:
                 continue
             return message
         return None
+
+    def model_api_proxy_block_detail(self, error: ModelAPIError) -> str:
+        detail_lines = [
+            f"error_type: {error.__class__.__name__}",
+            f"message: {getattr(error, 'message', str(error))}",
+        ]
+        status_code = getattr(error, "status_code", None)
+        if status_code is not None:
+            detail_lines.append(f"status_code: {status_code}")
+        model_name = getattr(error, "model_name", None)
+        if model_name is not None:
+            detail_lines.append(f"model_name: {model_name}")
+        body = getattr(error, "body", None)
+        if body is not None:
+            detail_lines.append("body:")
+            detail_lines.append(self.raw_error_body_text(body))
+        return "\n".join(detail_lines)
+
+    @staticmethod
+    def raw_error_body_text(body: object) -> str:
+        if isinstance(body, str):
+            return body
+        if isinstance(body, bytes):
+            return body.decode("utf-8", errors="replace")
+        return dumps(body, ensure_ascii=False, default=str)
 
     def exception_diagnostic_item(
         self,

@@ -243,6 +243,7 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             tool_registry=self._tool_registry,
             role_registry=self._role_registry,
             mcp_registry=self._mcp_registry,
+            mcp_discovery_service=getattr(self, "_mcp_discovery_service", None),
             skill_registry=self._skill_registry,
         )
         return prepared_prompt, history, prepared_system_prompt, cast(object, agent)

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import relay_teams.agents.execution.system_prompts as system_prompts
 from relay_teams.interfaces.server.deps import (
+    get_mcp_discovery_service,
     get_mcp_registry,
     get_role_registry,
     get_skill_registry,
@@ -19,6 +20,7 @@ from relay_teams.interfaces.server.deps import (
     get_workspace_service,
 )
 from relay_teams.interfaces.server.routers import prompts
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
@@ -270,6 +272,18 @@ class _FakeMcpRegistry(McpRegistry):
         )
 
 
+def _build_mcp_discovery_service() -> McpDiscoveryService:
+    service = McpDiscoveryService(_FakeMcpRegistry())
+    service.mark_ready(
+        "docs",
+        (
+            McpToolInfo(name="docs_read_file", description="Read a file"),
+            McpToolInfo(name="docs_search_docs", description="Search docs"),
+        ),
+    )
+    return service
+
+
 def _create_client(
     *,
     skill_runtime_service: _FakeSkillRuntimeService | None = None,
@@ -284,6 +298,7 @@ def _create_client(
     app.dependency_overrides[get_role_registry] = _build_role_registry
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
+    app.dependency_overrides[get_mcp_discovery_service] = _build_mcp_discovery_service
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
     app.dependency_overrides[get_skill_runtime_service] = lambda: (
         resolved_skill_runtime_service
@@ -409,6 +424,7 @@ def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provide
     app.dependency_overrides[get_role_registry] = _build_role_registry
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
+    app.dependency_overrides[get_mcp_discovery_service] = _build_mcp_discovery_service
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
     app.dependency_overrides[get_skill_runtime_service] = _FakeSkillRuntimeService
     app.dependency_overrides[get_workspace_service] = lambda: workspace_service
@@ -457,6 +473,7 @@ def test_prompts_preview_includes_project_instruction_files(tmp_path: Path) -> N
     app.dependency_overrides[get_role_registry] = _build_role_registry
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
+    app.dependency_overrides[get_mcp_discovery_service] = _build_mcp_discovery_service
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
     app.dependency_overrides[get_skill_runtime_service] = _FakeSkillRuntimeService
     app.dependency_overrides[get_workspace_service] = lambda: workspace_service

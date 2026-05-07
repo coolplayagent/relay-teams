@@ -18,6 +18,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
 )
 from relay_teams.media import MediaAssetService
 from relay_teams.monitors import MonitorService
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.metrics import MetricRecorder
 from relay_teams.notifications import NotificationService
@@ -128,6 +129,7 @@ def create_provider_factory(
     reminder_service: SystemReminderService | None = None,
     auto_harness_service: object | None = None,
     audit_service: AuditService | None = None,
+    mcp_discovery_service: McpDiscoveryService | None = None,
 ) -> Callable[[RoleDefinition, str | None], LLMProvider]:
     fallback_cooldown_registries: dict[tuple[str, ...], ProfileCooldownRegistry] = {}
     fallback_cooldown_registry_lock = Lock()
@@ -227,6 +229,7 @@ def create_provider_factory(
                 subagent_reflection_service=subagent_reflection_service,
                 tool_registry=tool_registry,
                 mcp_registry=mcp_registry,
+                mcp_discovery_service=mcp_discovery_service,
                 skill_registry=skill_registry,
                 allowed_tools=tool_registry.resolve_known(
                     runtime_tool_names,

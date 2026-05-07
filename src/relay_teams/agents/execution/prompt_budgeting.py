@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import Sequence
 
 from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
@@ -14,13 +13,11 @@ from relay_teams.agents.execution.conversation_compaction import (
     build_conversation_compaction_budget,
 )
 from relay_teams.computer import describe_builtin_tool
-from relay_teams.logger import get_logger, log_event
-from relay_teams.mcp.mcp_models import McpToolSchema
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
+from relay_teams.mcp.mcp_models import McpDiscoveryStatus, McpToolInfo, McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
-
-LOGGER = get_logger(__name__)
 
 ESTIMATED_TOKEN_BYTES = 4
 ESTIMATED_TOKEN_OVERHEAD = 8
@@ -29,7 +26,8 @@ MIN_AVAILABLE_OUTPUT_TOKENS = 1
 BUILTIN_TOOL_CONTEXT_CHARS = 200
 EXTERNAL_TOOL_CONTEXT_CHARS = 600
 SKILL_CONTEXT_CHARS = 800
-MCP_SERVER_CONTEXT_FALLBACK_CHARS = 1_200
+MCP_SERVER_CONTEXT_FALLBACK_CHARS = 8_000
+MCP_DISCOVERED_TOOL_SCHEMA_RESERVE_CHARS = 1_200
 
 
 class PromptBudgetingService:
@@ -39,10 +37,12 @@ class PromptBudgetingService:
         config: ModelEndpointConfig,
         mcp_registry: McpRegistry,
         mcp_tool_context_token_cache: dict[str, int],
+        mcp_discovery_service: McpDiscoveryService | None = None,
     ) -> None:
         self._config = config
         self._mcp_registry = mcp_registry
         self._mcp_tool_context_token_cache = mcp_tool_context_token_cache
+        self._mcp_discovery_service = mcp_discovery_service
 
     async def estimate_compaction_budget(
         self,
@@ -181,35 +181,61 @@ class PromptBudgetingService:
             if cached_tokens is not None:
                 total_tokens += cached_tokens
                 continue
-            try:
-                tool_schemas = await self._mcp_registry.list_tool_schemas(server_name)
-            except Exception as exc:
-                fallback_tokens = self.estimated_mcp_context_tokens_fallback(
-                    allowed_mcp_servers=(server_name,),
-                )
-                total_tokens += fallback_tokens
-                log_event(
-                    LOGGER,
-                    logging.WARNING,
-                    event="llm.mcp_context_budget.estimate_failed",
-                    message=(
-                        "Failed to inspect MCP tool schemas for token budgeting; "
-                        "falling back to heuristic reserve"
-                    ),
-                    payload={
-                        "server_name": server_name,
-                        "fallback_tokens": fallback_tokens,
-                    },
-                    exc_info=exc,
-                )
-                continue
-            estimated_tokens = self.estimate_mcp_tool_schema_tokens(
-                server_name=server_name,
-                tool_schemas=tool_schemas,
+            discovered_tokens = self._estimated_discovered_mcp_context_tokens(
+                server_name=server_name
             )
-            self._mcp_tool_context_token_cache[server_name] = estimated_tokens
-            total_tokens += estimated_tokens
+            if discovered_tokens is not None:
+                self._mcp_tool_context_token_cache[server_name] = discovered_tokens
+                total_tokens += discovered_tokens
+                continue
+            total_tokens += self.estimated_mcp_context_tokens_fallback(
+                allowed_mcp_servers=(server_name,),
+            )
         return total_tokens
+
+    def _estimated_discovered_mcp_context_tokens(
+        self,
+        *,
+        server_name: str,
+    ) -> int | None:
+        if self._mcp_discovery_service is None:
+            return None
+        summary = self._mcp_discovery_service.get_tools_summary(server_name)
+        if summary.status != McpDiscoveryStatus.READY:
+            return None
+        return self.estimate_mcp_tool_info_tokens(
+            server_name=server_name,
+            tools=summary.tools,
+        )
+
+    @staticmethod
+    def estimate_mcp_tool_info_tokens(
+        *,
+        server_name: str,
+        tools: tuple[McpToolInfo, ...],
+    ) -> int:
+        if not tools:
+            return 0
+        serialized_payload = json.dumps(
+            [
+                {
+                    "server": server_name,
+                    "tool": tool.model_dump(mode="json"),
+                    "input_schema_reserve_chars": (
+                        MCP_DISCOVERED_TOOL_SCHEMA_RESERVE_CHARS
+                    ),
+                }
+                for tool in tools
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+        reserved_chars = len(tools) * MCP_DISCOVERED_TOOL_SCHEMA_RESERVE_CHARS
+        return max(
+            1,
+            ((len(serialized_payload) + reserved_chars) // ESTIMATED_TOKEN_BYTES)
+            + ESTIMATED_TOKEN_OVERHEAD,
+        )
 
     def estimate_mcp_tool_schema_tokens(
         self,

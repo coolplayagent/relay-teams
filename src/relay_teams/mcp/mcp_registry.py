@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 import logging
-import os
 import re
 from typing import Protocol, cast
 
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
+import httpx
+from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.message import SessionMessage
 from pydantic import JsonValue
 from pydantic_ai.mcp import (
     MCPServer,
@@ -15,12 +20,16 @@ from pydantic_ai.mcp import (
     MCPServerStreamableHTTP,
 )
 
+from relay_teams.env.proxy_env import extract_proxy_env_vars, load_proxy_env_config
+from relay_teams.env.runtime_env import load_merged_env_vars
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_models import McpServerSpec, McpToolInfo, McpToolSchema
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
 _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS = 15.0
+_DEFAULT_STDIO_MCP_DISCOVERY_TIMEOUT_SECONDS = 60.0
 _CAPABILITY_WILDCARD = "*"
 _ENV_REFERENCE_PATTERN = re.compile(
     r"\{\{(?P<template>[A-Za-z_][A-Za-z0-9_]*)}}"
@@ -36,6 +45,105 @@ class _ListedMcpTool(Protocol):
     inputSchema: object
 
 
+class ProxyAwareMCPServerSSE(MCPServerSSE):
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None,
+        proxy_env: Mapping[str, str],
+        server_id: str,
+        tool_prefix: str,
+        timeout: float,
+        read_timeout: float | None,
+    ) -> None:
+        super().__init__(
+            url=url,
+            headers=None,
+            id=server_id,
+            tool_prefix=tool_prefix,
+            timeout=timeout,
+            read_timeout=read_timeout,
+        )
+        self._relay_headers = headers
+        self._relay_proxy_env = dict(proxy_env)
+
+    @asynccontextmanager
+    async def client_streams(
+        self,
+    ) -> AsyncIterator[
+        tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+        ]
+    ]:
+        def httpx_client_factory(
+            headers: dict[str, str] | None = None,
+            timeout: httpx.Timeout | None = None,
+            auth: httpx.Auth | None = None,
+        ) -> httpx.AsyncClient:
+            _ = headers, timeout, auth
+            return create_async_http_client(
+                merged_env=self._relay_proxy_env,
+                headers=self._relay_headers,
+                timeout=timeout,
+                timeout_seconds=self.timeout,
+            )
+
+        async with sse_client(
+            url=self.url,
+            timeout=self.timeout,
+            sse_read_timeout=self.read_timeout,
+            httpx_client_factory=httpx_client_factory,
+        ) as (read_stream, write_stream, *_):
+            yield read_stream, write_stream
+
+
+class ProxyAwareMCPServerStreamableHTTP(MCPServerStreamableHTTP):
+    def __init__(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None,
+        proxy_env: Mapping[str, str],
+        server_id: str,
+        tool_prefix: str,
+        timeout: float,
+        read_timeout: float | None,
+    ) -> None:
+        super().__init__(
+            url=url,
+            headers=None,
+            id=server_id,
+            tool_prefix=tool_prefix,
+            timeout=timeout,
+            read_timeout=read_timeout,
+        )
+        self._relay_headers = headers
+        self._relay_proxy_env = dict(proxy_env)
+
+    @asynccontextmanager
+    async def client_streams(
+        self,
+    ) -> AsyncIterator[
+        tuple[
+            MemoryObjectReceiveStream[SessionMessage | Exception],
+            MemoryObjectSendStream[SessionMessage],
+        ]
+    ]:
+        async with create_async_http_client(
+            merged_env=self._relay_proxy_env,
+            headers=self._relay_headers,
+            timeout=httpx.Timeout(timeout=self.timeout, read=self.read_timeout),
+            timeout_seconds=self.timeout,
+        ) as http_client:
+            async with streamable_http_client(
+                self.url,
+                http_client=http_client,
+            ) as (read_stream, write_stream, *_):
+                yield read_stream, write_stream
+
+
 def get_mcp_tool_prefix(server_name: str) -> str:
     return server_name.strip()
 
@@ -48,10 +156,27 @@ def get_effective_mcp_tool_name(server_name: str, tool_name: str) -> str:
 
 
 class McpRegistry:
-    def __init__(self, specs: tuple[McpServerSpec, ...] = ()) -> None:
+    def __init__(
+        self,
+        specs: tuple[McpServerSpec, ...] = (),
+        *,
+        proxy_env: Mapping[str, str] | None = None,
+        discovery_env_fingerprint: str = "",
+    ) -> None:
         self._specs = {spec.name: spec for spec in specs}
+        self._proxy_env = dict(proxy_env or {})
+        self._discovery_env_fingerprint = discovery_env_fingerprint
         self._toolsets: dict[str, MCPServer] = {}
         self._runtime_failed_names: set[str] = set()
+
+    def discovery_fingerprint_context(self) -> dict[str, JsonValue]:
+        proxy_env_payload: dict[str, JsonValue] = {
+            key: value for key, value in self._proxy_env.items()
+        }
+        return {
+            "env": self._discovery_env_fingerprint,
+            "proxy_env": proxy_env_payload,
+        }
 
     def get_toolsets(self, names: tuple[str, ...]) -> tuple[MCPServer, ...]:
         with trace_span(
@@ -157,13 +282,51 @@ class McpRegistry:
         return spec
 
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
+        return await self._list_tools(
+            name,
+            operation="list_tools",
+            update_runtime_state=True,
+            use_cached_toolset=True,
+            failure_level=logging.ERROR,
+            stdio_default_timeout_seconds=_DEFAULT_STDIO_MCP_TIMEOUT_SECONDS,
+        )
+
+    async def list_tools_for_discovery(self, name: str) -> tuple[McpToolInfo, ...]:
+        return await self._list_tools(
+            name,
+            operation="list_tools_for_discovery",
+            update_runtime_state=False,
+            use_cached_toolset=False,
+            failure_level=logging.DEBUG,
+            stdio_default_timeout_seconds=_DEFAULT_STDIO_MCP_DISCOVERY_TIMEOUT_SECONDS,
+        )
+
+    async def _list_tools(
+        self,
+        name: str,
+        *,
+        operation: str,
+        update_runtime_state: bool,
+        use_cached_toolset: bool,
+        failure_level: int,
+        stdio_default_timeout_seconds: float,
+    ) -> tuple[McpToolInfo, ...]:
         with trace_span(
             LOGGER,
             component="mcp.registry",
-            operation="list_tools",
-            attributes={"server_name": name},
+            operation=operation,
+            attributes={
+                "server_name": name,
+                "update_runtime_state": update_runtime_state,
+            },
+            failure_level=failure_level,
         ):
-            mcp_tools = await self._list_tool_objects(name)
+            mcp_tools = await self._list_tool_objects(
+                name,
+                update_runtime_state=update_runtime_state,
+                use_cached_toolset=use_cached_toolset,
+                stdio_default_timeout_seconds=stdio_default_timeout_seconds,
+            )
             return tuple(
                 McpToolInfo(
                     name=get_effective_mcp_tool_name(name, str(tool.name)),
@@ -197,15 +360,31 @@ class McpRegistry:
                 for tool in mcp_tools
             )
 
-    async def _list_tool_objects(self, name: str) -> tuple[_ListedMcpTool, ...]:
+    async def _list_tool_objects(
+        self,
+        name: str,
+        *,
+        update_runtime_state: bool = True,
+        use_cached_toolset: bool = True,
+        stdio_default_timeout_seconds: float = _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS,
+    ) -> tuple[_ListedMcpTool, ...]:
         try:
-            toolset = self._get_or_create_toolset(name)
+            toolset = (
+                self._get_or_create_toolset(name)
+                if use_cached_toolset
+                else self._build_transient_toolset(
+                    name,
+                    stdio_default_timeout_seconds=stdio_default_timeout_seconds,
+                )
+            )
             async with toolset:
                 mcp_tools = await toolset.list_tools()
         except Exception:
-            self.mark_server_runtime_failed(name)
+            if update_runtime_state:
+                self.mark_server_runtime_failed(name)
             raise
-        self.mark_server_runtime_available(name)
+        if update_runtime_state:
+            self.mark_server_runtime_available(name)
         return cast("tuple[_ListedMcpTool, ...]", tuple(mcp_tools))
 
     def _get_or_create_toolset(self, name: str) -> MCPServer:
@@ -222,12 +401,32 @@ class McpRegistry:
             spec = self.get_spec(name)
             if not spec.enabled:
                 raise ValueError(f"MCP server is disabled: {name}")
-            toolset = build_mcp_server(spec)
+            toolset = build_mcp_server(spec, proxy_env=self._proxy_env)
             self._toolsets[name] = toolset
             return toolset
 
+    def _build_transient_toolset(
+        self,
+        name: str,
+        *,
+        stdio_default_timeout_seconds: float,
+    ) -> MCPServer:
+        spec = self.get_spec(name)
+        if not spec.enabled:
+            raise ValueError(f"MCP server is disabled: {name}")
+        return build_mcp_server(
+            spec,
+            proxy_env=self._proxy_env,
+            stdio_default_timeout_seconds=stdio_default_timeout_seconds,
+        )
 
-def build_mcp_server(spec: McpServerSpec) -> MCPServer:
+
+def build_mcp_server(
+    spec: McpServerSpec,
+    *,
+    proxy_env: Mapping[str, str] | None = None,
+    stdio_default_timeout_seconds: float = _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS,
+) -> MCPServer:
     server_config = spec.server_config
     transport = _detect_transport(server_config)
     if transport == "stdio":
@@ -235,12 +434,12 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
         return MCPServerStdio(
             command=command,
             args=_string_list(server_config.get("args")),
-            env=_build_stdio_env(server_config),
+            env=_build_stdio_env(server_config, proxy_env=proxy_env),
             cwd=_optional_string(server_config.get("cwd")),
             tool_prefix=get_mcp_tool_prefix(spec.name),
             timeout=(
                 _optional_positive_float(server_config.get("timeout"))
-                or _DEFAULT_STDIO_MCP_TIMEOUT_SECONDS
+                or stdio_default_timeout_seconds
             ),
             read_timeout=(
                 _optional_positive_float(server_config.get("read_timeout")) or 300.0
@@ -249,19 +448,29 @@ def build_mcp_server(spec: McpServerSpec) -> MCPServer:
         )
     if transport == "sse":
         url = _required_string(server_config, "url")
-        return MCPServerSSE(
+        return ProxyAwareMCPServerSSE(
             url=url,
             headers=_string_dict(server_config.get("headers")),
-            id=spec.name,
+            proxy_env=_build_remote_env(server_config, proxy_env=proxy_env),
+            server_id=spec.name,
             tool_prefix=get_mcp_tool_prefix(spec.name),
+            timeout=_optional_positive_float(server_config.get("timeout")) or 5.0,
+            read_timeout=(
+                _optional_positive_float(server_config.get("read_timeout")) or 300.0
+            ),
         )
     if transport in ("http", "streamable-http"):
         url = _required_string(server_config, "url")
-        return MCPServerStreamableHTTP(
+        return ProxyAwareMCPServerStreamableHTTP(
             url=url,
             headers=_string_dict(server_config.get("headers")),
-            id=spec.name,
+            proxy_env=_build_remote_env(server_config, proxy_env=proxy_env),
+            server_id=spec.name,
             tool_prefix=get_mcp_tool_prefix(spec.name),
+            timeout=_optional_positive_float(server_config.get("timeout")) or 5.0,
+            read_timeout=(
+                _optional_positive_float(server_config.get("read_timeout")) or 300.0
+            ),
         )
     raise ValueError(f"Unsupported MCP transport: {transport}")
 
@@ -318,15 +527,57 @@ def _string_dict(value: JsonValue) -> dict[str, str] | None:
     return {str(key): str(item) for key, item in value.items() if isinstance(key, str)}
 
 
-def _build_stdio_env(server_config: Mapping[str, JsonValue]) -> dict[str, str]:
-    merged_env = dict(os.environ)
+def _build_stdio_env(
+    server_config: Mapping[str, JsonValue],
+    *,
+    proxy_env: Mapping[str, str] | None,
+) -> dict[str, str]:
     explicit_env = _string_dict(server_config.get("env")) or {}
-    explicit_env = {
-        key: _expand_env_references(value, merged_env)
+    reference_env = load_merged_env_vars()
+    inherited_env = dict(reference_env)
+    for key in extract_proxy_env_vars(reference_env):
+        inherited_env.pop(key, None)
+    app_proxy_env = _resolve_mcp_runtime_proxy_env(proxy_env)
+    expansion_reference_env = dict(reference_env)
+    expansion_reference_env.update(app_proxy_env)
+    expanded_explicit_env = {
+        key: _expand_env_references(value, expansion_reference_env)
         for key, value in explicit_env.items()
     }
-    merged_env.update(explicit_env)
-    return merged_env
+    explicit_proxy_env = extract_proxy_env_vars(expanded_explicit_env)
+    inherited_env.update(app_proxy_env)
+    inherited_env.update(explicit_proxy_env)
+    inherited_env.update(expanded_explicit_env)
+    return inherited_env
+
+
+def _build_remote_env(
+    server_config: Mapping[str, JsonValue],
+    *,
+    proxy_env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    reference_env = load_merged_env_vars()
+    base_env = _resolve_mcp_runtime_proxy_env(proxy_env)
+    explicit_env = _string_dict(server_config.get("env")) or {}
+    expansion_reference_env = dict(reference_env)
+    expansion_reference_env.update(base_env)
+    expanded_explicit_env = {
+        key: _expand_env_references(value, expansion_reference_env)
+        for key, value in explicit_env.items()
+    }
+    base_env.update(extract_proxy_env_vars(expanded_explicit_env))
+    base_env.update(expanded_explicit_env)
+    return base_env
+
+
+def _resolve_mcp_runtime_proxy_env(
+    proxy_env: Mapping[str, str] | None,
+) -> dict[str, str]:
+    if proxy_env is not None:
+        return extract_proxy_env_vars(proxy_env)
+    return extract_proxy_env_vars(
+        load_proxy_env_config(include_process_env=False).normalized_env()
+    )
 
 
 def _expand_env_references(value: str, env_values: Mapping[str, str]) -> str:

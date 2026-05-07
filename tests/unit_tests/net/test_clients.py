@@ -71,6 +71,17 @@ async def test_create_async_http_client_disables_ssl_verification_when_configure
     assert verify_mode == _SSL_VERIFY_DISABLED
 
 
+@pytest.mark.asyncio
+async def test_create_async_http_client_merges_custom_headers() -> None:
+    async with create_async_http_client(
+        merged_env={}, headers={"X-MCP-Server": "remote"}
+    ) as client:
+        headers = client.headers
+
+    assert headers["User-Agent"] == clients_module.get_user_agent()
+    assert headers["X-MCP-Server"] == "remote"
+
+
 def test_create_runtime_async_http_client_uses_hydrated_proxy_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

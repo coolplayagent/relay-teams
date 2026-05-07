@@ -3,16 +3,18 @@ from __future__ import annotations
 
 from pydantic import JsonValue
 
+import hashlib
 from json import dumps, loads
 from pathlib import Path
 from typing import cast
 
 from relay_teams.builtin import ensure_app_config_bootstrap
 from relay_teams.env import (
-    apply_proxy_env_to_process_env,
     extract_proxy_env_vars,
     load_merged_env_vars,
+    load_proxy_env_config,
     sync_app_env_to_process_env,
+    sync_proxy_env_to_process_env,
 )
 from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
@@ -45,6 +47,9 @@ class McpConfigManager:
         self._app_config_dir: Path = app_config_dir.expanduser().resolve()
         self._user_home_dir: Path | None = user_home_dir
 
+    def config_file_path(self) -> Path:
+        return self._app_config_dir / _MCP_FILE_NAME
+
     def load_registry(
         self,
         *,
@@ -62,7 +67,11 @@ class McpConfigManager:
             merged_env = load_merged_env_vars(
                 extra_env_files=(self._app_config_dir / _ENV_FILE_NAME,),
             )
-            proxy_env = apply_proxy_env_to_process_env(merged_env)
+            proxy_config = load_proxy_env_config(
+                extra_env_files=(self._app_config_dir / _ENV_FILE_NAME,),
+            )
+            proxy_env = extract_proxy_env_vars(proxy_config.normalized_env())
+            sync_proxy_env_to_process_env(proxy_config)
             for spec in _load_specs_from_file(
                 file_path=self._app_config_dir / _MCP_FILE_NAME,
                 source=McpConfigScope.APP,
@@ -74,7 +83,14 @@ class McpConfigManager:
                     spec=spec,
                     proxy_env=proxy_env,
                 )
-            return McpRegistry(tuple(merged_specs.values()))
+            return McpRegistry(
+                tuple(merged_specs.values()),
+                proxy_env=proxy_env,
+                discovery_env_fingerprint=_fingerprint_env_for_discovery(
+                    merged_env=merged_env,
+                    proxy_env=proxy_env,
+                ),
+            )
 
     def add_server(
         self,
@@ -363,11 +379,31 @@ def json_dumps(payload: dict[str, JsonValue]) -> str:
     return dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
 
+def _fingerprint_env_for_discovery(
+    *,
+    merged_env: dict[str, str],
+    proxy_env: dict[str, str],
+) -> str:
+    payload = {
+        "merged_env": merged_env,
+        "proxy_env": proxy_env,
+    }
+    serialized = dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def _apply_proxy_env_to_mcp_server_config(
     server_config: dict[str, JsonValue],
     proxy_env: dict[str, str],
 ) -> dict[str, JsonValue]:
     if not proxy_env:
+        return server_config
+    if _is_stdio_mcp_server_config(server_config):
         return server_config
 
     merged_config: dict[str, JsonValue] = dict(server_config)
@@ -384,6 +420,21 @@ def _apply_proxy_env_to_mcp_server_config(
         merged_env[key] = value
     merged_config["env"] = merged_env
     return merged_config
+
+
+def _is_stdio_mcp_server_config(server_config: dict[str, JsonValue]) -> bool:
+    raw_transport = server_config.get("transport")
+    if isinstance(raw_transport, str) and raw_transport.strip():
+        return raw_transport.strip() == "stdio"
+
+    raw_type = server_config.get("type")
+    if isinstance(raw_type, str) and raw_type.strip():
+        return raw_type.strip() == "local"
+
+    return isinstance(server_config.get("command"), str) and not isinstance(
+        server_config.get("url"),
+        str,
+    )
 
 
 def _apply_proxy_env_to_mcp_spec(
