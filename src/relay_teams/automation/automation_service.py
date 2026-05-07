@@ -31,6 +31,7 @@ from relay_teams.automation.automation_models import (
     AutomationExecutionHandle,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
+    AutomationIntervalUnit,
     AutomationProjectCreateInput,
     AutomationProjectRecord,
     AutomationProjectStatus,
@@ -137,6 +138,8 @@ class AutomationService:
             prompt=payload.prompt,
             schedule_mode=payload.schedule_mode,
             cron_expression=_normalize_optional_text(payload.cron_expression),
+            interval_every=payload.interval_every,
+            interval_unit=payload.interval_unit,
             run_at=payload.run_at,
             timezone=timezone_name,
             run_config=run_config,
@@ -147,6 +150,8 @@ class AutomationService:
                 _next_run_at(
                     schedule_mode=payload.schedule_mode,
                     cron_expression=payload.cron_expression,
+                    interval_every=payload.interval_every,
+                    interval_unit=payload.interval_unit,
                     run_at=payload.run_at,
                     timezone_name=timezone_name,
                     after=now,
@@ -190,6 +195,8 @@ class AutomationService:
             prompt=payload.prompt,
             schedule_mode=payload.schedule_mode,
             cron_expression=_normalize_optional_text(payload.cron_expression),
+            interval_every=payload.interval_every,
+            interval_unit=payload.interval_unit,
             run_at=payload.run_at,
             timezone=timezone_name,
             run_config=run_config,
@@ -200,6 +207,8 @@ class AutomationService:
                 _next_run_at(
                     schedule_mode=payload.schedule_mode,
                     cron_expression=payload.cron_expression,
+                    interval_every=payload.interval_every,
+                    interval_unit=payload.interval_unit,
                     run_at=payload.run_at,
                     timezone_name=timezone_name,
                     after=now,
@@ -265,11 +274,24 @@ class AutomationService:
             candidate=payload.cron_expression,
             fallback=existing.cron_expression,
         )
+        interval_every = (
+            payload.interval_every
+            if payload.interval_every is not None
+            else existing.interval_every
+        )
+        interval_unit = payload.interval_unit or existing.interval_unit
         run_at = payload.run_at if payload.run_at is not None else existing.run_at
         if payload.schedule_mode == AutomationScheduleMode.CRON:
             run_at = None
+            interval_every = None
+            interval_unit = None
+        if payload.schedule_mode == AutomationScheduleMode.INTERVAL:
+            cron_expression = None
+            run_at = None
         if payload.schedule_mode == AutomationScheduleMode.ONE_SHOT:
             cron_expression = None
+            interval_every = None
+            interval_unit = None
         run_config = (
             self._validate_run_config_for_write(payload.run_config)
             if payload.run_config is not None
@@ -294,6 +316,8 @@ class AutomationService:
             prompt=payload.prompt or existing.prompt,
             schedule_mode=schedule_mode,
             cron_expression=cron_expression,
+            interval_every=interval_every,
+            interval_unit=interval_unit,
             run_at=run_at,
             timezone=timezone_name,
             run_config=run_config,
@@ -320,6 +344,8 @@ class AutomationService:
                 "prompt": probe.prompt,
                 "schedule_mode": probe.schedule_mode,
                 "cron_expression": _normalize_optional_text(probe.cron_expression),
+                "interval_every": probe.interval_every,
+                "interval_unit": probe.interval_unit,
                 "run_at": probe.run_at,
                 "timezone": timezone_name,
                 "run_config": probe.run_config,
@@ -329,6 +355,8 @@ class AutomationService:
                     _next_run_at(
                         schedule_mode=probe.schedule_mode,
                         cron_expression=probe.cron_expression,
+                        interval_every=probe.interval_every,
+                        interval_unit=probe.interval_unit,
                         run_at=probe.run_at,
                         timezone_name=timezone_name,
                         after=now,
@@ -353,11 +381,24 @@ class AutomationService:
             candidate=payload.cron_expression,
             fallback=existing.cron_expression,
         )
+        interval_every = (
+            payload.interval_every
+            if payload.interval_every is not None
+            else existing.interval_every
+        )
+        interval_unit = payload.interval_unit or existing.interval_unit
         run_at = payload.run_at if payload.run_at is not None else existing.run_at
         if payload.schedule_mode == AutomationScheduleMode.CRON:
             run_at = None
+            interval_every = None
+            interval_unit = None
+        if payload.schedule_mode == AutomationScheduleMode.INTERVAL:
+            cron_expression = None
+            run_at = None
         if payload.schedule_mode == AutomationScheduleMode.ONE_SHOT:
             cron_expression = None
+            interval_every = None
+            interval_unit = None
         run_config = (
             self._validate_run_config_for_write(payload.run_config)
             if payload.run_config is not None
@@ -382,6 +423,8 @@ class AutomationService:
             prompt=payload.prompt or existing.prompt,
             schedule_mode=schedule_mode,
             cron_expression=cron_expression,
+            interval_every=interval_every,
+            interval_unit=interval_unit,
             run_at=run_at,
             timezone=timezone_name,
             run_config=run_config,
@@ -408,6 +451,8 @@ class AutomationService:
                 "prompt": probe.prompt,
                 "schedule_mode": probe.schedule_mode,
                 "cron_expression": _normalize_optional_text(probe.cron_expression),
+                "interval_every": probe.interval_every,
+                "interval_unit": probe.interval_unit,
                 "run_at": probe.run_at,
                 "timezone": timezone_name,
                 "run_config": probe.run_config,
@@ -417,6 +462,8 @@ class AutomationService:
                     _next_run_at(
                         schedule_mode=probe.schedule_mode,
                         cron_expression=probe.cron_expression,
+                        interval_every=probe.interval_every,
+                        interval_unit=probe.interval_unit,
                         run_at=probe.run_at,
                         timezone_name=timezone_name,
                         after=now,
@@ -445,6 +492,8 @@ class AutomationService:
                     _next_run_at(
                         schedule_mode=existing.schedule_mode,
                         cron_expression=existing.cron_expression,
+                        interval_every=existing.interval_every,
+                        interval_unit=existing.interval_unit,
                         run_at=existing.run_at,
                         timezone_name=existing.timezone,
                         after=now,
@@ -473,6 +522,8 @@ class AutomationService:
                     _next_run_at(
                         schedule_mode=existing.schedule_mode,
                         cron_expression=existing.cron_expression,
+                        interval_every=existing.interval_every,
+                        interval_unit=existing.interval_unit,
                         run_at=existing.run_at,
                         timezone_name=existing.timezone,
                         after=now,
@@ -675,8 +726,8 @@ class AutomationService:
                 reason=reason,
             )
             if bound_session_handle is not None:
-                next_run_at = _next_run_at_after_fire(
-                    project=project, fired_at=effective_now
+                next_run_at = _next_run_at_after_materialize(
+                    project=project, fired_at=effective_now, reason=reason
                 )
                 if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                     next_status = AutomationProjectStatus.DISABLED
@@ -740,8 +791,8 @@ class AutomationService:
                     run_id=run_id,
                     reason=reason,
                 )
-            next_run_at = _next_run_at_after_fire(
-                project=project, fired_at=effective_now
+            next_run_at = _next_run_at_after_materialize(
+                project=project, fired_at=effective_now, reason=reason
             )
             if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                 next_status = AutomationProjectStatus.DISABLED
@@ -764,8 +815,8 @@ class AutomationService:
                 reused_bound_session=False,
             )
         except Exception as exc:
-            next_run_at = _next_run_at_after_fire(
-                project=project, fired_at=effective_now
+            next_run_at = _next_run_at_after_materialize(
+                project=project, fired_at=effective_now, reason=reason
             )
             if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                 next_status = AutomationProjectStatus.DISABLED
@@ -801,8 +852,8 @@ class AutomationService:
                 )
             )
             if bound_session_handle is not None:
-                next_run_at = _next_run_at_after_fire(
-                    project=project, fired_at=effective_now
+                next_run_at = _next_run_at_after_materialize(
+                    project=project, fired_at=effective_now, reason=reason
                 )
                 if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                     next_status = AutomationProjectStatus.DISABLED
@@ -867,8 +918,8 @@ class AutomationService:
                     run_id=run_id,
                     reason=reason,
                 )
-            next_run_at = _next_run_at_after_fire(
-                project=project, fired_at=effective_now
+            next_run_at = _next_run_at_after_materialize(
+                project=project, fired_at=effective_now, reason=reason
             )
             if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                 next_status = AutomationProjectStatus.DISABLED
@@ -891,8 +942,8 @@ class AutomationService:
                 reused_bound_session=False,
             )
         except Exception as exc:
-            next_run_at = _next_run_at_after_fire(
-                project=project, fired_at=effective_now
+            next_run_at = _next_run_at_after_materialize(
+                project=project, fired_at=effective_now, reason=reason
             )
             if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
                 next_status = AutomationProjectStatus.DISABLED
@@ -1235,19 +1286,41 @@ def _next_run_at_after_fire(
 ) -> datetime | None:
     if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
         return None
+    after = (
+        fired_at
+        if project.schedule_mode == AutomationScheduleMode.INTERVAL
+        else fired_at + timedelta(minutes=1)
+    )
     return _next_run_at(
         schedule_mode=project.schedule_mode,
         cron_expression=project.cron_expression,
+        interval_every=project.interval_every,
+        interval_unit=project.interval_unit,
         run_at=project.run_at,
         timezone_name=project.timezone,
-        after=fired_at + timedelta(minutes=1),
+        after=after,
     )
+
+
+def _next_run_at_after_materialize(
+    *,
+    project: AutomationProjectRecord,
+    fired_at: datetime,
+    reason: str,
+) -> datetime | None:
+    if project.schedule_mode == AutomationScheduleMode.ONE_SHOT:
+        return None
+    if reason != "schedule":
+        return project.next_run_at
+    return _next_run_at_after_fire(project=project, fired_at=fired_at)
 
 
 def _next_run_at(
     *,
     schedule_mode: AutomationScheduleMode,
     cron_expression: str | None,
+    interval_every: int | None,
+    interval_unit: AutomationIntervalUnit | None,
     run_at: datetime | None,
     timezone_name: str,
     after: datetime,
@@ -1260,6 +1333,15 @@ def _next_run_at(
         if run_at <= after:
             return None
         return run_at.astimezone(UTC)
+    if schedule_mode == AutomationScheduleMode.INTERVAL:
+        if interval_every is None:
+            raise ValueError("interval_every is required for interval schedules")
+        if interval_unit is None:
+            raise ValueError("interval_unit is required for interval schedules")
+        return after.astimezone(UTC) + _interval_delta(
+            interval_every=interval_every,
+            interval_unit=interval_unit,
+        )
     if not cron_expression:
         raise ValueError("cron_expression is required for cron schedules")
     return next_cron_occurrence(
@@ -1267,6 +1349,18 @@ def _next_run_at(
         timezone_name=timezone_name,
         after=after,
     )
+
+
+def _interval_delta(
+    *,
+    interval_every: int,
+    interval_unit: AutomationIntervalUnit,
+) -> timedelta:
+    if interval_unit == AutomationIntervalUnit.MINUTES:
+        return timedelta(minutes=interval_every)
+    if interval_unit == AutomationIntervalUnit.HOURS:
+        return timedelta(hours=interval_every)
+    return timedelta(days=interval_every)
 
 
 def next_cron_occurrence(

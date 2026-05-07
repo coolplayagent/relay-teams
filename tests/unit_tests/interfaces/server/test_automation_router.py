@@ -10,6 +10,7 @@ from relay_teams.automation import (
     AutomationDeliveryEvent,
     AutomationFeishuBinding,
     AutomationFeishuBindingCandidate,
+    AutomationIntervalUnit,
     AutomationProjectCreateInput,
     AutomationProjectNameConflictError,
     AutomationProjectRecord,
@@ -60,6 +61,8 @@ class _FakeAutomationService:
             prompt=req.prompt,
             schedule_mode=req.schedule_mode,
             cron_expression=req.cron_expression,
+            interval_every=req.interval_every,
+            interval_unit=req.interval_unit,
             run_at=req.run_at,
             timezone=req.timezone,
             run_config=req.run_config,
@@ -360,6 +363,33 @@ def test_create_project_route_maps_name_conflict_to_409() -> None:
 
     assert response.status_code == 409
     assert "already exists" in response.json()["detail"]
+
+
+def test_create_project_route_accepts_interval_schedule() -> None:
+    fake_service = _FakeAutomationService()
+    client = _client(fake_service)
+
+    response = client.post(
+        "/api/automation/projects",
+        json={
+            "name": "interval-briefing",
+            "workspace_id": "default",
+            "prompt": "Summarize every interval.",
+            "schedule_mode": "interval",
+            "interval_every": 2,
+            "interval_unit": "hours",
+            "timezone": "UTC",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schedule_mode"] == "interval"
+    assert payload["interval_every"] == 2
+    assert payload["interval_unit"] == "hours"
+    assert (
+        fake_service.created_payloads[0].interval_unit == AutomationIntervalUnit.HOURS
+    )
 
 
 def test_create_project_route_maps_invalid_binding_to_422() -> None:

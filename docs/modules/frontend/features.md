@@ -78,6 +78,7 @@
 
 - automation project 列表。
 - 选中 automation 的详情，包括 workspace、prompt、session mode、role/preset、delivery binding、最近 sessions。
+- automation 编辑器提供固定间隔、每天、工作日、每周、每月、一次性和高级 Cron 调度方式。固定间隔保存为 `interval`，每天/工作日/每周/每月保存为五段式 cron，高级 Cron 直接编辑 `cron_expression`。
 - schedules 与相关分区。
 - run now、enable/disable、edit、delete 等操作。
 - automation editor modal，用于创建或编辑自动化项目。
@@ -279,4 +280,3 @@ WeChat 表现：
 ### Environment
 
 负责环境变量配置。提供新增、保存、取消、删除等能力。
-

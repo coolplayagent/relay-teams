@@ -22,7 +22,14 @@ class AutomationProjectStatus(str, Enum):
 
 class AutomationScheduleMode(str, Enum):
     CRON = "cron"
+    INTERVAL = "interval"
     ONE_SHOT = "one_shot"
+
+
+class AutomationIntervalUnit(str, Enum):
+    MINUTES = "minutes"
+    HOURS = "hours"
+    DAYS = "days"
 
 
 class AutomationDeliveryEvent(str, Enum):
@@ -131,6 +138,8 @@ class AutomationProjectCreateInput(BaseModel):
     prompt: str = Field(min_length=1)
     schedule_mode: AutomationScheduleMode
     cron_expression: str | None = None
+    interval_every: int | None = Field(default=None, ge=1)
+    interval_unit: AutomationIntervalUnit | None = None
     run_at: datetime | None = None
     timezone: str = Field(default="UTC", min_length=1)
     run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
@@ -143,14 +152,33 @@ class AutomationProjectCreateInput(BaseModel):
         if self.schedule_mode == AutomationScheduleMode.CRON:
             if not self.cron_expression or not self.cron_expression.strip():
                 raise ValueError("cron_expression is required for cron schedules")
+            if len(self.cron_expression.split()) != 5:
+                raise ValueError("cron_expression must use five fields")
             if self.run_at is not None:
                 raise ValueError("run_at is not supported for cron schedules")
+            if self.interval_every is not None or self.interval_unit is not None:
+                raise ValueError("interval fields are not supported for cron schedules")
+        if self.schedule_mode == AutomationScheduleMode.INTERVAL:
+            if self.interval_every is None:
+                raise ValueError("interval_every is required for interval schedules")
+            if self.interval_unit is None:
+                raise ValueError("interval_unit is required for interval schedules")
+            if self.cron_expression is not None and self.cron_expression.strip():
+                raise ValueError(
+                    "cron_expression is not supported for interval schedules"
+                )
+            if self.run_at is not None:
+                raise ValueError("run_at is not supported for interval schedules")
         if self.schedule_mode == AutomationScheduleMode.ONE_SHOT:
             if self.run_at is None:
                 raise ValueError("run_at is required for one-shot schedules")
             if self.cron_expression is not None and self.cron_expression.strip():
                 raise ValueError(
                     "cron_expression is not supported for one-shot schedules"
+                )
+            if self.interval_every is not None or self.interval_unit is not None:
+                raise ValueError(
+                    "interval fields are not supported for one-shot schedules"
                 )
         return self
 
@@ -164,6 +192,8 @@ class AutomationProjectUpdateInput(BaseModel):
     prompt: str | None = Field(default=None, min_length=1)
     schedule_mode: AutomationScheduleMode | None = None
     cron_expression: str | None = None
+    interval_every: int | None = Field(default=None, ge=1)
+    interval_unit: AutomationIntervalUnit | None = None
     run_at: datetime | None = None
     timezone: str | None = Field(default=None, min_length=1)
     run_config: AutomationRunConfig | None = None
@@ -179,12 +209,38 @@ class AutomationProjectUpdateInput(BaseModel):
             and self.run_at is not None
         ):
             raise ValueError("run_at is not supported for cron schedules")
+        if self.schedule_mode == AutomationScheduleMode.CRON and (
+            self.interval_every is not None or self.interval_unit is not None
+        ):
+            raise ValueError("interval fields are not supported for cron schedules")
+        if (
+            self.schedule_mode == AutomationScheduleMode.INTERVAL
+            and self.cron_expression is not None
+            and self.cron_expression.strip()
+        ):
+            raise ValueError("cron_expression is not supported for interval schedules")
+        if (
+            self.schedule_mode == AutomationScheduleMode.INTERVAL
+            and self.run_at is not None
+        ):
+            raise ValueError("run_at is not supported for interval schedules")
         if (
             self.schedule_mode == AutomationScheduleMode.ONE_SHOT
             and self.cron_expression is not None
             and self.cron_expression.strip()
         ):
             raise ValueError("cron_expression is not supported for one-shot schedules")
+        if (
+            self.schedule_mode == AutomationScheduleMode.CRON
+            and self.cron_expression is not None
+            and self.cron_expression.strip()
+            and len(self.cron_expression.split()) != 5
+        ):
+            raise ValueError("cron_expression must use five fields")
+        if self.schedule_mode == AutomationScheduleMode.ONE_SHOT and (
+            self.interval_every is not None or self.interval_unit is not None
+        ):
+            raise ValueError("interval fields are not supported for one-shot schedules")
         return self
 
 
@@ -199,6 +255,8 @@ class AutomationProjectRecord(BaseModel):
     prompt: str = Field(min_length=1)
     schedule_mode: AutomationScheduleMode
     cron_expression: str | None = None
+    interval_every: int | None = Field(default=None, ge=1)
+    interval_unit: AutomationIntervalUnit | None = None
     run_at: datetime | None = None
     timezone: str = Field(min_length=1)
     run_config: AutomationRunConfig = Field(default_factory=AutomationRunConfig)
@@ -322,6 +380,7 @@ __all__ = [
     "AutomationExecutionHandle",
     "AutomationFeishuBinding",
     "AutomationFeishuBindingCandidate",
+    "AutomationIntervalUnit",
     "AutomationProjectCreateInput",
     "AutomationProjectRecord",
     "AutomationProjectStatus",

@@ -25,6 +25,7 @@ from relay_teams.automation.automation_event_repository import (
 from relay_teams.automation.automation_models import (
     AutomationExecutionHandle,
     AutomationFeishuBinding,
+    AutomationIntervalUnit,
     AutomationProjectCreateInput,
     AutomationProjectStatus,
     AutomationProjectUpdateInput,
@@ -1264,6 +1265,289 @@ def test_process_due_projects_runs_one_shot_once_and_disables_it(
         "请直接完成以下任务：\n"
         "Run once."
     )
+
+
+def test_interval_project_computes_and_advances_next_run(tmp_path: Path) -> None:
+    service, run_service, _ = _build_service(tmp_path)
+    now = datetime.now(tz=UTC)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="interval-report",
+            workspace_id="default",
+            prompt="Run repeatedly.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=15,
+            interval_unit=AutomationIntervalUnit.MINUTES,
+            timezone="UTC",
+        )
+    )
+
+    assert created.next_run_at is not None
+    assert created.next_run_at > now
+    assert created.next_run_at <= now + timedelta(minutes=16)
+
+    processed = service.process_due_projects(now=created.next_run_at)
+    updated = service.get_project(created.automation_project_id)
+
+    assert processed == (created.automation_project_id,)
+    assert updated.status == AutomationProjectStatus.ENABLED
+    assert updated.next_run_at == created.next_run_at + timedelta(minutes=15)
+    assert run_service.started_run_ids == ["run-1"]
+
+
+def test_manual_interval_run_preserves_schedule_cursor(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="manual-interval-report",
+            workspace_id="default",
+            prompt="Run repeatedly.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=2,
+            interval_unit=AutomationIntervalUnit.HOURS,
+            timezone="UTC",
+        )
+    )
+
+    _ = service.run_now(created.automation_project_id)
+    updated = service.get_project(created.automation_project_id)
+
+    assert updated.next_run_at == created.next_run_at
+
+
+def test_update_project_switches_interval_to_cron_and_one_shot(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="switchable-interval",
+            workspace_id="default",
+            prompt="Run repeatedly.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=2,
+            interval_unit=AutomationIntervalUnit.HOURS,
+            timezone="UTC",
+        )
+    )
+
+    cron_updated = service.update_project(
+        created.automation_project_id,
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * *",
+        ),
+    )
+    one_shot_at = datetime.now(tz=UTC) + timedelta(days=1)
+    one_shot_updated = service.update_project(
+        created.automation_project_id,
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            run_at=one_shot_at,
+        ),
+    )
+
+    assert cron_updated.schedule_mode == AutomationScheduleMode.CRON
+    assert cron_updated.interval_every is None
+    assert cron_updated.interval_unit is None
+    assert cron_updated.run_at is None
+    assert one_shot_updated.schedule_mode == AutomationScheduleMode.ONE_SHOT
+    assert one_shot_updated.cron_expression is None
+    assert one_shot_updated.interval_every is None
+    assert one_shot_updated.interval_unit is None
+    assert one_shot_updated.run_at == one_shot_at
+
+
+def test_update_project_async_switches_cron_to_interval(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="async-switchable-cron",
+            workspace_id="default",
+            prompt="Run daily.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+        )
+    )
+
+    async def exercise() -> None:
+        updated = await service.update_project_async(
+            created.automation_project_id,
+            AutomationProjectUpdateInput(
+                schedule_mode=AutomationScheduleMode.INTERVAL,
+                interval_every=30,
+                interval_unit=AutomationIntervalUnit.MINUTES,
+            ),
+        )
+        assert updated.schedule_mode == AutomationScheduleMode.INTERVAL
+        assert updated.cron_expression is None
+        assert updated.run_at is None
+        assert updated.interval_every == 30
+        assert updated.interval_unit == AutomationIntervalUnit.MINUTES
+
+    asyncio.run(exercise())
+
+
+def test_interval_day_schedule_advances_after_scheduled_fire(tmp_path: Path) -> None:
+    service, _, _ = _build_service(tmp_path)
+    created = service.create_project(
+        AutomationProjectCreateInput(
+            name="daily-interval-report",
+            workspace_id="default",
+            prompt="Run every day.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=1,
+            interval_unit=AutomationIntervalUnit.DAYS,
+            timezone="UTC",
+        )
+    )
+
+    assert created.next_run_at is not None
+    processed = service.process_due_projects(now=created.next_run_at)
+    updated = service.get_project(created.automation_project_id)
+
+    assert processed == (created.automation_project_id,)
+    assert updated.next_run_at == created.next_run_at + timedelta(days=1)
+
+
+def test_next_run_at_rejects_incomplete_interval_fields() -> None:
+    with pytest.raises(ValueError, match="interval_every is required"):
+        automation_service_module._next_run_at(
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            cron_expression=None,
+            interval_every=None,
+            interval_unit=AutomationIntervalUnit.MINUTES,
+            run_at=None,
+            timezone_name="UTC",
+            after=datetime.now(tz=UTC),
+        )
+    with pytest.raises(ValueError, match="interval_unit is required"):
+        automation_service_module._next_run_at(
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            cron_expression=None,
+            interval_every=1,
+            interval_unit=None,
+            run_at=None,
+            timezone_name="UTC",
+            after=datetime.now(tz=UTC),
+        )
+
+
+def test_interval_schedule_validation_rejects_cron_expression() -> None:
+    with pytest.raises(ValidationError, match="cron_expression is not supported"):
+        AutomationProjectCreateInput(
+            name="invalid-interval-report",
+            workspace_id="default",
+            prompt="Run repeatedly.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=1,
+            interval_unit=AutomationIntervalUnit.DAYS,
+            cron_expression="0 9 * * *",
+            timezone="UTC",
+        )
+
+
+def test_schedule_create_input_rejects_invalid_field_combinations() -> None:
+    with pytest.raises(ValidationError, match="cron_expression must use five fields"):
+        AutomationProjectCreateInput(
+            name="bad-cron",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * *",
+            timezone="UTC",
+        )
+    with pytest.raises(ValidationError, match="interval fields are not supported"):
+        AutomationProjectCreateInput(
+            name="cron-with-interval",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * *",
+            interval_every=1,
+            interval_unit=AutomationIntervalUnit.HOURS,
+            timezone="UTC",
+        )
+    with pytest.raises(ValidationError, match="interval_every is required"):
+        AutomationProjectCreateInput(
+            name="missing-interval-every",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_unit=AutomationIntervalUnit.HOURS,
+            timezone="UTC",
+        )
+    with pytest.raises(ValidationError, match="interval_unit is required"):
+        AutomationProjectCreateInput(
+            name="missing-interval-unit",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=1,
+            timezone="UTC",
+        )
+    with pytest.raises(ValidationError, match="run_at is not supported"):
+        AutomationProjectCreateInput(
+            name="interval-with-run-at",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            interval_every=1,
+            interval_unit=AutomationIntervalUnit.HOURS,
+            run_at=datetime.now(tz=UTC),
+            timezone="UTC",
+        )
+    with pytest.raises(ValidationError, match="cron_expression is not supported"):
+        AutomationProjectCreateInput(
+            name="one-shot-with-cron",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            cron_expression="0 9 * * *",
+            run_at=datetime.now(tz=UTC),
+            timezone="UTC",
+        )
+    with pytest.raises(ValidationError, match="interval fields are not supported"):
+        AutomationProjectCreateInput(
+            name="one-shot-with-interval",
+            workspace_id="default",
+            prompt="Run.",
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            interval_every=1,
+            interval_unit=AutomationIntervalUnit.DAYS,
+            run_at=datetime.now(tz=UTC),
+            timezone="UTC",
+        )
+
+
+def test_schedule_update_input_rejects_invalid_field_combinations() -> None:
+    with pytest.raises(ValidationError, match="interval fields are not supported"):
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * * *",
+            interval_every=1,
+        )
+    with pytest.raises(ValidationError, match="cron_expression is not supported"):
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            cron_expression="0 9 * * *",
+        )
+    with pytest.raises(ValidationError, match="run_at is not supported"):
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.INTERVAL,
+            run_at=datetime.now(tz=UTC),
+        )
+    with pytest.raises(ValidationError, match="cron_expression must use five fields"):
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.CRON,
+            cron_expression="0 9 * *",
+        )
+    with pytest.raises(ValidationError, match="interval fields are not supported"):
+        AutomationProjectUpdateInput(
+            schedule_mode=AutomationScheduleMode.ONE_SHOT,
+            interval_unit=AutomationIntervalUnit.MINUTES,
+        )
 
 
 def test_process_due_projects_skips_invalid_persisted_projects(

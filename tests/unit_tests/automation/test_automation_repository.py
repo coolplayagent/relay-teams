@@ -21,6 +21,7 @@ from relay_teams.automation import (
     AutomationDeliveryRepository,
     AutomationDeliveryStatus,
     AutomationFeishuBinding,
+    AutomationIntervalUnit,
     AutomationProjectRecord,
     AutomationProjectRepository,
     AutomationProjectStatus,
@@ -156,6 +157,31 @@ def test_automation_project_repo_roundtrips_xiaoluban_binding(
     assert loaded.delivery_binding.derived_uid == "uidself"
 
 
+def test_automation_project_repo_roundtrips_interval_schedule(
+    tmp_path: Path,
+) -> None:
+    repository = AutomationProjectRepository(tmp_path / "automation_interval.db")
+    record = _build_project_record(
+        automation_project_id="aut-interval",
+        name="interval-project",
+    ).model_copy(
+        update={
+            "schedule_mode": AutomationScheduleMode.INTERVAL,
+            "cron_expression": None,
+            "interval_every": 15,
+            "interval_unit": AutomationIntervalUnit.MINUTES,
+        }
+    )
+
+    _ = repository.create(record)
+    loaded = repository.get(record.automation_project_id)
+
+    assert loaded.schedule_mode == AutomationScheduleMode.INTERVAL
+    assert loaded.cron_expression is None
+    assert loaded.interval_every == 15
+    assert loaded.interval_unit == AutomationIntervalUnit.MINUTES
+
+
 def test_automation_project_repo_skips_invalid_required_identifier_rows(
     tmp_path: Path,
 ) -> None:
@@ -195,6 +221,40 @@ def test_automation_project_repo_skips_invalid_required_identifier_rows(
     assert [record.automation_project_id for record in due_records] == ["aut-valid"]
     with pytest.raises(KeyError):
         repository.get(invalid.automation_project_id)
+
+
+def test_automation_project_repo_skips_invalid_interval_every_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "automation_invalid_interval.db"
+    repository = AutomationProjectRepository(db_path)
+    record = _build_project_record(
+        automation_project_id="aut-invalid-interval",
+        name="invalid-interval-project",
+    ).model_copy(
+        update={
+            "schedule_mode": AutomationScheduleMode.INTERVAL,
+            "cron_expression": None,
+            "interval_every": 1,
+            "interval_unit": AutomationIntervalUnit.HOURS,
+        }
+    )
+    _ = repository.create(record)
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        UPDATE automation_projects
+        SET interval_every=?
+        WHERE automation_project_id=?
+        """,
+        (0, record.automation_project_id),
+    )
+    connection.commit()
+    connection.close()
+
+    assert repository.list_all() == ()
+    with pytest.raises(KeyError):
+        repository.get(record.automation_project_id)
 
 
 def test_automation_project_repo_async_methods_use_async_sqlite(
