@@ -21,13 +21,13 @@ from relay_teams.hooks.hook_event_models import (
     TaskCreatedInput,
     UserPromptSubmitInput,
 )
-from relay_teams.hooks.hook_loader import (
+from relay_teams.hooks.hook_normalization import (
     filter_tolerant_hook_groups,
-    HookLoader,
     normalize_hooks_payload,
     parse_tolerant_hooks_payload,
     validate_hook_event_capabilities,
 )
+from relay_teams.hooks.hook_loader import HookLoader
 from relay_teams.hooks.hook_models import (
     HookRuntimeView,
     HookDecision,

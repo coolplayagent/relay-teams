@@ -8,6 +8,7 @@ from pydantic import JsonValue
 from relay_teams.mcp.mcp_models import McpConfigScope
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.plugins import PluginRegistry
+from relay_teams.plugins.views import build_public_plugin_registry
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 from relay_teams.skills.skill_registry import SkillRegistry
 
@@ -63,6 +64,7 @@ class ConfigStatusService:
         }
         if self._get_plugin_registry is not None:
             plugin_registry = self._get_plugin_registry()
+            public_plugin_registry = build_public_plugin_registry(plugin_registry)
             plugin_summaries: list[JsonValue] = [
                 {
                     "name": plugin.name,
@@ -75,12 +77,13 @@ class ConfigStatusService:
                     "command_count": len(plugin.command_sources),
                     "hook_count": len(plugin.hook_sources),
                     "mcp_server_config_count": len(plugin.mcp_sources),
+                    "monitor_count": len(plugin.monitor_sources),
                 }
                 for plugin in plugin_registry.plugins
             ]
             plugin_diagnostics: list[JsonValue] = [
                 diagnostic.model_dump(mode="json")
-                for diagnostic in plugin_registry.diagnostics
+                for diagnostic in public_plugin_registry.diagnostics
             ]
             plugins_status: JsonValue = {
                 "loaded": True,

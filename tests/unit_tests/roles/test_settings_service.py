@@ -198,6 +198,57 @@ def test_save_role_document_preserves_plugin_roles_on_reload(
     assert captured_registry[-1].get("quality:reviewer").name == "Reviewer"
 
 
+def test_plugin_roles_are_listed_as_read_only_copy_sources(tmp_path: Path) -> None:
+    roles_dir = tmp_path / "roles"
+    roles_dir.mkdir()
+    plugin_root = tmp_path / "plugin"
+    plugin_roles_dir = plugin_root / "roles"
+    plugin_roles_dir.mkdir(parents=True)
+    _write_role(
+        plugin_roles_dir / "reviewer.md",
+        role_id="reviewer",
+        name="Reviewer",
+        description="Reviews plugin work.",
+        version="1.0.0",
+        tools=("orch_dispatch_task",),
+        mode=RoleMode.SUBAGENT,
+        system_prompt="Review carefully.",
+    )
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    service = RoleSettingsService(
+        roles_dir=roles_dir,
+        builtin_roles_dir=_create_builtin_roles_dir(tmp_path),
+        get_tool_registry=build_default_registry,
+        get_mcp_registry=McpRegistry,
+        get_skill_registry=lambda: SkillRegistry.from_skill_dirs(
+            app_skills_dir=skills_dir
+        ),
+        get_external_agent_service=None,
+        on_roles_reloaded=lambda _registry: None,
+        plugin_sources=(
+            PluginComponentSource(
+                plugin_name="quality",
+                root_dir=plugin_root,
+                data_dir=plugin_root / "data",
+                path=plugin_roles_dir,
+            ),
+        ),
+    )
+
+    summaries = service.list_role_documents()
+    plugin_summary = next(
+        summary for summary in summaries if summary.role_id == "quality:reviewer"
+    )
+    record = service.get_role_document("quality:reviewer")
+
+    assert plugin_summary.source == RoleConfigSource.PLUGIN
+    assert plugin_summary.deletable is False
+    assert record.source == RoleConfigSource.PLUGIN
+    assert record.role_id == "quality:reviewer"
+    assert record.file_name == "reviewer.md"
+
+
 def test_validate_role_document_rejects_unknown_tools(tmp_path: Path) -> None:
     roles_dir = tmp_path / "roles"
     roles_dir.mkdir()

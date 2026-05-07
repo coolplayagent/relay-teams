@@ -40,6 +40,7 @@ from relay_teams.interfaces.server.runtime_identity import (
 from relay_teams.net.clients import create_async_http_client
 from relay_teams.mcp.mcp_cli import mcp_app
 from relay_teams.paths import get_project_config_dir
+from relay_teams.plugins.plugin_cli import plugin_app
 from relay_teams.roles.role_cli import build_roles_app
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.skills.clawhub_cli import build_clawhub_app
@@ -475,6 +476,7 @@ app.add_typer(commands_app, name="commands")
 app.add_typer(hooks_app, name="hooks")
 app.add_typer(gateway_app, name="gateway")
 app.add_typer(memories_app, name="memories")
+app.add_typer(plugin_app, name="plugin")
 
 
 def main() -> None:

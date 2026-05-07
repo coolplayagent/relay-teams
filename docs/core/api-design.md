@@ -418,16 +418,169 @@ The response flattens effective hook handlers across user, project, and project-
 Each entry includes at least the handler name, hook event, matcher, source scope/path, and any scoped filters such as tool names or role IDs.
 When no hook files are active, the endpoint returns an empty `loaded_hooks` list.
 
+### `GET /system/configs/plugins`
+
+Returns the persisted plugin configuration registry for user, project,
+project-local, managed, and local development plugin sources. The response
+includes plugin records, masked `user_config` values for sensitive fields,
+component source paths, component counts, settings sources, dependency/runtime
+diagnostics, high-trust command audit diagnostics for plugin hooks, MCP servers,
+and monitors, and disabled plugin records.
+
 ### `GET /system/configs/plugins/runtime`
 
-Returns the Phase 1 runtime plugin registry loaded from local plugin roots.
-Local plugin roots are configured through `RELAY_TEAMS_PLUGIN_DIRS`, typically
+Returns the runtime plugin registry currently loaded by the server. Local
+development roots are configured through `RELAY_TEAMS_PLUGIN_DIRS`, typically
 from the process environment or the `.env` file in the resolved app config
-directory.
-The response includes enabled plugin records, component source paths for skills,
-roles, commands, hooks, and MCP server configs, plus plugin diagnostics. Invalid
-runtime plugin entries are reported through diagnostics instead of crashing
-startup.
+directory. Installed plugins are loaded from the Relay Teams plugin state files
+and immutable installed-copy directory.
+
+The response includes enabled and disabled plugin records, `component_counts`,
+component source paths for skills, roles, commands, hooks, MCP server configs,
+parsed monitor definitions, parsed settings sources, required user config fields
+with sensitive values masked, and plugin diagnostics. Invalid persisted runtime
+plugin entries are reported through diagnostics instead of crashing startup.
+Diagnostics also include informational command audit rows for plugin-provided
+command hooks, MCP commands, and monitor commands; sensitive `user_config` values
+remain masked in public registry views.
+
+### `POST /system/configs/plugins:validate`
+
+Validates a plugin directory without installing it.
+
+Request:
+
+```json
+{
+  "path": "C:/plugins/quality"
+}
+```
+
+The response is a plugin registry containing the validated plugin record and
+diagnostics. Explicit validation is strict for manifest shape, component paths,
+settings schema, and JSON-compatible plugin component configs.
+
+### `POST /system/configs/plugins/marketplace`
+
+Loads a local marketplace JSON index so clients can browse available plugins and
+versions before installing.
+
+Request:
+
+```json
+{
+  "marketplace": "C:/plugins/marketplace.json"
+}
+```
+
+The response is a marketplace index with plugin names, descriptions, latest
+versions, and version entries. The frontend uses this endpoint instead of reading
+marketplace files directly.
+
+### `POST /system/configs/plugins:install`
+
+Installs a plugin into the requested scope.
+
+Request:
+
+```json
+{
+  "source": "C:/plugins/quality",
+  "scope": "user",
+  "enabled": true,
+  "source_kind": "local",
+  "source_ref": "",
+  "marketplace": null,
+  "version": null
+}
+```
+
+`source_kind` may be `local` or `git` for direct installs. When omitted, the
+server infers git sources from common git URL forms. For direct git installs,
+`source_ref` may name a branch, tag, or commit to check out before validation.
+Persisted git sources reuse the same `source_ref` on update: commit and tag refs
+therefore remain pinned, while an empty ref or a branch can resolve to newer
+source content on later updates.
+`source` may also be a marketplace plugin name when `marketplace` points at a
+marketplace JSON file. Marketplace version entries may include `sha256`,
+`dependencies`, and git source `ref`; when present, the backend verifies the
+materialized source and installed copy before updating plugin state.
+
+### `POST /system/configs/plugins/{name}:configure`
+
+Stores plugin `user_config` values for one installed plugin and scope.
+
+Request:
+
+```json
+{
+  "scope": "user",
+  "user_config": {
+    "token": "secret-token"
+  }
+}
+```
+
+Sensitive values are persisted through the unified secret infrastructure and are
+not written in clear text to plugin state files or returned in registry views.
+Returned sensitive values are masked as configured.
+
+### `POST /system/configs/plugins/{name}:enable`
+
+Enables an installed plugin in the requested scope and reloads plugin-dependent
+runtime registries for new runs.
+
+Request:
+
+```json
+{
+  "scope": "user"
+}
+```
+
+Required `user_config` values must be configured before the plugin can be
+enabled.
+
+### `POST /system/configs/plugins/{name}:disable`
+
+Disables an installed plugin in the requested scope and reloads plugin-dependent
+runtime registries for new runs.
+
+Request:
+
+```json
+{
+  "scope": "user"
+}
+```
+
+### `POST /system/configs/plugins/{name}:update`
+
+Updates one installed plugin to a requested version or the latest marketplace
+version. Older installed copies are retained until pruned.
+
+For direct git installs, update reinstalls from the persisted source and ref.
+Pinned commit/tag refs update to the same revision; branch refs and empty refs
+are resolved again by git.
+
+Request:
+
+```json
+{
+  "scope": "user",
+  "version": null
+}
+```
+
+### `DELETE /system/configs/plugins/{name}`
+
+Uninstalls one plugin state record from the requested scope.
+
+Query parameters:
+
+- `scope`: `user`, `project`, or `project_local`
+- `prune`: when true, removes installed plugin copies no longer referenced by
+  any mutable plugin state file
 
 ### `PUT /system/configs/github`
 

@@ -11,7 +11,7 @@ from relay_teams.hooks.hook_event_models import (
     PostToolUseInput,
     PreToolUseInput,
 )
-from relay_teams.hooks.hook_loader import CLAUDE_TOOL_MATCHER_ALIASES
+from relay_teams.hooks.hook_normalization import CLAUDE_TOOL_MATCHER_ALIASES
 
 _TOOL_CONDITION_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
     "edit": ("file_path", "path"),

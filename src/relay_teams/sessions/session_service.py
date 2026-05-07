@@ -383,6 +383,13 @@ class SessionService:
             resolved_orchestration_preset_id = (
                 self._orchestration_settings_service.default_orchestration_preset_id()
             )
+        if (
+            resolved_normal_root_role_id is None
+            and self._orchestration_settings_service is not None
+        ):
+            resolved_normal_root_role_id = (
+                self._orchestration_settings_service.default_normal_root_role_id()
+            )
         if resolved_normal_root_role_id is None and self._role_registry is not None:
             resolved_normal_root_role_id = self._require_main_agent_role_id()
         resolved_normal_root_role_id = self._resolve_normal_root_role_id(

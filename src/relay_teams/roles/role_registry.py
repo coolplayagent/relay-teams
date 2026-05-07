@@ -271,6 +271,7 @@ class RoleLoader:
         *,
         builtin_roles_dir: Path,
         app_roles_dir: Path,
+        plugin_sources: tuple[PluginComponentSource, ...] = (),
     ) -> dict[str, tuple[Path, RoleConfigSource]]:
         resolved: dict[str, tuple[Path, RoleConfigSource]] = {}
         for md_file in sorted(builtin_roles_dir.glob("*.md")):
@@ -279,7 +280,30 @@ class RoleLoader:
         for md_file in sorted(app_roles_dir.glob("*.md")):
             definition = self.load_one(md_file)
             resolved[definition.role_id] = (md_file, RoleConfigSource.APP)
+        for plugin_source in plugin_sources:
+            if not plugin_source.path.exists() or not plugin_source.path.is_dir():
+                continue
+            for md_file in sorted(plugin_source.path.glob("*.md")):
+                try:
+                    role = self.load_one(md_file)
+                    namespaced_role = _namespace_plugin_role(
+                        role=role,
+                        plugin_name=plugin_source.plugin_name,
+                    )
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Skipping invalid plugin role",
+                        extra={"path": str(md_file), "error": str(exc)},
+                    )
+                    continue
+                resolved[namespaced_role.role_id] = (md_file, RoleConfigSource.PLUGIN)
         return resolved
+
+    def load_plugin_one(self, path: Path, *, plugin_name: str) -> RoleDefinition:
+        return _namespace_plugin_role(
+            role=self.load_one(path),
+            plugin_name=plugin_name,
+        )
 
     def load_one(self, path: Path) -> RoleDefinition:
         raw = path.read_text(encoding="utf-8")

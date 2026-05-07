@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from typing import NoReturn
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, JsonValue
-
-import asyncio
 
 from relay_teams.interfaces.server.async_call import (
     call_maybe_async_in_isolated_thread,
@@ -65,6 +65,7 @@ from relay_teams.net.web_connectivity import (
     WebConnectivityProbeService,
 )
 from relay_teams.interfaces.server.deps import (
+    get_container,
     get_clawhub_connectivity_probe_service,
     get_clawhub_config_service,
     get_clawhub_skill_service,
@@ -90,6 +91,7 @@ from relay_teams.interfaces.server.deps import (
     get_plugin_registry,
     get_workspace_manager,
 )
+from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.interfaces.server.control_plane import (
     ControlPlaneDiscoveryPayload,
     ControlPlaneLivePayload,
@@ -152,7 +154,10 @@ from relay_teams.skills.clawhub_models import (
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.hooks import HookRuntimeView, HookService, HooksConfig
-from relay_teams.plugins import PluginRegistry
+from relay_teams.plugins import PluginInstallSourceKind, PluginRegistry, PluginScope
+from relay_teams.plugins.marketplace_models import PluginMarketplaceIndex
+from relay_teams.plugins.marketplace_service import PluginMarketplaceService
+from relay_teams.plugins.views import build_public_plugin_registry
 from relay_teams.validation import RequiredIdentifierStr
 from relay_teams.workspace import (
     SshProfileConfig,
@@ -168,6 +173,50 @@ router = APIRouter(prefix="/system", tags=["System"])
 _AGENT_RUNTIME_PROBE_WORKSPACE_ID = "default"
 _AGENT_RUNTIME_PROBE_SESSION_ID = "agent-runtime-probe"
 _AGENT_RUNTIME_PROBE_ROLE_ID = "agent-runtime-probe"
+
+
+class PluginInstallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    scope: PluginScope = PluginScope.USER
+    enabled: bool = True
+    source_kind: PluginInstallSourceKind | None = None
+    source_ref: str = ""
+    marketplace: str | None = None
+    version: str | None = None
+
+
+class PluginValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+
+
+class PluginMarketplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    marketplace: str
+
+
+class PluginScopeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: PluginScope = PluginScope.USER
+
+
+class PluginUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: PluginScope = PluginScope.USER
+    version: str | None = None
+
+
+class PluginConfigureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scope: PluginScope = PluginScope.USER
+    user_config: dict[str, JsonValue]
 
 
 class NotificationConfigRequest(BaseModel):
@@ -261,7 +310,197 @@ async def get_config_status(
 async def get_plugins_runtime_view(
     plugin_registry: PluginRegistry = Depends(get_plugin_registry),
 ) -> PluginRegistry:
-    return plugin_registry
+    return build_public_plugin_registry(plugin_registry)
+
+
+@router.get("/configs/plugins")
+async def get_plugins_config(
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    registry = await asyncio.to_thread(container.plugin_config_manager.load_registry)
+    return build_public_plugin_registry(registry)
+
+
+@router.post("/configs/plugins:validate")
+async def validate_plugin_config(
+    req: PluginValidateRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    record, diagnostics = await asyncio.to_thread(
+        container.plugin_config_manager.validate_plugin,
+        plugin_root=Path(req.path),
+        require_manifest=True,
+        strict_explicit_paths=True,
+    )
+    records = () if record is None else (record,)
+    return build_public_plugin_registry(
+        PluginRegistry(plugins=records, diagnostics=diagnostics)
+    )
+
+
+@router.post("/configs/plugins/marketplace")
+async def load_plugin_marketplace(
+    req: PluginMarketplaceRequest,
+) -> PluginMarketplaceIndex:
+    try:
+        return await asyncio.to_thread(
+            PluginMarketplaceService().load_index,
+            Path(req.marketplace),
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, value_error_status=400, os_error_status=400)
+
+
+@router.post("/configs/plugins:install")
+async def install_plugin_config(
+    req: PluginInstallRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        if req.marketplace is None:
+            source_kind = req.source_kind or _infer_plugin_install_source_kind(
+                req.source
+            )
+            if source_kind == PluginInstallSourceKind.GIT:
+                await asyncio.to_thread(
+                    container.plugin_config_manager.install_git_plugin,
+                    source=req.source,
+                    scope=req.scope,
+                    ref=req.source_ref,
+                    enabled=req.enabled,
+                )
+            elif source_kind == PluginInstallSourceKind.LOCAL:
+                await asyncio.to_thread(
+                    container.plugin_config_manager.install_plugin,
+                    source=Path(req.source),
+                    scope=req.scope,
+                    enabled=req.enabled,
+                )
+            else:
+                raise ValueError("Marketplace plugin installs require marketplace")
+        else:
+            await asyncio.to_thread(
+                container.plugin_config_manager.install_marketplace_plugin,
+                name=req.source,
+                marketplace=Path(req.marketplace),
+                scope=req.scope,
+                version=req.version,
+                enabled=req.enabled,
+            )
+    except Exception as exc:
+        _raise_system_http_error(
+            exc,
+            key_error_status=404,
+            value_error_status=400,
+            os_error_status=400,
+        )
+    await asyncio.to_thread(container.reload_plugin_runtime)
+    return build_public_plugin_registry(container.plugin_registry)
+
+
+def _infer_plugin_install_source_kind(source: str) -> PluginInstallSourceKind:
+    normalized = source.strip().lower()
+    if normalized.startswith(("http://", "https://", "ssh://", "git@")):
+        return PluginInstallSourceKind.GIT
+    if normalized.endswith(".git"):
+        return PluginInstallSourceKind.GIT
+    return PluginInstallSourceKind.LOCAL
+
+
+@router.post("/configs/plugins/{name}:enable")
+async def enable_plugin_config(
+    name: RequiredIdentifierStr,
+    req: PluginScopeRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        await asyncio.to_thread(
+            container.plugin_config_manager.set_plugin_enabled,
+            name=name,
+            scope=req.scope,
+            enabled=True,
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, key_error_status=404, value_error_status=400)
+    await asyncio.to_thread(container.reload_plugin_runtime)
+    return build_public_plugin_registry(container.plugin_registry)
+
+
+@router.post("/configs/plugins/{name}:disable")
+async def disable_plugin_config(
+    name: RequiredIdentifierStr,
+    req: PluginScopeRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        await asyncio.to_thread(
+            container.plugin_config_manager.set_plugin_enabled,
+            name=name,
+            scope=req.scope,
+            enabled=False,
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, key_error_status=404, value_error_status=400)
+    await asyncio.to_thread(container.reload_plugin_runtime)
+    return build_public_plugin_registry(container.plugin_registry)
+
+
+@router.post("/configs/plugins/{name}:update")
+async def update_plugin_config(
+    name: RequiredIdentifierStr,
+    req: PluginUpdateRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        await asyncio.to_thread(
+            container.plugin_config_manager.update_plugin,
+            name=name,
+            scope=req.scope,
+            version=req.version,
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, key_error_status=404, value_error_status=400)
+    await asyncio.to_thread(container.reload_plugin_runtime)
+    return build_public_plugin_registry(container.plugin_registry)
+
+
+@router.post("/configs/plugins/{name}:configure")
+async def configure_plugin_config(
+    name: RequiredIdentifierStr,
+    req: PluginConfigureRequest,
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        await asyncio.to_thread(
+            container.plugin_config_manager.set_plugin_user_config,
+            name=name,
+            scope=req.scope,
+            user_config=req.user_config,
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, key_error_status=404, value_error_status=400)
+    await asyncio.to_thread(container.reload_plugin_runtime)
+    return build_public_plugin_registry(container.plugin_registry)
+
+
+@router.delete("/configs/plugins/{name}")
+async def delete_plugin_config(
+    name: RequiredIdentifierStr,
+    scope: PluginScope = Query(PluginScope.USER),
+    prune: bool = Query(False),
+    container: ServerContainer = Depends(get_container),
+) -> PluginRegistry:
+    try:
+        await asyncio.to_thread(
+            container.plugin_config_manager.uninstall_plugin,
+            name=name,
+            scope=scope,
+            prune=prune,
+        )
+    except Exception as exc:
+        _raise_system_http_error(exc, key_error_status=404, value_error_status=400)
+    await asyncio.to_thread(container.reload_plugin_runtime)
+    return build_public_plugin_registry(container.plugin_registry)
 
 
 @router.get("/configs/workspace/ssh-profiles")

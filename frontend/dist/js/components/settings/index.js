@@ -13,6 +13,11 @@ import {
     loadHooksSettingsPanel,
     syncHooksSettingsActions,
 } from './hooksSettings.js';
+import {
+    bindPluginsSettingsHandlers,
+    loadPluginsSettingsPanel,
+    syncPluginsSettingsActions,
+} from './pluginsSettings.js';
 import { bindModelProfileHandlers, loadModelProfilesPanel } from './modelProfiles.js';
 import { renderModelProfilesPanelMarkup } from './modelProfiles/template.js';
 import {
@@ -68,6 +73,10 @@ const TAB_METADATA = {
     mcp: {
         titleKey: 'settings.panel.mcp.title',
         descriptionKey: 'settings.panel.mcp.description',
+    },
+    plugins: {
+        titleKey: 'settings.panel.plugins.title',
+        descriptionKey: 'settings.panel.plugins.description',
     },
     commands: {
         titleKey: 'settings.panel.commands.title',
@@ -152,6 +161,9 @@ const ACTION_TAB_OWNERS = {
     'save-mcp-server-btn': 'mcp',
     'cancel-mcp-server-btn': 'mcp',
     'reload-mcp-btn': 'mcp',
+    'refresh-plugins-btn': 'plugins',
+    'validate-plugin-btn': 'plugins',
+    'install-plugin-btn': 'plugins',
     'reset-appearance-btn': 'appearance',
 };
 
@@ -184,6 +196,9 @@ function createModal() {
                     </button>
                     <button class="settings-tab" data-tab="mcp">
                         <span class="settings-tab-label" data-i18n="settings.tab.mcp">MCP</span>
+                    </button>
+                    <button class="settings-tab" data-tab="plugins">
+                        <span class="settings-tab-label" data-i18n="settings.tab.plugins">Plugins</span>
                     </button>
                     <button class="settings-tab" data-tab="commands">
                         <span class="settings-tab-label" data-i18n="settings.tab.commands">Commands</span>
@@ -889,6 +904,13 @@ function createModal() {
                             </div>
                         </div>
                     </div>
+                    <div class="settings-panel" id="plugins-panel" style="display:none;">
+                        <div class="settings-section">
+                            <div class="settings-content-stack">
+                                <div class="plugins-settings-root" id="plugins-settings-root"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="settings-actions-bar" id="settings-actions-bar">
                     <div class="settings-panel-actions" id="settings-panel-actions">
@@ -935,6 +957,9 @@ function createModal() {
                             <button class="primary-btn section-action-btn settings-action" id="save-mcp-server-btn" type="button" style="display:none;" data-i18n="settings.action.save">Save</button>
                             <button class="secondary-btn section-action-btn settings-action" id="cancel-mcp-server-btn" type="button" style="display:none;" data-i18n="settings.action.cancel">Cancel</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reload-mcp-btn" type="button" style="display:none;" data-i18n="settings.action.reload">Reload</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="refresh-plugins-btn" type="button" style="display:none;" data-i18n="settings.action.refresh">Refresh</button>
+                            <button class="secondary-btn section-action-btn settings-action" id="validate-plugin-btn" type="button" style="display:none;" data-i18n="settings.plugins.validate">Validate</button>
+                            <button class="primary-btn section-action-btn settings-action" id="install-plugin-btn" type="button" style="display:none;" data-i18n="settings.plugins.install">Add Plugin</button>
                             <button class="secondary-btn section-action-btn settings-action" id="reset-appearance-btn" type="button" style="display:none;" data-i18n="settings.action.reset">Reset</button>
                         </div>
                     </div>
@@ -975,6 +1000,7 @@ function setupEventListeners() {
     bindModelProfileHandlers();
     bindCommandsSettingsHandlers();
     bindHooksSettingsHandlers();
+    bindPluginsSettingsHandlers();
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
@@ -1014,6 +1040,7 @@ async function showPanel(tab) {
     bindModelProfileHandlers();
     bindCommandsSettingsHandlers();
     bindHooksSettingsHandlers();
+    bindPluginsSettingsHandlers();
     bindAgentSettingsHandlers();
     bindOrchestrationSettingsHandlers();
     bindRoleSettingsHandlers();
@@ -1056,6 +1083,8 @@ async function loadSettingsPanel(tab) {
         await loadWorkspaceSettingsPanel();
     } else if (tab === 'mcp') {
         await loadMcpStatusPanel();
+    } else if (tab === 'plugins') {
+        await loadPluginsSettingsPanel();
     } else if (tab === 'commands') {
         await loadCommandsSettingsPanel();
     } else if (tab === 'skills') {
@@ -1125,6 +1154,8 @@ function renderPanelActions(tab) {
     } else if (tab === 'mcp') {
         document.getElementById('add-mcp-server-btn').style.display = 'inline-flex';
         document.getElementById('reload-mcp-btn').style.display = 'inline-flex';
+    } else if (tab === 'plugins') {
+        syncPluginsSettingsActions();
     } else if (tab === 'commands') {
         syncCommandsSettingsActions();
     } else if (tab === 'appearance') {

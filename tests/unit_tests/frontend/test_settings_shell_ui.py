@@ -102,6 +102,7 @@ const webTab = tabs.find(tab => tab.dataset.tab === "web");
 const proxyTab = tabs.find(tab => tab.dataset.tab === "proxy");
 const workspaceTab = tabs.find(tab => tab.dataset.tab === "workspace");
 const mcpTab = tabs.find(tab => tab.dataset.tab === "mcp");
+const pluginsTab = tabs.find(tab => tab.dataset.tab === "plugins");
 
 const modelTab = tabs.find(tab => tab.dataset.tab === "model");
 await modelTab.onclick();
@@ -120,6 +121,9 @@ await workspaceTab.onclick();
 const workspaceAddDisplay = document.getElementById("add-ssh-profile-btn").style.display;
 await mcpTab.onclick();
 const mcpReloadDisplay = document.getElementById("reload-mcp-btn").style.display;
+await pluginsTab.onclick();
+const pluginsRefreshDisplay = document.getElementById("refresh-plugins-btn").style.display;
+const pluginsInstallDisplay = document.getElementById("install-plugin-btn").style.display;
 const hasGitHubSaveButton = Boolean(document.getElementById("save-github-btn"));
 
 console.log(JSON.stringify({
@@ -131,6 +135,8 @@ console.log(JSON.stringify({
     proxySaveDisplay,
     workspaceAddDisplay,
     mcpReloadDisplay,
+    pluginsRefreshDisplay,
+    pluginsInstallDisplay,
     hasGitHubSaveButton,
 }));
 """.strip(),
@@ -144,6 +150,8 @@ console.log(JSON.stringify({
     assert payload["proxySaveDisplay"] == "inline-flex"
     assert payload["workspaceAddDisplay"] == "inline-flex"
     assert payload["mcpReloadDisplay"] == "inline-flex"
+    assert payload["pluginsRefreshDisplay"] == "inline-flex"
+    assert payload["pluginsInstallDisplay"] == "inline-flex"
     assert payload["hasGitHubSaveButton"] is False
 
 
@@ -295,7 +303,10 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
         'data-tab="model"'
     )
     assert tabs_html.index('data-tab="model"') < tabs_html.index('data-tab="mcp"')
-    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="commands"')
+    assert tabs_html.index('data-tab="mcp"') < tabs_html.index('data-tab="plugins"')
+    assert tabs_html.index('data-tab="plugins"') < tabs_html.index(
+        'data-tab="commands"'
+    )
     assert tabs_html.index('data-tab="commands"') < tabs_html.index('data-tab="hooks"')
     assert tabs_html.index('data-tab="hooks"') < tabs_html.index('data-tab="agents"')
     assert tabs_html.index('data-tab="agents"') < tabs_html.index('data-tab="roles"')
@@ -315,6 +326,7 @@ def test_settings_tab_order_and_labels_are_simplified() -> None:
     )
     assert ">Model</span>" in tabs_html
     assert ">MCP</span>" in tabs_html
+    assert ">Plugins</span>" in tabs_html
     assert ">Commands</span>" in tabs_html
     assert ">Hooks</span>" in tabs_html
     assert ">Agent Runtime</span>" in tabs_html
@@ -395,6 +407,11 @@ def test_settings_action_bar_css_hides_inactive_tab_owned_actions() -> None:
     assert (
         '.settings-actions-bar[data-active-tab="roles"] '
         '[data-settings-action-tab]:not([data-settings-action-tab="roles"])'
+        in components_css
+    )
+    assert (
+        '.settings-actions-bar[data-active-tab="plugins"] '
+        '[data-settings-action-tab]:not([data-settings-action-tab="plugins"])'
         in components_css
     )
     assert "display: none !important;" in components_css
@@ -608,6 +625,7 @@ def _run_settings_script(tmp_path: Path, runner_source: str) -> dict[str, object
     mock_commands_settings_path = tmp_path / "mockCommandsSettings.mjs"
     model_profiles_template_path = tmp_path / "modelProfilesTemplate.mjs"
     mock_hooks_settings_path = tmp_path / "mockHooksSettings.mjs"
+    mock_plugins_settings_path = tmp_path / "mockPluginsSettings.mjs"
     mock_agents_settings_path = tmp_path / "mockAgentsSettings.mjs"
     mock_environment_path = tmp_path / "mockEnvironmentVariables.mjs"
     mock_notifications_path = tmp_path / "mockNotifications.mjs"
@@ -694,6 +712,24 @@ export function syncHooksSettingsActions() {
     document.getElementById('validate-hooks-btn').style.display = 'inline-flex';
     document.getElementById('save-hooks-btn').style.display = 'inline-flex';
     document.getElementById('save-profile-btn').style.display = 'inline-flex';
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_plugins_settings_path.write_text(
+        """
+export function bindPluginsSettingsHandlers() {
+    globalThis.__bindCalls.plugins += 1;
+}
+
+export async function loadPluginsSettingsPanel() {
+    globalThis.__loadCalls.plugins += 1;
+}
+
+export function syncPluginsSettingsActions() {
+    document.getElementById('refresh-plugins-btn').style.display = 'inline-flex';
+    document.getElementById('validate-plugin-btn').style.display = 'inline-flex';
+    document.getElementById('install-plugin-btn').style.display = 'inline-flex';
 }
 """.strip(),
         encoding="utf-8",
@@ -880,6 +916,8 @@ export function t(key) {
         'settings.panel.skills.description': 'Check installed skills and refresh the server-side registry.',
         'settings.panel.mcp.title': 'MCP',
         'settings.panel.mcp.description': 'Review the currently loaded MCP servers and reload the runtime view.',
+        'settings.panel.plugins.title': 'Plugins',
+        'settings.panel.plugins.description': 'Install, validate, configure, and inspect plugin-provided capabilities.',
         'settings.panel.commands.title': 'Commands',
         'settings.panel.commands.description': 'Review slash commands discovered for the active workspace.',
         'settings.panel.hooks.title': 'Hooks',
@@ -955,6 +993,7 @@ export function logError(eventName, message, payload) {
         .replace("./agentsSettings.js", "./mockAgentsSettings.mjs")
         .replace("./commandsSettings.js", "./mockCommandsSettings.mjs")
         .replace("./hooksSettings.js", "./mockHooksSettings.mjs")
+        .replace("./pluginsSettings.js", "./mockPluginsSettings.mjs")
         .replace("./modelProfiles/template.js", "./modelProfilesTemplate.mjs")
         .replace("./modelProfiles.js", "./mockModelProfiles.mjs")
         .replace("./environmentVariables.js", "./mockEnvironmentVariables.mjs")
@@ -1140,6 +1179,7 @@ function createDocument() {{
         model: 0,
         speech: 0,
         commands: 0,
+        plugins: 0,
     hooks: 0,
     agents: 0,
     roles: 0,
@@ -1158,6 +1198,7 @@ function createDocument() {{
         model: 0,
         speech: 0,
         commands: 0,
+        plugins: 0,
     hooks: 0,
     agents: 0,
     roles: 0,

@@ -87,9 +87,14 @@ class RoleSettingsService:
         for role_id, (role_path, source) in self._loader.build_effective_role_map(
             builtin_roles_dir=self._builtin_roles_dir,
             app_roles_dir=self._roles_dir,
+            plugin_sources=self._plugin_sources,
         ).items():
+            definition = self._role_definition_for_source(
+                role_path=role_path,
+                source=source,
+            )
             definition = self._validate_definition(
-                self._loader.load_one(role_path),
+                definition,
                 strict_capability_validation=False,
                 consumer=f"roles.settings_service.list_role_documents.role:{role_id}",
             )
@@ -106,7 +111,10 @@ class RoleSettingsService:
         role_path, source = self._find_role_record(role_id)
         content = role_path.read_text(encoding="utf-8")
         role = self._canonicalize_role_capabilities_for_record(
-            self._loader.load_from_text(content, source_name=role_path.name),
+            self._role_definition_for_source(
+                role_path=role_path,
+                source=source,
+            ),
             consumer=f"roles.settings_service.get_role_document.role:{role_id}",
         )
         return self._record_from_definition(
@@ -662,6 +670,7 @@ class RoleSettingsService:
         return self._loader.build_effective_role_map(
             builtin_roles_dir=self._builtin_roles_dir,
             app_roles_dir=self._roles_dir,
+            plugin_sources=self._plugin_sources,
         ).get(role_id)
 
     def _resolve_role_source(self, role_id: str) -> RoleConfigSource:
@@ -673,6 +682,7 @@ class RoleSettingsService:
             for role_id, (_, source) in self._loader.build_effective_role_map(
                 builtin_roles_dir=self._builtin_roles_dir,
                 app_roles_dir=self._roles_dir,
+                plugin_sources=self._plugin_sources,
             ).items()
         }
 
@@ -690,6 +700,30 @@ class RoleSettingsService:
         builtin_role_ids: frozenset[str],
     ) -> bool:
         return source == RoleConfigSource.APP and role_id not in builtin_role_ids
+
+    def _role_definition_for_source(
+        self,
+        *,
+        role_path: Path,
+        source: RoleConfigSource,
+    ) -> RoleDefinition:
+        if source != RoleConfigSource.PLUGIN:
+            return self._loader.load_one(role_path)
+        plugin_name = self._plugin_name_for_role_path(role_path)
+        if plugin_name is None:
+            return self._loader.load_one(role_path)
+        return self._loader.load_plugin_one(role_path, plugin_name=plugin_name)
+
+    def _plugin_name_for_role_path(self, role_path: Path) -> str | None:
+        resolved_role_path = role_path.expanduser().resolve()
+        for plugin_source in self._plugin_sources:
+            resolved_source_path = plugin_source.path.expanduser().resolve()
+            try:
+                resolved_role_path.relative_to(resolved_source_path)
+            except ValueError:
+                continue
+            return plugin_source.plugin_name
+        return None
 
 
 def _normalize_optional_text(value: str | None) -> str | None:

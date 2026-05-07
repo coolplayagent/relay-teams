@@ -126,6 +126,130 @@ export async function validateHooksConfig(payload) {
     );
 }
 
+export async function fetchPluginsConfig() {
+    return requestJson(
+        '/api/system/configs/plugins',
+        undefined,
+        'Failed to fetch plugins config',
+    );
+}
+
+export async function fetchPluginsRuntime() {
+    return requestJson(
+        '/api/system/configs/plugins/runtime',
+        undefined,
+        'Failed to fetch plugins runtime',
+    );
+}
+
+export async function validatePlugin(path) {
+    return requestJson(
+        '/api/system/configs/plugins:validate',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+        },
+        'Failed to validate plugin',
+    );
+}
+
+export async function fetchPluginMarketplace(marketplace) {
+    return requestJson(
+        '/api/system/configs/plugins/marketplace',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ marketplace }),
+        },
+        'Failed to fetch plugin marketplace',
+    );
+}
+
+export async function installPlugin(payload) {
+    const result = await requestJson(
+        '/api/system/configs/plugins:install',
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        'Failed to install plugin',
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
+export async function configurePlugin(name, payload) {
+    const result = await requestJson(
+        `/api/system/configs/plugins/${encodeURIComponent(name)}:configure`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        `Failed to configure plugin ${name}`,
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
+export async function enablePlugin(name, scope) {
+    const result = await requestJson(
+        `/api/system/configs/plugins/${encodeURIComponent(name)}:enable`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scope }),
+        },
+        `Failed to enable plugin ${name}`,
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
+export async function disablePlugin(name, scope) {
+    const result = await requestJson(
+        `/api/system/configs/plugins/${encodeURIComponent(name)}:disable`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scope }),
+        },
+        `Failed to disable plugin ${name}`,
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
+export async function updatePlugin(name, payload) {
+    const result = await requestJson(
+        `/api/system/configs/plugins/${encodeURIComponent(name)}:update`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        },
+        `Failed to update plugin ${name}`,
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
+export async function deletePlugin(name, scope, prune = false) {
+    const query = new URLSearchParams({
+        scope: String(scope || ''),
+        prune: prune ? 'true' : 'false',
+    });
+    const result = await requestJson(
+        `/api/system/configs/plugins/${encodeURIComponent(name)}?${query.toString()}`,
+        { method: 'DELETE' },
+        `Failed to delete plugin ${name}`,
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
 export async function fetchCommands(workspaceId) {
     const safeWorkspaceId = encodeURIComponent(String(workspaceId || '').trim());
     return requestJson(
