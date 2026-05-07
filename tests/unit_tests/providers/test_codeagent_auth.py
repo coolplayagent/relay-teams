@@ -105,13 +105,13 @@ def test_poll_token_sync_posts_client_code_json(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     class _FakeHttpClient:
-        def __enter__(self) -> "_FakeHttpClient":
+        async def __aenter__(self) -> "_FakeHttpClient":
             return self
 
-        def __exit__(self, *exc_info: object) -> None:
+        async def __aexit__(self, *exc_info: object) -> None:
             return None
 
-        def post(
+        async def post(
             self,
             url: str,
             *,
@@ -131,7 +131,7 @@ def test_poll_token_sync_posts_client_code_json(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(
-        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
         lambda **kwargs: _FakeHttpClient(),
     )
 
@@ -160,13 +160,13 @@ def test_poll_token_sync_returns_none_until_token_available(monkeypatch) -> None
     )
 
     class _FakeHttpClient:
-        def __enter__(self) -> "_FakeHttpClient":
+        async def __aenter__(self) -> "_FakeHttpClient":
             return self
 
-        def __exit__(self, *exc_info: object) -> None:
+        async def __aexit__(self, *exc_info: object) -> None:
             return None
 
-        def post(
+        async def post(
             self,
             url: str,
             *,
@@ -179,7 +179,7 @@ def test_poll_token_sync_returns_none_until_token_available(monkeypatch) -> None
             return httpx.Response(200, json={"message": "pending"})
 
     monkeypatch.setattr(
-        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
         lambda **kwargs: _FakeHttpClient(),
     )
 
@@ -202,13 +202,13 @@ def test_poll_token_sync_raises_for_http_error_response(monkeypatch) -> None:
     )
 
     class _FakeHttpClient:
-        def __enter__(self) -> "_FakeHttpClient":
+        async def __aenter__(self) -> "_FakeHttpClient":
             return self
 
-        def __exit__(self, *exc_info: object) -> None:
+        async def __aexit__(self, *exc_info: object) -> None:
             return None
 
-        def post(
+        async def post(
             self,
             url: str,
             *,
@@ -222,7 +222,7 @@ def test_poll_token_sync_raises_for_http_error_response(monkeypatch) -> None:
             )
 
     monkeypatch.setattr(
-        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
         lambda **kwargs: _FakeHttpClient(),
     )
 
@@ -242,7 +242,7 @@ def test_codeagent_token_service_uses_configured_access_token_first(
         raise AssertionError("refresh endpoint should not be called")
 
     monkeypatch.setattr(
-        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
         build_client,
     )
 
@@ -507,13 +507,13 @@ def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
     )
 
     class _FakeHttpClient:
-        def __enter__(self) -> "_FakeHttpClient":
+        async def __aenter__(self) -> "_FakeHttpClient":
             return self
 
-        def __exit__(self, *exc_info: object) -> None:
+        async def __aexit__(self, *exc_info: object) -> None:
             return None
 
-        def post(
+        async def post(
             self,
             url: str,
             *,
@@ -529,7 +529,7 @@ def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
             return httpx.Response(200, json=next(refresh_responses))
 
     monkeypatch.setattr(
-        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
         lambda **kwargs: _FakeHttpClient(),
     )
 
@@ -591,13 +591,13 @@ def test_codeagent_token_service_persists_rotated_tokens_for_secret_owner(
             )
 
     class _FakeHttpClient:
-        def __enter__(self) -> "_FakeHttpClient":
+        async def __aenter__(self) -> "_FakeHttpClient":
             return self
 
-        def __exit__(self, *exc_info: object) -> None:
+        async def __aexit__(self, *exc_info: object) -> None:
             return None
 
-        def post(
+        async def post(
             self,
             url: str,
             *,
@@ -619,7 +619,7 @@ def test_codeagent_token_service_persists_rotated_tokens_for_secret_owner(
         lambda: _FakeSecretStore(),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.codeagent_auth.create_sync_http_client",
+        "relay_teams.providers.codeagent_auth.create_async_http_client",
         lambda **kwargs: _FakeHttpClient(),
     )
 
@@ -1520,7 +1520,7 @@ def test_get_codeagent_token_service_returns_default_singleton() -> None:
 
 @pytest.mark.asyncio
 async def test_build_codeagent_openai_client_exposes_custom_auth() -> None:
-    http_client = httpx.AsyncClient()
+    http_client = httpx.AsyncClient(trust_env=False)
     try:
         client = codeagent_auth_module.build_codeagent_openai_client(
             base_url=DEFAULT_CODEAGENT_BASE_URL,

@@ -49,13 +49,13 @@ class _FakeHttpClient:
         self._error = error
         self._captured = captured if captured is not None else {}
 
-    def __enter__(self) -> _FakeHttpClient:
+    async def __aenter__(self) -> "_FakeHttpClient":
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def post(
+    async def post(
         self,
         url: str,
         *,
@@ -70,7 +70,7 @@ class _FakeHttpClient:
         assert self._response is not None
         return self._response
 
-    def get(
+    async def get(
         self,
         url: str,
         *,
@@ -94,13 +94,13 @@ class _QueuedHttpClient:
         self._responses = responses
         self._captured = captured if captured is not None else {}
 
-    def __enter__(self) -> _QueuedHttpClient:
+    async def __aenter__(self) -> "_QueuedHttpClient":
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def get(
+    async def get(
         self,
         url: str,
         *,
@@ -207,7 +207,7 @@ def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -249,7 +249,7 @@ def test_probe_preserves_zero_valued_usage_fields(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -282,7 +282,7 @@ def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -302,7 +302,7 @@ def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -335,7 +335,7 @@ def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> Non
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -359,7 +359,7 @@ def test_probe_returns_timeout_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(error=httpx.ReadTimeout("timed out")),
     )
 
@@ -377,7 +377,7 @@ def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 401,
@@ -400,7 +400,7 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -470,7 +470,7 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -510,7 +510,7 @@ def test_probe_supports_anthropic_provider(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -556,7 +556,7 @@ def test_probe_anthropic_profile_override_preserves_saved_base_url(
     )
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -591,7 +591,7 @@ def test_probe_anthropic_returns_network_error_for_request_exception(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ConnectError("failed to reach anthropic endpoint"),
         ),
@@ -619,7 +619,7 @@ def test_probe_allows_header_only_override(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -657,7 +657,7 @@ def test_probe_supports_maas_provider(monkeypatch) -> None:
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -716,7 +716,7 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -770,7 +770,7 @@ def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) 
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -809,7 +809,7 @@ def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -850,7 +850,7 @@ def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -885,7 +885,7 @@ def test_probe_codeagent_rejects_invalid_event_stream_payload(monkeypatch) -> No
         lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -922,7 +922,7 @@ def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -986,7 +986,7 @@ def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
         lambda: _FakeCodeAgentTokenService(["fresh-session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1035,7 +1035,7 @@ def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) ->
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1165,7 +1165,7 @@ def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> 
         return _FakeHttpClient(captured=local_capture, response=responses.pop(0))
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         build_client,
     )
 
@@ -1203,7 +1203,7 @@ def test_discover_models_supports_maas_provider(monkeypatch) -> None:
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1296,7 +1296,7 @@ def test_discover_models_supports_codeagent_provider_with_oauth_session(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1398,7 +1398,7 @@ def test_probe_codeagent_returns_network_error_for_request_exception(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1536,7 +1536,7 @@ def test_discover_models_codeagent_returns_timeout_for_request_exception(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1664,7 +1664,7 @@ def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
         )
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
@@ -1814,7 +1814,7 @@ def test_verify_codeagent_auth_returns_error_when_verify_request_times_out(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ReadTimeout("verify request timed out")
         ),
@@ -1845,7 +1845,7 @@ def test_verify_codeagent_auth_returns_error_when_verify_request_fails(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ConnectError("failed to reach codeagent")
         ),
@@ -1909,7 +1909,7 @@ def test_verify_codeagent_auth_returns_error_for_redirect_response(
         )
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
@@ -1981,7 +1981,7 @@ def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
         ),
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
@@ -2059,7 +2059,7 @@ def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
         ),
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
@@ -2142,7 +2142,7 @@ def test_verify_codeagent_auth_returns_reauth_required_after_refresh_denied(
         httpx.Response(401, json={"detail": "expired access token"}),
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
@@ -2651,7 +2651,7 @@ def test_discover_models_merges_saved_maas_password_when_override_omits_it(
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -2702,7 +2702,7 @@ def test_discover_models_refreshes_maas_token_after_unauthorized_response(
         return _FakeHttpClient(captured=local_capture, response=responses.pop(0))
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         build_client,
     )
 
@@ -2746,7 +2746,7 @@ def test_discover_models_refreshes_maas_auth_when_department_missing(
         lambda: token_service,
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -2823,7 +2823,7 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -2865,7 +2865,7 @@ def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> 
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -2900,7 +2900,7 @@ def test_discover_models_extracts_context_window_when_provider_returns_it(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -2937,7 +2937,7 @@ def test_discover_models_extracts_endpoint_only_metadata(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -2988,7 +2988,7 @@ def test_discover_models_extracts_moonshot_endpoint_only_metadata(monkeypatch) -
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3048,7 +3048,7 @@ def test_discover_models_leaves_minimax_openai_endpoint_only_metadata_empty(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3099,7 +3099,7 @@ def test_discover_models_leaves_xiaomi_mimo_endpoint_only_metadata_empty(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3153,7 +3153,7 @@ def test_discover_models_leaves_bigmodel_endpoint_only_metadata_empty(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3202,7 +3202,7 @@ def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3232,7 +3232,7 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3262,7 +3262,7 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3293,7 +3293,7 @@ def test_discover_models_supports_anthropic_provider(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3335,7 +3335,7 @@ def test_discover_models_anthropic_returns_network_error_for_request_exception(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ConnectError("failed to reach anthropic model list"),
         ),
@@ -3361,7 +3361,7 @@ def test_discover_models_supports_anthropic_endpoint_only_metadata(monkeypatch) 
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3401,7 +3401,7 @@ def test_discover_models_leaves_minimax_anthropic_endpoint_only_metadata_empty(
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3453,7 +3453,7 @@ def test_discover_models_allows_header_only_override(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3486,7 +3486,7 @@ def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(200, json={"items": [{"id": "missing-data"}]})
         ),
@@ -3508,7 +3508,7 @@ def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3568,7 +3568,7 @@ def test_probe_resolves_default_alias_to_runtime_default_profile(monkeypatch) ->
     )
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from json import dumps, loads
@@ -13,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from relay_teams.env.proxy_env import ProxyEnvConfig
 from relay_teams.logger import get_logger
 from relay_teams.media import MediaModality
-from relay_teams.net.clients import create_async_http_client, create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.providers.model_capabilities import resolve_model_capabilities
 from relay_teams.providers.model_config import ModelCapabilities, ProviderType
 
@@ -93,108 +94,7 @@ class ModelCatalogService:
         self._ttl_seconds = ttl_seconds
 
     def get_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
-        cached = self._load_cache()
-        if cached is not None and not refresh:
-            return self._result_from_cache(
-                cached,
-                ok=True,
-                stale=self._is_stale(cached),
-            )
-
-        fetched = self._fetch_catalog()
-        if fetched.ok:
-            envelope = _ModelCatalogCacheEnvelope(
-                source_url=self._source_url,
-                fetched_at=fetched.fetched_at or datetime.now(timezone.utc),
-                providers=fetched.providers,
-            )
-            try:
-                self._write_cache(envelope)
-            except OSError as exc:
-                LOGGER.warning(
-                    "Failed to write model catalog cache.",
-                    extra={
-                        "event": "providers.model_catalog.cache_write_failed",
-                        "cache_path": str(self._cache_path()),
-                        "error": str(exc),
-                    },
-                )
-            return self._result_from_cache(envelope, ok=True, stale=False)
-
-        if cached is None:
-            return fetched
-        return self._result_from_cache(
-            cached,
-            ok=False,
-            stale=True,
-            error_code=fetched.error_code,
-            error_message=fetched.error_message,
-        )
-
-    def _fetch_catalog(self) -> ModelCatalogResult:
-        last_error: ModelCatalogResult | None = None
-        for _attempt in range(_MODEL_CATALOG_FETCH_ATTEMPTS):
-            result = self._fetch_catalog_once()
-            if result.ok:
-                return result
-            last_error = result
-            if result.error_code not in {"network_timeout", "network_error"}:
-                return result
-        if last_error is not None:
-            return last_error
-        return self._error_result(
-            error_code="network_error",
-            error_message="Failed to fetch model catalog.",
-        )
-
-    def _fetch_catalog_once(self) -> ModelCatalogResult:
-        try:
-            with create_sync_http_client(
-                proxy_config=self._get_proxy_config(),
-                timeout_seconds=_MODEL_CATALOG_TIMEOUT_SECONDS,
-                connect_timeout_seconds=_MODEL_CATALOG_TIMEOUT_SECONDS,
-                follow_redirects=True,
-            ) as client:
-                response = client.get(self._source_url)
-        except httpx.TimeoutException as exc:
-            return self._error_result(
-                error_code="network_timeout",
-                error_message=str(exc) or "Timed out fetching model catalog.",
-            )
-        except httpx.RequestError as exc:
-            return self._error_result(
-                error_code="network_error",
-                error_message=str(exc) or "Failed to fetch model catalog.",
-            )
-
-        if response.status_code >= 400:
-            return self._error_result(
-                error_code="http_error",
-                error_message=(
-                    f"Model catalog source returned HTTP {response.status_code}."
-                ),
-            )
-
-        try:
-            payload: object = response.json()
-        except ValueError:
-            return self._error_result(
-                error_code="invalid_response",
-                error_message="Model catalog source returned invalid JSON.",
-            )
-
-        providers = _parse_catalog_payload(payload)
-        if not providers:
-            return self._error_result(
-                error_code="invalid_response",
-                error_message="Model catalog source returned no providers.",
-            )
-        return ModelCatalogResult(
-            ok=True,
-            source_url=self._source_url,
-            fetched_at=datetime.now(timezone.utc),
-            providers=providers,
-        )
+        return asyncio.run(self.get_catalog_async(refresh=refresh))
 
     def _load_cache(self) -> _ModelCatalogCacheEnvelope | None:
         cache_path = self._cache_path()

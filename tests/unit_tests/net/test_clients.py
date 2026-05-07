@@ -9,7 +9,7 @@ import pytest
 
 import relay_teams.net.clients as clients_module
 from relay_teams.env.proxy_env import ProxyEnvConfig
-from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.net.proxy_transports import AsyncRequestLimiter
 
 _SSL_VERIFY_DISABLED = 0
@@ -22,8 +22,11 @@ def _transport_verify_mode(transport: object) -> int:
     return int(ssl_context.verify_mode)
 
 
-def test_create_sync_http_client_routes_requests_with_runtime_proxy_rules() -> None:
-    with create_sync_http_client(
+@pytest.mark.asyncio
+async def test_create_async_http_client_routes_requests_with_runtime_proxy_rules() -> (
+    None
+):
+    async with create_async_http_client(
         merged_env={
             "HTTPS_PROXY": "http://proxy.example:8080",
             "NO_PROXY": "localhost;127.*;example.com;<local>",
@@ -35,8 +38,8 @@ def test_create_sync_http_client_routes_requests_with_runtime_proxy_rules() -> N
         https_proxy_transport = getattr(transport, "_https_proxy_transport")
 
     assert client.trust_env is False
-    assert isinstance(https_proxy_transport, httpx.HTTPTransport)
-    assert isinstance(direct_transport, httpx.HTTPTransport)
+    assert isinstance(https_proxy_transport, httpx.AsyncHTTPTransport)
+    assert isinstance(direct_transport, httpx.AsyncHTTPTransport)
     assert select_transport("https://service.example.net") is https_proxy_transport
     assert select_transport("https://example.com") is direct_transport
     assert select_transport("https://127.0.0.1:8443") is direct_transport
@@ -44,8 +47,11 @@ def test_create_sync_http_client_routes_requests_with_runtime_proxy_rules() -> N
     assert _transport_verify_mode(direct_transport) == _SSL_VERIFY_DISABLED
 
 
-def test_create_sync_http_client_enables_ssl_verification_when_configured() -> None:
-    with create_sync_http_client(merged_env={"SSL_VERIFY": "true"}) as client:
+@pytest.mark.asyncio
+async def test_create_async_http_client_enables_ssl_verification_when_configured() -> (
+    None
+):
+    async with create_async_http_client(merged_env={"SSL_VERIFY": "true"}) as client:
         verify_mode = _transport_verify_mode(
             getattr(client._transport, "_direct_transport")
         )
@@ -53,54 +59,16 @@ def test_create_sync_http_client_enables_ssl_verification_when_configured() -> N
     assert verify_mode == _SSL_VERIFY_REQUIRED
 
 
-def test_create_sync_http_client_disables_ssl_verification_when_configured() -> None:
-    with create_sync_http_client(merged_env={"SSL_VERIFY": "false"}) as client:
+@pytest.mark.asyncio
+async def test_create_async_http_client_disables_ssl_verification_when_configured() -> (
+    None
+):
+    async with create_async_http_client(merged_env={"SSL_VERIFY": "false"}) as client:
         verify_mode = _transport_verify_mode(
             getattr(client._transport, "_direct_transport")
         )
 
     assert verify_mode == _SSL_VERIFY_DISABLED
-
-
-def test_create_runtime_sync_http_client_uses_hydrated_proxy_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    proxy_config = ProxyEnvConfig(https_proxy="http://user:secret@proxy.example:8443")
-    captured_proxy_configs: list[ProxyEnvConfig | None] = []
-
-    def fake_create_sync_http_client(
-        *,
-        merged_env: Mapping[str, str] | None = None,
-        proxy_config: ProxyEnvConfig | None = None,
-        ssl_verify: bool | None = None,
-        timeout_seconds: float = 0.0,
-        connect_timeout_seconds: float = 0.0,
-        follow_redirects: bool = False,
-    ) -> httpx.Client:
-        _ = (
-            merged_env,
-            ssl_verify,
-            timeout_seconds,
-            connect_timeout_seconds,
-            follow_redirects,
-        )
-        captured_proxy_configs.append(proxy_config)
-        return cast(httpx.Client, object())
-
-    monkeypatch.setattr(
-        clients_module,
-        "load_proxy_env_config",
-        lambda: proxy_config,
-    )
-    monkeypatch.setattr(
-        clients_module,
-        "create_sync_http_client",
-        fake_create_sync_http_client,
-    )
-
-    _ = clients_module.create_runtime_sync_http_client()
-
-    assert captured_proxy_configs == [proxy_config]
 
 
 def test_create_runtime_async_http_client_uses_hydrated_proxy_config(

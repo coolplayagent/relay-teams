@@ -11,7 +11,7 @@ import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from relay_teams.net.clients import create_async_http_client, create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.providers.model_config import (
     DEFAULT_MAAS_APP_ID,
     DEFAULT_MAAS_LOGIN_URL,
@@ -187,17 +187,13 @@ class MaaSTokenService:
         ssl_verify: bool | None,
         connect_timeout_seconds: float,
     ) -> _MaaSTokenRecord:
-        with create_sync_http_client(
-            ssl_verify=ssl_verify,
-            timeout_seconds=connect_timeout_seconds,
-            connect_timeout_seconds=connect_timeout_seconds,
-        ) as client:
-            response = client.post(
-                DEFAULT_MAAS_LOGIN_URL,
-                headers={"Content-Type": "application/json"},
-                json=_maas_login_payload(auth_config),
+        return asyncio.run(
+            self._login_async(
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
             )
-        return _build_token_record(response)
+        )
 
     async def _login_async(
         self,

@@ -15,7 +15,7 @@ import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from relay_teams.net.clients import create_async_http_client, create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.providers.maas_auth import (
     MaaSAuthConfig,
     MaaSLoginError,
@@ -298,23 +298,13 @@ class CodeAgentTokenService:
         ssl_verify: bool | None,
         connect_timeout_seconds: float,
     ) -> CodeAgentOAuthTokenResult:
-        if auth_config.refresh_token is None:
-            raise CodeAgentOAuthError(
-                "CodeAgent refresh token is not configured.",
-                status_code=None,
+        return asyncio.run(
+            self.refresh_token(
+                base_url=base_url,
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
             )
-        with create_sync_http_client(
-            ssl_verify=ssl_verify,
-            timeout_seconds=connect_timeout_seconds,
-            connect_timeout_seconds=connect_timeout_seconds,
-        ) as client:
-            response = client.post(
-                _refresh_token_url(base_url),
-                json=_refresh_token_payload(auth_config),
-                headers={"Content-Type": "application/json"},
-            )
-        return _build_token_result(
-            response, fallback_refresh_token=auth_config.refresh_token
         )
 
     async def refresh_token(
@@ -351,20 +341,13 @@ class CodeAgentTokenService:
         ssl_verify: bool | None,
         connect_timeout_seconds: float,
     ) -> CodeAgentOAuthTokenResult | None:
-        with create_sync_http_client(
-            ssl_verify=ssl_verify,
-            timeout_seconds=connect_timeout_seconds,
-            connect_timeout_seconds=connect_timeout_seconds,
-        ) as client:
-            response = client.post(
-                _get_token_url(session.base_url),
-                json={
-                    "clientCode": session.client_code,
-                    "redirectUrl": session.callback_url,
-                },
-                headers={"Content-Type": "application/json"},
+        return asyncio.run(
+            self.poll_token(
+                session=session,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
             )
-        return _build_polled_token_result(response)
+        )
 
     # noinspection PyMethodMayBeStatic
     async def poll_token(  # noqa: PLR6301

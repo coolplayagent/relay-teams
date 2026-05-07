@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 from time import perf_counter
 from typing import Literal, cast
-import asyncio
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from relay_teams.logger import get_logger
 from relay_teams.media import MediaModality
-from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.providers.codeagent_auth import (
     CodeAgentOAuthError,
     build_codeagent_request_headers,
@@ -68,6 +68,28 @@ _MAX_PROBE_TIMEOUT_MS = 300_000
 ModelDiscoveryMetadataPolicy = Literal["allow_inference", "endpoint_only"]
 
 LOGGER = get_logger(__name__)
+
+
+def _run_async_http_request(
+    *,
+    method: Literal["GET", "POST"],
+    url: str,
+    headers: dict[str, str],
+    timeout_seconds: float,
+    ssl_verify: bool | None,
+    json_body: dict[str, object] | None = None,
+) -> httpx.Response:
+    async def request() -> httpx.Response:
+        async with create_async_http_client(
+            timeout_seconds=timeout_seconds,
+            connect_timeout_seconds=timeout_seconds,
+            ssl_verify=ssl_verify,
+        ) as client:
+            if method == "GET":
+                return await client.get(url, headers=headers)
+            return await client.post(url, headers=headers, json=json_body)
+
+    return asyncio.run(request())
 
 
 def _uses_openai_compatible_transport(provider: ProviderType) -> bool:
@@ -1031,16 +1053,14 @@ class ModelConnectivityProbeService:
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:
-            with create_sync_http_client(
+            response = _run_async_http_request(
+                method="POST",
+                url=endpoint,
+                headers=headers,
+                json_body=payload,
                 timeout_seconds=timeout_ms / 1000,
-                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            ) as client:
-                response = client.post(
-                    endpoint,
-                    headers=headers,
-                    json=payload,
-                )
+            )
         except httpx.TimeoutException as exc:
             return self._build_transport_error_result(
                 config=config,
@@ -1283,15 +1303,13 @@ class ModelConnectivityProbeService:
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:
-            with create_sync_http_client(
+            response = _run_async_http_request(
+                method="GET",
+                url=endpoint,
+                headers=headers,
                 timeout_seconds=timeout_ms / 1000,
-                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            ) as client:
-                response = client.get(
-                    endpoint,
-                    headers=headers,
-                )
+            )
         except httpx.TimeoutException as exc:
             return self._build_model_discovery_transport_error_result(
                 config=config,
@@ -1601,16 +1619,14 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> httpx.Response | ModelDiscoveryResult:
         try:
-            with create_sync_http_client(
+            return _run_async_http_request(
+                method="POST",
+                url=endpoint,
+                headers=headers,
+                json_body=payload,
                 timeout_seconds=timeout_ms / 1000,
-                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            ) as client:
-                return client.post(
-                    endpoint,
-                    headers=headers,
-                    json=payload,
-                )
+            )
         except httpx.TimeoutException as exc:
             return self._build_model_discovery_transport_error_result(
                 config=config,
@@ -1639,15 +1655,13 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> httpx.Response | ModelDiscoveryResult:
         try:
-            with create_sync_http_client(
+            return _run_async_http_request(
+                method="GET",
+                url=endpoint,
+                headers=headers,
                 timeout_seconds=timeout_ms / 1000,
-                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            ) as client:
-                return client.get(
-                    endpoint,
-                    headers=headers,
-                )
+            )
         except httpx.TimeoutException as exc:
             return self._build_model_discovery_transport_error_result(
                 config=config,
@@ -1771,16 +1785,14 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> httpx.Response | ModelConnectivityProbeResult:
         try:
-            with create_sync_http_client(
+            return _run_async_http_request(
+                method="POST",
+                url=endpoint,
+                headers=headers,
+                json_body=payload,
                 timeout_seconds=timeout_ms / 1000,
-                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            ) as client:
-                return client.post(
-                    endpoint,
-                    headers=headers,
-                    json=payload,
-                )
+            )
         except httpx.TimeoutException as exc:
             return self._build_transport_error_result(
                 config=config,
@@ -2039,15 +2051,13 @@ class ModelConnectivityProbeService:
     ) -> httpx.Response | CodeAgentAuthVerifyResult:
         endpoint = f"{config.base_url.rstrip('/')}/chat/modles?checkUserPermission=TRUE"
         try:
-            with create_sync_http_client(
+            return _run_async_http_request(
+                method="GET",
+                url=endpoint,
+                headers=build_codeagent_request_headers(token=token),
                 timeout_seconds=config.connect_timeout_seconds,
-                connect_timeout_seconds=config.connect_timeout_seconds,
                 ssl_verify=config.ssl_verify,
-            ) as client:
-                return client.get(
-                    endpoint,
-                    headers=build_codeagent_request_headers(token=token),
-                )
+            )
         except httpx.TimeoutException as exc:
             return CodeAgentAuthVerifyResult(
                 status="error",

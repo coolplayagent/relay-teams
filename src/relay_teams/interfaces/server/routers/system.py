@@ -556,7 +556,7 @@ def start_codeagent_oauth(
 
 
 @router.get("/configs/model/codeagent/oauth/{auth_session_id}")
-def get_codeagent_oauth_session_status(
+async def get_codeagent_oauth_session_status(
     auth_session_id: str,
 ) -> CodeAgentOAuthSessionResponse:
     session = get_codeagent_oauth_session(auth_session_id)
@@ -564,7 +564,7 @@ def get_codeagent_oauth_session_status(
         raise HTTPException(status_code=404, detail="CodeAgent OAuth session not found")
     if not session.completed:
         try:
-            token_result = get_codeagent_token_service().poll_token_sync(
+            token_result = await get_codeagent_token_service().poll_token(
                 session=session,
                 ssl_verify=None,
                 connect_timeout_seconds=15.0,

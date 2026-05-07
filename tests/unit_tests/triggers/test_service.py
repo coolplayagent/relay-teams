@@ -135,7 +135,7 @@ class _FakeGitHubApiClient:
             },
         )
 
-    def get_repository(
+    async def get_repository(
         self, *, token: str, owner: str, repo: str
     ) -> dict[str, JsonValue]:
         assert token == "ghp_test"
@@ -145,7 +145,7 @@ class _FakeGitHubApiClient:
             "full_name": f"{owner}/{repo}",
         }
 
-    def list_repositories(
+    async def list_repositories(
         self,
         *,
         token: str,
@@ -161,7 +161,7 @@ class _FakeGitHubApiClient:
             if normalized_query in str(payload.get("full_name", "")).lower()
         )
 
-    def delete_repository_webhook(
+    async def delete_repository_webhook(
         self,
         *,
         token: str,
@@ -172,7 +172,7 @@ class _FakeGitHubApiClient:
         assert token == "ghp_test"
         self.deleted_webhooks.append((owner, repo, webhook_id))
 
-    def register_repository_webhook(
+    async def register_repository_webhook(
         self,
         *,
         token: str,
@@ -188,7 +188,7 @@ class _FakeGitHubApiClient:
         )
         return {"id": f"hook-{len(self.registered_webhooks)}"}
 
-    def list_pull_request_files(
+    async def list_pull_request_files(
         self,
         *,
         token: str,
@@ -200,7 +200,7 @@ class _FakeGitHubApiClient:
         _ = (owner, repo, pull_request_number)
         return self.pull_request_files
 
-    def create_issue_comment(
+    async def create_issue_comment(
         self,
         *,
         token: str,
@@ -213,7 +213,7 @@ class _FakeGitHubApiClient:
         self.created_comments.append((owner, repo, issue_number, body))
         return {"id": 1001}
 
-    def add_labels(
+    async def add_labels(
         self,
         *,
         token: str,
@@ -226,7 +226,7 @@ class _FakeGitHubApiClient:
         self.added_labels.append((owner, repo, issue_number, labels))
         return {"labels": list(labels)}
 
-    def remove_label(
+    async def remove_label(
         self,
         *,
         token: str,
@@ -238,7 +238,7 @@ class _FakeGitHubApiClient:
         assert token == "ghp_test"
         self.removed_labels.append((owner, repo, issue_number, label))
 
-    def add_assignees(
+    async def add_assignees(
         self,
         *,
         token: str,
@@ -251,7 +251,7 @@ class _FakeGitHubApiClient:
         self.added_assignees.append((owner, repo, issue_number, assignees))
         return {"assignees": list(assignees)}
 
-    def remove_assignees(
+    async def remove_assignees(
         self,
         *,
         token: str,
@@ -264,7 +264,7 @@ class _FakeGitHubApiClient:
         self.removed_assignees.append((owner, repo, issue_number, assignees))
         return {"assignees": list(assignees)}
 
-    def set_commit_status(
+    async def set_commit_status(
         self,
         *,
         token: str,

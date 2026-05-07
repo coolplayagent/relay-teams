@@ -23,13 +23,13 @@ class _FakeProbeClient:
         self._response = response
         self.calls: list[str] = []
 
-    def __enter__(self) -> _FakeProbeClient:
+    async def __aenter__(self) -> _FakeProbeClient:
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def get(self, url: str) -> httpx.Response:
+    async def get(self, url: str) -> httpx.Response:
         self.calls.append(url)
         return self._response
 
@@ -182,7 +182,7 @@ def test_probe_github_webhook_marks_inactive_temporary_public_url(monkeypatch) -
         )
     )
     monkeypatch.setattr(
-        "relay_teams.net.github_connectivity.create_sync_http_client",
+        "relay_teams.net.github_connectivity.create_async_http_client",
         lambda **_kwargs: fake_client,
     )
     service = GitHubWebhookConnectivityProbeService(

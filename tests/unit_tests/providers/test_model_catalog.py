@@ -17,10 +17,10 @@ class _FakeCatalogClient:
         self._response = response
         self.requested_urls: list[str] = []
 
-    def __enter__(self) -> "_FakeCatalogClient":
+    async def __aenter__(self) -> "_FakeCatalogClient":
         return self
 
-    def __exit__(
+    async def __aexit__(
         self,
         exc_type: object,
         exc_value: object,
@@ -28,7 +28,7 @@ class _FakeCatalogClient:
     ) -> None:
         return None
 
-    def get(self, url: str) -> httpx.Response:
+    async def get(self, url: str) -> httpx.Response:
         self.requested_urls.append(url)
         if isinstance(self._response, Exception):
             raise self._response
@@ -71,7 +71,7 @@ def test_model_catalog_fetches_models_dev_payload(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: client,
     )
     service = ModelCatalogService(
@@ -118,7 +118,7 @@ def test_model_catalog_marks_anthropic_compatible_marketplace_provider(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: client,
     )
     service = ModelCatalogService(
@@ -151,7 +151,7 @@ def test_model_catalog_marks_anthropic_api_path_as_anthropic_provider(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: client,
     )
     service = ModelCatalogService(
@@ -183,7 +183,7 @@ def test_model_catalog_marks_anthropic_api_root_as_anthropic_provider(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: client,
     )
     service = ModelCatalogService(
@@ -219,7 +219,7 @@ def test_model_catalog_uses_proxy_config_and_30_second_timeout(
         captured_kwargs.append(kwargs)
         return client
 
-    monkeypatch.setattr(model_catalog, "create_sync_http_client", create_client)
+    monkeypatch.setattr(model_catalog, "create_async_http_client", create_client)
     service = ModelCatalogService(
         config_dir=tmp_path,
         get_proxy_config=lambda: proxy_config,
@@ -253,7 +253,7 @@ def test_model_catalog_returns_fetched_data_when_cache_write_fails(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: client,
     )
     service = ModelCatalogService(
@@ -292,7 +292,7 @@ def test_model_catalog_retries_transient_network_errors(
         created_clients.append(client)
         return client
 
-    monkeypatch.setattr(model_catalog, "create_sync_http_client", create_client)
+    monkeypatch.setattr(model_catalog, "create_async_http_client", create_client)
     service = ModelCatalogService(
         config_dir=tmp_path,
         get_proxy_config=lambda: ProxyEnvConfig(),
@@ -331,7 +331,7 @@ def test_model_catalog_uses_fresh_cache_without_fetching(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: first_client,
     )
     assert service.get_catalog(refresh=True).ok is True
@@ -339,7 +339,7 @@ def test_model_catalog_uses_fresh_cache_without_fetching(
     def fail_fetch(**_kwargs: object) -> _FakeCatalogClient:
         raise AssertionError("fresh cache should avoid network")
 
-    monkeypatch.setattr(model_catalog, "create_sync_http_client", fail_fetch)
+    monkeypatch.setattr(model_catalog, "create_async_http_client", fail_fetch)
 
     cached = service.get_catalog()
 
@@ -370,7 +370,7 @@ def test_model_catalog_returns_stale_cache_when_refresh_fails(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: success_client,
     )
     assert service.get_catalog(refresh=True).ok is True
@@ -378,7 +378,7 @@ def test_model_catalog_returns_stale_cache_when_refresh_fails(
     failed_client = _FakeCatalogClient(httpx.ConnectError("offline"))
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: failed_client,
     )
 
@@ -412,7 +412,7 @@ def test_model_catalog_prefers_stale_cache_without_fetching(
     )
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: success_client,
     )
     assert service.get_catalog(refresh=True).ok is True
@@ -420,7 +420,7 @@ def test_model_catalog_prefers_stale_cache_without_fetching(
     def fail_fetch(**_kwargs: object) -> _FakeCatalogClient:
         raise AssertionError("cached catalog should be returned before refresh")
 
-    monkeypatch.setattr(model_catalog, "create_sync_http_client", fail_fetch)
+    monkeypatch.setattr(model_catalog, "create_async_http_client", fail_fetch)
 
     result = service.get_catalog()
 
@@ -436,7 +436,7 @@ def test_model_catalog_without_cache_reports_fetch_error(
     failed_client = _FakeCatalogClient(httpx.ConnectError("offline"))
     monkeypatch.setattr(
         model_catalog,
-        "create_sync_http_client",
+        "create_async_http_client",
         lambda **_kwargs: failed_client,
     )
     service = ModelCatalogService(

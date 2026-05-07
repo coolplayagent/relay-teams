@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import secrets
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -43,7 +45,10 @@ from relay_teams.sessions.runs.terminal_payload import (
     parse_terminal_payload_json,
 )
 from relay_teams.sessions.session_service import SessionService
-from relay_teams.triggers.github_client import GitHubApiClient, GitHubApiError
+from relay_teams.triggers.github_client import (
+    GitHubApiClient,
+    GitHubApiError,
+)
 from relay_teams.triggers.models import (
     GitHubActionSpec,
     GitHubActionType,
@@ -81,12 +86,33 @@ from relay_teams.triggers.repository import (
     TriggerRuleNameConflictError,
 )
 from relay_teams.triggers.secret_store import GitHubTriggerSecretStore
-import asyncio
 
+JsonObject = dict[str, JsonValue]
 LOGGER = get_logger(__name__)
 _GITHUB_DELIVERY_HEADER = "x-github-delivery"
 _GITHUB_EVENT_HEADER = "x-github-event"
 _GITHUB_SIGNATURE_HEADER = "x-hub-signature-256"
+
+
+def _run_sync_awaitable(result: JsonObject | Awaitable[JsonObject]) -> JsonObject:
+    if inspect.isawaitable(result):
+        return asyncio.run(cast(Coroutine[object, object, JsonObject], result))
+    return result
+
+
+def _run_sync_awaitable_tuple(
+    result: tuple[JsonObject, ...] | Awaitable[tuple[JsonObject, ...]],
+) -> tuple[JsonObject, ...]:
+    if inspect.isawaitable(result):
+        return asyncio.run(
+            cast(Coroutine[object, object, tuple[JsonObject, ...]], result)
+        )
+    return result
+
+
+def _run_sync_awaitable_none(result: None | Awaitable[None]) -> None:
+    if inspect.isawaitable(result):
+        asyncio.run(cast(Coroutine[object, object, None], result))
 
 
 class EventLogLike(Protocol):
@@ -299,9 +325,11 @@ class GitHubTriggerService:
     ) -> tuple[GitHubAvailableRepositoryRecord, ...]:
         _ = self._repository.get_account(account_id)
         token = self._require_account_token(account_id)
-        payloads = self._github_client.list_repositories(
-            token=token,
-            query=_normalize_optional_text(query),
+        payloads = _run_sync_awaitable_tuple(
+            self._github_client.list_repositories(
+                token=token,
+                query=_normalize_optional_text(query),
+            )
         )
         repositories: list[GitHubAvailableRepositoryRecord] = []
         for payload in payloads:
@@ -338,10 +366,12 @@ class GitHubTriggerService:
             )
         owner = _normalize_required_text(payload.owner, field_name="owner")
         repo_name = _normalize_required_text(payload.repo_name, field_name="repo_name")
-        repo_payload = self._github_client.get_repository(
-            token=token,
-            owner=owner,
-            repo=repo_name,
+        repo_payload = _run_sync_awaitable(
+            self._github_client.get_repository(
+                token=token,
+                owner=owner,
+                repo=repo_name,
+            )
         )
         resolved_owner, resolved_repo_name, resolved_full_name = (
             _resolve_repository_identity(
@@ -399,10 +429,12 @@ class GitHubTriggerService:
         last_error = existing.last_error
         if identity_changed:
             token = self._require_account_token(existing.account_id)
-            repo_payload = self._github_client.get_repository(
-                token=token,
-                owner=owner,
-                repo=repo_name,
+            repo_payload = _run_sync_awaitable(
+                self._github_client.get_repository(
+                    token=token,
+                    owner=owner,
+                    repo=repo_name,
+                )
             )
             owner, repo_name, full_name = _resolve_repository_identity(
                 repo_payload,
@@ -480,14 +512,16 @@ class GitHubTriggerService:
         existing = self._repository.get_repo_subscription(repo_subscription_id)
         if _normalize_optional_text(existing.provider_webhook_id) is not None:
             token = self._require_account_token(existing.account_id)
-            self._github_client.delete_repository_webhook(
-                token=token,
-                owner=existing.owner,
-                repo=existing.repo_name,
-                webhook_id=_normalize_required_text(
-                    existing.provider_webhook_id,
-                    field_name="provider_webhook_id",
-                ),
+            _run_sync_awaitable_none(
+                self._github_client.delete_repository_webhook(
+                    token=token,
+                    owner=existing.owner,
+                    repo=existing.repo_name,
+                    webhook_id=_normalize_required_text(
+                        existing.provider_webhook_id,
+                        field_name="provider_webhook_id",
+                    ),
+                )
             )
         updated = existing.model_copy(
             update={
@@ -1388,12 +1422,14 @@ class GitHubTriggerService:
                 ),
                 context,
             )
-            response = self._github_client.create_issue_comment(
-                token=token,
-                owner=repo.owner,
-                repo=repo.repo_name,
-                issue_number=issue_number,
-                body=body,
+            response = _run_sync_awaitable(
+                self._github_client.create_issue_comment(
+                    token=token,
+                    owner=repo.owner,
+                    repo=repo.repo_name,
+                    issue_number=issue_number,
+                    body=body,
+                )
             )
             response_payload = _response_payload_dict(response)
             response_id = _json_identifier(response_payload.get("id"))
@@ -1401,12 +1437,14 @@ class GitHubTriggerService:
         if action_spec.action_type == GitHubActionType.ADD_LABELS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
-            response = self._github_client.add_labels(
-                token=token,
-                owner=repo.owner,
-                repo=repo.repo_name,
-                issue_number=issue_number,
-                labels=action_spec.labels,
+            response = _run_sync_awaitable(
+                self._github_client.add_labels(
+                    token=token,
+                    owner=repo.owner,
+                    repo=repo.repo_name,
+                    issue_number=issue_number,
+                    labels=action_spec.labels,
+                )
             )
             request_payload = {"labels": _json_string_list_value(action_spec.labels)}
             return request_payload, _response_payload_dict(response), None
@@ -1414,23 +1452,27 @@ class GitHubTriggerService:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
             for label in action_spec.labels:
-                self._github_client.remove_label(
-                    token=token,
-                    owner=repo.owner,
-                    repo=repo.repo_name,
-                    issue_number=issue_number,
-                    label=label,
+                _run_sync_awaitable_none(
+                    self._github_client.remove_label(
+                        token=token,
+                        owner=repo.owner,
+                        repo=repo.repo_name,
+                        issue_number=issue_number,
+                        label=label,
+                    )
                 )
             return {"labels": _json_string_list_value(action_spec.labels)}, {}, None
         if action_spec.action_type == GitHubActionType.ASSIGN_USERS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
-            response = self._github_client.add_assignees(
-                token=token,
-                owner=repo.owner,
-                repo=repo.repo_name,
-                issue_number=issue_number,
-                assignees=action_spec.assignees,
+            response = _run_sync_awaitable(
+                self._github_client.add_assignees(
+                    token=token,
+                    owner=repo.owner,
+                    repo=repo.repo_name,
+                    issue_number=issue_number,
+                    assignees=action_spec.assignees,
+                )
             )
             request_payload = {
                 "assignees": _json_string_list_value(action_spec.assignees)
@@ -1439,12 +1481,14 @@ class GitHubTriggerService:
         if action_spec.action_type == GitHubActionType.UNASSIGN_USERS:
             if issue_number is None:
                 raise RuntimeError("issue_or_pull_request_number_missing")
-            response = self._github_client.remove_assignees(
-                token=token,
-                owner=repo.owner,
-                repo=repo.repo_name,
-                issue_number=issue_number,
-                assignees=action_spec.assignees,
+            response = _run_sync_awaitable(
+                self._github_client.remove_assignees(
+                    token=token,
+                    owner=repo.owner,
+                    repo=repo.repo_name,
+                    issue_number=issue_number,
+                    assignees=action_spec.assignees,
+                )
             )
             request_payload = {
                 "assignees": _json_string_list_value(action_spec.assignees)
@@ -1470,20 +1514,23 @@ class GitHubTriggerService:
                 if target_url_template is not None
                 else None
             )
-            response = self._github_client.set_commit_status(
-                token=token,
-                owner=repo.owner,
-                repo=repo.repo_name,
-                sha=sha,
-                state=_normalize_required_text(
-                    action_spec.commit_status_state, field_name="commit_status_state"
-                ),
-                context=_normalize_required_text(
-                    action_spec.commit_status_context,
-                    field_name="commit_status_context",
-                ),
-                description=description,
-                target_url=target_url,
+            response = _run_sync_awaitable(
+                self._github_client.set_commit_status(
+                    token=token,
+                    owner=repo.owner,
+                    repo=repo.repo_name,
+                    sha=sha,
+                    state=_normalize_required_text(
+                        action_spec.commit_status_state,
+                        field_name="commit_status_state",
+                    ),
+                    context=_normalize_required_text(
+                        action_spec.commit_status_context,
+                        field_name="commit_status_context",
+                    ),
+                    description=description,
+                    target_url=target_url,
+                )
             )
             response_payload = _response_payload_dict(response)
             request_payload: dict[str, JsonValue] = {
@@ -1537,11 +1584,13 @@ class GitHubTriggerService:
             return
         try:
             token = self._require_account_token(repo_subscription.account_id)
-            self._github_client.delete_repository_webhook(
-                token=token,
-                owner=repo_subscription.owner,
-                repo=repo_subscription.repo_name,
-                webhook_id=webhook_id,
+            _run_sync_awaitable_none(
+                self._github_client.delete_repository_webhook(
+                    token=token,
+                    owner=repo_subscription.owner,
+                    repo=repo_subscription.repo_name,
+                    webhook_id=webhook_id,
+                )
             )
         except (GitHubApiError, KeyError, ValueError) as exc:
             log_event(
@@ -1604,19 +1653,23 @@ class GitHubTriggerService:
             webhook_secret = self._require_account_webhook_secret(existing.account_id)
             webhook_id = _normalize_optional_text(existing.provider_webhook_id)
             if webhook_id is not None:
-                self._github_client.delete_repository_webhook(
+                _run_sync_awaitable_none(
+                    self._github_client.delete_repository_webhook(
+                        token=token,
+                        owner=existing.owner,
+                        repo=existing.repo_name,
+                        webhook_id=webhook_id,
+                    )
+                )
+            response_payload = _run_sync_awaitable(
+                self._github_client.register_repository_webhook(
                     token=token,
                     owner=existing.owner,
                     repo=existing.repo_name,
-                    webhook_id=webhook_id,
+                    callback_url=callback_url,
+                    webhook_secret=webhook_secret,
+                    events=desired_events,
                 )
-            response_payload = self._github_client.register_repository_webhook(
-                token=token,
-                owner=existing.owner,
-                repo=existing.repo_name,
-                callback_url=callback_url,
-                webhook_secret=webhook_secret,
-                events=desired_events,
             )
             updated = existing.model_copy(
                 update={
@@ -1678,11 +1731,13 @@ class GitHubTriggerService:
             )
         try:
             token = self._require_account_token(repo_subscription.account_id)
-            self._github_client.delete_repository_webhook(
-                token=token,
-                owner=repo_subscription.owner,
-                repo=repo_subscription.repo_name,
-                webhook_id=webhook_id,
+            _run_sync_awaitable_none(
+                self._github_client.delete_repository_webhook(
+                    token=token,
+                    owner=repo_subscription.owner,
+                    repo=repo_subscription.repo_name,
+                    webhook_id=webhook_id,
+                )
             )
             updated = repo_subscription.model_copy(
                 update={

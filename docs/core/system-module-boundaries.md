@@ -98,9 +98,10 @@ Boundary:
 - `net/*`: proxy-aware HTTP client construction and transport policy.
   `urllib.request.urlopen` and `urllib.request.Request` must not be used anywhere
   in `src/relay_teams/`. All outbound HTTP traffic must use client instances
-  created by the factories in `relay_teams.net.clients`. Gateway outbound HTTP
-  is async-only and must use `create_async_http_client()` or
-  `create_runtime_async_http_client()`; do not add gateway sync HTTP fallbacks.
+  created by the async factories in `relay_teams.net.clients`. The net module no
+  longer exposes sync HTTP factories or sync proxy transports. Synchronous
+  public API boundaries may block on async implementations, but they must not
+  maintain a separate synchronous HTTP client path.
 - `secrets/*`: secret persistence and masking.
 - `trace/*`: trace/span context propagation.
 

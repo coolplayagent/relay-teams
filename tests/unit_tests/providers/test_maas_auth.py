@@ -13,18 +13,18 @@ from relay_teams.providers.maas_auth import (
 from relay_teams.providers.model_config import MaaSAuthConfig
 
 
-class _FakeSyncHttpClient:
+class _FakeAsyncHttpClient:
     def __init__(self, response: httpx.Response) -> None:
         self._response = response
         self.calls = 0
 
-    def __enter__(self) -> _FakeSyncHttpClient:
+    async def __aenter__(self) -> "_FakeAsyncHttpClient":
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def post(
+    async def post(
         self,
         url: str,
         *,
@@ -39,7 +39,7 @@ class _FakeSyncHttpClient:
 
 
 def test_build_maas_openai_client_disables_sdk_retries() -> None:
-    http_client = httpx.AsyncClient()
+    http_client = httpx.AsyncClient(trust_env=False)
     try:
         client = build_maas_openai_client(
             base_url="https://maas.example/api/v2",
@@ -60,7 +60,7 @@ def test_build_maas_openai_client_disables_sdk_retries() -> None:
 def test_get_auth_context_sync_extracts_department_from_direct_field(
     monkeypatch,
 ) -> None:
-    client = _FakeSyncHttpClient(
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -72,7 +72,7 @@ def test_get_auth_context_sync_extracts_department_from_direct_field(
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
@@ -91,7 +91,7 @@ def test_get_auth_context_sync_extracts_department_from_direct_field(
 
 
 def test_get_auth_context_sync_falls_back_to_department_segments(monkeypatch) -> None:
-    client = _FakeSyncHttpClient(
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -107,7 +107,7 @@ def test_get_auth_context_sync_falls_back_to_department_segments(monkeypatch) ->
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
@@ -125,7 +125,7 @@ def test_get_auth_context_sync_falls_back_to_department_segments(monkeypatch) ->
 
 
 def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> None:
-    client = _FakeSyncHttpClient(
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -137,7 +137,7 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
@@ -181,7 +181,7 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
 
 
 def test_get_auth_context_sync_reuses_cached_department(monkeypatch) -> None:
-    client = _FakeSyncHttpClient(
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -193,7 +193,7 @@ def test_get_auth_context_sync_reuses_cached_department(monkeypatch) -> None:
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 

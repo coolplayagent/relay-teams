@@ -3238,7 +3238,7 @@ def test_codeagent_oauth_status_polls_until_token_available(monkeypatch) -> None
         def __init__(self) -> None:
             self.calls = 0
 
-        def poll_token_sync(
+        async def poll_token(
             self,
             *,
             session: object,
@@ -3331,7 +3331,7 @@ def test_codeagent_oauth_status_returns_bad_gateway_for_transport_errors(
     request = httpx.Request("POST", "https://codeagent.example/codeAgentPro")
 
     class _FakeCodeAgentTokenService:
-        def poll_token_sync(
+        async def poll_token(
             self,
             *,
             session: object,
@@ -3369,7 +3369,7 @@ def test_codeagent_oauth_status_returns_gateway_timeout_for_poll_timeouts(
     request = httpx.Request("POST", "https://codeagent.example/codeAgentPro")
 
     class _FakeCodeAgentTokenService:
-        def poll_token_sync(
+        async def poll_token(
             self,
             *,
             session: object,
@@ -3406,7 +3406,7 @@ def test_codeagent_oauth_status_preserves_explicit_oauth_error_status(
     payload = start_response.json()
 
     class _FakeCodeAgentTokenService:
-        def poll_token_sync(
+        async def poll_token(
             self,
             *,
             session: object,
