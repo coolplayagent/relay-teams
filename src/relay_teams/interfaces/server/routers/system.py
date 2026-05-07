@@ -404,14 +404,14 @@ async def get_model_catalog(
     refresh: bool = Query(default=False),
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelCatalogResult:
-    return await asyncio.to_thread(service.get_model_catalog, refresh=refresh)
+    return await service.get_model_catalog_async(refresh=refresh)
 
 
 @router.post("/configs/model/catalog:refresh")
 async def refresh_model_catalog(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> ModelCatalogResult:
-    return await asyncio.to_thread(service.get_model_catalog, refresh=True)
+    return await service.get_model_catalog_async(refresh=True)
 
 
 class ModelProfileRequest(ModelProfileConfigPayload):
@@ -556,7 +556,7 @@ def start_codeagent_oauth(
 
 
 @router.get("/configs/model/codeagent/oauth/{auth_session_id}")
-def get_codeagent_oauth_session_status(
+async def get_codeagent_oauth_session_status(
     auth_session_id: str,
 ) -> CodeAgentOAuthSessionResponse:
     session = get_codeagent_oauth_session(auth_session_id)
@@ -564,7 +564,7 @@ def get_codeagent_oauth_session_status(
         raise HTTPException(status_code=404, detail="CodeAgent OAuth session not found")
     if not session.completed:
         try:
-            token_result = get_codeagent_token_service().poll_token_sync(
+            token_result = await get_codeagent_token_service().poll_token(
                 session=session,
                 ssl_verify=None,
                 connect_timeout_seconds=15.0,
@@ -620,9 +620,8 @@ async def verify_codeagent_auth(
     service: ModelConfigService = Depends(get_model_config_service),
 ) -> CodeAgentAuthVerifyResponse:
     try:
-        result = await asyncio.to_thread(
-            service.verify_codeagent_auth,
-            profile_name=req.profile_name,
+        result = await service.verify_codeagent_auth_async(
+            profile_name=req.profile_name
         )
         return CodeAgentAuthVerifyResponse.model_validate(
             result.model_dump(mode="json")
@@ -695,7 +694,7 @@ async def probe_model_connectivity(
     try:
         return await call_maybe_async_in_network_probe_thread(
             "model.probe_connectivity",
-            service.probe_connectivity,
+            service.probe_connectivity_async,
             req,
         )
     except ValueError as exc:
@@ -710,7 +709,7 @@ async def discover_model_catalog(
     try:
         return await call_maybe_async_in_network_probe_thread(
             "model.discover_models",
-            service.discover_models,
+            service.discover_models_async,
             req,
         )
     except ValueError as exc:

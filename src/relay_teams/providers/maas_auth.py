@@ -3,15 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import AsyncGenerator, Generator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime, timedelta
-from threading import Lock
 
 import httpx
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 
-from relay_teams.net.clients import create_async_http_client, create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.providers.model_config import (
     DEFAULT_MAAS_APP_ID,
     DEFAULT_MAAS_LOGIN_URL,
@@ -64,61 +63,11 @@ class MaaSLoginError(RuntimeError):
 class MaaSTokenService:
     def __init__(self) -> None:
         self._tokens: dict[str, _MaaSTokenRecord] = {}
-        self._sync_locks: dict[str, Lock] = {}
         self._async_locks: dict[str, asyncio.Lock] = {}
 
     def clear(self) -> None:
         self._tokens.clear()
-        self._sync_locks.clear()
         self._async_locks.clear()
-
-    def get_token_sync(
-        self,
-        *,
-        auth_config: MaaSAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-        force_refresh: bool = False,
-    ) -> str:
-        return self.get_auth_context_sync(
-            auth_config=auth_config,
-            ssl_verify=ssl_verify,
-            connect_timeout_seconds=connect_timeout_seconds,
-            force_refresh=force_refresh,
-        ).token
-
-    def get_auth_context_sync(
-        self,
-        *,
-        auth_config: MaaSAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-        force_refresh: bool = False,
-    ) -> MaaSAuthContext:
-        cache_key = self._cache_key(auth_config)
-        cached = self._tokens.get(cache_key)
-        if (
-            not force_refresh
-            and cached is not None
-            and not self._should_refresh(cached)
-        ):
-            return cached.auth_context
-        lock = self._sync_locks.setdefault(cache_key, Lock())
-        with lock:
-            cached = self._tokens.get(cache_key)
-            if (
-                not force_refresh
-                and cached is not None
-                and not self._should_refresh(cached)
-            ):
-                return cached.auth_context
-            record = self._login_sync(
-                auth_config=auth_config,
-                ssl_verify=ssl_verify,
-                connect_timeout_seconds=connect_timeout_seconds,
-            )
-            self._tokens[cache_key] = record
-            return record.auth_context
 
     async def get_token(
         self,
@@ -180,25 +129,6 @@ class MaaSTokenService:
     def _should_refresh(record: _MaaSTokenRecord) -> bool:
         return datetime.now(UTC) + _MAAS_REFRESH_SKEW >= record.expires_at
 
-    def _login_sync(
-        self,
-        *,
-        auth_config: MaaSAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-    ) -> _MaaSTokenRecord:
-        with create_sync_http_client(
-            ssl_verify=ssl_verify,
-            timeout_seconds=connect_timeout_seconds,
-            connect_timeout_seconds=connect_timeout_seconds,
-        ) as client:
-            response = client.post(
-                DEFAULT_MAAS_LOGIN_URL,
-                headers={"Content-Type": "application/json"},
-                json=_maas_login_payload(auth_config),
-            )
-        return _build_token_record(response)
-
     async def _login_async(
         self,
         *,
@@ -234,35 +164,6 @@ class MaaSRequestAuth(httpx.Auth):
         self._ssl_verify = ssl_verify
         self._connect_timeout_seconds = connect_timeout_seconds
         self._token_service = token_service
-
-    def sync_auth_flow(
-        self,
-        request: httpx.Request,
-    ) -> Generator[httpx.Request, httpx.Response, None]:
-        token = self._token_service.get_token_sync(
-            auth_config=self._auth_config,
-            ssl_verify=self._ssl_verify,
-            connect_timeout_seconds=self._connect_timeout_seconds,
-        )
-        response = yield _clone_request_with_maas_headers(
-            request,
-            token=token,
-            app_id=DEFAULT_MAAS_APP_ID,
-        )
-        if response.status_code not in {401, 403}:
-            return
-        response.close()
-        retry_token = self._token_service.get_token_sync(
-            auth_config=self._auth_config,
-            ssl_verify=self._ssl_verify,
-            connect_timeout_seconds=self._connect_timeout_seconds,
-            force_refresh=True,
-        )
-        yield _clone_request_with_maas_headers(
-            response.request,
-            token=retry_token,
-            app_id=DEFAULT_MAAS_APP_ID,
-        )
 
     async def async_auth_flow(
         self,

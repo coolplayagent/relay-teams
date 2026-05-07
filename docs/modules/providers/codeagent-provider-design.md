@@ -125,6 +125,10 @@ CodeAgent does not reuse top-level `maas_auth`.
 ## Model Discovery And Chat Requests
 
 CodeAgent model discovery and chat requests use the same provider auth resolver as save-time verification and runtime execution.
+Token polling, refresh, password login, request auth, model discovery, chat
+probe, and auth verification are async-only backend paths. CodeAgent provider
+code must use the shared async HTTP client and `httpx.Auth.async_auth_flow`;
+there is no separate sync token or sync auth-flow implementation.
 
 ### Model Discovery
 

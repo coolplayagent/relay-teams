@@ -31,6 +31,10 @@
 ### 3.1.1 `POST /api/system/configs/model:probe`
 
 用途：探测当前生效配置或候选配置是否能成功完成最小模型调用。
+实现要求：模型探测、模型发现、MaaS 登录、CodeAgent token 解析/刷新和
+CodeAgent auth verification 均走原生 async 路径，并使用
+`create_async_http_client()`。不要通过 `asyncio.to_thread()` 包装同步网络探测，
+也不要在 provider connectivity 中重新引入同步 HTTP 客户端。
 
 请求体（建议）：
 

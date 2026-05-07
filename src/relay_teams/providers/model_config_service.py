@@ -67,9 +67,6 @@ class ModelConfigService:
     def get_model_fallback_config(self) -> ModelFallbackConfig:
         return self._model_fallback_config_manager.get_model_fallback_config()
 
-    def get_model_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
-        return self._model_catalog_service.get_catalog(refresh=refresh)
-
     async def get_model_catalog_async(
         self, *, refresh: bool = False
     ) -> ModelCatalogResult:
@@ -113,23 +110,11 @@ class ModelConfigService:
         self._model_fallback_config_manager.save_model_fallback_config(config)
         self.reload_model_config()
 
-    def probe_connectivity(
-        self,
-        request: ModelConnectivityProbeRequest,
-    ) -> ModelConnectivityProbeResult:
-        return self._model_connectivity_probe_service.probe(request)
-
     async def probe_connectivity_async(
         self,
         request: ModelConnectivityProbeRequest,
     ) -> ModelConnectivityProbeResult:
         return await self._model_connectivity_probe_service.probe_async(request)
-
-    def discover_models(
-        self,
-        request: ModelDiscoveryRequest,
-    ) -> ModelDiscoveryResult:
-        return self._model_connectivity_probe_service.discover_models(request)
 
     async def discover_models_async(
         self,
@@ -137,15 +122,6 @@ class ModelConfigService:
     ) -> ModelDiscoveryResult:
         return await self._model_connectivity_probe_service.discover_models_async(
             request
-        )
-
-    def verify_codeagent_auth(
-        self,
-        *,
-        profile_name: str,
-    ) -> CodeAgentAuthVerifyResult:
-        return self._model_connectivity_probe_service.verify_codeagent_auth(
-            profile_name=profile_name
         )
 
     async def verify_codeagent_auth_async(

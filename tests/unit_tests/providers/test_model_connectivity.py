@@ -49,13 +49,13 @@ class _FakeHttpClient:
         self._error = error
         self._captured = captured if captured is not None else {}
 
-    def __enter__(self) -> _FakeHttpClient:
+    async def __aenter__(self) -> _FakeHttpClient:
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def post(
+    async def post(
         self,
         url: str,
         *,
@@ -70,7 +70,7 @@ class _FakeHttpClient:
         assert self._response is not None
         return self._response
 
-    def get(
+    async def get(
         self,
         url: str,
         *,
@@ -94,13 +94,13 @@ class _QueuedHttpClient:
         self._responses = responses
         self._captured = captured if captured is not None else {}
 
-    def __enter__(self) -> _QueuedHttpClient:
+    async def __aenter__(self) -> _QueuedHttpClient:
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def get(
+    async def get(
         self,
         url: str,
         *,
@@ -130,7 +130,7 @@ class _FakeMaaSTokenService:
         self._captured = captured
         self._departments = departments or ["Relay/Department"] * len(tokens)
 
-    def get_token_sync(
+    async def get_token(
         self,
         *,
         auth_config: MaaSAuthConfig,
@@ -138,14 +138,16 @@ class _FakeMaaSTokenService:
         connect_timeout_seconds: float,
         force_refresh: bool = False,
     ) -> str:
-        return self.get_auth_context_sync(
-            auth_config=auth_config,
-            ssl_verify=ssl_verify,
-            connect_timeout_seconds=connect_timeout_seconds,
-            force_refresh=force_refresh,
+        return (
+            await self.get_auth_context(
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
         ).token
 
-    def get_auth_context_sync(
+    async def get_auth_context(
         self,
         *,
         auth_config: MaaSAuthConfig,
@@ -178,7 +180,7 @@ class _FakeCodeAgentTokenService:
         self._tokens = tokens
         self._captured = captured
 
-    def get_token_sync(
+    async def get_token(
         self,
         *,
         base_url: str,
@@ -202,12 +204,13 @@ class _FakeCodeAgentTokenService:
         return self._tokens.pop(0)
 
 
-def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -227,7 +230,7 @@ def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(profile_name="default", timeout_ms=3200)
     )
 
@@ -245,11 +248,12 @@ def test_probe_uses_saved_profile_and_returns_usage(monkeypatch) -> None:
     assert payload["top_p"] == pytest.approx(0.95)
 
 
-def test_probe_preserves_zero_valued_usage_fields(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_preserves_zero_valued_usage_fields(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -266,7 +270,9 @@ def test_probe_preserves_zero_valued_usage_fields(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert result.token_usage is not None
@@ -275,14 +281,15 @@ def test_probe_preserves_zero_valued_usage_fields(monkeypatch) -> None:
     assert result.token_usage.total_tokens == 0
 
 
-def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
+@pytest.mark.asyncio
+async def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -291,18 +298,21 @@ def test_probe_uses_profile_connect_timeout_when_request_timeout_omitted(
         ),
     )
 
-    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert captured["timeout_seconds"] == pytest.approx(17.5)
 
 
-def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -311,7 +321,7 @@ def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             profile_name="default",
             override=ModelConnectivityProbeOverride(
@@ -330,12 +340,13 @@ def test_probe_merges_override_with_saved_profile(monkeypatch) -> None:
     assert payload["model"] == "draft-model"
 
 
-def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -344,7 +355,7 @@ def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> Non
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             profile_name="default",
             override=ModelConnectivityProbeOverride(ssl_verify=False),
@@ -355,15 +366,16 @@ def test_probe_uses_model_ssl_override_before_global_default(monkeypatch) -> Non
     assert captured["ssl_verify"] is False
 
 
-def test_probe_returns_timeout_error(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_returns_timeout_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(error=httpx.ReadTimeout("timed out")),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(profile_name="default", timeout_ms=2000)
     )
 
@@ -373,11 +385,12 @@ def test_probe_returns_timeout_error(monkeypatch) -> None:
     assert result.diagnostics.endpoint_reachable is False
 
 
-def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 401,
@@ -386,7 +399,9 @@ def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None
         ),
     )
 
-    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(profile_name="default")
+    )
 
     assert result.ok is False
     assert result.error_code == "auth_invalid"
@@ -395,12 +410,13 @@ def test_probe_returns_auth_error_for_unauthorized_response(monkeypatch) -> None
     assert result.error_message == "Invalid API key."
 
 
-def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -409,7 +425,7 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 model="draft-model",
@@ -425,11 +441,12 @@ def test_probe_accepts_editor_default_timeout(monkeypatch) -> None:
     assert captured["timeout_seconds"] == pytest.approx(15.0)
 
 
-def test_probe_requires_base_url_for_openai_override() -> None:
+@pytest.mark.asyncio
+async def test_probe_requires_base_url_for_openai_override() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="base_url"):
-        service.probe(
+        await service.probe_async(
             ModelConnectivityProbeRequest(
                 override=ModelConnectivityProbeOverride(
                     provider=ProviderType.OPENAI_COMPATIBLE,
@@ -440,11 +457,54 @@ def test_probe_requires_base_url_for_openai_override() -> None:
         )
 
 
-def test_probe_requires_codeagent_auth_for_codeagent_override() -> None:
+@pytest.mark.asyncio
+async def test_probe_rejects_unknown_profile_name() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(ValueError, match="missing-profile"):
+        await service.probe_async(
+            ModelConnectivityProbeRequest(profile_name="missing-profile")
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_requires_auth_material_for_openai_override() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(ValueError, match="api_key or headers"):
+        await service.probe_async(
+            ModelConnectivityProbeRequest(
+                override=ModelConnectivityProbeOverride(
+                    provider=ProviderType.OPENAI_COMPATIBLE,
+                    model="draft-model",
+                    base_url="https://draft.test/v1",
+                )
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_requires_maas_auth_for_maas_override() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(ValueError, match="maas_auth"):
+        await service.probe_async(
+            ModelConnectivityProbeRequest(
+                override=ModelConnectivityProbeOverride(
+                    provider=ProviderType.MAAS,
+                    model="maas-chat",
+                    base_url="https://maas.example/api/v2",
+                )
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_probe_requires_codeagent_auth_for_codeagent_override() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="codeagent_auth"):
-        service.probe(
+        await service.probe_async(
             ModelConnectivityProbeRequest(
                 override=ModelConnectivityProbeOverride(
                     provider=ProviderType.CODEAGENT,
@@ -454,23 +514,25 @@ def test_probe_requires_codeagent_auth_for_codeagent_override() -> None:
         )
 
 
-def test_probe_codeagent_override_reports_all_missing_required_fields() -> None:
+@pytest.mark.asyncio
+async def test_probe_codeagent_override_reports_all_missing_required_fields() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="model, codeagent_auth"):
-        service.probe(
+        await service.probe_async(
             ModelConnectivityProbeRequest(
                 override=ModelConnectivityProbeOverride(provider=ProviderType.CODEAGENT)
             )
         )
 
 
-def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -479,7 +541,7 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.BIGMODEL,
@@ -498,7 +560,8 @@ def test_probe_supports_bigmodel_provider(monkeypatch) -> None:
     )
 
 
-def test_probe_supports_anthropic_provider(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_supports_anthropic_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(
         get_runtime=lambda: _runtime_config(
@@ -510,7 +573,7 @@ def test_probe_supports_anthropic_provider(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -526,7 +589,9 @@ def test_probe_supports_anthropic_provider(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert result.provider == ProviderType.ANTHROPIC
@@ -542,7 +607,8 @@ def test_probe_supports_anthropic_provider(monkeypatch) -> None:
     assert headers["anthropic-version"] == "2023-06-01"
 
 
-def test_probe_anthropic_profile_override_preserves_saved_base_url(
+@pytest.mark.asyncio
+async def test_probe_anthropic_profile_override_preserves_saved_base_url(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -556,7 +622,7 @@ def test_probe_anthropic_profile_override_preserves_saved_base_url(
     )
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -572,7 +638,7 @@ def test_probe_anthropic_profile_override_preserves_saved_base_url(
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             profile_name="default",
             override=ModelConnectivityProbeOverride(temperature=0.2),
@@ -585,19 +651,20 @@ def test_probe_anthropic_profile_override_preserves_saved_base_url(
     assert payload["temperature"] == 0.2
 
 
-def test_probe_anthropic_returns_network_error_for_request_exception(
+@pytest.mark.asyncio
+async def test_probe_anthropic_returns_network_error_for_request_exception(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ConnectError("failed to reach anthropic endpoint"),
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.ANTHROPIC,
@@ -614,12 +681,13 @@ def test_probe_anthropic_returns_network_error_for_request_exception(
     assert result.retryable is True
 
 
-def test_probe_allows_header_only_override(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_allows_header_only_override(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -628,7 +696,7 @@ def test_probe_allows_header_only_override(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 model="draft-model",
@@ -648,7 +716,8 @@ def test_probe_allows_header_only_override(monkeypatch) -> None:
     assert headers["Authorization"] == "Bearer header-only"
 
 
-def test_probe_supports_maas_provider(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_supports_maas_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
@@ -657,7 +726,7 @@ def test_probe_supports_maas_provider(monkeypatch) -> None:
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -667,7 +736,7 @@ def test_probe_supports_maas_provider(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -690,7 +759,8 @@ def test_probe_supports_maas_provider(monkeypatch) -> None:
     assert token_calls[0]["force_refresh"] is False
 
 
-def test_probe_supports_codeagent_provider_with_oauth_session(
+@pytest.mark.asyncio
+async def test_probe_supports_codeagent_provider_with_oauth_session(
     monkeypatch,
 ) -> None:
     clear_codeagent_oauth_session_store()
@@ -716,7 +786,7 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -726,7 +796,7 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -761,7 +831,10 @@ def test_probe_supports_codeagent_provider_with_oauth_session(
     clear_codeagent_oauth_session_store()
 
 
-def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_codeagent_accepts_event_stream_success_without_json(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
@@ -770,7 +843,7 @@ def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) 
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -784,7 +857,7 @@ def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) 
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -800,7 +873,8 @@ def test_probe_codeagent_accepts_event_stream_success_without_json(monkeypatch) 
     assert result.token_usage is None
 
 
-def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
@@ -809,7 +883,7 @@ def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -823,7 +897,7 @@ def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -840,7 +914,8 @@ def test_probe_codeagent_rejects_event_stream_error_payload(monkeypatch) -> None
     assert result.error_message == "invalid codeagent model"
 
 
-def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
+@pytest.mark.asyncio
+async def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
@@ -850,7 +925,7 @@ def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -860,7 +935,7 @@ def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -877,42 +952,8 @@ def test_probe_codeagent_rejects_event_stream_top_level_message_payload(
     assert result.error_message == "invalid codeagent model"
 
 
-def test_probe_codeagent_rejects_invalid_event_stream_payload(monkeypatch) -> None:
-    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
-
-    monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
-        lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
-    )
-    monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
-        lambda **_kwargs: _FakeHttpClient(
-            response=httpx.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                text="event: ping\n\n",
-            ),
-        ),
-    )
-
-    result = service.probe(
-        ModelConnectivityProbeRequest(
-            override=ModelConnectivityProbeOverride(
-                provider=ProviderType.CODEAGENT,
-                model="codeagent-chat",
-                codeagent_auth=CodeAgentAuthConfig(
-                    refresh_token="refresh-token",
-                ),
-            )
-        )
-    )
-
-    assert result.ok is False
-    assert result.error_code == "invalid_response"
-    assert result.error_message == "Provider returned invalid SSE payload."
-
-
-def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
+@pytest.mark.asyncio
+async def test_probe_codeagent_rejects_invalid_event_stream_payload(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
@@ -922,17 +963,17 @@ def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
-                text="data: ping\n\n",
+                text="event: ping\n\n",
             ),
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -949,7 +990,46 @@ def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
     assert result.error_message == "Provider returned invalid SSE payload."
 
 
-def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
+@pytest.mark.asyncio
+async def test_probe_codeagent_rejects_plain_text_event_stream_heartbeat(
+    monkeypatch,
+) -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_codeagent_token_service",
+        lambda: _FakeCodeAgentTokenService(["session-access-token"], {}),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_async_http_client",
+        lambda **_kwargs: _FakeHttpClient(
+            response=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text="data: ping\n\n",
+            ),
+        ),
+    )
+
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.CODEAGENT,
+                model="codeagent-chat",
+                codeagent_auth=CodeAgentAuthConfig(
+                    refresh_token="refresh-token",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "invalid_response"
+    assert result.error_message == "Provider returned invalid SSE payload."
+
+
+@pytest.mark.asyncio
+async def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
     monkeypatch,
 ) -> None:
     clear_codeagent_oauth_session_store()
@@ -986,7 +1066,7 @@ def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
         lambda: _FakeCodeAgentTokenService(["fresh-session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -996,7 +1076,7 @@ def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             profile_name="codeagent-profile",
             override=ModelConnectivityProbeOverride(
@@ -1014,7 +1094,10 @@ def test_probe_prefers_fresh_codeagent_oauth_session_over_saved_refresh_token(
     clear_codeagent_oauth_session_store()
 
 
-def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_merges_saved_maas_password_when_override_omits_it(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(
         get_runtime=lambda: _runtime_config(
@@ -1035,7 +1118,7 @@ def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) ->
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1045,7 +1128,7 @@ def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) ->
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             profile_name="maas-profile",
             override=ModelConnectivityProbeOverride(
@@ -1060,11 +1143,14 @@ def test_probe_merges_saved_maas_password_when_override_omits_it(monkeypatch) ->
     assert token_calls[0]["password"] == "saved-password"
 
 
-def test_probe_returns_maas_auth_error_for_invalid_credentials(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_returns_maas_auth_error_for_invalid_credentials(
+    monkeypatch,
+) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _InvalidCredentialsTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             auth_config: MaaSAuthConfig,
@@ -1082,7 +1168,7 @@ def test_probe_returns_maas_auth_error_for_invalid_credentials(monkeypatch) -> N
         lambda: _InvalidCredentialsTokenService(),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -1102,11 +1188,12 @@ def test_probe_returns_maas_auth_error_for_invalid_credentials(monkeypatch) -> N
     assert result.diagnostics.auth_valid is False
 
 
-def test_probe_returns_retryable_maas_login_service_error(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_returns_retryable_maas_login_service_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _UnavailableTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             auth_config: MaaSAuthConfig,
@@ -1124,7 +1211,7 @@ def test_probe_returns_retryable_maas_login_service_error(monkeypatch) -> None:
         lambda: _UnavailableTokenService(),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -1144,7 +1231,10 @@ def test_probe_returns_retryable_maas_login_service_error(monkeypatch) -> None:
     assert result.diagnostics.auth_valid is True
 
 
-def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_refreshes_maas_token_after_unauthorized_response(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {"requests": []}
     responses = [
         httpx.Response(401, json={"error": {"message": "expired"}}),
@@ -1165,11 +1255,11 @@ def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> 
         return _FakeHttpClient(captured=local_capture, response=responses.pop(0))
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         build_client,
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -1194,7 +1284,178 @@ def test_probe_refreshes_maas_token_after_unauthorized_response(monkeypatch) -> 
     assert token_calls[1]["force_refresh"] is True
 
 
-def test_discover_models_supports_maas_provider(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_reports_maas_refresh_timeout_after_unauthorized_response(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    class _TimeoutOnRefreshMaaSTokenService(_FakeMaaSTokenService):
+        async def get_token(
+            self,
+            *,
+            auth_config: MaaSAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            if force_refresh:
+                raise httpx.ReadTimeout("refresh timed out")
+            return await super().get_token(
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _TimeoutOnRefreshMaaSTokenService(["expired-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_async_http_client",
+        lambda **kwargs: _FakeHttpClient(
+            captured=captured,
+            response=httpx.Response(401, json={"error": {"message": "expired"}}),
+        ),
+    )
+
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "network_timeout"
+    token_calls = cast(list[dict[str, object]], captured["maas_token_calls"])
+    assert token_calls[0]["force_refresh"] is False
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_maas_refresh_request_error_after_unauthorized_response(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    class _RequestErrorOnRefreshMaaSTokenService(_FakeMaaSTokenService):
+        async def get_token(
+            self,
+            *,
+            auth_config: MaaSAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            if force_refresh:
+                raise httpx.ConnectError("refresh failed")
+            return await super().get_token(
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _RequestErrorOnRefreshMaaSTokenService(["expired-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_async_http_client",
+        lambda **kwargs: _FakeHttpClient(
+            captured=captured,
+            response=httpx.Response(401, json={"error": {"message": "expired"}}),
+        ),
+    )
+
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "network_error"
+
+
+@pytest.mark.asyncio
+async def test_probe_reports_maas_refresh_login_error_after_unauthorized_response(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    class _LoginErrorOnRefreshMaaSTokenService(_FakeMaaSTokenService):
+        async def get_token(
+            self,
+            *,
+            auth_config: MaaSAuthConfig,
+            ssl_verify: bool | None,
+            connect_timeout_seconds: float,
+            force_refresh: bool = False,
+        ) -> str:
+            if force_refresh:
+                raise MaaSLoginError(
+                    "refresh rejected",
+                    status_code=401,
+                )
+            return await super().get_token(
+                auth_config=auth_config,
+                ssl_verify=ssl_verify,
+                connect_timeout_seconds=connect_timeout_seconds,
+                force_refresh=force_refresh,
+            )
+
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.get_maas_token_service",
+        lambda: _LoginErrorOnRefreshMaaSTokenService(["expired-token"], captured),
+    )
+    monkeypatch.setattr(
+        "relay_teams.providers.model_connectivity.create_async_http_client",
+        lambda **kwargs: _FakeHttpClient(
+            captured=captured,
+            response=httpx.Response(401, json={"error": {"message": "expired"}}),
+        ),
+    )
+
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(
+            override=ModelConnectivityProbeOverride(
+                provider=ProviderType.MAAS,
+                model="maas-chat",
+                base_url="https://maas.example/api/v2",
+                maas_auth=MaaSAuthConfig(
+                    username="relay-user",
+                    password="relay-password",
+                ),
+            )
+        )
+    )
+
+    assert result.ok is False
+    assert result.error_code == "auth_invalid"
+
+
+@pytest.mark.asyncio
+async def test_discover_models_supports_maas_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
@@ -1203,7 +1464,7 @@ def test_discover_models_supports_maas_provider(monkeypatch) -> None:
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1231,7 +1492,7 @@ def test_discover_models_supports_maas_provider(monkeypatch) -> None:
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -1270,7 +1531,8 @@ def test_discover_models_supports_maas_provider(monkeypatch) -> None:
     )
 
 
-def test_discover_models_supports_codeagent_provider_with_oauth_session(
+@pytest.mark.asyncio
+async def test_discover_models_supports_codeagent_provider_with_oauth_session(
     monkeypatch,
 ) -> None:
     clear_codeagent_oauth_session_store()
@@ -1296,7 +1558,7 @@ def test_discover_models_supports_codeagent_provider_with_oauth_session(
         lambda: _FakeCodeAgentTokenService(["session-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1309,7 +1571,7 @@ def test_discover_models_supports_codeagent_provider_with_oauth_session(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -1344,11 +1606,12 @@ def test_discover_models_supports_codeagent_provider_with_oauth_session(
     clear_codeagent_oauth_session_store()
 
 
-def test_discover_models_requires_base_url_for_openai_override() -> None:
+@pytest.mark.asyncio
+async def test_discover_models_requires_base_url_for_openai_override() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="base_url"):
-        service.discover_models(
+        await service.discover_models_async(
             ModelDiscoveryRequest(
                 override=ModelConnectivityProbeOverride(
                     provider=ProviderType.OPENAI_COMPATIBLE,
@@ -1359,11 +1622,12 @@ def test_discover_models_requires_base_url_for_openai_override() -> None:
         )
 
 
-def test_discover_models_requires_codeagent_auth_for_codeagent_override() -> None:
+@pytest.mark.asyncio
+async def test_discover_models_requires_codeagent_auth_for_codeagent_override() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="codeagent_auth"):
-        service.discover_models(
+        await service.discover_models_async(
             ModelDiscoveryRequest(
                 override=ModelConnectivityProbeOverride(
                     provider=ProviderType.CODEAGENT,
@@ -1373,11 +1637,14 @@ def test_discover_models_requires_codeagent_auth_for_codeagent_override() -> Non
         )
 
 
-def test_discover_models_codeagent_override_reports_missing_codeagent_auth() -> None:
+@pytest.mark.asyncio
+async def test_discover_models_codeagent_override_reports_missing_codeagent_auth() -> (
+    None
+):
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="codeagent_auth"):
-        service.discover_models(
+        await service.discover_models_async(
             ModelDiscoveryRequest(
                 override=ModelConnectivityProbeOverride(
                     provider=ProviderType.CODEAGENT,
@@ -1387,7 +1654,8 @@ def test_discover_models_codeagent_override_reports_missing_codeagent_auth() -> 
         )
 
 
-def test_probe_codeagent_returns_network_error_for_request_exception(
+@pytest.mark.asyncio
+async def test_probe_codeagent_returns_network_error_for_request_exception(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1398,7 +1666,7 @@ def test_probe_codeagent_returns_network_error_for_request_exception(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1408,7 +1676,7 @@ def test_probe_codeagent_returns_network_error_for_request_exception(
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -1425,13 +1693,14 @@ def test_probe_codeagent_returns_network_error_for_request_exception(
     assert result.retryable is True
 
 
-def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_status(
+@pytest.mark.asyncio
+async def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_status(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1457,7 +1726,7 @@ def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_s
         lambda: _FailingCodeAgentTokenService(),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -1474,13 +1743,14 @@ def test_probe_codeagent_returns_invalid_response_for_oauth_error_without_http_s
     assert result.retryable is False
 
 
-def test_probe_codeagent_maps_codeagent_auth_invalid_error_without_http_status(
+@pytest.mark.asyncio
+async def test_probe_codeagent_maps_codeagent_auth_invalid_error_without_http_status(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1507,7 +1777,7 @@ def test_probe_codeagent_maps_codeagent_auth_invalid_error_without_http_status(
         lambda: _FailingCodeAgentTokenService(),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -1525,7 +1795,8 @@ def test_probe_codeagent_maps_codeagent_auth_invalid_error_without_http_status(
     assert result.retryable is False
 
 
-def test_discover_models_codeagent_returns_timeout_for_request_exception(
+@pytest.mark.asyncio
+async def test_discover_models_codeagent_returns_timeout_for_request_exception(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1536,7 +1807,7 @@ def test_discover_models_codeagent_returns_timeout_for_request_exception(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -1546,7 +1817,7 @@ def test_discover_models_codeagent_returns_timeout_for_request_exception(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -1563,13 +1834,14 @@ def test_discover_models_codeagent_returns_timeout_for_request_exception(
     assert result.retryable is True
 
 
-def test_discover_models_codeagent_returns_invalid_response_for_oauth_error(
+@pytest.mark.asyncio
+async def test_discover_models_codeagent_returns_invalid_response_for_oauth_error(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1595,7 +1867,7 @@ def test_discover_models_codeagent_returns_invalid_response_for_oauth_error(
         lambda: _FailingCodeAgentTokenService(),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -1612,7 +1884,8 @@ def test_discover_models_codeagent_returns_invalid_response_for_oauth_error(
     assert result.retryable is False
 
 
-def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1630,7 +1903,7 @@ def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
     )
 
     class _TokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1664,14 +1937,14 @@ def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
         )
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "valid"
     assert result.detail is None
@@ -1696,27 +1969,30 @@ def test_verify_codeagent_auth_returns_valid_when_saved_token_request_succeeds(
     assert headers["User-Agent"] == "AgentKernel/1.0"
 
 
-def test_verify_codeagent_auth_raises_for_missing_profile() -> None:
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_raises_for_missing_profile() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(
         ValueError,
         match="Model profile 'missing' was not found in runtime config.",
     ):
-        service.verify_codeagent_auth(profile_name="missing")
+        await service.verify_codeagent_auth_async(profile_name="missing")
 
 
-def test_verify_codeagent_auth_raises_for_non_codeagent_profile() -> None:
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_raises_for_non_codeagent_profile() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(
         ValueError,
         match="Model profile 'default' is not a CodeAgent profile.",
     ):
-        service.verify_codeagent_auth(profile_name="default")
+        await service.verify_codeagent_auth_async(profile_name="default")
 
 
-def test_verify_codeagent_auth_raises_without_codeagent_auth() -> None:
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_raises_without_codeagent_auth() -> None:
     invalid_config = ModelEndpointConfig.model_construct(
         provider=ProviderType.CODEAGENT,
         model="codeagent-chat",
@@ -1749,10 +2025,11 @@ def test_verify_codeagent_auth_raises_without_codeagent_auth() -> None:
         ValueError,
         match="Model profile 'default' does not have CodeAgent auth configured.",
     ):
-        service.verify_codeagent_auth(profile_name="default")
+        await service.verify_codeagent_auth_async(profile_name="default")
 
 
-def test_verify_codeagent_auth_returns_error_when_token_refresh_times_out(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_error_when_token_refresh_times_out(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(
@@ -1766,7 +2043,7 @@ def test_verify_codeagent_auth_returns_error_when_token_refresh_times_out(
     )
 
     class _TimeoutTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1789,13 +2066,14 @@ def test_verify_codeagent_auth_returns_error_when_token_refresh_times_out(
         lambda: _TimeoutTokenService(),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "error"
     assert result.detail == "token request timed out"
 
 
-def test_verify_codeagent_auth_returns_error_when_verify_request_times_out(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_error_when_verify_request_times_out(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1814,19 +2092,20 @@ def test_verify_codeagent_auth_returns_error_when_verify_request_times_out(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ReadTimeout("verify request timed out")
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "error"
     assert result.detail == "verify request timed out"
 
 
-def test_verify_codeagent_auth_returns_error_when_verify_request_fails(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_error_when_verify_request_fails(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1845,19 +2124,20 @@ def test_verify_codeagent_auth_returns_error_when_verify_request_fails(
         lambda: _FakeCodeAgentTokenService(["codeagent-access-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ConnectError("failed to reach codeagent")
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "error"
     assert result.detail == "failed to reach codeagent"
 
 
-def test_verify_codeagent_auth_returns_error_for_redirect_response(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_error_for_redirect_response(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1875,7 +2155,7 @@ def test_verify_codeagent_auth_returns_error_for_redirect_response(
     )
 
     class _TokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1909,14 +2189,14 @@ def test_verify_codeagent_auth_returns_error_for_redirect_response(
         )
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "error"
     assert result.detail == "Failed to verify CodeAgent authentication."
@@ -1932,7 +2212,8 @@ def test_verify_codeagent_auth_returns_error_for_redirect_response(
     ]
 
 
-def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -1947,7 +2228,7 @@ def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
     )
 
     class _SuccessfulCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -1981,14 +2262,14 @@ def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
         ),
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "valid"
     assert result.detail is None
@@ -2010,7 +2291,8 @@ def test_verify_codeagent_auth_returns_valid_after_successful_refresh(
     ]
 
 
-def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -2025,7 +2307,7 @@ def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
     )
 
     class _SuccessfulCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -2059,14 +2341,14 @@ def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
         ),
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "error"
     assert result.detail == "Failed to verify CodeAgent authentication."
@@ -2088,7 +2370,8 @@ def test_verify_codeagent_auth_returns_error_when_refresh_redirects(
     ]
 
 
-def test_verify_codeagent_auth_returns_reauth_required_after_refresh_denied(
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_returns_reauth_required_after_refresh_denied(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -2106,7 +2389,7 @@ def test_verify_codeagent_auth_returns_reauth_required_after_refresh_denied(
     )
 
     class _FailingRefreshTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -2142,26 +2425,27 @@ def test_verify_codeagent_auth_returns_reauth_required_after_refresh_denied(
         httpx.Response(401, json={"detail": "expired access token"}),
     ]
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _QueuedHttpClient(
             captured=captured,
             responses=responses,
         ),
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert result.status == "reauth_required"
     assert result.detail == "未识别到用户认证信息"
 
 
-def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_errors(
+@pytest.mark.asyncio
+async def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_errors(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -2187,7 +2471,7 @@ def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_erro
         lambda: _FailingCodeAgentTokenService(),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.CODEAGENT,
@@ -2205,13 +2489,14 @@ def test_discover_models_codeagent_oauth_http_error_is_retryable_for_server_erro
     assert result.diagnostics.auth_valid is True
 
 
-def test_get_codeagent_token_for_probe_returns_timeout_when_token_service_times_out(
+@pytest.mark.asyncio
+async def test_get_codeagent_token_for_probe_async_returns_timeout_when_token_service_times_out(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _TimeoutingCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -2234,7 +2519,7 @@ def test_get_codeagent_token_for_probe_returns_timeout_when_token_service_times_
         lambda: _TimeoutingCodeAgentTokenService(),
     )
 
-    result = service._get_codeagent_token_for_probe(
+    result = await service._get_codeagent_token_for_probe_async(
         config=ModelEndpointConfig(
             provider=ProviderType.CODEAGENT,
             model="codeagent-chat",
@@ -2251,13 +2536,14 @@ def test_get_codeagent_token_for_probe_returns_timeout_when_token_service_times_
     assert result.error_code == "network_timeout"
 
 
-def test_get_codeagent_token_for_discovery_returns_network_error_when_token_service_fails(
+@pytest.mark.asyncio
+async def test_get_codeagent_token_for_discovery_async_returns_network_error_when_token_service_fails(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     class _FailingCodeAgentTokenService:
-        def get_token_sync(
+        async def get_token(
             self,
             *,
             base_url: str,
@@ -2280,7 +2566,7 @@ def test_get_codeagent_token_for_discovery_returns_network_error_when_token_serv
         lambda: _FailingCodeAgentTokenService(),
     )
 
-    result = service._get_codeagent_token_for_discovery(
+    result = await service._get_codeagent_token_for_discovery_async(
         config=ModelDiscoveryResolvedConfig(
             provider=ProviderType.CODEAGENT,
             base_url=DEFAULT_CODEAGENT_BASE_URL,
@@ -2628,7 +2914,8 @@ def test_extract_codeagent_model_entries_skips_blank_model_ids() -> None:
     assert tuple(entry.model for entry in entries) == ("codeagent-chat",)
 
 
-def test_discover_models_merges_saved_maas_password_when_override_omits_it(
+@pytest.mark.asyncio
+async def test_discover_models_merges_saved_maas_password_when_override_omits_it(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -2651,7 +2938,7 @@ def test_discover_models_merges_saved_maas_password_when_override_omits_it(
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -2664,7 +2951,7 @@ def test_discover_models_merges_saved_maas_password_when_override_omits_it(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             profile_name="maas-profile",
             override=ModelConnectivityProbeOverride(
@@ -2679,7 +2966,8 @@ def test_discover_models_merges_saved_maas_password_when_override_omits_it(
     assert token_calls[0]["password"] == "saved-password"
 
 
-def test_discover_models_refreshes_maas_token_after_unauthorized_response(
+@pytest.mark.asyncio
+async def test_discover_models_refreshes_maas_token_after_unauthorized_response(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {"requests": []}
@@ -2702,11 +2990,11 @@ def test_discover_models_refreshes_maas_token_after_unauthorized_response(
         return _FakeHttpClient(captured=local_capture, response=responses.pop(0))
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         build_client,
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -2730,7 +3018,8 @@ def test_discover_models_refreshes_maas_token_after_unauthorized_response(
     assert token_calls[1]["force_refresh"] is True
 
 
-def test_discover_models_refreshes_maas_auth_when_department_missing(
+@pytest.mark.asyncio
+async def test_discover_models_refreshes_maas_auth_when_department_missing(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -2746,7 +3035,7 @@ def test_discover_models_refreshes_maas_auth_when_department_missing(
         lambda: token_service,
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -2759,7 +3048,7 @@ def test_discover_models_refreshes_maas_auth_when_department_missing(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -2780,7 +3069,8 @@ def test_discover_models_refreshes_maas_auth_when_department_missing(
     assert token_calls[1]["force_refresh"] is True
 
 
-def test_discover_models_returns_invalid_response_when_maas_department_missing(
+@pytest.mark.asyncio
+async def test_discover_models_returns_invalid_response_when_maas_department_missing(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -2795,7 +3085,7 @@ def test_discover_models_returns_invalid_response_when_maas_department_missing(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -2818,12 +3108,15 @@ def test_discover_models_returns_invalid_response_when_maas_department_missing(
     assert token_calls[1]["force_refresh"] is True
 
 
-def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_uses_saved_profile_and_parses_catalog(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -2843,7 +3136,7 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(profile_name="default", timeout_ms=2800)
     )
 
@@ -2861,11 +3154,14 @@ def test_discover_models_uses_saved_profile_and_parses_catalog(monkeypatch) -> N
     )
 
 
-def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_projects_input_modalities_from_catalog(
+    monkeypatch,
+) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -2883,7 +3179,9 @@ def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> 
         ),
     )
 
-    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+    result = await service.discover_models_async(
+        ModelDiscoveryRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert result.model_entries[0].model == "gpt-4o-mini"
@@ -2894,13 +3192,14 @@ def test_discover_models_projects_input_modalities_from_catalog(monkeypatch) -> 
     assert result.model_entries[1].capabilities.input.image is True
 
 
-def test_discover_models_extracts_context_window_when_provider_returns_it(
+@pytest.mark.asyncio
+async def test_discover_models_extracts_context_window_when_provider_returns_it(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -2923,7 +3222,9 @@ def test_discover_models_extracts_context_window_when_provider_returns_it(
         ),
     )
 
-    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+    result = await service.discover_models_async(
+        ModelDiscoveryRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert result.models == ("fake-chat-model", "reasoning-model")
@@ -2933,11 +3234,12 @@ def test_discover_models_extracts_context_window_when_provider_returns_it(
     assert result.model_entries[1].context_window == 128000
 
 
-def test_discover_models_extracts_endpoint_only_metadata(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_extracts_endpoint_only_metadata(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -2963,7 +3265,7 @@ def test_discover_models_extracts_endpoint_only_metadata(monkeypatch) -> None:
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             profile_name="default",
             metadata_policy="endpoint_only",
@@ -2984,11 +3286,14 @@ def test_discover_models_extracts_endpoint_only_metadata(monkeypatch) -> None:
     assert entries["bool-limit-model"].output_limit is None
 
 
-def test_discover_models_extracts_moonshot_endpoint_only_metadata(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_extracts_moonshot_endpoint_only_metadata(
+    monkeypatch,
+) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3016,7 +3321,7 @@ def test_discover_models_extracts_moonshot_endpoint_only_metadata(monkeypatch) -
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.OPENAI_COMPATIBLE,
@@ -3042,13 +3347,14 @@ def test_discover_models_extracts_moonshot_endpoint_only_metadata(monkeypatch) -
     assert result.model_entries[1].input_modalities == ()
 
 
-def test_discover_models_leaves_minimax_openai_endpoint_only_metadata_empty(
+@pytest.mark.asyncio
+async def test_discover_models_leaves_minimax_openai_endpoint_only_metadata_empty(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3073,7 +3379,7 @@ def test_discover_models_leaves_minimax_openai_endpoint_only_metadata_empty(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.OPENAI_COMPATIBLE,
@@ -3093,13 +3399,14 @@ def test_discover_models_leaves_minimax_openai_endpoint_only_metadata_empty(
         assert entry.capabilities.input.image is None
 
 
-def test_discover_models_leaves_xiaomi_mimo_endpoint_only_metadata_empty(
+@pytest.mark.asyncio
+async def test_discover_models_leaves_xiaomi_mimo_endpoint_only_metadata_empty(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3127,7 +3434,7 @@ def test_discover_models_leaves_xiaomi_mimo_endpoint_only_metadata_empty(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.OPENAI_COMPATIBLE,
@@ -3147,13 +3454,14 @@ def test_discover_models_leaves_xiaomi_mimo_endpoint_only_metadata_empty(
         assert entry.capabilities.input.image is None
 
 
-def test_discover_models_leaves_bigmodel_endpoint_only_metadata_empty(
+@pytest.mark.asyncio
+async def test_discover_models_leaves_bigmodel_endpoint_only_metadata_empty(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3178,7 +3486,7 @@ def test_discover_models_leaves_bigmodel_endpoint_only_metadata_empty(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.BIGMODEL,
@@ -3198,11 +3506,14 @@ def test_discover_models_leaves_bigmodel_endpoint_only_metadata_empty(
         assert entry.capabilities.input.image is None
 
 
-def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_falls_back_to_known_context_window_rules(
+    monkeypatch,
+) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3217,7 +3528,9 @@ def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -
         ),
     )
 
-    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+    result = await service.discover_models_async(
+        ModelDiscoveryRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert result.models == ("gpt-4o-mini", "kimi-k2.5")
@@ -3225,14 +3538,15 @@ def test_discover_models_falls_back_to_known_context_window_rules(monkeypatch) -
     assert result.model_entries[1].context_window == 256000
 
 
-def test_discover_models_allows_saved_api_key_with_override_base_url(
+@pytest.mark.asyncio
+async def test_discover_models_allows_saved_api_key_with_override_base_url(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3242,7 +3556,7 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             profile_name="default",
             override=ModelConnectivityProbeOverride(base_url="https://draft.test/v1"),
@@ -3257,12 +3571,13 @@ def test_discover_models_allows_saved_api_key_with_override_base_url(
     assert captured["timeout_seconds"] == pytest.approx(17.5)
 
 
-def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3272,7 +3587,7 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.BIGMODEL,
@@ -3288,12 +3603,13 @@ def test_discover_models_supports_bigmodel_provider(monkeypatch) -> None:
     assert captured["url"] == "https://open.bigmodel.cn/api/coding/paas/v4/models"
 
 
-def test_discover_models_supports_anthropic_provider(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_supports_anthropic_provider(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3311,7 +3627,7 @@ def test_discover_models_supports_anthropic_provider(monkeypatch) -> None:
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.ANTHROPIC,
@@ -3329,19 +3645,20 @@ def test_discover_models_supports_anthropic_provider(monkeypatch) -> None:
     assert headers["x-api-key"] == "draft-api-key"
 
 
-def test_discover_models_anthropic_returns_network_error_for_request_exception(
+@pytest.mark.asyncio
+async def test_discover_models_anthropic_returns_network_error_for_request_exception(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             error=httpx.ConnectError("failed to reach anthropic model list"),
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.ANTHROPIC,
@@ -3357,11 +3674,14 @@ def test_discover_models_anthropic_returns_network_error_for_request_exception(
     assert result.retryable is True
 
 
-def test_discover_models_supports_anthropic_endpoint_only_metadata(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_supports_anthropic_endpoint_only_metadata(
+    monkeypatch,
+) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3378,7 +3698,7 @@ def test_discover_models_supports_anthropic_endpoint_only_metadata(monkeypatch) 
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.ANTHROPIC,
@@ -3395,13 +3715,14 @@ def test_discover_models_supports_anthropic_endpoint_only_metadata(monkeypatch) 
     assert result.model_entries[0].output_limit == 8192
 
 
-def test_discover_models_leaves_minimax_anthropic_endpoint_only_metadata_empty(
+@pytest.mark.asyncio
+async def test_discover_models_leaves_minimax_anthropic_endpoint_only_metadata_empty(
     monkeypatch,
 ) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(
                 200,
@@ -3428,7 +3749,7 @@ def test_discover_models_leaves_minimax_anthropic_endpoint_only_metadata_empty(
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.ANTHROPIC,
@@ -3448,12 +3769,13 @@ def test_discover_models_leaves_minimax_anthropic_endpoint_only_metadata_empty(
         assert entry.capabilities.input.image is None
 
 
-def test_discover_models_allows_header_only_override(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_allows_header_only_override(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3463,7 +3785,7 @@ def test_discover_models_allows_header_only_override(monkeypatch) -> None:
         ),
     )
 
-    result = service.discover_models(
+    result = await service.discover_models_async(
         ModelDiscoveryRequest(
             override=ModelConnectivityProbeOverride(
                 base_url="https://draft.test/v1",
@@ -3482,24 +3804,28 @@ def test_discover_models_allows_header_only_override(monkeypatch) -> None:
     assert headers["Authorization"] == "Bearer discovery-header"
 
 
-def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_discover_models_returns_invalid_response_error(monkeypatch) -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **_kwargs: _FakeHttpClient(
             response=httpx.Response(200, json={"items": [{"id": "missing-data"}]})
         ),
     )
 
-    result = service.discover_models(ModelDiscoveryRequest(profile_name="default"))
+    result = await service.discover_models_async(
+        ModelDiscoveryRequest(profile_name="default")
+    )
 
     assert result.ok is False
     assert result.error_code == "invalid_response"
     assert result.retryable is False
 
 
-def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
@@ -3508,7 +3834,7 @@ def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
         lambda: _FakeMaaSTokenService(["maas-token"], captured),
     )
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3525,7 +3851,7 @@ def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
         ),
     )
 
-    result = service.probe(
+    result = await service.probe_async(
         ModelConnectivityProbeRequest(
             override=ModelConnectivityProbeOverride(
                 provider=ProviderType.MAAS,
@@ -3544,21 +3870,26 @@ def test_probe_maas_supports_event_stream_wrapped_json(monkeypatch) -> None:
     assert result.token_usage.total_tokens == 3
 
 
-def test_probe_requires_source_config() -> None:
+@pytest.mark.asyncio
+async def test_probe_requires_source_config() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="Provide profile_name, override, or both."):
-        service.probe(ModelConnectivityProbeRequest())
+        await service.probe_async(ModelConnectivityProbeRequest())
 
 
-def test_discover_models_requires_source_config() -> None:
+@pytest.mark.asyncio
+async def test_discover_models_requires_source_config() -> None:
     service = ModelConnectivityProbeService(get_runtime=_runtime_config)
 
     with pytest.raises(ValueError, match="Provide profile_name, override, or both."):
-        service.discover_models(ModelDiscoveryRequest())
+        await service.discover_models_async(ModelDiscoveryRequest())
 
 
-def test_probe_resolves_default_alias_to_runtime_default_profile(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_probe_resolves_default_alias_to_runtime_default_profile(
+    monkeypatch,
+) -> None:
     captured: dict[str, object] = {}
     service = ModelConnectivityProbeService(
         get_runtime=lambda: _runtime_config(
@@ -3568,7 +3899,7 @@ def test_probe_resolves_default_alias_to_runtime_default_profile(monkeypatch) ->
     )
 
     monkeypatch.setattr(
-        "relay_teams.providers.model_connectivity.create_sync_http_client",
+        "relay_teams.providers.model_connectivity.create_async_http_client",
         lambda **kwargs: (
             captured.update(kwargs)
             or _FakeHttpClient(
@@ -3577,7 +3908,9 @@ def test_probe_resolves_default_alias_to_runtime_default_profile(monkeypatch) ->
         ),
     )
 
-    result = service.probe(ModelConnectivityProbeRequest(profile_name="default"))
+    result = await service.probe_async(
+        ModelConnectivityProbeRequest(profile_name="default")
+    )
 
     assert result.ok is True
     assert captured["url"] == "https://example.test/v1/chat/completions"

@@ -101,6 +101,11 @@ Boundary:
   created by the factories in `relay_teams.net.clients`. Gateway outbound HTTP
   is async-only and must use `create_async_http_client()` or
   `create_runtime_async_http_client()`; do not add gateway sync HTTP fallbacks.
+  Provider runtime network paths for MaaS, CodeAgent, model catalog fetch,
+  model probe, model discovery, and CodeAgent auth verification are also
+  async-only. The shared sync HTTP factory may remain for deliberate unrelated
+  synchronous boundaries, but it must not be reintroduced into those provider
+  paths.
 - `secrets/*`: secret persistence and masking.
 - `trace/*`: trace/span context propagation.
 

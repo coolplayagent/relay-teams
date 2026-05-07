@@ -5,6 +5,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import pytest
 
 from relay_teams.providers.maas_auth import (
     MaaSTokenService,
@@ -13,18 +14,18 @@ from relay_teams.providers.maas_auth import (
 from relay_teams.providers.model_config import MaaSAuthConfig
 
 
-class _FakeSyncHttpClient:
+class _FakeAsyncHttpClient:
     def __init__(self, response: httpx.Response) -> None:
         self._response = response
         self.calls = 0
 
-    def __enter__(self) -> _FakeSyncHttpClient:
+    async def __aenter__(self) -> _FakeAsyncHttpClient:
         return self
 
-    def __exit__(self, *_args: object) -> None:
+    async def __aexit__(self, *_args: object) -> None:
         return None
 
-    def post(
+    async def post(
         self,
         url: str,
         *,
@@ -39,7 +40,7 @@ class _FakeSyncHttpClient:
 
 
 def test_build_maas_openai_client_disables_sdk_retries() -> None:
-    http_client = httpx.AsyncClient()
+    http_client = httpx.AsyncClient(trust_env=False)
     try:
         client = build_maas_openai_client(
             base_url="https://maas.example/api/v2",
@@ -57,10 +58,11 @@ def test_build_maas_openai_client_disables_sdk_retries() -> None:
         asyncio.run(http_client.aclose())
 
 
-def test_get_auth_context_sync_extracts_department_from_direct_field(
+@pytest.mark.asyncio
+async def test_get_auth_context_extracts_department_from_direct_field(
     monkeypatch,
 ) -> None:
-    client = _FakeSyncHttpClient(
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -72,11 +74,11 @@ def test_get_auth_context_sync_extracts_department_from_direct_field(
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
-    auth_context = service.get_auth_context_sync(
+    auth_context = await service.get_auth_context(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
@@ -90,8 +92,9 @@ def test_get_auth_context_sync_extracts_department_from_direct_field(
     assert client.calls == 1
 
 
-def test_get_auth_context_sync_falls_back_to_department_segments(monkeypatch) -> None:
-    client = _FakeSyncHttpClient(
+@pytest.mark.asyncio
+async def test_get_auth_context_falls_back_to_department_segments(monkeypatch) -> None:
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -107,11 +110,11 @@ def test_get_auth_context_sync_falls_back_to_department_segments(monkeypatch) ->
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
-    auth_context = service.get_auth_context_sync(
+    auth_context = await service.get_auth_context(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
@@ -124,8 +127,9 @@ def test_get_auth_context_sync_falls_back_to_department_segments(monkeypatch) ->
     assert client.calls == 1
 
 
-def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> None:
-    client = _FakeSyncHttpClient(
+@pytest.mark.asyncio
+async def test_get_auth_context_refreshes_one_hour_before_expiry(monkeypatch) -> None:
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -137,7 +141,7 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
@@ -147,7 +151,7 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
             password="relay-password",
         )
     )
-    service._tokens[cache_key] = service._login_sync(
+    service._tokens[cache_key] = await service._login_async(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
@@ -158,7 +162,7 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
     assert client.calls == 1
 
     service._tokens[cache_key].expires_at = datetime.now(UTC) + timedelta(minutes=59)
-    service.get_auth_context_sync(
+    await service.get_auth_context(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
@@ -169,7 +173,7 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
     assert client.calls == 2
 
     service._tokens[cache_key].expires_at = datetime.now(UTC) + timedelta(minutes=61)
-    service.get_auth_context_sync(
+    await service.get_auth_context(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
@@ -180,8 +184,9 @@ def test_get_auth_context_sync_refreshes_one_hour_before_expiry(monkeypatch) -> 
     assert client.calls == 2
 
 
-def test_get_auth_context_sync_reuses_cached_department(monkeypatch) -> None:
-    client = _FakeSyncHttpClient(
+@pytest.mark.asyncio
+async def test_get_auth_context_reuses_cached_department(monkeypatch) -> None:
+    client = _FakeAsyncHttpClient(
         httpx.Response(
             200,
             json={
@@ -193,11 +198,11 @@ def test_get_auth_context_sync_reuses_cached_department(monkeypatch) -> None:
     service = MaaSTokenService()
 
     monkeypatch.setattr(
-        "relay_teams.providers.maas_auth.create_sync_http_client",
+        "relay_teams.providers.maas_auth.create_async_http_client",
         lambda **_kwargs: client,
     )
 
-    first = service.get_auth_context_sync(
+    first = await service.get_auth_context(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
@@ -205,7 +210,7 @@ def test_get_auth_context_sync_reuses_cached_department(monkeypatch) -> None:
         ssl_verify=None,
         connect_timeout_seconds=15,
     )
-    second = service.get_auth_context_sync(
+    second = await service.get_auth_context(
         auth_config=MaaSAuthConfig(
             username="relay-user",
             password="relay-password",
