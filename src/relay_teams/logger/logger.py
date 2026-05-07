@@ -7,13 +7,13 @@ import copy
 import configparser
 import json
 import logging
-import os
 import re
 import shutil
 import sys
 import traceback
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time as datetime_time
 from logging.handlers import QueueHandler, QueueListener, TimedRotatingFileHandler
+from math import isfinite
 from pathlib import Path
 from queue import SimpleQueue
 from threading import Lock
@@ -39,8 +39,12 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_DEBUG_LOG_LEVEL = "DEBUG"
 DEFAULT_LOG_CONSOLE = "1"
 DEFAULT_BACKUP_COUNT = 14
+DEFAULT_MAX_LOG_FILE_MB = "256"
+DEFAULT_THIRD_PARTY_DEBUG = "0"
 _LOGGER_INI_NAME = "logger.ini"
 DEFAULT_LOG_REDACTION_PLACEHOLDER = "***"
+_MAX_LOG_FILE_MB_ENV = "AGENT_TEAMS_LOG_MAX_FILE_MB"
+_THIRD_PARTY_DEBUG_ENV = "AGENT_TEAMS_LOG_THIRD_PARTY_DEBUG"
 _REDACTION_KEYS_ADD_ENV = "AGENT_TEAMS_LOG_REDACTION_KEYS_ADD"
 _REDACTION_KEYS_REPLACE_ENV = "AGENT_TEAMS_LOG_REDACTION_KEYS_REPLACE"
 _REDACTION_PATTERNS_ADD_ENV = "AGENT_TEAMS_LOG_REDACTION_PATTERNS_ADD"
@@ -69,6 +73,8 @@ _HEADER_TOKEN_PATTERN = re.compile(
 )
 _URL_PATTERN = re.compile(r"\b(?:https?|wss?)://[^\s\"'<>]+", re.IGNORECASE)
 _OPENAI_TOKEN_PATTERN = re.compile(r"\bsk-[A-Za-z0-9_-]{8,}\b")
+_NOISY_THIRD_PARTY_LOGGERS = ("aiosqlite", "httpcore", "httpx")
+_SIZE_ROLLOVER_SUFFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\.\d+$")
 
 _RUNTIME_ENV_VALUES: dict[str, str] | None = None
 _LOGGING_LOCK = Lock()
@@ -126,7 +132,7 @@ def _trace_log_record_factory(*args: object, **kwargs: object) -> logging.LogRec
         "parent_span_id": context.parent_span_id,
     }
     for field_name, field_value in context_fields.items():
-        if field_value is not None and not hasattr(record, field_name):
+        if field_value is not None and field_name not in record.__dict__:
             setattr(record, field_name, field_value)
     return record
 
@@ -143,12 +149,20 @@ class _LoggingRuntime:
         backend_queue_handler: QueueHandler,
         frontend_queue_handler: QueueHandler,
         managed_handlers: tuple[logging.Handler, ...],
+        managed_logger_levels: tuple["_ManagedLoggerLevel", ...],
     ) -> None:
         self.backend_listener = backend_listener
         self.frontend_listener = frontend_listener
         self.backend_queue_handler = backend_queue_handler
         self.frontend_queue_handler = frontend_queue_handler
         self.managed_handlers = managed_handlers
+        self.managed_logger_levels = managed_logger_levels
+
+
+class _ManagedLoggerLevel:
+    def __init__(self, *, logger: logging.Logger, level: int) -> None:
+        self.logger = logger
+        self.level = level
 
 
 class StructuredQueueHandler(QueueHandler):
@@ -179,9 +193,19 @@ class _BackendLogFilter(logging.Filter):
 
 
 class _DebugLogFilter(logging.Filter):
+    def __init__(self, *, include_third_party_debug: bool) -> None:
+        super().__init__()
+        self._include_third_party_debug = include_third_party_debug
+
     @override
     def filter(self, record: logging.LogRecord) -> bool:
-        return _resolve_log_source(record) == "backend"
+        if _resolve_log_source(record) != "backend":
+            return False
+        if record.levelno != logging.DEBUG:
+            return True
+        if self._include_third_party_debug:
+            return True
+        return _is_project_logger(record.name)
 
 
 def _is_noisy_httpx_access_log(record: logging.LogRecord) -> bool:
@@ -275,6 +299,12 @@ def configure_logging(
             default_name=logger_settings.frontend_level,
         )
         debug_level = _resolve_debug_log_level(default_name=logger_settings.debug_level)
+        max_file_bytes = _resolve_max_file_bytes(
+            default_name=logger_settings.max_file_mb
+        )
+        include_third_party_debug = _third_party_debug_enabled(
+            default_enabled=logger_settings.third_party_debug_enabled
+        )
 
         backend_formatter = HumanReadableFormatter()
         debug_formatter = HumanReadableFormatter()
@@ -284,18 +314,23 @@ def configure_logging(
             path=log_dir / DEFAULT_BACKEND_LOG_FILENAME,
             level=backend_level,
             formatter=backend_formatter,
+            max_bytes=max_file_bytes,
         )
         backend_file_handler.addFilter(_BackendLogFilter())
         debug_file_handler = _build_file_handler(
             path=log_dir / DEFAULT_DEBUG_LOG_FILENAME,
             level=debug_level,
             formatter=debug_formatter,
+            max_bytes=max_file_bytes,
         )
-        debug_file_handler.addFilter(_DebugLogFilter())
+        debug_file_handler.addFilter(
+            _DebugLogFilter(include_third_party_debug=include_third_party_debug)
+        )
         frontend_file_handler = _build_file_handler(
             path=log_dir / DEFAULT_FRONTEND_LOG_FILENAME,
             level=frontend_level,
             formatter=frontend_formatter,
+            max_bytes=max_file_bytes,
         )
 
         console_handler: logging.Handler | None = None
@@ -352,6 +387,9 @@ def configure_logging(
         frontend_root.addHandler(frontend_queue_handler)
 
         _configure_uvicorn_loggers()
+        managed_logger_levels = _configure_third_party_loggers(
+            include_debug=include_third_party_debug
+        )
 
         managed_handlers: list[logging.Handler] = [
             backend_queue_handler,
@@ -369,6 +407,7 @@ def configure_logging(
             backend_queue_handler=backend_queue_handler,
             frontend_queue_handler=frontend_queue_handler,
             managed_handlers=tuple(managed_handlers),
+            managed_logger_levels=managed_logger_levels,
         )
         _log_redaction_warnings(redaction_warnings)
 
@@ -392,6 +431,9 @@ def shutdown_logging() -> None:
 
     for handler in runtime.managed_handlers:
         handler.close()
+
+    for managed_logger_level in runtime.managed_logger_levels:
+        managed_logger_level.logger.setLevel(managed_logger_level.level)
 
     _LOGGING_RUNTIME = None
 
@@ -669,11 +711,15 @@ class _LoggerSettings:
         frontend_level: str | None = None,
         debug_level: str | None = None,
         console_enabled: bool | None = None,
+        max_file_mb: str | None = None,
+        third_party_debug_enabled: bool | None = None,
     ) -> None:
         self.backend_level = backend_level
         self.frontend_level = frontend_level
         self.debug_level = debug_level
         self.console_enabled = console_enabled
+        self.max_file_mb = max_file_mb
+        self.third_party_debug_enabled = third_party_debug_enabled
 
 
 def _console_enabled(
@@ -723,6 +769,55 @@ def _resolve_debug_log_level(*, default_name: str | None = None) -> int:
     return logging.DEBUG
 
 
+def _resolve_max_file_bytes(*, default_name: str | None = None) -> int:
+    raw = _get_runtime_env_value(
+        _MAX_LOG_FILE_MB_ENV,
+        default_name or DEFAULT_MAX_LOG_FILE_MB,
+    ).strip()
+    if not raw:
+        return int(DEFAULT_MAX_LOG_FILE_MB) * 1024 * 1024
+    try:
+        value = float(raw)
+    except ValueError:
+        return int(DEFAULT_MAX_LOG_FILE_MB) * 1024 * 1024
+    if not isfinite(value):
+        return int(DEFAULT_MAX_LOG_FILE_MB) * 1024 * 1024
+    if value <= 0:
+        return 0
+    value_bytes = value * 1024 * 1024
+    if not isfinite(value_bytes):
+        return int(DEFAULT_MAX_LOG_FILE_MB) * 1024 * 1024
+    return max(1, int(value_bytes))
+
+
+def _third_party_debug_enabled(*, default_enabled: bool | None = None) -> bool:
+    default_name = (
+        DEFAULT_THIRD_PARTY_DEBUG
+        if default_enabled is None
+        else str(default_enabled).lower()
+    )
+    raw = _get_runtime_env_value(_THIRD_PARTY_DEBUG_ENV, default_name)
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if default_enabled is not None:
+        return default_enabled
+    return DEFAULT_THIRD_PARTY_DEBUG.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_bool_setting(value: str | None, *, fallback: bool) -> bool:
+    if value is None:
+        return fallback
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return fallback
+
+
 def _load_logger_settings(config_dir: Path) -> _LoggerSettings:
     logger_ini_path = config_dir / _LOGGER_INI_NAME
     if not logger_ini_path.exists():
@@ -741,11 +836,19 @@ def _load_logger_settings(config_dir: Path) -> _LoggerSettings:
     console_enabled: bool | None = None
     if "console" in section:
         console_enabled = section.getboolean("console", fallback=True)
+    third_party_debug_enabled: bool | None = None
+    if "third_party_debug" in section:
+        third_party_debug_enabled = _parse_bool_setting(
+            section.get("third_party_debug"),
+            fallback=False,
+        )
     return _LoggerSettings(
         backend_level=section.get("backend_level"),
         frontend_level=section.get("frontend_level"),
         debug_level=section.get("debug_level"),
         console_enabled=console_enabled,
+        max_file_mb=section.get("max_file_mb"),
+        third_party_debug_enabled=third_party_debug_enabled,
     )
 
 
@@ -759,12 +862,134 @@ class _WindowsSafeTimedRotatingFileHandler(TimedRotatingFileHandler):
     handle is never invalidated.
     """
 
+    def __init__(
+        self,
+        filename: str,
+        when: str = "h",
+        interval: int = 1,
+        backup_count: int = 0,
+        encoding: str | None = None,
+        delay: bool = False,
+        utc: bool = False,
+        at_time: datetime_time | None = None,
+        errors: str | None = None,
+        *,
+        max_bytes: int = 0,
+    ) -> None:
+        super().__init__(
+            filename,
+            when,
+            interval,
+            backup_count,
+            encoding,
+            delay,
+            utc,
+            at_time,
+            errors,
+        )
+        self.max_bytes = max_bytes
+        self._backup_count = backup_count
+        self._rollover_reason = "time"
+
+    @override
+    def shouldRollover(self, record: logging.LogRecord) -> int:
+        if super().shouldRollover(record):
+            self._rollover_reason = "time"
+            return 1
+        if self.max_bytes <= 0:
+            return 0
+        if self.stream is None:
+            self.stream = self._open()
+        message = f"{self.format(record)}\n"
+        self.stream.seek(0, 2)
+        encoding = self.encoding or "utf-8"
+        projected_size = self.stream.tell() + len(
+            message.encode(encoding, errors="replace")
+        )
+        if projected_size >= self.max_bytes:
+            self._rollover_reason = "size"
+            return 1
+        return 0
+
+    @override
+    def doRollover(self) -> None:
+        if self._rollover_reason != "size":
+            super().doRollover()
+            return
+
+        self._rollover_reason = "time"
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        source_path = Path(self.baseFilename)
+        if source_path.exists():
+            self.rotate(str(source_path), str(self._next_size_rollover_path()))
+
+        for filename in self.getFilesToDelete():
+            Path(filename).unlink(missing_ok=True)
+
+        if not self.delay:
+            self.stream = self._open()
+
+    @override
+    def getFilesToDelete(self) -> list[str]:
+        if self._backup_count <= 0:
+            return []
+        base_path = Path(self.baseFilename)
+        rotated_prefix = f"{base_path.name}."
+        rotated_files = [
+            path
+            for path in base_path.parent.iterdir()
+            if path.is_file()
+            and path.name.startswith(rotated_prefix)
+            and self._is_rotated_log_suffix(path.name.removeprefix(rotated_prefix))
+        ]
+        if len(rotated_files) <= self._backup_count:
+            return []
+        rotated_files.sort(
+            key=lambda path: self._rotated_log_sort_key(
+                path.name.removeprefix(rotated_prefix)
+            )
+        )
+        return [str(path) for path in rotated_files[: -self._backup_count]]
+
+    def _is_rotated_log_suffix(self, suffix: str) -> bool:
+        return (
+            self.extMatch.fullmatch(suffix) is not None
+            or _SIZE_ROLLOVER_SUFFIX_RE.fullmatch(suffix) is not None
+        )
+
+    @staticmethod
+    def _rotated_log_sort_key(suffix: str) -> tuple[str, int, str]:
+        if _SIZE_ROLLOVER_SUFFIX_RE.fullmatch(suffix) is not None:
+            date_part, index_part = suffix.rsplit(".", maxsplit=1)
+            return date_part, int(index_part), suffix
+        return suffix, sys.maxsize, suffix
+
+    def _next_size_rollover_path(self) -> Path:
+        base_path = Path(self.baseFilename)
+        suffix = datetime.now(UTC).strftime("%Y-%m-%d")
+        rotated_prefix = f"{base_path.name}.{suffix}."
+        existing_indexes = [
+            int(path.name.removeprefix(rotated_prefix))
+            for path in base_path.parent.iterdir()
+            if path.is_file()
+            and path.name.startswith(rotated_prefix)
+            and path.name.removeprefix(rotated_prefix).isdigit()
+        ]
+        next_index = max(existing_indexes, default=0) + 1
+        if next_index < 10000:
+            return base_path.with_name(f"{base_path.name}.{suffix}.{next_index}")
+        return base_path.with_name(f"{base_path.name}.{suffix}.overflow")
+
     def rotate(self, source: str, dest: str) -> None:
         if sys.platform != "win32" or callable(self.rotator):
             super().rotate(source, dest)
             return
-        if os.path.exists(dest):
-            os.remove(dest)
+        destination_path = Path(dest)
+        if destination_path.exists():
+            destination_path.unlink()
         shutil.copy2(source, dest)
         with open(source, "w", encoding="utf-8"):
             pass
@@ -775,14 +1000,16 @@ def _build_file_handler(
     path: Path,
     level: int,
     formatter: logging.Formatter,
+    max_bytes: int = 0,
 ) -> _WindowsSafeTimedRotatingFileHandler:
     handler = _WindowsSafeTimedRotatingFileHandler(
         filename=str(path),
         when="midnight",
         interval=1,
-        backupCount=DEFAULT_BACKUP_COUNT,
+        backup_count=DEFAULT_BACKUP_COUNT,
         encoding="utf-8",
         utc=True,
+        max_bytes=max_bytes,
     )
     handler.setLevel(level)
     handler.setFormatter(formatter)
@@ -861,6 +1088,30 @@ def _configure_uvicorn_loggers() -> None:
         logger.handlers.clear()
         logger.propagate = True
         logger.setLevel(logging.DEBUG)
+
+
+def _configure_third_party_loggers(
+    *,
+    include_debug: bool,
+) -> tuple[_ManagedLoggerLevel, ...]:
+    managed_levels: list[_ManagedLoggerLevel] = []
+    for logger_name in _NOISY_THIRD_PARTY_LOGGERS:
+        logger = logging.getLogger(logger_name)
+        managed_levels.append(_ManagedLoggerLevel(logger=logger, level=logger.level))
+        target_level = (
+            logging.NOTSET if include_debug else max(logger.level, logging.INFO)
+        )
+        logger.setLevel(target_level)
+    return tuple(managed_levels)
+
+
+def _is_project_logger(name: str) -> bool:
+    return (
+        name == BACKEND_LOGGER_NAMESPACE
+        or name.startswith(f"{BACKEND_LOGGER_NAMESPACE}.")
+        or name == "relay_teams"
+        or name.startswith("relay_teams.")
+    )
 
 
 def _redact_string(value: str, *, settings: _RedactionSettings) -> str:

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Thread
 from typing import cast
@@ -210,6 +212,167 @@ def test_httpx_error_logs_remain_in_backend_log(tmp_path: Path) -> None:
         snapshot.restore()
 
 
+def test_third_party_debug_logs_are_excluded_by_default(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        logging.getLogger("aiosqlite").debug("executing SELECT 1")
+        logging.getLogger("relay_teams.custom").debug("project debug detail")
+        logging.getLogger("aiosqlite").warning("sqlite warning remains visible")
+
+        shutdown_logging()
+
+        backend_text = (config_dir / "log" / "backend.log").read_text(encoding="utf-8")
+        debug_text = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        assert "executing SELECT 1" not in debug_text
+        assert "project debug detail" in debug_text
+        assert "sqlite warning remains visible" in backend_text
+        assert "sqlite warning remains visible" in debug_text
+    finally:
+        snapshot.restore()
+
+
+def test_third_party_debug_logs_can_be_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    monkeypatch.setenv("AGENT_TEAMS_LOG_THIRD_PARTY_DEBUG", "true")
+    try:
+        configure_logging(config_dir=config_dir)
+        logging.getLogger("aiosqlite").debug("executing SELECT 1")
+
+        shutdown_logging()
+
+        debug_text = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        assert "executing SELECT 1" in debug_text
+    finally:
+        snapshot.restore()
+
+
+def test_frontend_events_are_excluded_from_debug_log(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    snapshot = _RootLoggerSnapshot.take()
+    try:
+        configure_logging(config_dir=config_dir)
+        frontend_logger = get_logger("tests.unit.frontend.event", source="frontend")
+        frontend_logger.error("frontend event detail")
+
+        shutdown_logging()
+
+        debug_text = (config_dir / "log" / "debug.log").read_text(encoding="utf-8")
+        frontend_text = (config_dir / "log" / "frontend.log").read_text(
+            encoding="utf-8"
+        )
+        assert "frontend event detail" not in debug_text
+        assert "frontend event detail" in frontend_text
+    finally:
+        snapshot.restore()
+
+
+def test_max_file_bytes_env_handles_blank_invalid_and_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_MAX_FILE_MB": ""},
+    )
+    assert logger_module._resolve_max_file_bytes() == 256 * 1024 * 1024
+
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_MAX_FILE_MB": "not-a-number"},
+    )
+    assert logger_module._resolve_max_file_bytes() == 256 * 1024 * 1024
+
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_MAX_FILE_MB": "nan"},
+    )
+    assert logger_module._resolve_max_file_bytes() == 256 * 1024 * 1024
+
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_MAX_FILE_MB": "inf"},
+    )
+    assert logger_module._resolve_max_file_bytes() == 256 * 1024 * 1024
+
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_MAX_FILE_MB": "1e308"},
+    )
+    assert logger_module._resolve_max_file_bytes() == 256 * 1024 * 1024
+
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_MAX_FILE_MB": "0"},
+    )
+    assert logger_module._resolve_max_file_bytes() == 0
+
+
+def test_third_party_debug_invalid_env_uses_explicit_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        logger_module,
+        "_RUNTIME_ENV_VALUES",
+        {"AGENT_TEAMS_LOG_THIRD_PARTY_DEBUG": "maybe"},
+    )
+    assert logger_module._third_party_debug_enabled(default_enabled=True)
+    assert not logger_module._third_party_debug_enabled(default_enabled=False)
+
+
+def test_third_party_debug_uses_config_default_when_env_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(logger_module, "_RUNTIME_ENV_VALUES", {})
+    assert logger_module._third_party_debug_enabled(default_enabled=True)
+    assert not logger_module._third_party_debug_enabled(default_enabled=False)
+
+
+def test_invalid_third_party_debug_ini_value_falls_back_to_false(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    config_dir.mkdir()
+    (config_dir / "logger.ini").write_text(
+        "[agent_teams]\nthird_party_debug = maybe\n",
+        encoding="utf-8",
+    )
+
+    settings = logger_module._load_logger_settings(config_dir)
+
+    assert settings.third_party_debug_enabled is False
+
+
+def test_third_party_logger_configuration_preserves_stricter_levels() -> None:
+    aiosqlite_logger = logging.getLogger("aiosqlite")
+    original_level = aiosqlite_logger.level
+    try:
+        aiosqlite_logger.setLevel(logging.WARNING)
+
+        managed_levels = logger_module._configure_third_party_loggers(
+            include_debug=False
+        )
+
+        assert aiosqlite_logger.level == logging.WARNING
+        assert any(
+            managed_level.logger is aiosqlite_logger
+            and managed_level.level == logging.WARNING
+            for managed_level in managed_levels
+        )
+    finally:
+        aiosqlite_logger.setLevel(original_level)
+
+
 def test_log_level_filters_lower_priority_events(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -347,6 +510,276 @@ def test_windows_safe_handler_removes_existing_dest_before_copy(
 
     assert dest.read_text(encoding="utf-8") == "new content"
     assert log_file.read_text(encoding="utf-8") == ""
+
+
+def test_windows_safe_handler_rotates_when_size_limit_is_reached(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "size.log"
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        backup_count=3,
+        encoding="utf-8",
+        utc=True,
+        max_bytes=40,
+    )
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger = logging.getLogger("tests.unit.size.rotation")
+    original_handlers = tuple(logger.handlers)
+    original_level = logger.level
+    original_propagate = logger.propagate
+    try:
+        logger.handlers.clear()
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+
+        logger.info("short line")
+        logger.info("this line is long enough to trigger size rollover")
+
+        handler.close()
+
+        rotated_files = tuple(tmp_path.glob("size.log.*.1"))
+        assert len(rotated_files) == 1
+        assert rotated_files[0].read_text(encoding="utf-8").strip() == "short line"
+        assert "this line is long enough" in log_file.read_text(encoding="utf-8")
+    finally:
+        logger.handlers.clear()
+        for original_handler in original_handlers:
+            logger.addHandler(original_handler)
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+        handler.close()
+
+
+def test_windows_safe_handler_skips_size_rollover_when_disabled(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "size-disabled.log"
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        encoding="utf-8",
+        utc=True,
+        max_bytes=0,
+    )
+    try:
+        record = logging.makeLogRecord(
+            {
+                "name": "tests.unit.size.disabled",
+                "levelno": logging.INFO,
+                "levelname": "INFO",
+                "msg": "short line",
+            }
+        )
+
+        assert handler.shouldRollover(record) == 0
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_opens_delayed_stream_for_size_check(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "delayed-size.log"
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        encoding="utf-8",
+        delay=True,
+        utc=True,
+        max_bytes=100,
+    )
+    try:
+        record = logging.makeLogRecord(
+            {
+                "name": "tests.unit.size.delayed",
+                "levelno": logging.INFO,
+                "levelname": "INFO",
+                "msg": "short line",
+            }
+        )
+
+        assert handler.stream is None
+        assert handler.shouldRollover(record) == 0
+        assert handler.stream is not None
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_uses_time_rollover_when_due(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "time.log"
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        encoding="utf-8",
+        utc=True,
+        max_bytes=100,
+    )
+    try:
+        handler.rolloverAt = 0
+        record = logging.makeLogRecord(
+            {
+                "name": "tests.unit.time.rollover",
+                "levelno": logging.INFO,
+                "levelname": "INFO",
+                "msg": "short line",
+            }
+        )
+
+        assert handler.shouldRollover(record) == 1
+        assert handler._rollover_reason == "time"
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_time_rollover_delegates_to_base(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "time-delegate.log"
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        encoding="utf-8",
+        utc=True,
+    )
+    try:
+        with patch("logging.handlers.TimedRotatingFileHandler.doRollover") as rollover:
+            handler.doRollover()
+
+        rollover.assert_called_once_with()
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_get_files_to_delete_honors_backup_count(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "retention.log"
+    log_file.write_text("active", encoding="utf-8")
+    manual_file = tmp_path / "retention.log.2026-05-07.manual"
+    manual_file.write_text("manual", encoding="utf-8")
+    time.sleep(0.02)
+    old_file = tmp_path / "retention.log.2026-05-01.1"
+    keep_file = tmp_path / "retention.log.2026-05-07.1"
+    old_file.write_text("old", encoding="utf-8")
+    time.sleep(0.02)
+    keep_file.write_text("keep", encoding="utf-8")
+    time.sleep(0.02)
+    old_file.touch()
+
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        backup_count=1,
+        encoding="utf-8",
+        utc=True,
+    )
+    try:
+        assert handler.getFilesToDelete() == [str(old_file)]
+        assert manual_file.exists()
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_keeps_timed_backup_after_same_day_size_chunks(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "retention-order.log"
+    log_file.write_text("active", encoding="utf-8")
+    first_chunk = tmp_path / "retention-order.log.2026-05-07.1"
+    second_chunk = tmp_path / "retention-order.log.2026-05-07.2"
+    timed_backup = tmp_path / "retention-order.log.2026-05-07"
+    first_chunk.write_text("first", encoding="utf-8")
+    second_chunk.write_text("second", encoding="utf-8")
+    timed_backup.write_text("timed", encoding="utf-8")
+
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        backup_count=1,
+        encoding="utf-8",
+        utc=True,
+    )
+    try:
+        assert handler.getFilesToDelete() == [str(first_chunk), str(second_chunk)]
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_uses_next_highest_size_rollover_index(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "next-index.log"
+    log_file.write_text("active", encoding="utf-8")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
+    second_chunk = tmp_path / f"next-index.log.{today}.2"
+    second_chunk.write_text("second", encoding="utf-8")
+
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        backup_count=1,
+        encoding="utf-8",
+        utc=True,
+    )
+    try:
+        assert handler._next_size_rollover_path() == (
+            tmp_path / f"next-index.log.{today}.3"
+        )
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_get_files_to_delete_returns_empty_without_backups(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "no-retention.log"
+    log_file.write_text("active", encoding="utf-8")
+    rotated_file = tmp_path / "no-retention.log.2026-05-07.1"
+    rotated_file.write_text("old", encoding="utf-8")
+
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        backup_count=0,
+        encoding="utf-8",
+        utc=True,
+    )
+    try:
+        assert handler.getFilesToDelete() == []
+    finally:
+        handler.close()
+
+
+def test_windows_safe_handler_size_rollover_deletes_expired_backups(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "delete-expired.log"
+    log_file.write_text("active", encoding="utf-8")
+    expired_file = tmp_path / "delete-expired.log.2026-05-07.1"
+    expired_file.write_text("expired", encoding="utf-8")
+    handler = _WindowsSafeTimedRotatingFileHandler(
+        filename=str(log_file),
+        when="midnight",
+        backup_count=1,
+        encoding="utf-8",
+        utc=True,
+        max_bytes=1,
+    )
+    try:
+        handler._rollover_reason = "size"
+        with patch.object(
+            handler, "getFilesToDelete", return_value=[str(expired_file)]
+        ):
+            handler.doRollover()
+
+        assert not expired_file.exists()
+    finally:
+        handler.close()
 
 
 def test_default_redaction_masks_sensitive_message_and_payload_values(
