@@ -58,7 +58,7 @@ class FeishuRuntimeConfigLike(Protocol):
 
 
 class FeishuClientLike(Protocol):
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -66,7 +66,7 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -86,9 +86,20 @@ class NotificationServiceLike(Protocol):
         dedupe_key: str | None = None,
     ) -> bool: ...
 
+    async def emit_async(
+        self,
+        *,
+        notification_type: NotificationType,
+        title: str,
+        body: str,
+        context: NotificationContext,
+        dedupe_key: str | None = None,
+    ) -> bool:
+        raise NotImplementedError
+
 
 class XiaolubanGatewayServiceLike(Protocol):
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,
@@ -191,24 +202,21 @@ class AutomationDeliveryService:
                 ),
             )
         )
-        if record.started_status == AutomationDeliveryStatus.PENDING:
-            _ = self._attempt_started_delivery(record)
-            return self._repository.get_by_run_id(run_id)
         return record
 
-    def process_pending(self, *, limit: int = 20) -> bool:
+    async def process_pending(self, *, limit: int = 20) -> bool:
         progress = False
         stale_before = _utc_now() - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
         for record in self._repository.list_pending_started(
             limit=limit,
             stale_before=stale_before,
         ):
-            progress = self._attempt_started_delivery(record) or progress
+            progress = await self._attempt_started_delivery(record) or progress
         for record in self._repository.list_pending_terminal(
             limit=limit,
             stale_before=stale_before,
         ):
-            progress = self._attempt_terminal_delivery(record) or progress
+            progress = await self._attempt_terminal_delivery(record) or progress
         for record in self._repository.list_pending_started_cleanup(
             limit=limit,
             stale_before=stale_before,
@@ -287,7 +295,9 @@ class AutomationDeliveryService:
             )
         )
 
-    def _attempt_started_delivery(self, record: AutomationRunDeliveryRecord) -> bool:
+    async def _attempt_started_delivery(
+        self, record: AutomationRunDeliveryRecord
+    ) -> bool:
         claim_cutoff = _utc_now() - timedelta(seconds=_CLAIM_STALE_AFTER_SECONDS)
         if record.started_status not in {
             AutomationDeliveryStatus.PENDING,
@@ -302,7 +312,7 @@ class AutomationDeliveryService:
             return False
         attempts = claimed.started_attempts + 1
         try:
-            message_id = self._send_text(
+            message_id = await self._send_text(
                 binding=claimed.binding,
                 text=str(claimed.started_message or "").strip(),
                 session_id=claimed.session_id,
@@ -341,7 +351,9 @@ class AutomationDeliveryService:
         )
         return True
 
-    def _attempt_terminal_delivery(self, record: AutomationRunDeliveryRecord) -> bool:
+    async def _attempt_terminal_delivery(
+        self, record: AutomationRunDeliveryRecord
+    ) -> bool:
         if record.terminal_status not in {
             AutomationDeliveryStatus.PENDING,
             AutomationDeliveryStatus.SENDING,
@@ -397,7 +409,7 @@ class AutomationDeliveryService:
             or str(claimed.reply_to_message_id or "").strip()
         )
         try:
-            message_id = self._send_text(
+            message_id = await self._send_text(
                 binding=claimed.binding,
                 text=terminal_message,
                 reply_to_message_id=reply_to_message_id or None,
@@ -424,7 +436,7 @@ class AutomationDeliveryService:
                 )
             )
             if next_status == AutomationDeliveryStatus.FAILED:
-                self._emit_fallback_terminal_notification(
+                await self._emit_fallback_terminal_notification(
                     record=persisted,
                     runtime_status=runtime.status,
                 )
@@ -464,7 +476,7 @@ class AutomationDeliveryService:
         )
         return True
 
-    def _send_text(
+    async def _send_text(
         self,
         *,
         binding: AutomationDeliveryBinding,
@@ -483,12 +495,12 @@ class AutomationDeliveryService:
                 raise RuntimeError("missing_runtime_config")
             normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
             if normalized_reply_to_message_id:
-                return self._feishu_client.reply_text_message(
+                return await self._feishu_client.reply_text_message(
                     message_id=normalized_reply_to_message_id,
                     text=text,
                     environment=runtime_config.environment,
                 )
-            return self._feishu_client.send_text_message(
+            return await self._feishu_client.send_text_message(
                 chat_id=binding.chat_id,
                 text=text,
                 environment=runtime_config.environment,
@@ -496,7 +508,7 @@ class AutomationDeliveryService:
         if self._xiaoluban_gateway_service is None:
             raise RuntimeError("xiaoluban_delivery_service_unavailable")
         try:
-            return self._xiaoluban_gateway_service.send_notification_message(
+            return await self._xiaoluban_gateway_service.send_notification_message(
                 account_id=binding.account_id,
                 workspace_id=self._resolve_workspace_id(session_id),
                 session_id=session_id,
@@ -516,7 +528,7 @@ class AutomationDeliveryService:
             return ""
         return str(session.workspace_id or "").strip()
 
-    def _emit_fallback_terminal_notification(
+    async def _emit_fallback_terminal_notification(
         self,
         *,
         record: AutomationRunDeliveryRecord,
@@ -537,7 +549,7 @@ class AutomationDeliveryService:
         body = str(record.terminal_message or "").strip()
         if not body:
             return
-        _ = self._notification_service.emit(
+        _ = await self._notification_service.emit_async(
             notification_type=notification_type,
             title=title,
             body=body,
@@ -606,9 +618,7 @@ class AutomationDeliveryWorker:
     async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                progress = await asyncio.to_thread(
-                    self._delivery_service.process_pending
-                )
+                progress = await self._delivery_service.process_pending()
                 if progress:
                     continue
             except Exception as exc:

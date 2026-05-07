@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -35,6 +37,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
 )
 from relay_teams.sessions.session_models import ProjectKind, SessionRecord
 
+pytestmark = pytest.mark.asyncio
+
 
 class _FakeSessionLookup:
     def __init__(self, sessions: dict[str, SessionRecord]) -> None:
@@ -66,12 +70,21 @@ class _FakeRunService:
         _ = intent
         return ("run-1", "session-1")
 
+    async def create_detached_run_async(self, intent: object) -> tuple[str, str]:
+        return self.create_detached_run(intent)
+
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
 
     def resume_run(self, run_id: str) -> str:
         self.resume_run_ids.append(run_id)
         return "session-1"
+
+    async def resume_run_async(self, run_id: str) -> str:
+        return self.resume_run(run_id)
 
 
 class _FakeRuntimeConfigLookup:
@@ -94,12 +107,14 @@ class _FakeFeishuClient:
         self.reply_messages: list[dict[str, str]] = []
         self.deleted_messages: list[str] = []
 
-    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
+    async def send_text_message(
+        self, *, chat_id: str, text: str, environment=None
+    ) -> str:
         _ = environment
         self.sent_messages.append({"chat_id": chat_id, "text": text})
         return f"om_{len(self.sent_messages)}"
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -158,7 +173,7 @@ def _build_project() -> AutomationProjectRecord:
     )
 
 
-def test_bound_queue_and_delivery_services_resume_without_premature_failed(
+async def test_bound_queue_and_delivery_services_resume_without_premature_failed(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "automation-bound-session-delivery-e2e.db"
@@ -206,7 +221,9 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
         )
     )
 
-    handle = queue_service.materialize_execution(project=project, reason="schedule")
+    handle = await queue_service.materialize_execution(
+        project=project, reason="schedule"
+    )
 
     assert handle is not None
     assert handle.queued is True
@@ -226,7 +243,7 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
         )
     )
 
-    assert queue_service.process_pending() is True
+    assert await queue_service.process_pending() is True
     waiting_record = queue_repo.list_waiting_for_result(limit=10)[0]
     delivery_record = delivery_repo.get_by_run_id("run-1")
     assert waiting_record.run_id == "run-1"
@@ -244,12 +261,12 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
         )
     )
 
-    assert delivery_service.process_pending() is False
+    assert await delivery_service.process_pending() is False
     assert [message["text"] for message in feishu_client.sent_messages] == [
         "定时任务 Daily Briefing 准备执行，当前任务前面有 1 个消息"
     ]
 
-    assert queue_service.process_pending() is True
+    assert await queue_service.process_pending() is True
     waiting_record = queue_repo.list_waiting_for_result(limit=10)[0]
     assert waiting_record.resume_attempts == 0
     assert waiting_record.resume_next_attempt_at > waiting_record.updated_at
@@ -263,7 +280,7 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
         )
     )
 
-    assert queue_service.process_pending() is True
+    assert await queue_service.process_pending() is True
     assert run_service.resume_run_ids == ["run-1"]
 
     _ = run_runtime_repo.upsert(
@@ -285,7 +302,7 @@ def test_bound_queue_and_delivery_services_resume_without_premature_failed(
         )
     )
 
-    assert delivery_service.process_pending() is True
+    assert await delivery_service.process_pending() is True
     delivery_record = delivery_repo.get_by_run_id("run-1")
     assert delivery_record.terminal_status == AutomationDeliveryStatus.SENT
     assert delivery_record.terminal_event == AutomationDeliveryEvent.COMPLETED

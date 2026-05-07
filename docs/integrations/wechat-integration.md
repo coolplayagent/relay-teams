@@ -45,6 +45,11 @@ Enabled accounts run a background long-poll worker. For each accepted message:
 6. if the session is already busy, the message stays queued and the user receives a queue receipt instead of being auto-attached to the active run
 7. terminal run output is sent back through WeChat `sendmessage`
 
+WeChat gateway provider traffic uses the shared async net client factories for
+login, long polling, message send, typing, media upload URL lookup, and CDN
+upload. The gateway does not keep a second synchronous HTTP implementation for
+these operations.
+
 ## Login Flow
 
 Frontend and backend use this flow:

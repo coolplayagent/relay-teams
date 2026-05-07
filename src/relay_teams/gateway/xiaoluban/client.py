@@ -12,14 +12,14 @@ from relay_teams.gateway.xiaoluban.models import (
     XiaolubanSendTextRequest,
     XiaolubanSendTextResponse,
 )
-from relay_teams.net import create_sync_http_client
+from relay_teams.net import create_async_http_client
 
 
 class XiaolubanClient:
     def __init__(self) -> None:
         self._timeout_seconds = 30.0
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         text: str,
@@ -35,10 +35,10 @@ class XiaolubanClient:
             sender=sender,
         )
         try:
-            with create_sync_http_client(
+            async with create_async_http_client(
                 timeout_seconds=self._timeout_seconds
             ) as client:
-                response = client.post(
+                response = await client.post(
                     _normalize_base_url(base_url),
                     content=request.model_dump_json().encode("utf-8"),
                     headers={"Content-Type": "application/json"},
@@ -47,7 +47,7 @@ class XiaolubanClient:
             raise RuntimeError(f"Xiaoluban API request failed: {exc}") from exc
         return _parse_send_response(response)
 
-    def keep_alive(
+    async def keep_alive(
         self,
         *,
         uid: str,
@@ -64,13 +64,13 @@ class XiaolubanClient:
             minute=timeout_minutes,
             auth=auth_token,
         )
-        _ = self._post_util_route(
+        _ = await self._post_util_route(
             base_url=base_url,
             route="keep_alive",
             payload_json=request.model_dump_json(),
         )
 
-    def _post_util_route(
+    async def _post_util_route(
         self,
         *,
         base_url: str,
@@ -78,10 +78,10 @@ class XiaolubanClient:
         payload_json: str,
     ) -> httpx.Response:
         try:
-            with create_sync_http_client(
+            async with create_async_http_client(
                 timeout_seconds=self._timeout_seconds
             ) as client:
-                response = client.post(
+                response = await client.post(
                     _build_util_url(base_url, route),
                     content=payload_json.encode("utf-8"),
                     headers={"Content-Type": "application/json"},

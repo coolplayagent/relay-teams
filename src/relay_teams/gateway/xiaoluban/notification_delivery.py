@@ -24,7 +24,7 @@ class XiaolubanAccountLookup(Protocol):
 
     def has_usable_credentials(self, account_id: str) -> bool: ...
 
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,
@@ -73,7 +73,7 @@ class XiaolubanNotificationDispatcher:
         self._account_lookup = account_lookup
         self._terminal_notification_suppressor = terminal_notification_suppressor
 
-    def dispatch(self, request: NotificationRequest) -> None:
+    async def dispatch(self, request: NotificationRequest) -> None:
         if request.notification_type != NotificationType.RUN_COMPLETED:
             return
         if (
@@ -101,7 +101,7 @@ class XiaolubanNotificationDispatcher:
             ):
                 continue
             try:
-                _ = self._account_lookup.send_notification_message(
+                _ = await self._account_lookup.send_notification_message(
                     account_id=account.account_id,
                     workspace_id=workspace_id,
                     session_id=request.context.session_id,

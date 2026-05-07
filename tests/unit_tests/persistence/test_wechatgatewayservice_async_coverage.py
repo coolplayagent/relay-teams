@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -29,6 +29,7 @@ async def test_list_accounts_async_delegates() -> None:
 @pytest.mark.asyncio
 async def test_start_login_async_delegates() -> None:
     mock_self = MagicMock()
+    mock_self.start_login = AsyncMock()
     method = WeChatGatewayService.start_login_async
     await method(mock_self, cast(Any, ""))
     getattr(mock_self, "start_login").assert_called_once()
@@ -37,6 +38,7 @@ async def test_start_login_async_delegates() -> None:
 @pytest.mark.asyncio
 async def test_wait_login_async_delegates() -> None:
     mock_self = MagicMock()
+    mock_self.wait_login = AsyncMock()
     method = WeChatGatewayService.wait_login_async
     await method(mock_self, cast(Any, ""))
     getattr(mock_self, "wait_login").assert_called_once()

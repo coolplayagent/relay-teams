@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import cast
 
 import pytest
 from pydantic import JsonValue
+from pydantic_ai import Agent
 
 from relay_teams.gateway import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.xiaoluban import (
@@ -15,13 +17,18 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanSecretStatus,
 )
 from relay_teams.tools.notify_tools import notify as notify_module
-from relay_teams.tools.notify_tools.models import NotifyRecipientKind, NotifyTarget
+from relay_teams.tools.notify_tools.models import (
+    NotifyProvider,
+    NotifyRecipientKind,
+    NotifyTarget,
+)
 from relay_teams.tools.notify_tools.notify import build_notify_approval_request
 from relay_teams.tools.notify_tools.xiaoluban import (
     resolve_xiaoluban_notify_targets,
     send_xiaoluban_notify,
 )
 from relay_teams.tools.runtime.context import ToolContext
+from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.runtime.models import ToolExecutionError
 
 
@@ -46,7 +53,7 @@ class _FakeXiaolubanService:
             and account.secret_status.token_configured
         )
 
-    def send_notification_message(
+    async def send_notification_message(
         self,
         *,
         account_id: str,
@@ -92,6 +99,22 @@ class _FakeDeps:
 class _FakeContext:
     def __init__(self, deps: _FakeDeps) -> None:
         self.deps = deps
+
+
+class _FakeAgent:
+    def __init__(self) -> None:
+        self.tools: dict[str, Callable[..., object]] = {}
+
+    def tool(
+        self, *, description: str
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        _ = description
+
+        def decorator(func: Callable[..., object]) -> Callable[..., object]:
+            self.tools[func.__name__] = func
+            return func
+
+        return decorator
 
 
 def _account(
@@ -145,6 +168,45 @@ def _xiaoluban_gateway_session(account_id: str) -> GatewaySessionRecord:
         internal_session_id="session-1",
         channel_state={"account_id": account_id},
     )
+
+
+@pytest.mark.asyncio
+async def test_notify_register_executes_async_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _FakeXiaolubanService((_account("xlb_1"),))
+    ctx = _ctx(service)
+    fake_agent = _FakeAgent()
+    notify_module.register(cast(Agent[ToolDeps, str], fake_agent))
+    tool = cast(
+        Callable[..., Awaitable[dict[str, JsonValue]]],
+        fake_agent.tools["notify"],
+    )
+
+    async def _fake_execute_tool(
+        ctx: ToolContext,
+        *,
+        tool_name: str,
+        args_summary: dict[str, object],
+        tool_input: dict[str, JsonValue],
+        action: Callable[[dict[str, JsonValue]], Awaitable[dict[str, JsonValue]]],
+        **kwargs: object,
+    ) -> dict[str, JsonValue]:
+        _ = (ctx, tool_name, args_summary, kwargs)
+        return await action(tool_input)
+
+    monkeypatch.setattr(notify_module, "execute_tool", _fake_execute_tool)
+
+    result = await tool(
+        ctx,
+        provider=NotifyProvider.XIAOLUBAN,
+        message="hello",
+        target=NotifyTarget.OWNER,
+    )
+
+    sent = cast(list[dict[str, JsonValue]], result["sent"])
+    assert sent[0]["message_id"] == "msg-1"
+    assert service.sent == [("xlb_1", "uid_self", "hello")]
 
 
 def test_default_owner_target_uses_single_available_account_owner() -> None:
@@ -295,7 +357,8 @@ def test_non_explicit_group_targets_ignore_incidental_recipients() -> None:
     assert owner_and_groups.filtered_recipients == ()
 
 
-def test_owner_and_group_targets_deduplicate_by_recipient_id() -> None:
+@pytest.mark.asyncio
+async def test_owner_and_group_targets_deduplicate_by_recipient_id() -> None:
     service = _FakeXiaolubanService(
         (_account("xlb_1", groups=("uid_self", "group-1")),)
     )
@@ -307,7 +370,7 @@ def test_owner_and_group_targets_deduplicate_by_recipient_id() -> None:
         target=NotifyTarget.OWNER_AND_CONFIGURED_GROUPS,
         recipients=(),
     )
-    result = send_xiaoluban_notify(
+    result = await send_xiaoluban_notify(
         ctx,
         message="hello",
         target=NotifyTarget.OWNER_AND_CONFIGURED_GROUPS,
@@ -392,7 +455,8 @@ def test_group_notify_builds_guarded_approval_request() -> None:
     assert "2 group target" in request.target_summary
 
 
-def test_send_reports_partial_failure_and_filtered_recipients() -> None:
+@pytest.mark.asyncio
+async def test_send_reports_partial_failure_and_filtered_recipients() -> None:
     service = _FakeXiaolubanService((_account("xlb_1"),))
     service.fail_targets.add("group-2")
     ctx = _ctx(service)
@@ -403,7 +467,7 @@ def test_send_reports_partial_failure_and_filtered_recipients() -> None:
         recipients=("group-1", "group-2", "not-allowed"),
     )
 
-    result = send_xiaoluban_notify(
+    result = await send_xiaoluban_notify(
         ctx,
         message="hello",
         target=NotifyTarget.EXPLICIT,
@@ -415,7 +479,8 @@ def test_send_reports_partial_failure_and_filtered_recipients() -> None:
     assert result.filtered_recipients == ("not-allowed",)
 
 
-def test_send_fails_when_all_targets_fail() -> None:
+@pytest.mark.asyncio
+async def test_send_fails_when_all_targets_fail() -> None:
     service = _FakeXiaolubanService((_account("xlb_1", groups=("group-1",)),))
     service.fail_targets.add("group-1")
     ctx = _ctx(service)
@@ -427,7 +492,7 @@ def test_send_fails_when_all_targets_fail() -> None:
     )
 
     with pytest.raises(ToolExecutionError) as exc_info:
-        _ = send_xiaoluban_notify(
+        _ = await send_xiaoluban_notify(
             ctx,
             message="hello",
             target=NotifyTarget.CONFIGURED_GROUPS,
@@ -437,10 +502,11 @@ def test_send_fails_when_all_targets_fail() -> None:
     assert exc_info.value.error_type == "delivery_failed"
 
 
-def test_notify_action_executes_xiaoluban_send() -> None:
+@pytest.mark.asyncio
+async def test_notify_action_executes_xiaoluban_send() -> None:
     service = _FakeXiaolubanService((_account("xlb_1"),))
 
-    payload = notify_module._execute_notify_action(
+    payload = await notify_module._execute_notify_action(
         _ctx(service),
         {
             "provider": "xiaoluban",

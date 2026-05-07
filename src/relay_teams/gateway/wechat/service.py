@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
 import json
@@ -188,9 +188,11 @@ class WeChatGatewayService:
 
         return await asyncio.to_thread(self.list_accounts)
 
-    def start_login(self, request: WeChatLoginStartRequest) -> WeChatLoginStartResponse:
+    async def start_login(
+        self, request: WeChatLoginStartRequest
+    ) -> WeChatLoginStartResponse:
         base_url = request.base_url or DEFAULT_WECHAT_BASE_URL
-        qr = self._client.start_qr_login(
+        qr = await self._client.start_qr_login(
             base_url=base_url,
             route_tag=request.route_tag,
             bot_type=request.bot_type,
@@ -213,13 +215,15 @@ class WeChatGatewayService:
         self, request: WeChatLoginStartRequest
     ) -> WeChatLoginStartResponse:
 
-        return await asyncio.to_thread(self.start_login, request)
+        return await self.start_login(request)
 
-    def wait_login(self, request: WeChatLoginWaitRequest) -> WeChatLoginWaitResponse:
+    async def wait_login(
+        self, request: WeChatLoginWaitRequest
+    ) -> WeChatLoginWaitResponse:
         login_session = self._login_sessions.get(request.session_key)
         if login_session is None:
             raise KeyError(f"Unknown WeChat login session: {request.session_key}")
-        status = self._client.wait_qr_login(
+        status = await self._client.wait_qr_login(
             login_session=login_session,
             timeout_ms=request.timeout_ms,
         )
@@ -293,7 +297,7 @@ class WeChatGatewayService:
         self, request: WeChatLoginWaitRequest
     ) -> WeChatLoginWaitResponse:
 
-        return await asyncio.to_thread(self.wait_login, request)
+        return await self.wait_login(request)
 
     def update_account(
         self,
@@ -487,6 +491,9 @@ class WeChatGatewayService:
         self._set_status(account_id, running=False)
 
     def _run_monitor(self, account_id: str, stop_event: Event) -> None:
+        asyncio.run(self._run_monitor_async(account_id, stop_event))
+
+    async def _run_monitor_async(self, account_id: str, stop_event: Event) -> None:
         self._set_status(account_id, running=True, last_error=None)
         while not stop_event.is_set():
             try:
@@ -497,7 +504,7 @@ class WeChatGatewayService:
                         account_id, running=False, last_error="missing_token"
                     )
                     return
-                response = self._client.get_updates(
+                response = await self._client.get_updates(
                     account=account, token=token, timeout_ms=_DEFAULT_POLL_TIMEOUT_MS
                 )
                 updated_account = account
@@ -712,8 +719,10 @@ class WeChatGatewayService:
                             f"WeChat reply failed because bot token is missing for {account_id}."
                         )
                     text = self._paused_text(event)
-                    self._send_typing(account, token, peer_user_id, context_token, 2)
-                    self._im_tool_service.send_text_to_wechat_peer(
+                    await self._send_typing_async(
+                        account, token, peer_user_id, context_token, 2
+                    )
+                    await self._im_tool_service.send_text_to_wechat_peer(
                         account_id=account_id,
                         peer_user_id=peer_user_id,
                         text=text,
@@ -733,7 +742,9 @@ class WeChatGatewayService:
                         f"WeChat reply failed because bot token is missing for {account_id}."
                     )
                 text = self._terminal_text(event)
-                self._send_typing(account, token, peer_user_id, context_token, 2)
+                await self._send_typing_async(
+                    account, token, peer_user_id, context_token, 2
+                )
                 log_event(
                     LOGGER,
                     logging.INFO,
@@ -746,7 +757,7 @@ class WeChatGatewayService:
                         "peer_user_id": peer_user_id,
                     },
                 )
-                self._im_tool_service.send_text_to_wechat_peer(
+                await self._im_tool_service.send_text_to_wechat_peer(
                     account_id=account_id,
                     peer_user_id=peer_user_id,
                     text=text,
@@ -997,8 +1008,31 @@ class WeChatGatewayService:
         event_name: str,
         failure_message: str,
     ) -> None:
+        self._run_or_schedule(
+            self._send_intermediate_text_async(
+                account_id=account_id,
+                gateway_session_id=gateway_session_id,
+                peer_user_id=peer_user_id,
+                context_token=context_token,
+                text=text,
+                event_name=event_name,
+                failure_message=failure_message,
+            )
+        )
+
+    async def _send_intermediate_text_async(
+        self,
+        *,
+        account_id: str,
+        gateway_session_id: str,
+        peer_user_id: str,
+        context_token: str | None,
+        text: str,
+        event_name: str,
+        failure_message: str,
+    ) -> None:
         try:
-            self._im_tool_service.send_text_to_wechat_peer(
+            await self._im_tool_service.send_text_to_wechat_peer(
                 account_id=account_id,
                 peer_user_id=peer_user_id,
                 text=text,
@@ -1026,6 +1060,17 @@ class WeChatGatewayService:
             context_token=context_token,
             occurred_at=datetime.now(tz=timezone.utc),
         )
+
+    @staticmethod
+    def _run_or_schedule(
+        coroutine: Coroutine[object, object, None],
+    ) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(coroutine)
+            return
+        _ = loop.create_task(coroutine)
 
     def _record_intermediate_outbound(
         self,
@@ -1075,8 +1120,26 @@ class WeChatGatewayService:
         context_token: str | None,
         status: int,
     ) -> None:
+        self._run_or_schedule(
+            self._send_typing_async(
+                account,
+                token,
+                peer_user_id,
+                context_token,
+                status,
+            )
+        )
+
+    async def _send_typing_async(
+        self,
+        account: WeChatAccountRecord,
+        token: str,
+        peer_user_id: str,
+        context_token: str | None,
+        status: int,
+    ) -> None:
         try:
-            ticket = self._client.get_typing_ticket(
+            ticket = await self._client.get_typing_ticket(
                 account=account,
                 token=token,
                 peer_user_id=peer_user_id,
@@ -1084,7 +1147,7 @@ class WeChatGatewayService:
             )
             if ticket is None:
                 return
-            self._client.send_typing(
+            await self._client.send_typing(
                 account=account,
                 token=token,
                 peer_user_id=peer_user_id,

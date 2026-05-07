@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timezone
 
 from relay_teams.gateway.feishu.models import (
@@ -25,6 +27,8 @@ from relay_teams.notifications import (
     NotificationType,
 )
 from relay_teams.sessions.session_models import SessionMode, SessionRecord
+
+pytestmark = pytest.mark.asyncio
 
 
 class _FakeSessionRepo:
@@ -68,7 +72,7 @@ class _FakeFeishuClient:
     def is_configured(self, environment: FeishuEnvironment | None = None) -> bool:
         return environment is not None
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -78,7 +82,7 @@ class _FakeFeishuClient:
         self.sent.append(("text", chat_id, text, environment))
         return "om_text"
 
-    def send_card_message(
+    async def send_card_message(
         self,
         *,
         chat_id: str,
@@ -117,7 +121,7 @@ def _build_runtime() -> FeishuTriggerRuntimeConfig:
     )
 
 
-def test_dispatcher_sends_text_message_with_trigger_environment() -> None:
+async def test_dispatcher_sends_text_message_with_trigger_environment() -> None:
     client = _FakeFeishuClient()
     runtime = _build_runtime()
     dispatcher = FeishuNotificationDispatcher(
@@ -126,7 +130,7 @@ def test_dispatcher_sends_text_message_with_trigger_environment() -> None:
         feishu_client=client,
     )
 
-    dispatcher.dispatch(
+    await dispatcher.dispatch(
         NotificationRequest(
             notification_type=NotificationType.RUN_COMPLETED,
             title="Run Completed",
@@ -144,7 +148,7 @@ def test_dispatcher_sends_text_message_with_trigger_environment() -> None:
     assert client.sent == [("text", "chat-1", "ok", runtime.environment)]
 
 
-def test_dispatcher_sends_card_message_when_requested() -> None:
+async def test_dispatcher_sends_card_message_when_requested() -> None:
     client = _FakeFeishuClient()
     runtime = _build_runtime()
     dispatcher = FeishuNotificationDispatcher(
@@ -153,7 +157,7 @@ def test_dispatcher_sends_card_message_when_requested() -> None:
         feishu_client=client,
     )
 
-    dispatcher.dispatch(
+    await dispatcher.dispatch(
         NotificationRequest(
             notification_type=NotificationType.TOOL_APPROVAL_REQUESTED,
             title="Approval Required",
@@ -181,7 +185,7 @@ def test_dispatcher_sends_card_message_when_requested() -> None:
     assert environment == runtime.environment
 
 
-def test_dispatcher_skips_when_trigger_runtime_missing() -> None:
+async def test_dispatcher_skips_when_trigger_runtime_missing() -> None:
     client = _FakeFeishuClient()
     dispatcher = FeishuNotificationDispatcher(
         session_repo=_FakeSessionRepo(),
@@ -189,7 +193,7 @@ def test_dispatcher_skips_when_trigger_runtime_missing() -> None:
         feishu_client=client,
     )
 
-    dispatcher.dispatch(
+    await dispatcher.dispatch(
         NotificationRequest(
             notification_type=NotificationType.RUN_COMPLETED,
             title="Run Completed",
@@ -207,7 +211,7 @@ def test_dispatcher_skips_when_trigger_runtime_missing() -> None:
     assert client.sent == []
 
 
-def test_dispatcher_skips_terminal_notifications_when_pool_owns_reply() -> None:
+async def test_dispatcher_skips_terminal_notifications_when_pool_owns_reply() -> None:
     client = _FakeFeishuClient()
     runtime = _build_runtime()
     dispatcher = FeishuNotificationDispatcher(
@@ -219,7 +223,7 @@ def test_dispatcher_skips_terminal_notifications_when_pool_owns_reply() -> None:
         ),
     )
 
-    dispatcher.dispatch(
+    await dispatcher.dispatch(
         NotificationRequest(
             notification_type=NotificationType.RUN_COMPLETED,
             title="Run Completed",

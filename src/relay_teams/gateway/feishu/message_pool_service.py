@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from threading import Event, Thread
 from typing import Protocol
 from uuid import uuid4
 
@@ -71,7 +71,7 @@ class FeishuRuntimeConfigLookup(Protocol):
 
 
 class FeishuClientLike(Protocol):
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -79,7 +79,7 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def create_message_reaction(
+    async def create_message_reaction(
         self,
         *,
         message_id: str,
@@ -87,7 +87,7 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> None: ...
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -95,7 +95,7 @@ class FeishuClientLike(Protocol):
         environment: FeishuEnvironment | None = None,
     ) -> str: ...
 
-    def resolve_user_name(
+    async def resolve_user_name(
         self,
         *,
         open_id: str,
@@ -125,36 +125,44 @@ class FeishuMessagePoolService:
         self._event_log = event_log
         self._external_session_binding_repo = external_session_binding_repo
         self._automation_queue_repo = automation_queue_repo
-        self._stop_event = Event()
-        self._wake_event = Event()
-        self._thread: Thread | None = None
+        self._stop_event = asyncio.Event()
+        self._wake_event = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task[None] | None = None
         self._pause_notice_keys: set[str] = set()
 
-    def start(self) -> None:
+    async def start(self) -> None:
         self._message_pool_repo.recover_stale_claims(
             claimed_before=datetime.now(tz=timezone.utc)
             - timedelta(seconds=_STALE_CLAIM_SECONDS)
         )
-        if self._thread is not None and self._thread.is_alive():
+        if self._task is not None and not self._task.done():
             return
+        self._loop = asyncio.get_running_loop()
         self._stop_event.clear()
         self._wake_event.clear()
-        thread = Thread(
-            target=self._run_loop,
+        self._task = asyncio.create_task(
+            self._run_loop(),
             name="feishu-message-pool",
-            daemon=True,
         )
-        self._thread = thread
-        thread.start()
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self._stop_event.set()
-        self._wake_event.set()
-        thread = self._thread
-        if thread is None:
+        self._wake()
+        task = self._task
+        if task is None:
             return
-        thread.join(timeout=10)
-        self._thread = None
+        try:
+            await asyncio.wait_for(task, timeout=10)
+        except asyncio.TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                # Cancellation is expected after the stop timeout.
+                pass
+        self._task = None
+        self._loop = None
 
     def enqueue_message(
         self,
@@ -166,15 +174,11 @@ class FeishuMessagePoolService:
         remote_addr: str | None,
     ) -> TriggerProcessingResult:
         _ = (raw_body, headers, remote_addr)
-        enriched = self._enrich_sender_name(
-            normalized=normalized,
-            runtime_config=runtime_config,
-        )
         now = datetime.now(tz=timezone.utc)
         reaction_status = (
             FeishuMessageDeliveryStatus.PENDING
             if self._feishu_client is not None
-            and self._should_send_reaction_acknowledgement(enriched)
+            and self._should_send_reaction_acknowledgement(normalized)
             else FeishuMessageDeliveryStatus.SKIPPED
         )
         final_reply_status = (
@@ -187,16 +191,16 @@ class FeishuMessagePoolService:
                 message_pool_id=f"fmp_{uuid4().hex[:16]}",
                 trigger_id=runtime_config.trigger_id,
                 trigger_name=runtime_config.trigger_name,
-                tenant_key=enriched.tenant_key,
-                chat_id=enriched.chat_id,
-                chat_type=enriched.chat_type,
-                event_id=enriched.event_id,
-                message_key=_message_key(enriched),
-                message_id=enriched.message_id,
-                sender_name=enriched.sender_name,
-                intent_text=enriched.trigger_text,
-                payload=enriched.payload,
-                metadata=enriched.metadata,
+                tenant_key=normalized.tenant_key,
+                chat_id=normalized.chat_id,
+                chat_type=normalized.chat_type,
+                event_id=normalized.event_id,
+                message_key=_message_key(normalized),
+                message_id=normalized.message_id,
+                sender_name=normalized.sender_name,
+                intent_text=normalized.trigger_text,
+                payload=normalized.payload,
+                metadata=normalized.metadata,
                 processing_status=FeishuMessageProcessingStatus.QUEUED,
                 reaction_status=reaction_status,
                 reaction_type=(
@@ -223,7 +227,7 @@ class FeishuMessagePoolService:
             record.message_pool_id
         ) + self._count_external_session_queue_ahead(record)
         queue_reply_text = _build_queue_reply_text(queue_depth)
-        updated = self._message_pool_repo.update(
+        self._message_pool_repo.update(
             record.message_pool_id,
             ack_status=(
                 FeishuMessageDeliveryStatus.PENDING
@@ -233,9 +237,7 @@ class FeishuMessagePoolService:
             ack_text=queue_reply_text,
             last_error=None,
         )
-        self._attempt_reaction(updated)
-        self._attempt_queue_reply(updated)
-        self._wake_event.set()
+        self._wake()
         return TriggerProcessingResult(
             status="accepted",
             trigger_id=runtime_config.trigger_id,
@@ -331,7 +333,7 @@ class FeishuMessagePoolService:
             chat_id=chat_id,
             cancelled_at=datetime.now(tz=timezone.utc),
         )
-        self._wake_event.set()
+        self._wake()
         return FeishuChatQueueClearResult(
             trigger_id=trigger_id,
             tenant_key=tenant_key,
@@ -359,14 +361,14 @@ class FeishuMessagePoolService:
             }
         )
 
-    def _run_loop(self) -> None:
+    async def _run_loop(self) -> None:
         while not self._stop_event.is_set():
             progress = False
             try:
-                progress = self._retry_pending_reactions() or progress
-                progress = self._retry_pending_queue_replies() or progress
-                progress = self._process_queued_messages() or progress
-                progress = self._finalize_waiting_results() or progress
+                progress = await self._retry_pending_reactions() or progress
+                progress = await self._retry_pending_queue_replies() or progress
+                progress = await self._process_queued_messages() or progress
+                progress = await self._finalize_waiting_results() or progress
             except Exception as exc:
                 log_event(
                     logger,
@@ -378,10 +380,23 @@ class FeishuMessagePoolService:
                 )
             if progress:
                 continue
-            self._wake_event.wait(timeout=_POLL_INTERVAL_SECONDS)
+            try:
+                await asyncio.wait_for(
+                    self._wake_event.wait(), timeout=_POLL_INTERVAL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                # Polling timeout is expected; continue the loop and retry work.
+                pass
             self._wake_event.clear()
 
-    def _retry_pending_reactions(self, *, limit: int = 20) -> bool:
+    def _wake(self) -> None:
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(self._wake_event.set)
+            return
+        self._wake_event.set()
+
+    async def _retry_pending_reactions(self, *, limit: int = 20) -> bool:
         progress = False
         for record in self._message_pool_repo.list_pending_reactions(limit=limit):
             if record.reaction_status != FeishuMessageDeliveryStatus.PENDING:
@@ -393,10 +408,10 @@ class FeishuMessagePoolService:
                 )
                 progress = True
                 continue
-            progress = self._attempt_reaction(record) or progress
+            progress = await self._attempt_reaction(record) or progress
         return progress
 
-    def _retry_pending_queue_replies(self, *, limit: int = 20) -> bool:
+    async def _retry_pending_queue_replies(self, *, limit: int = 20) -> bool:
         progress = False
         for record in self._message_pool_repo.list_pending_acknowledgements(
             limit=limit
@@ -410,10 +425,10 @@ class FeishuMessagePoolService:
                 )
                 progress = True
                 continue
-            progress = self._attempt_queue_reply(record) or progress
+            progress = await self._attempt_queue_reply(record) or progress
         return progress
 
-    def _process_queued_messages(self, *, limit: int = 20) -> bool:
+    async def _process_queued_messages(self, *, limit: int = 20) -> bool:
         progress = False
         for record in self._message_pool_repo.list_ready_for_processing(
             ready_at=datetime.now(tz=timezone.utc),
@@ -436,9 +451,19 @@ class FeishuMessagePoolService:
                 self._mark_retryable_failure(claimed, error="missing_runtime_config")
                 continue
             try:
-                session_id, run_id = self._inbound_runtime.start_run(
+                enriched = await self._enrich_sender_name(
+                    normalized=_record_to_normalized_message(claimed),
                     runtime_config=runtime_config,
-                    message=_record_to_normalized_message(claimed),
+                )
+                if enriched.sender_name != claimed.sender_name:
+                    claimed = self._message_pool_repo.update(
+                        claimed.message_pool_id,
+                        sender_name=enriched.sender_name,
+                        metadata=enriched.metadata,
+                    )
+                session_id, run_id = await self._inbound_runtime.start_run_async(
+                    runtime_config=runtime_config,
+                    message=enriched,
                 )
             except GatewaySessionBusyError:
                 self._requeue_busy_record(claimed)
@@ -456,7 +481,7 @@ class FeishuMessagePoolService:
             )
         return progress
 
-    def _finalize_waiting_results(self, *, limit: int = 20) -> bool:
+    async def _finalize_waiting_results(self, *, limit: int = 20) -> bool:
         progress = False
         now = datetime.now(tz=timezone.utc)
         for record in self._message_pool_repo.list_waiting_for_result(limit=limit):
@@ -489,7 +514,9 @@ class FeishuMessagePoolService:
                 continue
             if runtime.status == RunRuntimeStatus.PAUSED:
                 if runtime.phase == RunRuntimePhase.AWAITING_RECOVERY:
-                    progress = self._notify_recovery_pause(record, runtime) or progress
+                    progress = (
+                        await self._notify_recovery_pause(record, runtime) or progress
+                    )
                 continue
             if runtime.status not in {
                 RunRuntimeStatus.COMPLETED,
@@ -498,10 +525,10 @@ class FeishuMessagePoolService:
             }:
                 continue
             progress = True
-            self._finalize_terminal_record(record=record, runtime=runtime)
+            await self._finalize_terminal_record(record=record, runtime=runtime)
         return progress
 
-    def _finalize_terminal_record(
+    async def _finalize_terminal_record(
         self,
         *,
         record: FeishuMessagePoolRecord,
@@ -543,7 +570,7 @@ class FeishuMessagePoolService:
             return
         attempts = record.final_reply_attempts + 1
         try:
-            self._send_terminal_reply(
+            await self._send_terminal_reply(
                 record=record,
                 text=reply_text,
                 environment=runtime_config.environment,
@@ -582,7 +609,7 @@ class FeishuMessagePoolService:
             last_error=None,
         )
 
-    def _attempt_reaction(self, record: FeishuMessagePoolRecord) -> bool:
+    async def _attempt_reaction(self, record: FeishuMessagePoolRecord) -> bool:
         if (
             self._feishu_client is None
             or record.reaction_status == FeishuMessageDeliveryStatus.SKIPPED
@@ -606,7 +633,7 @@ class FeishuMessagePoolService:
             last_error=None,
         )
         try:
-            self._feishu_client.create_message_reaction(
+            await self._feishu_client.create_message_reaction(
                 message_id=message_id,
                 reaction_type=reaction_type,
                 environment=runtime_config.environment,
@@ -630,7 +657,7 @@ class FeishuMessagePoolService:
         )
         return True
 
-    def _attempt_queue_reply(self, record: FeishuMessagePoolRecord) -> bool:
+    async def _attempt_queue_reply(self, record: FeishuMessagePoolRecord) -> bool:
         if (
             self._feishu_client is None
             or record.ack_status == FeishuMessageDeliveryStatus.SKIPPED
@@ -651,7 +678,7 @@ class FeishuMessagePoolService:
             last_error=None,
         )
         try:
-            self._send_queue_reply(
+            await self._send_queue_reply(
                 record=claimed,
                 text=str(claimed.ack_text),
                 environment=runtime_config.environment,
@@ -675,7 +702,7 @@ class FeishuMessagePoolService:
         )
         return True
 
-    def _notify_recovery_pause(
+    async def _notify_recovery_pause(
         self,
         record: FeishuMessagePoolRecord,
         runtime: RunRuntimeRecord,
@@ -699,7 +726,7 @@ class FeishuMessagePoolService:
             error_message=error_message or runtime.last_error,
         )
         try:
-            self._send_terminal_reply(
+            await self._send_terminal_reply(
                 record=record,
                 text=text,
                 environment=runtime_config.environment,
@@ -720,7 +747,7 @@ class FeishuMessagePoolService:
         self._pause_notice_keys.add(dedupe_key)
         return True
 
-    def _send_queue_reply(
+    async def _send_queue_reply(
         self,
         *,
         record: FeishuMessagePoolRecord,
@@ -731,19 +758,19 @@ class FeishuMessagePoolService:
         if feishu_client is None:
             raise RuntimeError("Feishu client is not configured")
         if str(record.message_id or "").strip():
-            feishu_client.reply_text_message(
+            await feishu_client.reply_text_message(
                 message_id=str(record.message_id),
                 text=text,
                 environment=environment,
             )
             return
-        feishu_client.send_text_message(
+        await feishu_client.send_text_message(
             chat_id=record.chat_id,
             text=text,
             environment=environment,
         )
 
-    def _send_terminal_reply(
+    async def _send_terminal_reply(
         self,
         *,
         record: FeishuMessagePoolRecord,
@@ -754,13 +781,13 @@ class FeishuMessagePoolService:
         if feishu_client is None:
             raise RuntimeError("Feishu client is not configured")
         if str(record.message_id or "").strip():
-            feishu_client.reply_text_message(
+            await feishu_client.reply_text_message(
                 message_id=str(record.message_id),
                 text=text,
                 environment=environment,
             )
             return
-        feishu_client.send_text_message(
+        await feishu_client.send_text_message(
             chat_id=record.chat_id,
             text=text,
             environment=environment,
@@ -814,7 +841,7 @@ class FeishuMessagePoolService:
             binding.session_id
         )
 
-    def _enrich_sender_name(
+    async def _enrich_sender_name(
         self,
         *,
         normalized: FeishuNormalizedMessage,
@@ -828,7 +855,7 @@ class FeishuMessagePoolService:
         ):
             return normalized
         try:
-            sender_name = self._feishu_client.resolve_user_name(
+            sender_name = await self._feishu_client.resolve_user_name(
                 open_id=str(normalized.sender_open_id),
                 chat_id=normalized.chat_id,
                 environment=runtime_config.environment,

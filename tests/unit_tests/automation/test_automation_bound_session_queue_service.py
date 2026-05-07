@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import asyncio
 import threading
 from datetime import datetime, timedelta, timezone
@@ -34,6 +36,8 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeStatus,
 )
 from relay_teams.sessions.session_models import ProjectKind, SessionRecord
+
+pytestmark = pytest.mark.asyncio
 
 
 class _FakeSessionLookup:
@@ -70,14 +74,23 @@ class _FakeRunService:
         self.created_intents.append(intent)
         return (f"run-{len(self.created_intents)}", intent.session_id)
 
+    async def create_detached_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        return self.create_detached_run(intent)
+
     def ensure_run_started(self, run_id: str) -> None:
         self.started_run_ids.append(run_id)
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.ensure_run_started(run_id)
 
     def resume_run(self, run_id: str) -> str:
         self.resume_run_ids.append(run_id)
         if self.resume_errors:
             raise RuntimeError(self.resume_errors.pop(0))
         return "session-1"
+
+    async def resume_run_async(self, run_id: str) -> str:
+        return self.resume_run(run_id)
 
 
 class _FakeDeliveryService:
@@ -102,7 +115,7 @@ class _FakeBoundSessionQueueWorkerService:
     def __init__(self) -> None:
         self.calls = 0
 
-    def process_pending(self) -> bool:
+    async def process_pending(self) -> bool:
         self.calls += 1
         return self.calls == 1
 
@@ -113,9 +126,9 @@ class _BlockingBoundSessionQueueWorkerService:
         self.release = threading.Event()
         self.finished = threading.Event()
 
-    def process_pending(self) -> bool:
+    async def process_pending(self) -> bool:
         self.entered.set()
-        self.release.wait(timeout=2.0)
+        _ = await asyncio.to_thread(self.release.wait, 2.0)
         self.finished.set()
         return False
 
@@ -141,12 +154,14 @@ class _FakeFeishuClient:
         self.reply_messages: list[dict[str, str]] = []
         self.deleted_messages: list[str] = []
 
-    def send_text_message(self, *, chat_id: str, text: str, environment=None) -> str:
+    async def send_text_message(
+        self, *, chat_id: str, text: str, environment=None
+    ) -> str:
         _ = environment
         self.sent_messages.append({"chat_id": chat_id, "text": text})
         return f"om_{len(self.sent_messages)}"
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -259,7 +274,7 @@ def _build_service(
     )
 
 
-def _queue_and_start_bound_run(
+async def _queue_and_start_bound_run(
     tmp_path: Path,
 ) -> tuple[
     AutomationBoundSessionQueueService,
@@ -289,7 +304,7 @@ def _queue_and_start_bound_run(
             phase=RunRuntimePhase.COORDINATOR_RUNNING,
         )
     )
-    _ = service.materialize_execution(project=_build_project(), reason="schedule")
+    _ = await service.materialize_execution(project=_build_project(), reason="schedule")
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="active-run-1",
@@ -298,7 +313,7 @@ def _queue_and_start_bound_run(
             phase=RunRuntimePhase.TERMINAL,
         )
     )
-    _ = service.process_pending()
+    _ = await service.process_pending()
     return (
         service,
         session_lookup,
@@ -311,7 +326,7 @@ def _queue_and_start_bound_run(
     )
 
 
-def test_materialize_execution_starts_in_bound_session_when_idle(
+async def test_materialize_execution_starts_in_bound_session_when_idle(
     tmp_path: Path,
 ) -> None:
     (
@@ -325,7 +340,9 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
         _project_repo,
     ) = _build_service(tmp_path)
 
-    handle = service.materialize_execution(project=_build_project(), reason="schedule")
+    handle = await service.materialize_execution(
+        project=_build_project(), reason="schedule"
+    )
 
     assert handle is not None
     assert handle.session_id == "session-1"
@@ -353,7 +370,7 @@ def test_materialize_execution_starts_in_bound_session_when_idle(
     assert feishu_client.sent_messages == []
 
 
-def test_materialize_execution_queues_when_bound_session_is_busy(
+async def test_materialize_execution_queues_when_bound_session_is_busy(
     tmp_path: Path,
 ) -> None:
     (
@@ -375,7 +392,9 @@ def test_materialize_execution_queues_when_bound_session_is_busy(
         )
     )
 
-    handle = service.materialize_execution(project=_build_project(), reason="schedule")
+    handle = await service.materialize_execution(
+        project=_build_project(), reason="schedule"
+    )
     queued_records = queue_repo.list_ready_to_start(
         ready_at=datetime.now(tz=timezone.utc),
         limit=10,
@@ -408,7 +427,7 @@ def test_materialize_execution_queues_when_bound_session_is_busy(
     ]
 
 
-def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
+async def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     tmp_path: Path,
 ) -> None:
     (
@@ -429,7 +448,7 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
             phase=RunRuntimePhase.COORDINATOR_RUNNING,
         )
     )
-    _ = service.materialize_execution(project=_build_project(), reason="manual")
+    _ = await service.materialize_execution(project=_build_project(), reason="manual")
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
             run_id="active-run-1",
@@ -439,7 +458,7 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
     waiting_records = queue_repo.list_waiting_for_result(limit=10)
 
     assert progressed is True
@@ -468,7 +487,7 @@ def test_process_pending_starts_queued_run_after_bound_session_becomes_idle(
     assert _feishu_client.deleted_messages == []
 
 
-def test_materialize_execution_fails_when_bound_session_is_missing(
+async def test_materialize_execution_fails_when_bound_session_is_missing(
     tmp_path: Path,
 ) -> None:
     (
@@ -495,7 +514,7 @@ def test_materialize_execution_fails_when_bound_session_is_missing(
     )
 
     try:
-        _ = service.materialize_execution(project=project, reason="schedule")
+        _ = await service.materialize_execution(project=project, reason="schedule")
     except RuntimeError as exc:
         assert "missing_bound_session:missing-session" in str(exc)
     else:
@@ -503,7 +522,7 @@ def test_materialize_execution_fails_when_bound_session_is_missing(
     assert run_service.created_intents == []
 
 
-def test_process_pending_schedules_recoverable_resume_with_backoff(
+async def test_process_pending_schedules_recoverable_resume_with_backoff(
     tmp_path: Path,
 ) -> None:
     (
@@ -515,7 +534,7 @@ def test_process_pending_schedules_recoverable_resume_with_backoff(
         _delivery_service,
         _feishu_client,
         _project_repo,
-    ) = _queue_and_start_bound_run(tmp_path)
+    ) = await _queue_and_start_bound_run(tmp_path)
     waiting = queue_repo.list_waiting_for_result(limit=10)[0]
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
@@ -527,7 +546,7 @@ def test_process_pending_schedules_recoverable_resume_with_backoff(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     updated = queue_repo.list_waiting_for_result(limit=10)[0]
     assert progressed is True
@@ -537,7 +556,7 @@ def test_process_pending_schedules_recoverable_resume_with_backoff(
     assert updated.resume_next_attempt_at > updated.updated_at
 
 
-def test_process_pending_requests_resume_after_backoff_elapsed(
+async def test_process_pending_requests_resume_after_backoff_elapsed(
     tmp_path: Path,
 ) -> None:
     (
@@ -549,7 +568,7 @@ def test_process_pending_requests_resume_after_backoff_elapsed(
         _delivery_service,
         _feishu_client,
         _project_repo,
-    ) = _queue_and_start_bound_run(tmp_path)
+    ) = await _queue_and_start_bound_run(tmp_path)
     waiting = queue_repo.list_waiting_for_result(limit=10)[0]
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
@@ -569,7 +588,7 @@ def test_process_pending_requests_resume_after_backoff_elapsed(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     updated = queue_repo.list_waiting_for_result(limit=10)[0]
     assert progressed is True
@@ -578,7 +597,7 @@ def test_process_pending_requests_resume_after_backoff_elapsed(
     assert updated.last_error is None
 
 
-def test_materialize_execution_treats_dirty_failed_recovery_run_as_busy(
+async def test_materialize_execution_treats_dirty_failed_recovery_run_as_busy(
     tmp_path: Path,
 ) -> None:
     (
@@ -601,7 +620,9 @@ def test_materialize_execution_treats_dirty_failed_recovery_run_as_busy(
         )
     )
 
-    handle = service.materialize_execution(project=_build_project(), reason="schedule")
+    handle = await service.materialize_execution(
+        project=_build_project(), reason="schedule"
+    )
 
     assert handle is not None
     assert handle.queued is True
@@ -619,7 +640,7 @@ def test_materialize_execution_treats_dirty_failed_recovery_run_as_busy(
     assert repaired.status == RunRuntimeStatus.PAUSED
 
 
-def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
+async def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
     tmp_path: Path,
 ) -> None:
     (
@@ -631,7 +652,7 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
         delivery_service,
         feishu_client,
         _project_repo,
-    ) = _queue_and_start_bound_run(tmp_path)
+    ) = await _queue_and_start_bound_run(tmp_path)
     waiting = queue_repo.list_waiting_for_result(limit=10)[0]
     run_service.resume_errors = ["still paused"]
     _ = run_runtime_repo.upsert(
@@ -653,7 +674,7 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     failed_record = queue_repo.get(waiting.automation_queue_id)
     assert failed_record is not None
@@ -669,7 +690,7 @@ def test_process_pending_exhausts_resume_attempts_and_skips_terminal_delivery(
     ]
 
 
-def test_materialize_execution_rebinds_bound_session_workspace_before_start(
+async def test_materialize_execution_rebinds_bound_session_workspace_before_start(
     tmp_path: Path,
 ) -> None:
     (
@@ -687,14 +708,14 @@ def test_materialize_execution_rebinds_bound_session_workspace_before_start(
     ].model_copy(update={"workspace_id": "stale-worktree"})
     project = _build_project().model_copy(update={"workspace_id": "fresh-worktree"})
 
-    handle = service.materialize_execution(project=project, reason="manual")
+    handle = await service.materialize_execution(project=project, reason="manual")
 
     assert handle is not None
     assert session_lookup.rebind_calls == [("session-1", "fresh-worktree")]
     assert run_service.created_intents[0].reuse_root_instance is True
 
 
-def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
+async def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
     tmp_path: Path,
 ) -> None:
     (
@@ -707,7 +728,7 @@ def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
         _feishu_client,
         _project_repo,
     ) = _build_service(tmp_path)
-    _ = service.materialize_execution(project=_build_project(), reason="schedule")
+    _ = await service.materialize_execution(project=_build_project(), reason="schedule")
     waiting = queue_repo.list_waiting_for_result(limit=10)[0]
     _ = run_runtime_repo.upsert(
         RunRuntimeRecord(
@@ -727,7 +748,7 @@ def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
         )
     )
 
-    progressed = service.process_pending()
+    progressed = await service.process_pending()
 
     updated = queue_repo.list_waiting_for_result(limit=10)[0]
     assert progressed is True
@@ -736,7 +757,7 @@ def test_direct_start_waiting_record_auto_resumes_recoverable_runtime(
     assert updated.last_error is None
 
 
-def test_bound_session_queue_worker_start_wake_stop() -> None:
+async def test_bound_session_queue_worker_start_wake_stop() -> None:
     async def run_worker() -> None:
         service = _FakeBoundSessionQueueWorkerService()
         worker = AutomationBoundSessionQueueWorker(
@@ -753,10 +774,10 @@ def test_bound_session_queue_worker_start_wake_stop() -> None:
 
         assert service.calls >= 2
 
-    asyncio.run(run_worker())
+    await run_worker()
 
 
-def test_bound_session_queue_worker_stop_waits_for_inflight_processing() -> None:
+async def test_bound_session_queue_worker_stop_waits_for_inflight_processing() -> None:
     async def run_worker() -> None:
         service = _BlockingBoundSessionQueueWorkerService()
         worker = AutomationBoundSessionQueueWorker(
@@ -775,10 +796,12 @@ def test_bound_session_queue_worker_stop_waits_for_inflight_processing() -> None
         await asyncio.wait_for(stop_task, timeout=1.0)
         assert service.finished.is_set()
 
-    asyncio.run(run_worker())
+    await run_worker()
 
 
-def test_bound_session_queue_worker_stop_times_out_for_stalled_processing() -> None:
+async def test_bound_session_queue_worker_stop_times_out_for_stalled_processing() -> (
+    None
+):
     async def run_worker() -> None:
         service = _BlockingBoundSessionQueueWorkerService()
         worker = AutomationBoundSessionQueueWorker(
@@ -794,6 +817,6 @@ def test_bound_session_queue_worker_stop_times_out_for_stalled_processing() -> N
         assert service.finished.is_set() is False
 
         service.release.set()
-        assert await asyncio.to_thread(service.finished.wait, 1.0)
+        assert service.finished.is_set() is False
 
-    asyncio.run(run_worker())
+    await run_worker()

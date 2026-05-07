@@ -32,7 +32,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         """Send a proactive notification through a configured provider."""
 
         async def _action(tool_input: dict[str, JsonValue]) -> dict[str, JsonValue]:
-            return _execute_notify_action(ctx, tool_input)
+            return await _execute_notify_action(ctx, tool_input)
 
         return await execute_tool(
             ctx,
@@ -60,7 +60,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         )
 
 
-def _execute_notify_action(
+async def _execute_notify_action(
     ctx: ToolContext,
     tool_input: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
@@ -73,7 +73,7 @@ def _execute_notify_action(
         target=resolved_target,
         recipients=_recipient_tuple(tool_input.get("recipients")),
     )
-    result = send_xiaoluban_notify(
+    result = await send_xiaoluban_notify(
         ctx,
         message=resolved_message,
         target=resolved_target,

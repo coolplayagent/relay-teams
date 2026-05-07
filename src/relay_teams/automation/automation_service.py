@@ -1122,9 +1122,11 @@ class AutomationService:
             raise RuntimeError(
                 "Automation bound session execution service is unavailable"
             )
-        return self._bound_session_queue_service.materialize_execution(
-            project=project,
-            reason=reason,
+        return asyncio.run(
+            self._bound_session_queue_service.materialize_execution(
+                project=project,
+                reason=reason,
+            )
         )
 
     async def _materialize_bound_session_execution_async(
@@ -1137,8 +1139,11 @@ class AutomationService:
             return None
         if project.delivery_binding.provider != "feishu":
             return None
-        return await asyncio.to_thread(
-            self._materialize_bound_session_execution,
+        if self._bound_session_queue_service is None:
+            raise RuntimeError(
+                "Automation bound session execution service is unavailable"
+            )
+        return await self._bound_session_queue_service.materialize_execution(
             project=project,
             reason=reason,
         )

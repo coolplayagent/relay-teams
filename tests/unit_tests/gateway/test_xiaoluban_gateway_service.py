@@ -26,6 +26,8 @@ from relay_teams.gateway.xiaoluban import (
 )
 from relay_teams.secrets import AppSecretStore
 
+pytestmark = pytest.mark.asyncio
+
 
 class _FakeXiaolubanSecretStore(XiaolubanSecretStore):
     def __init__(self) -> None:
@@ -52,7 +54,7 @@ class _FakeXiaolubanClient(XiaolubanClient):
         self.calls: list[dict[str, str]] = []
         self.fail_receiver_uids: set[str] = set()
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         text: str,
@@ -102,7 +104,19 @@ class _FakeHttpClient:
         _ = (exc_type, exc, traceback)
         return False
 
-    def post(
+    async def __aenter__(self) -> _FakeHttpClient:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        _ = (exc_type, exc, traceback)
+        return False
+
+    async def post(
         self,
         url: str,
         *,
@@ -132,7 +146,19 @@ class _FailingHttpClient:
         _ = (exc_type, exc, traceback)
         return False
 
-    def post(
+    async def __aenter__(self) -> _FailingHttpClient:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        _ = (exc_type, exc, traceback)
+        return False
+
+    async def post(
         self,
         url: str,
         *,
@@ -189,7 +215,7 @@ class _FakeAppSecretStore(AppSecretStore):
         self.values.pop((namespace, owner_id, field_name), None)
 
 
-def test_create_account_persists_token_and_derived_uid(tmp_path: Path) -> None:
+async def test_create_account_persists_token_and_derived_uid(tmp_path: Path) -> None:
     service, secret_store, _client = _build_service(tmp_path)
 
     record = service.create_account(
@@ -211,7 +237,7 @@ def test_create_account_persists_token_and_derived_uid(tmp_path: Path) -> None:
     )
 
 
-def test_prepare_account_id_returns_unused_xlb_identifier(tmp_path: Path) -> None:
+async def test_prepare_account_id_returns_unused_xlb_identifier(tmp_path: Path) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
 
     account_id = service.prepare_account_id()
@@ -220,7 +246,7 @@ def test_prepare_account_id_returns_unused_xlb_identifier(tmp_path: Path) -> Non
     assert len(account_id) == 16
 
 
-def test_create_account_accepts_prepared_account_id_and_rejects_duplicate(
+async def test_create_account_accepts_prepared_account_id_and_rejects_duplicate(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
@@ -245,7 +271,9 @@ def test_create_account_accepts_prepared_account_id_and_rejects_duplicate(
         )
 
 
-def test_create_account_rejects_invalid_prepared_account_id(tmp_path: Path) -> None:
+async def test_create_account_rejects_invalid_prepared_account_id(
+    tmp_path: Path,
+) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
 
     for account_id in ("bad_account", "xlb_test", "xlb_zzzzzzzzzzzz"):
@@ -259,7 +287,7 @@ def test_create_account_rejects_invalid_prepared_account_id(tmp_path: Path) -> N
             )
 
 
-def test_prepare_account_id_raises_after_repeated_collisions(
+async def test_prepare_account_id_raises_after_repeated_collisions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -282,7 +310,7 @@ def test_prepare_account_id_raises_after_repeated_collisions(
     assert existing.account_id == "xlb_aaaaaaaaaaaa"
 
 
-def test_reveal_token_returns_saved_token(tmp_path: Path) -> None:
+async def test_reveal_token_returns_saved_token(tmp_path: Path) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -296,7 +324,7 @@ def test_reveal_token_returns_saved_token(tmp_path: Path) -> None:
     assert revealed.token == "uid_1234567890abcdef1234567890abcdef"
 
 
-def test_notification_receivers_are_normalized_and_notify_self_is_forced(
+async def test_notification_receivers_are_normalized_and_notify_self_is_forced(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
@@ -316,7 +344,7 @@ def test_notification_receivers_are_normalized_and_notify_self_is_forced(
     assert loaded.notification_receiver == "group-1"
 
 
-def test_account_input_legacy_receiver_fields_drive_receivers() -> None:
+async def test_account_input_legacy_receiver_fields_drive_receivers() -> None:
     created = XiaolubanAccountCreateInput(
         display_name="小鲁班主账号",
         token="uid_1234567890abcdef1234567890abcdef",
@@ -334,7 +362,9 @@ def test_account_input_legacy_receiver_fields_drive_receivers() -> None:
     assert updated.notify_self is True
 
 
-def test_update_input_preserves_receiver_list_when_legacy_receiver_is_null() -> None:
+async def test_update_input_preserves_receiver_list_when_legacy_receiver_is_null() -> (
+    None
+):
     updated = XiaolubanAccountUpdateInput(
         notification_receiver=None,
         notification_receivers=(" group-1 ", "group-2"),
@@ -343,7 +373,9 @@ def test_update_input_preserves_receiver_list_when_legacy_receiver_is_null() -> 
     assert updated.notification_receivers == ("group-1", "group-2")
 
 
-def test_normalize_xiaoluban_notification_receivers_accepts_common_shapes() -> None:
+async def test_normalize_xiaoluban_notification_receivers_accepts_common_shapes() -> (
+    None
+):
     assert normalize_xiaoluban_notification_receivers(None) == ()
     assert normalize_xiaoluban_notification_receivers(" group-1,group-2；group-1 ") == (
         "group-1",
@@ -357,7 +389,7 @@ def test_normalize_xiaoluban_notification_receivers_accepts_common_shapes() -> N
     assert normalize_xiaoluban_notification_receivers(456) == ("456",)
 
 
-def test_update_account_replaces_token_and_derived_uid(tmp_path: Path) -> None:
+async def test_update_account_replaces_token_and_derived_uid(tmp_path: Path) -> None:
     service, secret_store, _client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -388,7 +420,7 @@ def test_update_account_replaces_token_and_derived_uid(tmp_path: Path) -> None:
     )
 
 
-def test_update_account_skips_stale_workspace_validation_for_unrelated_patch(
+async def test_update_account_skips_stale_workspace_validation_for_unrelated_patch(
     tmp_path: Path,
 ) -> None:
     workspace_lookup = _FakeWorkspaceLookup({"workspace-1"})
@@ -414,7 +446,7 @@ def test_update_account_skips_stale_workspace_validation_for_unrelated_patch(
     assert updated.notification_workspace_ids == ("workspace-1",)
 
 
-def test_update_account_rejects_unknown_workspace_on_explicit_patch(
+async def test_update_account_rejects_unknown_workspace_on_explicit_patch(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, _client = _build_service(
@@ -437,7 +469,7 @@ def test_update_account_rejects_unknown_workspace_on_explicit_patch(
         )
 
 
-def test_list_and_get_accounts_include_secret_status(tmp_path: Path) -> None:
+async def test_list_and_get_accounts_include_secret_status(tmp_path: Path) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -453,7 +485,9 @@ def test_list_and_get_accounts_include_secret_status(tmp_path: Path) -> None:
     assert loaded.secret_status.token_configured is True
 
 
-def test_send_text_message_uses_persisted_token_and_default_uid(tmp_path: Path) -> None:
+async def test_send_text_message_uses_persisted_token_and_default_uid(
+    tmp_path: Path,
+) -> None:
     service, _secret_store, client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -463,7 +497,7 @@ def test_send_text_message_uses_persisted_token_and_default_uid(tmp_path: Path) 
         )
     )
 
-    message_id = service.send_text_message(
+    message_id = await service.send_text_message(
         account_id=created.account_id,
         text="started",
     )
@@ -480,7 +514,7 @@ def test_send_text_message_uses_persisted_token_and_default_uid(tmp_path: Path) 
     ]
 
 
-def test_send_text_message_uses_explicit_receiver_uid(tmp_path: Path) -> None:
+async def test_send_text_message_uses_explicit_receiver_uid(tmp_path: Path) -> None:
     service, _secret_store, client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -489,7 +523,7 @@ def test_send_text_message_uses_explicit_receiver_uid(tmp_path: Path) -> None:
         )
     )
 
-    _ = service.send_text_message(
+    _ = await service.send_text_message(
         account_id=created.account_id,
         text="started",
         receiver_uid="override_uid",
@@ -498,7 +532,7 @@ def test_send_text_message_uses_explicit_receiver_uid(tmp_path: Path) -> None:
     assert client.calls[0]["receiver_uid"] == "override_uid"
 
 
-def test_send_notification_message_formats_text_once(tmp_path: Path) -> None:
+async def test_send_notification_message_formats_text_once(tmp_path: Path) -> None:
     service, _secret_store, client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -507,7 +541,7 @@ def test_send_notification_message_formats_text_once(tmp_path: Path) -> None:
         )
     )
 
-    message_id = service.send_notification_message(
+    message_id = await service.send_notification_message(
         account_id=created.account_id,
         workspace_id="workspace-1",
         session_id="session-1",
@@ -523,7 +557,7 @@ def test_send_notification_message_formats_text_once(tmp_path: Path) -> None:
     assert client.calls[0]["receiver_uid"] == "uid"
 
 
-def test_send_notification_message_delivers_to_self_and_multiple_groups(
+async def test_send_notification_message_delivers_to_self_and_multiple_groups(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, client = _build_service(tmp_path)
@@ -536,7 +570,7 @@ def test_send_notification_message_delivers_to_self_and_multiple_groups(
         )
     )
 
-    _ = service.send_notification_message(
+    _ = await service.send_notification_message(
         account_id=created.account_id,
         workspace_id="workspace-1",
         session_id="session-1",
@@ -551,7 +585,9 @@ def test_send_notification_message_delivers_to_self_and_multiple_groups(
     ]
 
 
-def test_effective_notification_targets_skip_blank_and_duplicate_targets() -> None:
+async def test_effective_notification_targets_skip_blank_and_duplicate_targets() -> (
+    None
+):
     account = XiaolubanAccountRecord.model_construct(
         account_id="xlb_dirty",
         display_name="Dirty",
@@ -567,7 +603,7 @@ def test_effective_notification_targets_skip_blank_and_duplicate_targets() -> No
     )
 
 
-def test_send_notification_message_continues_after_single_target_failure(
+async def test_send_notification_message_continues_after_single_target_failure(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, client = _build_service(tmp_path)
@@ -582,7 +618,7 @@ def test_send_notification_message_continues_after_single_target_failure(
         )
     )
 
-    message_id = service.send_notification_message(
+    message_id = await service.send_notification_message(
         account_id=created.account_id,
         workspace_id="workspace-1",
         session_id="session-1",
@@ -594,7 +630,7 @@ def test_send_notification_message_continues_after_single_target_failure(
     assert [call["receiver_uid"] for call in client.calls] == ["group-2"]
 
 
-def test_send_notification_message_raises_when_all_targets_fail(
+async def test_send_notification_message_raises_when_all_targets_fail(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, client = _build_service(tmp_path)
@@ -609,7 +645,7 @@ def test_send_notification_message_raises_when_all_targets_fail(
     )
 
     with pytest.raises(RuntimeError, match="send_failed"):
-        _ = service.send_notification_message(
+        _ = await service.send_notification_message(
             account_id=created.account_id,
             workspace_id="workspace-1",
             session_id="session-1",
@@ -618,7 +654,7 @@ def test_send_notification_message_raises_when_all_targets_fail(
         )
 
 
-def test_send_text_message_uses_self_before_configured_notification_receiver(
+async def test_send_text_message_uses_self_before_configured_notification_receiver(
     tmp_path: Path,
 ) -> None:
     service, _secret_store, client = _build_service(tmp_path)
@@ -630,7 +666,7 @@ def test_send_text_message_uses_self_before_configured_notification_receiver(
         )
     )
 
-    _ = service.send_text_message(
+    _ = await service.send_text_message(
         account_id=created.account_id,
         text="started",
     )
@@ -638,7 +674,7 @@ def test_send_text_message_uses_self_before_configured_notification_receiver(
     assert client.calls[0]["receiver_uid"] == "uid"
 
 
-def test_send_text_message_rejects_disabled_or_missing_token(
+async def test_send_text_message_rejects_disabled_or_missing_token(
     tmp_path: Path,
 ) -> None:
     service, secret_store, _client = _build_service(tmp_path)
@@ -651,16 +687,20 @@ def test_send_text_message_rejects_disabled_or_missing_token(
     )
 
     with pytest.raises(RuntimeError, match="xiaoluban_account_disabled"):
-        _ = service.send_text_message(account_id=created.account_id, text="started")
+        _ = await service.send_text_message(
+            account_id=created.account_id, text="started"
+        )
 
     _ = service.set_account_enabled(created.account_id, True)
     secret_store.delete_token(tmp_path, created.account_id)
 
     with pytest.raises(RuntimeError, match="missing_xiaoluban_token"):
-        _ = service.send_text_message(account_id=created.account_id, text="started")
+        _ = await service.send_text_message(
+            account_id=created.account_id, text="started"
+        )
 
 
-def test_delete_disabled_account_removes_record_and_token(tmp_path: Path) -> None:
+async def test_delete_disabled_account_removes_record_and_token(tmp_path: Path) -> None:
     service, secret_store, _client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -677,7 +717,7 @@ def test_delete_disabled_account_removes_record_and_token(tmp_path: Path) -> Non
         _ = service.get_account(created.account_id)
 
 
-def test_delete_enabled_account_requires_force(tmp_path: Path) -> None:
+async def test_delete_enabled_account_requires_force(tmp_path: Path) -> None:
     service, _secret_store, _client = _build_service(tmp_path)
     created = service.create_account(
         XiaolubanAccountCreateInput(
@@ -690,7 +730,7 @@ def test_delete_enabled_account_requires_force(tmp_path: Path) -> None:
         service.delete_account(created.account_id, force=False)
 
 
-def test_has_usable_credentials_handles_missing_disabled_and_tokenless_accounts(
+async def test_has_usable_credentials_handles_missing_disabled_and_tokenless_accounts(
     tmp_path: Path,
 ) -> None:
     service, secret_store, _client = _build_service(tmp_path)
@@ -712,19 +752,19 @@ def test_has_usable_credentials_handles_missing_disabled_and_tokenless_accounts(
     assert service.has_usable_credentials(created.account_id) is False
 
 
-def test_derive_uid_from_token_rejects_plugin_style_token() -> None:
+async def test_derive_uid_from_token_rejects_plugin_style_token() -> None:
     with pytest.raises(ValueError):
         _ = derive_uid_from_token("p_badtoken")
 
 
-def test_im_config_from_json_rejects_non_dict() -> None:
+async def test_im_config_from_json_rejects_non_dict() -> None:
     import relay_teams.gateway.xiaoluban.account_repository as account_repo_module
 
     with pytest.raises(ValueError, match="Invalid persisted im_config_json"):
         account_repo_module._im_config_from_json("[]")
 
 
-def test_notification_receivers_from_json_validates_and_deduplicates() -> None:
+async def test_notification_receivers_from_json_validates_and_deduplicates() -> None:
     import relay_teams.gateway.xiaoluban.account_repository as account_repo_module
 
     assert account_repo_module._notification_receivers_from_json(
@@ -736,7 +776,7 @@ def test_notification_receivers_from_json_validates_and_deduplicates() -> None:
         _ = account_repo_module._notification_receivers_from_json("{}")
 
 
-def test_account_repository_reads_legacy_notification_receiver(
+async def test_account_repository_reads_legacy_notification_receiver(
     tmp_path: Path,
 ) -> None:
     repository = XiaolubanAccountRepository(tmp_path / "xiaoluban_legacy_receiver.db")
@@ -778,7 +818,7 @@ def test_account_repository_reads_legacy_notification_receiver(
     assert loaded.notification_receiver == "group-legacy"
 
 
-def test_account_repository_skips_invalid_rows_and_raises_for_invalid_get(
+async def test_account_repository_skips_invalid_rows_and_raises_for_invalid_get(
     tmp_path: Path,
 ) -> None:
     repository = XiaolubanAccountRepository(tmp_path / "xiaoluban_dirty.db")
@@ -846,7 +886,7 @@ def test_account_repository_skips_invalid_rows_and_raises_for_invalid_get(
         _ = repository.get_account("missing")
 
 
-def test_account_repository_adds_missing_notification_columns(
+async def test_account_repository_adds_missing_notification_columns(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "xiaoluban_legacy.db"
@@ -878,7 +918,9 @@ def test_account_repository_adds_missing_notification_columns(
     assert "im_config_json" in columns
 
 
-def test_secret_store_normalizes_tokens_and_deletes_values(tmp_path: Path) -> None:
+async def test_secret_store_normalizes_tokens_and_deletes_values(
+    tmp_path: Path,
+) -> None:
     app_secret_store = _FakeAppSecretStore()
     secret_store = XiaolubanSecretStore(secret_store=app_secret_store)
 
@@ -895,24 +937,24 @@ def test_secret_store_normalizes_tokens_and_deletes_values(tmp_path: Path) -> No
     assert secret_store.can_persist_token() is True
 
 
-def test_client_sends_json_request_through_configured_base_url(
+async def test_client_sends_json_request_through_configured_base_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = httpx.Request("POST", DEFAULT_XIAOLUBAN_BASE_URL)
     response = httpx.Response(200, text='{"message_id":"msg-1"}', request=request)
     fake_http_client = _FakeHttpClient(response)
 
-    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
+    def fake_create_async_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
         assert timeout_seconds == 30.0
         return fake_http_client
 
     monkeypatch.setattr(
         xiaoluban_client_module,
-        "create_sync_http_client",
-        fake_create_sync_http_client,
+        "create_async_http_client",
+        fake_create_async_http_client,
     )
 
-    result = XiaolubanClient().send_text_message(
+    result = await XiaolubanClient().send_text_message(
         text="hello",
         receiver_uid="uid",
         auth_token="token",
@@ -933,24 +975,24 @@ def test_client_sends_json_request_through_configured_base_url(
     }
 
 
-def test_client_keep_alive_posts_session_payload(
+async def test_client_keep_alive_posts_session_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = httpx.Request("POST", "http://xlb.test/y/msg/util/keep_alive")
     response = httpx.Response(200, text="ok", request=request)
     fake_http_client = _FakeHttpClient(response)
 
-    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
+    def fake_create_async_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
         assert timeout_seconds == 30.0
         return fake_http_client
 
     monkeypatch.setattr(
         xiaoluban_client_module,
-        "create_sync_http_client",
-        fake_create_sync_http_client,
+        "create_async_http_client",
+        fake_create_async_http_client,
     )
 
-    XiaolubanClient().keep_alive(
+    await XiaolubanClient().keep_alive(
         uid="uid",
         session_id="session-1",
         save_info="saved",
@@ -971,74 +1013,74 @@ def test_client_keep_alive_posts_session_payload(
     }
 
 
-def test_client_wraps_transport_failures_as_runtime_error(
+async def test_client_wraps_transport_failures_as_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FailingHttpClient:
+    def fake_create_async_http_client(*, timeout_seconds: float) -> _FailingHttpClient:
         assert timeout_seconds == 30.0
         return _FailingHttpClient()
 
     monkeypatch.setattr(
         xiaoluban_client_module,
-        "create_sync_http_client",
-        fake_create_sync_http_client,
+        "create_async_http_client",
+        fake_create_async_http_client,
     )
 
     with pytest.raises(RuntimeError, match="Xiaoluban API request failed"):
-        _ = XiaolubanClient().send_text_message(
+        _ = await XiaolubanClient().send_text_message(
             text="hello",
             receiver_uid="uid",
             auth_token="token",
         )
 
 
-def test_client_post_util_route_handles_transport_failure(
+async def test_client_post_util_route_handles_transport_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FailingHttpClient:
+    def fake_create_async_http_client(*, timeout_seconds: float) -> _FailingHttpClient:
         assert timeout_seconds == 30.0
         return _FailingHttpClient()
 
     monkeypatch.setattr(
         xiaoluban_client_module,
-        "create_sync_http_client",
-        fake_create_sync_http_client,
+        "create_async_http_client",
+        fake_create_async_http_client,
     )
 
     with pytest.raises(RuntimeError, match="Xiaoluban API request failed"):
-        XiaolubanClient().keep_alive(
+        await XiaolubanClient().keep_alive(
             uid="uid",
             session_id="session-1",
             auth_token="token",
         )
 
 
-def test_client_post_util_route_handles_http_error(
+async def test_client_post_util_route_handles_http_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = httpx.Request("POST", "http://xlb.test/y/msg/util/keep_alive")
     response = httpx.Response(500, text="internal error", request=request)
     fake_http_client = _FakeHttpClient(response)
 
-    def fake_create_sync_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
+    def fake_create_async_http_client(*, timeout_seconds: float) -> _FakeHttpClient:
         assert timeout_seconds == 30.0
         return fake_http_client
 
     monkeypatch.setattr(
         xiaoluban_client_module,
-        "create_sync_http_client",
-        fake_create_sync_http_client,
+        "create_async_http_client",
+        fake_create_async_http_client,
     )
 
     with pytest.raises(RuntimeError, match="Xiaoluban util API request failed"):
-        XiaolubanClient().keep_alive(
+        await XiaolubanClient().keep_alive(
             uid="uid",
             session_id="session-1",
             auth_token="token",
         )
 
 
-def test_client_response_parsing_handles_fallback_shapes() -> None:
+async def test_client_response_parsing_handles_fallback_shapes() -> None:
     request = httpx.Request("POST", DEFAULT_XIAOLUBAN_BASE_URL)
     empty = xiaoluban_client_module._parse_send_response(
         httpx.Response(200, text="", request=request)

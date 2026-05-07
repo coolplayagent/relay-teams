@@ -407,7 +407,7 @@ class _FakeXiaolubanClient:
         self.sent_messages: list[tuple[str, str]] = []
         self._fail_send_when_contains = fail_send_when_contains
 
-    def keep_alive(
+    async def keep_alive(
         self,
         *,
         uid: str,
@@ -420,7 +420,7 @@ class _FakeXiaolubanClient:
         _ = (auth_token, base_url, timeout_minutes, save_info)
         self.keep_alive_calls.append((uid, session_id))
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         text: str,
@@ -1683,6 +1683,82 @@ def test_command_resume_without_existing_sessions(
     )
 
     assert "会话列表" in fake_client.sent_messages[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_command_new_replies_unavailable_without_gateway_sessions(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    service = _build_service(
+        tmp_path,
+        client=fake_client,
+        session_ingress_service=_FakeIngressService(),
+    )
+    account = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="Xiaoluban",
+            token="uidself_1234567890abcdef1234567890abcdef",
+        )
+    )
+    service.update_im_config(
+        account.account_id,
+        XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
+    )
+
+    await service._handle_new_command(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/new",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+        workspace_id="im-workspace",
+        reply_target="uidself",
+        task_text="",
+    )
+
+    assert "服务暂不可用，请稍后重试" in fake_client.sent_messages[-1][0]
+    assert fake_client.sent_messages[-1][1] == "uidself"
+
+
+@pytest.mark.asyncio
+async def test_command_resume_replies_unavailable_without_gateway_sessions(
+    tmp_path: Path,
+) -> None:
+    fake_client = _FakeXiaolubanClient()
+    service = _build_service(
+        tmp_path,
+        client=fake_client,
+        session_ingress_service=_FakeIngressService(),
+    )
+    account = service.create_account(
+        XiaolubanAccountCreateInput(
+            display_name="Xiaoluban",
+            token="uidself_1234567890abcdef1234567890abcdef",
+        )
+    )
+    service.update_im_config(
+        account.account_id,
+        XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
+    )
+
+    await service._handle_resume_command(
+        account_id=account.account_id,
+        message=XiaolubanInboundMessage(
+            content="/resume",
+            receiver="uidself",
+            sender="uidself",
+            session_id="welink-session-1",
+        ),
+        workspace_id="im-workspace",
+        reply_target="uidself",
+        arg="",
+    )
+
+    assert "服务暂不可用，请稍后重试" in fake_client.sent_messages[-1][0]
+    assert fake_client.sent_messages[-1][1] == "uidself"
 
 
 def test_command_resume_by_prefix_match(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 from lark_oapi.event.dispatcher_handler import P2ImMessageReceiveV1
+from lark_oapi.ws.const import DEVICE_ID, SERVICE_ID
 from lark_oapi.ws.model import ClientConfig
 from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 
@@ -23,7 +24,7 @@ from relay_teams.gateway.feishu.models import (
     TriggerProcessingResult,
 )
 from relay_teams.logger import get_logger, log_event
-from relay_teams.net import create_runtime_sync_http_client
+from relay_teams.net import create_runtime_async_http_client
 from relay_teams.net.websocket import (
     build_websocket_ssl_context,
     resolve_websocket_proxy_url,
@@ -540,10 +541,8 @@ class _FeishuWsController:
         )
 
     async def _connect_client(self, client: WsClientLike) -> None:
-        from lark_oapi.ws.const import DEVICE_ID, SERVICE_ID
-
         ws_client_module = import_lark_ws_client_module()
-        conn_url = await asyncio.to_thread(self._get_conn_url, client)
+        conn_url = await self._get_conn_url(client)
         conn_query = parse_qs(urlparse(conn_url).query)
         conn_ids = conn_query.get(DEVICE_ID)
         service_ids = conn_query.get(SERVICE_ID)
@@ -646,19 +645,20 @@ class _FeishuWsController:
             return random.random() * client._reconnect_nonce
         return float(max(client._reconnect_interval, 1))
 
-    def _get_conn_url(self, client: WsClientLike) -> str:
+    async def _get_conn_url(self, client: WsClientLike) -> str:
         from lark_oapi.ws.const import GEN_ENDPOINT_URI
         from lark_oapi.ws.exception import ClientException, ServerException
         from lark_oapi.ws.model import EndpointResp
 
-        response = self._create_feishu_http_client().post(
-            f"https://open.feishu.cn{GEN_ENDPOINT_URI}",
-            headers={"locale": "zh"},
-            json={
-                "AppID": client._app_id,
-                "AppSecret": client._app_secret,
-            },
-        )
+        async with self._create_feishu_http_client() as http_client:
+            response = await http_client.post(
+                f"https://open.feishu.cn{GEN_ENDPOINT_URI}",
+                headers={"locale": "zh"},
+                json={
+                    "AppID": client._app_id,
+                    "AppSecret": client._app_secret,
+                },
+            )
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -687,8 +687,8 @@ class _FeishuWsController:
         return endpoint_data.URL
 
     @staticmethod
-    def _create_feishu_http_client() -> httpx.Client:
-        return create_runtime_sync_http_client()
+    def _create_feishu_http_client() -> httpx.AsyncClient:
+        return create_runtime_async_http_client()
 
 
 def _create_ws_controller(

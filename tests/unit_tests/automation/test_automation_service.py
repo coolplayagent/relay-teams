@@ -91,7 +91,7 @@ class _FakeBoundSessionQueueService:
         self.materialize_calls: list[tuple[str, str]] = []
         self.deleted_project_ids: list[str] = []
 
-    def materialize_execution(
+    async def materialize_execution(
         self,
         *,
         project: object,
@@ -546,7 +546,7 @@ def test_async_run_now_offloads_bound_session_execution(
         result = await service.run_now_async(created.automation_project_id)
         updated = await service.get_project_async(created.automation_project_id)
 
-        assert "_materialize_bound_session_execution" in offloaded_functions
+        assert "_materialize_bound_session_execution" not in offloaded_functions
         assert result["session_id"] == "bound-session-1"
         assert result["run_id"] == "bound-run-1"
         assert result["reused_bound_session"] is True
@@ -1398,7 +1398,7 @@ def test_run_now_reuses_bound_session_without_creating_new_session(
 
 def test_run_now_fails_when_bound_session_execution_errors(tmp_path: Path) -> None:
     class _FailingBoundSessionQueueService(_FakeBoundSessionQueueService):
-        def materialize_execution(
+        async def materialize_execution(
             self,
             *,
             project: object,

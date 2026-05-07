@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Literal
 from typing import cast
 
+import pytest
 
 import relay_teams.gateway.feishu.trigger_handler as trigger_handler_module
 from relay_teams.gateway.feishu.models import (
@@ -178,7 +180,7 @@ class _FakeFeishuClient:
         self.sent_messages: list[tuple[str, str]] = []
         self.reply_messages: list[tuple[str, str]] = []
 
-    def send_text_message(
+    async def send_text_message(
         self,
         *,
         chat_id: str,
@@ -189,7 +191,7 @@ class _FakeFeishuClient:
         self.sent_messages.append((chat_id, text))
         return f"om_{len(self.sent_messages)}"
 
-    def reply_text_message(
+    async def reply_text_message(
         self,
         *,
         message_id: str,
@@ -205,7 +207,7 @@ class _FakeImToolService:
     def __init__(self, feishu_client: _FakeFeishuClient) -> None:
         self._feishu_client = feishu_client
 
-    def send_text_to_feishu_chat(
+    async def send_text_to_feishu_chat(
         self,
         *,
         chat_id: str,
@@ -215,13 +217,13 @@ class _FakeImToolService:
     ) -> None:
         normalized_reply_to_message_id = str(reply_to_message_id or "").strip()
         if normalized_reply_to_message_id:
-            self._feishu_client.reply_text_message(
+            await self._feishu_client.reply_text_message(
                 message_id=normalized_reply_to_message_id,
                 text=text,
                 environment=environment,
             )
             return
-        self._feishu_client.send_text_message(
+        await self._feishu_client.send_text_message(
             chat_id=chat_id,
             text=text,
             environment=environment,
@@ -495,6 +497,36 @@ def test_group_help_command_replies_when_mentioned(tmp_path: Path) -> None:
     assert len(feishu_client.reply_messages) == 1
     assert feishu_client.reply_messages[0][0] == "om_help_group"
     assert "help" in feishu_client.reply_messages[0][1]
+
+
+@pytest.mark.asyncio
+async def test_group_help_command_replies_when_event_loop_is_running(
+    tmp_path: Path,
+) -> None:
+    handler, _session_service, message_pool_service, _bindings, feishu_client = (
+        _build_handler(tmp_path=tmp_path)
+    )
+    raw_body = _build_event(
+        message_id="om_help_group",
+        chat_id="oc_group_help",
+        event_id="evt-help-group",
+        text='<at user_id="ou_bot">Agent Teams Bot</at> help',
+        chat_type="group",
+        mention_names=("Agent Teams Bot",),
+    )
+
+    result = handler.handle_sdk_event(
+        trigger_id="trg_feishu",
+        event=_build_sdk_event(raw_body),
+        raw_body=raw_body,
+        headers={},
+        remote_addr=None,
+    )
+    await asyncio.sleep(0)
+
+    assert result.status == "command"
+    assert message_pool_service.enqueued == []
+    assert feishu_client.reply_messages[0][0] == "om_help_group"
 
 
 def test_group_command_ignores_other_bot_mentions(tmp_path: Path) -> None:

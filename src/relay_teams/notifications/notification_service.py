@@ -33,7 +33,7 @@ _NOTIFICATION_HOOK_ACTIVE: ContextVar[bool] = ContextVar(
 
 class NotificationDispatcher(Protocol):
     @staticmethod
-    def dispatch(request: NotificationRequest) -> None:
+    async def dispatch(request: NotificationRequest) -> None:
         raise NotImplementedError
 
 
@@ -108,6 +108,7 @@ class NotificationService:
         self._hook_loop: _NotificationHookLoop | None = None
         self._hook_loop_lock = threading.Lock()
         self._active_loop_hook_tasks: set[asyncio.Task[None]] = set()
+        self._active_dispatch_tasks: set[asyncio.Task[None]] = set()
 
     def emit(
         self,
@@ -145,24 +146,7 @@ class NotificationService:
                 payload_json=dumps(request.model_dump(mode="json"), ensure_ascii=False),
             )
         )
-        for dispatcher in self._dispatchers:
-            try:
-                dispatcher.dispatch(request)
-            except Exception as exc:
-                log_event(
-                    logger,
-                    logging.ERROR,
-                    event="notification.dispatch.failed",
-                    message="Notification dispatcher failed",
-                    payload={
-                        "dispatcher": type(dispatcher).__name__,
-                        "notification_type": request.notification_type.value,
-                        "run_id": request.context.run_id,
-                        "session_id": request.context.session_id,
-                    },
-                    exc_info=exc,
-                )
-                continue
+        self._dispatch_from_sync_context(request)
         return True
 
     def _emit_notification_hook(self, request: NotificationRequest) -> None:
@@ -223,9 +207,30 @@ class NotificationService:
                 payload_json=dumps(request.model_dump(mode="json"), ensure_ascii=False),
             ),
         )
+        await self._dispatch_request_async(request)
+        return True
+
+    def _dispatch_from_sync_context(self, request: NotificationRequest) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            target_loop = self._run_event_hub.loop_for_run(request.context.run_id)
+            if target_loop is None or not target_loop.is_running():
+                target_loop = self._get_hook_loop().loop
+            future = asyncio.run_coroutine_threadsafe(
+                self._dispatch_request_async(request),
+                target_loop,
+            )
+            _ = future.result()
+            return
+        task = loop.create_task(self._dispatch_request_async(request))
+        self._active_dispatch_tasks.add(task)
+        task.add_done_callback(self._active_dispatch_tasks.discard)
+
+    async def _dispatch_request_async(self, request: NotificationRequest) -> None:
         for dispatcher in self._dispatchers:
             try:
-                await asyncio.to_thread(dispatcher.dispatch, request)
+                await dispatcher.dispatch(request)
             except Exception as exc:
                 log_event(
                     logger,
@@ -240,8 +245,6 @@ class NotificationService:
                     },
                     exc_info=exc,
                 )
-                continue
-        return True
 
     async def _emit_notification_hook_async(self, request: NotificationRequest) -> None:
         if self._hook_service is None:

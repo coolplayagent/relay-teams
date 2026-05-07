@@ -118,6 +118,10 @@ message forwarding mode, and sends `q` to exit that mode. The default
 `relay-teams server start` command remains loopback-only for the main web UI and
 still shows `http://127.0.0.1:8000`.
 
+Xiaoluban gateway outbound provider traffic uses the shared async net client
+factories for text notification, keep-alive, and utility-route requests. The
+gateway does not keep a duplicate synchronous HTTP path for those operations.
+
 Once in forwarding mode, the following interactive commands are available:
 
 - `/new` -- create a new session (becomes the active session for the IM conversation)

@@ -111,6 +111,11 @@ Rules:
 The server opens one Feishu SDK long connection per enabled Feishu gateway account whose
 credentials are ready.
 
+Outbound Feishu gateway HTTP runs through the shared async net client factories.
+The gateway does not maintain parallel synchronous HTTP implementations for
+message send, reply, reaction, upload, profile lookup, or websocket endpoint
+resolution.
+
 ## Session Binding
 
 Inbound Feishu session reuse is keyed by:
