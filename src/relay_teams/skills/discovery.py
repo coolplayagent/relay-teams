@@ -8,7 +8,7 @@ from threading import RLock
 import yaml
 
 from relay_teams.builtin import get_builtin_skills_dir
-from relay_teams.hooks import parse_tolerant_hooks_payload
+from relay_teams.hooks.hook_normalization import parse_tolerant_hooks_payload
 from relay_teams.hooks.hook_models import HookHandlerType, HooksConfig
 from relay_teams.logger import get_logger
 from relay_teams.paths import get_app_config_dir, get_project_root_or_none

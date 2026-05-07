@@ -533,6 +533,13 @@ export function invalidateManagedRequests(prefix) {
                 "await mod.updateMcpServer('filesystem', { config: {} }); "
                 "await mod.setMcpServerEnabled('filesystem', true); "
                 "await mod.reloadSkillsConfig(); "
+                "await mod.fetchPluginMarketplace('marketplace.json'); "
+                "await mod.installPlugin({ source: 'plugins/demo', scope: 'user', enabled: true }); "
+                "await mod.configurePlugin('demo', { scope: 'user', user_config: { token: 'secret' } }); "
+                "await mod.enablePlugin('demo', 'user'); "
+                "await mod.disablePlugin('demo', 'user'); "
+                "await mod.updatePlugin('demo', { scope: 'user', version: '1.2.0' }); "
+                "await mod.deletePlugin('demo', 'user', false); "
                 "console.log(JSON.stringify({"
                 "requests: globalThis.__capturedRequests,"
                 "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
@@ -566,6 +573,13 @@ export function invalidateManagedRequests(prefix) {
         "/api/mcp/servers/filesystem",
         "/api/mcp/servers/filesystem/enabled",
         "/api/system/configs/skills:reload",
+        "/api/system/configs/plugins/marketplace",
+        "/api/system/configs/plugins:install",
+        "/api/system/configs/plugins/demo:configure",
+        "/api/system/configs/plugins/demo:enable",
+        "/api/system/configs/plugins/demo:disable",
+        "/api/system/configs/plugins/demo:update",
+        "/api/system/configs/plugins/demo?scope=user&prune=false",
     ]
     assert payload["invalidatedPrefixes"] == [
         "roles:",
@@ -573,6 +587,12 @@ export function invalidateManagedRequests(prefix) {
         "system:model-profiles",
         "roles:",
         "system:model-profiles",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
+        "roles:",
         "roles:",
         "roles:",
         "roles:",

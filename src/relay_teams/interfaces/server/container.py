@@ -122,7 +122,8 @@ from relay_teams.notifications import NotificationConfigManager, NotificationSer
 from relay_teams.notifications.notification_settings_service import (
     NotificationSettingsService,
 )
-from relay_teams.plugins import PluginConfigManager, PluginRegistry
+from relay_teams.plugins import PluginRegistry
+from relay_teams.plugins.config_manager import PluginConfigManager
 from relay_teams.plugins.mcp_sources import load_plugin_mcp_specs
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
@@ -290,16 +291,6 @@ class ServerContainer:
         self.runtime: RuntimeConfig = runtime
         self._project_start_dir = Path.cwd().resolve()
         self._session_model_profile_lookup = session_model_profile_lookup
-        self.plugin_config_manager: PluginConfigManager = (
-            PluginConfigManager.from_environment(app_config_dir=app_config_dir)
-        )
-        self.plugin_registry: PluginRegistry = (
-            self.plugin_config_manager.load_registry()
-        )
-        self._plugin_mcp_specs = load_plugin_mcp_specs(
-            self.plugin_registry.mcp_sources()
-        )
-
         self.model_config_manager: ModelConfigManager = ModelConfigManager(
             config_dir=app_config_dir
         )
@@ -311,6 +302,18 @@ class ServerContainer:
         )
         self.orchestration_settings_config_manager = OrchestrationSettingsConfigManager(
             config_dir=app_config_dir
+        )
+        self.plugin_config_manager: PluginConfigManager = (
+            PluginConfigManager.from_environment(
+                app_config_dir=app_config_dir,
+                project_start_dir=self._project_start_dir,
+            )
+        )
+        self.plugin_registry: PluginRegistry = (
+            self.plugin_config_manager.load_registry()
+        )
+        self._plugin_mcp_specs = load_plugin_mcp_specs(
+            self.plugin_registry.mcp_sources()
         )
         self.proxy_config_service: ProxyConfigService = ProxyConfigService(
             config_dir=app_config_dir,
@@ -521,6 +524,7 @@ class ServerContainer:
                 config_manager=self.orchestration_settings_config_manager,
                 session_repo=self.session_repo,
                 get_role_registry=lambda: self.role_registry,
+                get_plugin_registry=lambda: self.plugin_registry,
             )
         )
         self.token_usage_repo: TokenUsageRepository = TokenUsageRepository(
@@ -1575,7 +1579,8 @@ class ServerContainer:
     def _reload_plugin_runtime_after_app_env_change(self) -> None:
         sync_app_env_to_process_env(self.runtime.paths.env_file)
         self.plugin_config_manager = PluginConfigManager.from_environment(
-            app_config_dir=self.runtime.paths.config_dir
+            app_config_dir=self.runtime.paths.config_dir,
+            project_start_dir=self._project_start_dir,
         )
         self.plugin_registry = self.plugin_config_manager.load_registry()
         self._plugin_mcp_specs = load_plugin_mcp_specs(
@@ -1628,6 +1633,9 @@ class ServerContainer:
         self._refresh_coordinator_runtime()
         self._refresh_runtime_dependents()
 
+    def reload_plugin_runtime(self) -> None:
+        self._reload_plugin_runtime_after_app_env_change()
+
     def _on_app_environment_changed(self, changed_keys: frozenset[str]) -> None:
         self.model_config_service.reload_model_config()
         proxy_related_keys = {
@@ -1638,8 +1646,7 @@ class ServerContainer:
             "SSL_VERIFY",
         }
         normalized_keys = {key.upper() for key in changed_keys}
-        if "RELAY_TEAMS_PLUGIN_DIRS" in normalized_keys:
-            self._reload_plugin_runtime_after_app_env_change()
+        self._reload_plugin_runtime_after_app_env_change()
         if normalized_keys.isdisjoint(proxy_related_keys):
             self._reload_mcp_runtime_after_app_env_change()
         else:

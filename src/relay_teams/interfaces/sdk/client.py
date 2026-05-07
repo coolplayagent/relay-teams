@@ -100,6 +100,113 @@ class AsyncAgentTeamsClient:
             f"/api/system/configs/clawhub/skills/{quote(skill_id, safe='')}",
         )
 
+    async def list_plugins(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/configs/plugins")
+
+    async def get_plugins_runtime(self) -> dict[str, JsonValue]:
+        return await self._request_json("GET", "/api/system/configs/plugins/runtime")
+
+    async def validate_plugin(self, path: str) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "POST",
+            "/api/system/configs/plugins:validate",
+            {"path": path},
+        )
+
+    async def install_plugin(
+        self,
+        *,
+        source: str,
+        scope: str = "user",
+        enabled: bool = True,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+        marketplace: str | None = None,
+        version: str | None = None,
+    ) -> dict[str, JsonValue]:
+        payload: dict[str, JsonValue] = {
+            "source": source,
+            "scope": scope,
+            "enabled": enabled,
+            "marketplace": marketplace,
+            "version": version,
+        }
+        if source_kind is not None:
+            payload["source_kind"] = source_kind
+        if source_ref is not None:
+            payload["source_ref"] = source_ref
+        return await self._request_json(
+            "POST",
+            "/api/system/configs/plugins:install",
+            payload,
+        )
+
+    async def configure_plugin(
+        self,
+        name: str,
+        *,
+        user_config: dict[str, JsonValue],
+        scope: str = "user",
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "POST",
+            f"/api/system/configs/plugins/{quote(name, safe='')}:configure",
+            {"scope": scope, "user_config": user_config},
+        )
+
+    async def enable_plugin(
+        self,
+        name: str,
+        *,
+        scope: str = "user",
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "POST",
+            f"/api/system/configs/plugins/{quote(name, safe='')}:enable",
+            {"scope": scope},
+        )
+
+    async def disable_plugin(
+        self,
+        name: str,
+        *,
+        scope: str = "user",
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "POST",
+            f"/api/system/configs/plugins/{quote(name, safe='')}:disable",
+            {"scope": scope},
+        )
+
+    async def update_plugin(
+        self,
+        name: str,
+        *,
+        scope: str = "user",
+        version: str | None = None,
+    ) -> dict[str, JsonValue]:
+        return await self._request_json(
+            "POST",
+            f"/api/system/configs/plugins/{quote(name, safe='')}:update",
+            {"scope": scope, "version": version},
+        )
+
+    async def delete_plugin(
+        self,
+        name: str,
+        *,
+        scope: str = "user",
+        prune: bool = False,
+    ) -> dict[str, JsonValue]:
+        prune_value = "true" if prune else "false"
+        return await self._request_json(
+            "DELETE",
+            (
+                f"/api/system/configs/plugins/{quote(name, safe='')}"
+                f"?scope={quote(scope, safe='')}&prune={prune_value}"
+            ),
+        )
+
     async def save_proxy_config(
         self,
         *,

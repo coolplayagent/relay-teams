@@ -13,6 +13,8 @@ from relay_teams.agents.orchestration.settings_models import (
     OrchestrationSettings,
 )
 from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
+from relay_teams.plugins.plugin_models import PluginRegistry
+from relay_teams.plugins.settings_service import resolve_plugin_default_agent_role_id
 from relay_teams.roles.role_registry import (
     RoleRegistry,
     is_reserved_system_role_definition,
@@ -29,10 +31,12 @@ class OrchestrationSettingsService:
         config_manager: OrchestrationSettingsConfigManager,
         session_repo: SessionRepository,
         get_role_registry: Callable[[], RoleRegistry],
+        get_plugin_registry: Callable[[], PluginRegistry] | None = None,
     ) -> None:
         self._config_manager = config_manager
         self._session_repo = session_repo
         self._get_role_registry = get_role_registry
+        self._get_plugin_registry = get_plugin_registry
 
     def get_orchestration_config(self) -> OrchestrationSettings:
         return self._config_manager.get_orchestration_settings()
@@ -56,6 +60,15 @@ class OrchestrationSettingsService:
     def default_orchestration_preset_id(self) -> str | None:
         settings = self._config_manager.get_orchestration_settings()
         return settings.default_orchestration_preset_id or None
+
+    def default_normal_root_role_id(self) -> str | None:
+        if self._get_plugin_registry is None:
+            return None
+        plugin_registry = self._get_plugin_registry()
+        return resolve_plugin_default_agent_role_id(
+            settings_sources=plugin_registry.settings_sources(),
+            role_registry=self._get_role_registry(),
+        )
 
     def resolve_run_topology(
         self,

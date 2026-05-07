@@ -1,4 +1,5 @@
 @import url("./settings/model-profiles.css");
+@import url("./settings/plugins.css");
 
 /* Settings Modal */
 .modal {
@@ -190,6 +191,7 @@
 .settings-actions-bar[data-active-tab="appearance"] [data-settings-action-tab]:not([data-settings-action-tab="appearance"]),
 .settings-actions-bar[data-active-tab="model"] [data-settings-action-tab]:not([data-settings-action-tab="model"]),
 .settings-actions-bar[data-active-tab="mcp"] [data-settings-action-tab]:not([data-settings-action-tab="mcp"]),
+.settings-actions-bar[data-active-tab="plugins"] [data-settings-action-tab]:not([data-settings-action-tab="plugins"]),
 .settings-actions-bar[data-active-tab="commands"] [data-settings-action-tab]:not([data-settings-action-tab="commands"]),
 .settings-actions-bar[data-active-tab="hooks"] [data-settings-action-tab]:not([data-settings-action-tab="hooks"]),
 .settings-actions-bar[data-active-tab="agents"] [data-settings-action-tab]:not([data-settings-action-tab="agents"]),

@@ -2,23 +2,39 @@
 from __future__ import annotations
 
 from relay_teams.plugins.plugin_models import (
+    PluginComponentCounts,
     PluginComponentSource,
+    PluginDependency,
     PluginDiagnostic,
     PluginDiagnosticSeverity,
+    PluginInstallSource,
+    PluginInstallSourceKind,
     PluginManifest,
+    PluginMonitorDefinition,
     PluginRecord,
     PluginRegistry,
     PluginScope,
+    PluginSettings,
+    PluginSettingsSource,
+    PluginStateFile,
+    PluginStateRecord,
 )
-from relay_teams.plugins.config_manager import PluginConfigManager
 
 __all__ = [
+    "PluginComponentCounts",
     "PluginComponentSource",
-    "PluginConfigManager",
+    "PluginDependency",
     "PluginDiagnostic",
     "PluginDiagnosticSeverity",
+    "PluginInstallSource",
+    "PluginInstallSourceKind",
     "PluginManifest",
+    "PluginMonitorDefinition",
     "PluginRecord",
     "PluginRegistry",
     "PluginScope",
+    "PluginSettings",
+    "PluginSettingsSource",
+    "PluginStateFile",
+    "PluginStateRecord",
 ]

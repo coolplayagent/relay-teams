@@ -13,6 +13,7 @@ from relay_teams.env.environment_variable_models import (
     EnvironmentVariableScope,
 )
 from relay_teams.interfaces.server.container import ServerContainer
+from relay_teams.plugins.config_manager import PluginConfigManager
 from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.roles import RoleLoader
 from relay_teams.skills.discovery import SkillsDirectory
@@ -418,9 +419,15 @@ def test_saving_app_environment_variable_reloads_mcp_and_skills_runtime(
     config_dir = tmp_path / ".agent-teams"
     _write_model_config(config_dir, api_key="initial-secret")
     container = ServerContainer(config_dir=config_dir)
+    plugin_reload_calls: list[str] = []
     mcp_reload_calls: list[str] = []
     skill_reload_calls: list[str] = []
 
+    monkeypatch.setattr(
+        container,
+        "_reload_plugin_runtime_after_app_env_change",
+        lambda: plugin_reload_calls.append("plugins"),
+    )
     monkeypatch.setattr(
         container.mcp_config_manager,
         "load_registry",
@@ -438,8 +445,68 @@ def test_saving_app_environment_variable_reloads_mcp_and_skills_runtime(
         request=EnvironmentVariableSaveRequest(value="enabled"),
     )
 
+    assert plugin_reload_calls == ["plugins"]
     assert mcp_reload_calls == ["mcp"]
     assert skill_reload_calls == ["skills"]
+
+
+def test_saving_app_environment_variable_reloads_plugin_manager_with_start_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_key = "RELAY_TEAMS_PLUGIN_DIRS"
+    _clear_proxy_env(monkeypatch)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    captured_kwargs: list[dict[str, object]] = []
+
+    original_from_environment = PluginConfigManager.from_environment
+
+    def _fake_from_environment(
+        _cls,
+        *,
+        app_config_dir: Path,
+        project_root: Path | None = None,
+        project_start_dir: Path | None = None,
+    ) -> PluginConfigManager:
+        captured_kwargs.append(
+            {
+                "app_config_dir": app_config_dir,
+                "project_root": project_root,
+                "project_start_dir": project_start_dir,
+            }
+        )
+        return original_from_environment(
+            app_config_dir=app_config_dir,
+            project_root=project_root,
+            project_start_dir=project_start_dir,
+        )
+
+    monkeypatch.setattr(
+        "relay_teams.interfaces.server.container.PluginConfigManager.from_environment",
+        classmethod(_fake_from_environment),
+    )
+    container = ServerContainer(config_dir=config_dir)
+    captured_kwargs.clear()
+    monkeypatch.setattr(
+        container.skills_config_reload_service,
+        "reload_skills_config",
+        lambda: None,
+    )
+
+    container.environment_variable_service.save_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key=env_key,
+        request=EnvironmentVariableSaveRequest(value="enabled"),
+    )
+
+    assert captured_kwargs
+    assert all(
+        item["project_start_dir"] == project_dir.resolve() for item in captured_kwargs
+    )
 
 
 def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
@@ -453,7 +520,6 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     feishu_reload_calls: list[str] = []
     wechat_reload_calls: list[str] = []
     mcp_reload_calls: list[str] = []
-    skill_reload_calls: list[str] = []
 
     monkeypatch.setattr(
         container.feishu_subscription_service,
@@ -470,11 +536,6 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
         "load_registry",
         lambda **_kwargs: (mcp_reload_calls.append("mcp"), container.mcp_registry)[1],
     )
-    monkeypatch.setattr(
-        container.skills_config_reload_service,
-        "reload_skills_config",
-        lambda: skill_reload_calls.append("skills"),
-    )
 
     container.environment_variable_service.save_environment_variable(
         scope=EnvironmentVariableScope.APP,
@@ -488,8 +549,7 @@ def test_proxy_environment_variable_change_triggers_proxy_runtime_refresh(
     )
     assert feishu_reload_calls == ["feishu"]
     assert wechat_reload_calls == ["wechat"]
-    assert mcp_reload_calls == ["mcp"]
-    assert skill_reload_calls == ["skills"]
+    assert mcp_reload_calls == ["mcp", "mcp"]
 
 
 @pytest.mark.asyncio

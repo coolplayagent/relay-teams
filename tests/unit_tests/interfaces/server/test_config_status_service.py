@@ -11,6 +11,16 @@ from relay_teams.gateway.gateway_models import GatewayMcpServerSpec
 from relay_teams.interfaces.server.config_status_service import ConfigStatusService
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.plugins.plugin_models import (
+    PluginComponentSource,
+    PluginDiagnostic,
+    PluginDiagnosticSeverity,
+    PluginManifest,
+    PluginRecord,
+    PluginRegistry,
+    PluginScope,
+    PluginUserConfigField,
+)
 from relay_teams.sessions.runs.runtime_config import (
     ModelConfigStatus,
     RuntimeConfig,
@@ -143,6 +153,67 @@ def test_get_config_status_keeps_empty_mcp_list_when_only_session_servers_exist(
         "loaded": True,
         "servers": [],
     }
+
+
+def test_get_config_status_redacts_plugin_diagnostics() -> None:
+    secret_value = "secret-token"
+    plugin = PluginRecord(
+        name="quality",
+        version="1.0.0",
+        scope=PluginScope.USER,
+        root_dir=Path("/tmp/plugins/quality"),
+        data_dir=Path("/tmp/config/plugins/data/quality"),
+        manifest=PluginManifest(
+            name="quality",
+            user_config={
+                "token": PluginUserConfigField(type="string", sensitive=True),
+            },
+        ),
+        user_config={"token": "<configured>"},
+        command_sources=(
+            PluginComponentSource(
+                plugin_name="quality",
+                scope=PluginScope.USER,
+                root_dir=Path("/tmp/plugins/quality"),
+                data_dir=Path("/tmp/config/plugins/data/quality"),
+                path=Path("/tmp/plugins/quality/commands"),
+                user_config={"token": secret_value},
+            ),
+        ),
+    )
+    registry = PluginRegistry(
+        plugins=(plugin,),
+        diagnostics=(
+            PluginDiagnostic(
+                plugin_name="quality",
+                scope=PluginScope.USER,
+                severity=PluginDiagnosticSeverity.ERROR,
+                message=f"Invalid command argument {secret_value}",
+            ),
+        ),
+    )
+    service = ConfigStatusService(
+        get_runtime=lambda: RuntimeConfig(
+            paths=_build_runtime_paths(),
+            llm_profiles={},
+            model_status=ModelConfigStatus(
+                loaded=True,
+                profiles=("default",),
+                error=None,
+            ),
+        ),
+        get_mcp_registry=lambda: McpRegistry(()),
+        get_skill_registry=lambda: cast(SkillRegistry, _FakeSkillRegistry()),
+        get_proxy_status=lambda: {"enabled": False},
+        get_plugin_registry=lambda: registry,
+    )
+
+    status = service.get_config_status()
+
+    plugins_status = cast(dict[str, JsonValue], status["plugins"])
+    diagnostics = cast(list[dict[str, JsonValue]], plugins_status["diagnostics"])
+    assert secret_value not in str(diagnostics)
+    assert "<configured>" in str(diagnostics)
 
 
 def _build_runtime_paths() -> RuntimePaths:

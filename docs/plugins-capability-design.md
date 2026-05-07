@@ -148,11 +148,11 @@ Rules:
 - component path fields must be relative plugin-root paths beginning with `./`
   when explicitly configured.
 - absolute paths and `..` traversal are rejected.
-- inline hook and MCP configs are supported only after path-based loading is
-  stable.
-- `user_config` values are parsed in Phase 1 but not yet substituted into
-  hook/MCP runtime config. Prompting, persistence, and sensitive value storage
-  are deferred until install/enable state exists.
+- inline hook, MCP, monitor, and settings configs are accepted after path-based
+  loading has established the plugin source boundary.
+- `user_config` values are parsed from manifests, persisted in install state,
+  and substituted into plugin hook/MCP runtime config. Interactive prompting and
+  sensitive value storage are deferred.
 
 Implementation constraints:
 
@@ -178,12 +178,24 @@ Implementation constraints:
 
 Phase 1 does not read plugin install state files. Runtime plugin roots are
 configured with `RELAY_TEAMS_PLUGIN_DIRS`, usually from the process environment
-or the `.env` file in the resolved app config directory. The resolved config
-directory may default to `.relay-teams`, but callers can change it through the
-runtime config-dir mechanism; plugin scope paths must use that resolved location
-instead of hardcoding the default directory name.
+or the `.env` file in the resolved app config directory.
 
-Recommended future state files:
+Relay Teams should mirror Claude Code's scope model, but the JSON state files
+must live under Relay Teams config paths:
+
+- `user` state uses `get_app_config_dir()`. This is normally the user's Relay
+  Teams app config directory, and can be redirected with
+  `RELAY_TEAMS_CONFIG_DIR`.
+- `project` and `project_local` state use the repository root resolved from
+  `get_project_root_or_none()`, then append the active Relay Teams config
+  directory name. Do not hardcode the default directory name; derive it from the
+  active config-dir setting, including `RELAY_TEAMS_CONFIG_DIR` when present.
+- `managed` state is read-only policy supplied by an admin-managed config
+  source. Runtime loading reads the JSON state file referenced by
+  `RELAY_TEAMS_MANAGED_PLUGINS_FILE`; it must not be mixed into user-writable
+  files.
+
+Recommended future JSON state files:
 
 ```text
 <resolved-app-config-dir>/plugins/
@@ -192,24 +204,28 @@ Recommended future state files:
   data/
   plugins.json
 
-<resolved-project-config-dir>/plugins.json
-<resolved-project-config-dir>/plugins.local.json
+<project-root>/<active-relay-config-dir-name>/plugins.json
+<project-root>/<active-relay-config-dir-name>/plugins.local.json
 ```
 
 Scope mapping:
 
 - `user`: available across workspaces, stored under the resolved app config
-  directory.
+  directory at `<resolved-app-config-dir>/plugins/plugins.json`.
 - `project`: shared with a repository, stored in the resolved project config
-  directory.
+  directory at
+  `<project-root>/<active-relay-config-dir-name>/plugins.json`.
 - `project_local`: local project-only config, stored in
-  `<resolved-project-config-dir>/plugins.local.json`.
-- `managed`: read-only enterprise/admin state. Design now, implement later.
+  `<project-root>/<active-relay-config-dir-name>/plugins.local.json`.
+- `managed`: read-only enterprise/admin state loaded from
+  `RELAY_TEAMS_MANAGED_PLUGINS_FILE` when configured.
 
 The existing `get_project_root_or_none()` helper should resolve project scope.
-The current `get_project_config_dir()` returns app config, so future plugin
-project config should not reuse it blindly; add explicit plugin path helpers
-that honor the active config-dir settings.
+The current `get_project_config_dir()` returns app config, so plugin project
+state must not reuse it blindly. Add explicit plugin path helpers, for example
+`get_plugin_user_state_file()` and `get_plugin_project_state_file()`, that
+honor the active config-dir settings and keep the default config directory name
+as an implementation detail.
 
 ## 6. Runtime Registry
 
@@ -407,14 +423,24 @@ Rules:
 - explicit validation rejects unknown keys.
 - plugin settings never override explicit user or project session settings.
 
+Initial implementation note: plugin settings are parsed from `settings.json` or
+the manifest-declared settings path, exposed through `PluginRegistry`, and
+support plugin variable substitution. The initial runtime merge supports the
+narrow `agent` setting as the default normal-mode root role for newly created
+sessions when the user did not explicitly provide `normal_root_role_id`.
+Invalid plugin agent settings are ignored with a warning so persisted plugin
+state cannot break startup or session creation.
+
 ## 9. Path and Variable Resolution
 
 Support these substitutions in plugin component configs:
 
 - `${RELAY_TEAMS_PLUGIN_ROOT}`
 - `${RELAY_TEAMS_PLUGIN_DATA}`
+- `${plugin_root}`
+- `${plugin_data}`
 - `${user_config.key}` (deferred until plugin enable-time configuration exists)
-- `${ENV_VAR}` only when explicitly allowed by the component schema
+- `${env:VAR}` only for high-trust plugin component configs
 
 Security rules:
 
@@ -441,6 +467,7 @@ relay-teams plugin uninstall <name> [--scope ...] [--prune]
 relay-teams plugin enable <name> [--scope ...]
 relay-teams plugin disable <name> [--scope ...]
 relay-teams plugin update <name> [--scope ...]
+relay-teams plugin configure <name> [--scope ...] --set key=value
 relay-teams plugin list [--format json] [--available]
 relay-teams plugin validate <path>
 ```
@@ -457,6 +484,10 @@ src/relay_teams/plugins/marketplace_service.py
 
 The marketplace only resolves available plugin sources and versions. Installed
 plugin state remains local Relay Teams config.
+
+Marketplace version entries may include `sha256`; when present, install/update
+verifies the materialized plugin source and the installed copy before updating
+state.
 
 ## 11. API Surface
 
@@ -514,6 +545,12 @@ Strict explicit validation:
 - plugin hook agent roles must resolve to subagent-capable roles
 - plugin MCP configs must be valid JSON-compatible objects
 
+Initial implementation note: strict install/validate now checks plugin role
+tool/MCP/skill references against the effective app config plus the candidate
+plugin component sources, and checks plugin hook agent handlers against
+namespaced plugin subagent roles. Runtime loading remains tolerant for persisted
+dirty state.
+
 Tolerant runtime loading:
 
 - invalid installed plugins are skipped
@@ -553,7 +590,8 @@ Required controls:
 
 - explicit install source and scope
 - no path traversal outside plugin root or data dir
-- sensitive `user_config` stored through existing secret infrastructure
+- sensitive `user_config` stored through existing secret infrastructure and not
+  written in clear text to plugin state files or registry views
 - command hooks, MCP commands, and monitor commands shown in diagnostics
 - plugin `bin/` PATH injection is deferred in Phase 1; plugin commands should
   use `${RELAY_TEAMS_PLUGIN_ROOT}` or `${RELAY_TEAMS_PLUGIN_DATA}` explicitly
@@ -611,6 +649,18 @@ Deliver:
 - dependency handling
 
 This phase makes plugins distributable.
+
+Initial implementation note: Phase 3 keeps marketplace resolution separate from
+runtime loading. Marketplace indexes are local JSON files that resolve plugin
+names and versions to install sources. Local installs and marketplace installs
+copy plugin files into immutable app-config storage under
+`<resolved-app-config-dir>/plugins/installed/<plugin-name>/<version>/`; runtime
+state points at that installed copy. `plugin update` installs a new version and
+updates the state record without deleting older installed copies. `plugin prune`
+removes installed versions that are no longer referenced by user, project, or
+project-local state. Dependency checks are strict for explicit install/update
+and tolerant at runtime: a persisted plugin with missing or mismatched
+dependencies is skipped with diagnostics rather than failing startup.
 
 ### Phase 4: Monitors and Managed Policy
 

@@ -193,6 +193,101 @@ async def test_get_proxy_config_calls_expected_endpoint(monkeypatch) -> None:
     }
 
 
+async def test_plugin_config_methods_call_expected_endpoints(monkeypatch) -> None:
+    client = AsyncAgentTeamsClient()
+    calls: list[tuple[str, str, object | None]] = []
+
+    async def fake_request_json(
+        method: str,
+        path: str,
+        payload: object | None = None,
+    ) -> dict[str, object]:
+        calls.append((method, path, payload))
+        return {"plugins": []}
+
+    monkeypatch.setattr(client, "_request_json", fake_request_json)
+
+    await client.list_plugins()
+    await client.get_plugins_runtime()
+    await client.validate_plugin("C:/plugins/quality")
+    await client.install_plugin(source="C:/plugins/local")
+    await client.install_plugin(
+        source="quality",
+        source_kind="git",
+        source_ref="v1.0.0",
+        marketplace="C:/marketplace.json",
+        version="1.0.0",
+        enabled=False,
+    )
+    await client.configure_plugin(
+        "quality",
+        user_config={"endpoint": "https://docs.test"},
+    )
+    await client.enable_plugin("quality")
+    await client.disable_plugin("quality")
+    await client.update_plugin("quality", version="2.0.0")
+    await client.delete_plugin("quality", scope="project", prune=True)
+
+    assert calls == [
+        ("GET", "/api/system/configs/plugins", None),
+        ("GET", "/api/system/configs/plugins/runtime", None),
+        (
+            "POST",
+            "/api/system/configs/plugins:validate",
+            {"path": "C:/plugins/quality"},
+        ),
+        (
+            "POST",
+            "/api/system/configs/plugins:install",
+            {
+                "source": "C:/plugins/local",
+                "scope": "user",
+                "enabled": True,
+                "marketplace": None,
+                "version": None,
+            },
+        ),
+        (
+            "POST",
+            "/api/system/configs/plugins:install",
+            {
+                "source": "quality",
+                "scope": "user",
+                "enabled": False,
+                "source_kind": "git",
+                "source_ref": "v1.0.0",
+                "marketplace": "C:/marketplace.json",
+                "version": "1.0.0",
+            },
+        ),
+        (
+            "POST",
+            "/api/system/configs/plugins/quality:configure",
+            {"scope": "user", "user_config": {"endpoint": "https://docs.test"}},
+        ),
+        (
+            "POST",
+            "/api/system/configs/plugins/quality:enable",
+            {"scope": "user"},
+        ),
+        (
+            "POST",
+            "/api/system/configs/plugins/quality:disable",
+            {"scope": "user"},
+        ),
+        (
+            "POST",
+            "/api/system/configs/plugins/quality:update",
+            {"scope": "user", "version": "2.0.0"},
+        ),
+        (
+            "DELETE",
+            "/api/system/configs/plugins/quality?scope=project&prune=true",
+            None,
+        ),
+    ]
+
+
 async def test_delete_workspace_calls_expected_endpoint(monkeypatch) -> None:
     client = AsyncAgentTeamsClient()
     captured: dict[str, object] = {}

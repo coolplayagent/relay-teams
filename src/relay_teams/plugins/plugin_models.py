@@ -27,6 +27,12 @@ class PluginScope(str, Enum):
     MANAGED = "managed"
 
 
+class PluginInstallSourceKind(str, Enum):
+    LOCAL = "local"
+    GIT = "git"
+    MARKETPLACE = "marketplace"
+
+
 class PluginDiagnosticSeverity(str, Enum):
     INFO = "info"
     WARNING = "warning"
@@ -70,8 +76,13 @@ class PluginUserConfigField(BaseModel):
 
 
 class PluginManifest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
+    schema_url: str | None = Field(
+        default=None,
+        validation_alias="$schema",
+        exclude=True,
+    )
     name: RequiredIdentifierStr
     version: str | None = None
     description: str = ""
@@ -126,6 +137,79 @@ class PluginComponentSource(BaseModel):
     root_dir: Path
     data_dir: Path
     path: Path
+    user_config: dict[str, JsonValue] = Field(default_factory=dict)
+    inline_config: dict[str, JsonValue] | None = None
+
+
+class PluginSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str | None = None
+
+
+class PluginSettingsSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plugin_name: RequiredIdentifierStr
+    scope: PluginScope = PluginScope.LOCAL
+    root_dir: Path
+    data_dir: Path
+    path: Path
+    user_config: dict[str, JsonValue] = Field(default_factory=dict)
+    inline_config: dict[str, JsonValue] | None = None
+    settings: PluginSettings
+
+
+class PluginMonitorDefinition(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: RequiredIdentifierStr
+    trigger: str = "always"
+    command: str
+    args: tuple[str, ...] = ()
+    env: dict[str, str] = Field(default_factory=dict)
+    description: str = ""
+
+
+class PluginComponentCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    skills: int = 0
+    roles: int = 0
+    commands: int = 0
+    hooks: int = 0
+    mcp_servers: int = 0
+    monitors: int = 0
+    settings: int = 0
+
+
+class PluginInstallSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: PluginInstallSourceKind = PluginInstallSourceKind.LOCAL
+    value: str
+    ref: str = ""
+    marketplace: str = ""
+    requested_version: str | None = None
+
+
+class PluginStateRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: RequiredIdentifierStr
+    version: str = "local"
+    scope: PluginScope
+    enabled: bool = True
+    root_dir: Path
+    source: PluginInstallSource
+    user_config: dict[str, JsonValue] = Field(default_factory=dict)
+    dependencies: tuple[PluginDependency, ...] = ()
+
+
+class PluginStateFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plugins: tuple[PluginStateRecord, ...] = ()
 
 
 class PluginRecord(BaseModel):
@@ -137,6 +221,8 @@ class PluginRecord(BaseModel):
     enabled: bool = True
     root_dir: Path
     data_dir: Path
+    source: PluginInstallSource | None = None
+    user_config: dict[str, JsonValue] = Field(default_factory=dict)
     manifest_path: Path | None = None
     manifest: PluginManifest
     skill_sources: tuple[PluginComponentSource, ...] = ()
@@ -144,6 +230,12 @@ class PluginRecord(BaseModel):
     command_sources: tuple[PluginComponentSource, ...] = ()
     hook_sources: tuple[PluginComponentSource, ...] = ()
     mcp_sources: tuple[PluginComponentSource, ...] = ()
+    monitor_sources: tuple[PluginComponentSource, ...] = ()
+    monitor_definitions: tuple[PluginMonitorDefinition, ...] = ()
+    settings_sources: tuple[PluginSettingsSource, ...] = ()
+    component_counts: PluginComponentCounts = Field(
+        default_factory=PluginComponentCounts
+    )
 
 
 class PluginRegistry(BaseModel):
@@ -186,4 +278,18 @@ class PluginRegistry(BaseModel):
     def mcp_sources(self) -> tuple[PluginComponentSource, ...]:
         return tuple(
             source for plugin in self.enabled_plugins() for source in plugin.mcp_sources
+        )
+
+    def monitor_sources(self) -> tuple[PluginComponentSource, ...]:
+        return tuple(
+            source
+            for plugin in self.enabled_plugins()
+            for source in plugin.monitor_sources
+        )
+
+    def settings_sources(self) -> tuple[PluginSettingsSource, ...]:
+        return tuple(
+            source
+            for plugin in self.enabled_plugins()
+            for source in plugin.settings_sources
         )

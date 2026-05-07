@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from json import loads
 from pathlib import Path
-import re
 
 from pydantic import JsonValue
 
@@ -11,11 +10,9 @@ from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec
 from relay_teams.plugins.path_resolution import namespace_plugin_ref
 from relay_teams.plugins.plugin_models import PluginComponentSource
+from relay_teams.plugins.substitution import substitute_plugin_vars
 
 LOGGER = get_logger(__name__)
-_PLUGIN_VAR_PATTERN = re.compile(
-    r"\$\{(?P<name>RELAY_TEAMS_PLUGIN_ROOT|RELAY_TEAMS_PLUGIN_DATA)}"
-)
 
 
 def load_plugin_mcp_specs(
@@ -29,7 +26,11 @@ def load_plugin_mcp_specs(
 
 def _load_source(source: PluginComponentSource) -> tuple[McpServerSpec, ...]:
     try:
-        payload = _load_json_object(source.path)
+        payload = (
+            source.inline_config
+            if source.inline_config is not None
+            else _load_json_object(source.path)
+        )
     except Exception as exc:
         LOGGER.warning(
             "Skipping invalid plugin MCP config",
@@ -53,10 +54,12 @@ def _load_source(source: PluginComponentSource) -> tuple[McpServerSpec, ...]:
             local_name=local_name,
         )
         normalized_config = _json_object(raw_config)
-        substituted_config = _substitute_plugin_vars(
+        substituted_config = substitute_plugin_vars(
             value=normalized_config,
             plugin_root=source.root_dir,
             plugin_data=source.data_dir,
+            user_config=source.user_config,
+            allow_env=True,
         )
         server_config = (
             substituted_config if isinstance(substituted_config, dict) else {}
@@ -97,50 +100,6 @@ def _json_value(value: object) -> JsonValue:
     if isinstance(value, dict):
         return {str(key): _json_value(item) for key, item in value.items()}
     return str(value)
-
-
-def _substitute_plugin_vars(
-    *,
-    value: JsonValue,
-    plugin_root: Path,
-    plugin_data: Path,
-) -> JsonValue:
-    if isinstance(value, str):
-        return _PLUGIN_VAR_PATTERN.sub(
-            lambda match: _plugin_var_value(
-                name=match.group("name"),
-                plugin_root=plugin_root,
-                plugin_data=plugin_data,
-            ),
-            value,
-        )
-    if isinstance(value, list):
-        return [
-            _substitute_plugin_vars(
-                value=item,
-                plugin_root=plugin_root,
-                plugin_data=plugin_data,
-            )
-            for item in value
-        ]
-    if isinstance(value, dict):
-        return {
-            key: _substitute_plugin_vars(
-                value=item,
-                plugin_root=plugin_root,
-                plugin_data=plugin_data,
-            )
-            for key, item in value.items()
-        }
-    return value
-
-
-def _plugin_var_value(*, name: str | None, plugin_root: Path, plugin_data: Path) -> str:
-    if name == "RELAY_TEAMS_PLUGIN_ROOT":
-        return str(plugin_root)
-    if name == "RELAY_TEAMS_PLUGIN_DATA":
-        return str(plugin_data)
-    return ""
 
 
 def _is_enabled(server_config: dict[str, JsonValue]) -> bool:
