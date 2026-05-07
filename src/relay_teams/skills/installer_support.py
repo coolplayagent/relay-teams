@@ -4,6 +4,7 @@ from __future__ import annotations
 from enum import Enum
 from io import BytesIO
 from pathlib import Path
+import asyncio
 import json
 import os
 import re
@@ -22,7 +23,7 @@ from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from relay_teams.paths import get_app_config_dir
 from relay_teams.roles import RoleDocumentDraft, default_memory_profile
 from relay_teams.roles.settings_service import RoleSettingsService
-from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.skills.discovery import get_app_skills_dir
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.mcp.mcp_registry import McpRegistry
@@ -596,10 +597,7 @@ def _request_text(url: str) -> str:
 
 def _request_bytes(url: str) -> bytes:
     try:
-        with create_sync_http_client(timeout_seconds=_HTTP_TIMEOUT_SECONDS) as client:
-            response = client.get(url, headers=_request_headers())
-            response.raise_for_status()
-            return response.content
+        return asyncio.run(_request_bytes_async(url))
     except httpx.HTTPStatusError as exc:
         raise _RequestHttpError(
             url=url,
@@ -615,6 +613,15 @@ def _request_bytes(url: str) -> bytes:
         raise SkillInstallerError(
             f"Request failed: {url} ({_format_exception_detail(exc)})"
         ) from exc
+
+
+async def _request_bytes_async(url: str) -> bytes:
+    async with create_async_http_client(
+        timeout_seconds=_HTTP_TIMEOUT_SECONDS
+    ) as client:
+        response = await client.get(url, headers=_request_headers())
+        response.raise_for_status()
+        return response.content
 
 
 def _request_headers() -> dict[str, str]:

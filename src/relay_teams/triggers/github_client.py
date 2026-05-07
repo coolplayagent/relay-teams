@@ -8,7 +8,7 @@ import httpx
 from pydantic import JsonValue
 
 from relay_teams.env.proxy_env import ProxyEnvConfig
-from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 
 _GITHUB_API_BASE_URL = "https://api.github.com"
 _DEFAULT_TIMEOUT_SECONDS = 20.0
@@ -45,14 +45,14 @@ class GitHubApiClient:
         self._get_proxy_config = get_proxy_config
         self._base_url = base_url.rstrip("/")
 
-    def get_repository(self, *, token: str, owner: str, repo: str) -> JsonObject:
-        return self._request_object_json(
+    async def get_repository(self, *, token: str, owner: str, repo: str) -> JsonObject:
+        return await self._request_object_json(
             token=token,
             method="GET",
             path=f"/repos/{owner}/{repo}",
         )
 
-    def list_repositories(
+    async def list_repositories(
         self,
         *,
         token: str,
@@ -62,7 +62,7 @@ class GitHubApiClient:
         repositories: list[JsonObject] = []
         seen_full_names: set[str] = set()
         for page in range(1, _REPOSITORY_LIST_MAX_PAGES + 1):
-            payload = self._request_json(
+            payload = await self._request_json(
                 token=token,
                 method="GET",
                 path="/user/repos",
@@ -95,7 +95,7 @@ class GitHubApiClient:
                 break
         return tuple(repositories)
 
-    def register_repository_webhook(
+    async def register_repository_webhook(
         self,
         *,
         token: str,
@@ -105,7 +105,7 @@ class GitHubApiClient:
         webhook_secret: str,
         events: tuple[str, ...],
     ) -> JsonObject:
-        return self._request_object_json(
+        return await self._request_object_json(
             token=token,
             method="POST",
             path=f"/repos/{owner}/{repo}/hooks",
@@ -122,7 +122,7 @@ class GitHubApiClient:
             },
         )
 
-    def delete_repository_webhook(
+    async def delete_repository_webhook(
         self,
         *,
         token: str,
@@ -130,14 +130,14 @@ class GitHubApiClient:
         repo: str,
         webhook_id: str,
     ) -> None:
-        _ = self._request_json(
+        _ = await self._request_json(
             token=token,
             method="DELETE",
             path=f"/repos/{owner}/{repo}/hooks/{webhook_id}",
             allow_empty_response=True,
         )
 
-    def list_pull_request_files(
+    async def list_pull_request_files(
         self,
         *,
         token: str,
@@ -148,7 +148,7 @@ class GitHubApiClient:
         filenames: list[str] = []
         page = 1
         while True:
-            response = self._request_json(
+            response = await self._request_json(
                 token=token,
                 method="GET",
                 path=f"/repos/{owner}/{repo}/pulls/{pull_request_number}/files",
@@ -170,7 +170,7 @@ class GitHubApiClient:
             page += 1
         return tuple(filenames)
 
-    def create_issue_comment(
+    async def create_issue_comment(
         self,
         *,
         token: str,
@@ -179,14 +179,14 @@ class GitHubApiClient:
         issue_number: int,
         body: str,
     ) -> JsonObject:
-        return self._request_object_json(
+        return await self._request_object_json(
             token=token,
             method="POST",
             path=f"/repos/{owner}/{repo}/issues/{issue_number}/comments",
             json_body={"body": body},
         )
 
-    def add_labels(
+    async def add_labels(
         self,
         *,
         token: str,
@@ -195,14 +195,14 @@ class GitHubApiClient:
         issue_number: int,
         labels: tuple[str, ...],
     ) -> JsonObject:
-        return self._request_object_json(
+        return await self._request_object_json(
             token=token,
             method="POST",
             path=f"/repos/{owner}/{repo}/issues/{issue_number}/labels",
             json_body={"labels": list(labels)},
         )
 
-    def remove_label(
+    async def remove_label(
         self,
         *,
         token: str,
@@ -211,14 +211,14 @@ class GitHubApiClient:
         issue_number: int,
         label: str,
     ) -> None:
-        _ = self._request_json(
+        _ = await self._request_json(
             token=token,
             method="DELETE",
             path=f"/repos/{owner}/{repo}/issues/{issue_number}/labels/{quote(label, safe='')}",
             allow_empty_response=True,
         )
 
-    def add_assignees(
+    async def add_assignees(
         self,
         *,
         token: str,
@@ -227,14 +227,14 @@ class GitHubApiClient:
         issue_number: int,
         assignees: tuple[str, ...],
     ) -> JsonObject:
-        return self._request_object_json(
+        return await self._request_object_json(
             token=token,
             method="POST",
             path=f"/repos/{owner}/{repo}/issues/{issue_number}/assignees",
             json_body={"assignees": list(assignees)},
         )
 
-    def remove_assignees(
+    async def remove_assignees(
         self,
         *,
         token: str,
@@ -243,14 +243,14 @@ class GitHubApiClient:
         issue_number: int,
         assignees: tuple[str, ...],
     ) -> JsonObject:
-        return self._request_object_json(
+        return await self._request_object_json(
             token=token,
             method="DELETE",
             path=f"/repos/{owner}/{repo}/issues/{issue_number}/assignees",
             json_body={"assignees": list(assignees)},
         )
 
-    def set_commit_status(
+    async def set_commit_status(
         self,
         *,
         token: str,
@@ -270,14 +270,14 @@ class GitHubApiClient:
             payload["description"] = description
         if target_url is not None:
             payload["target_url"] = target_url
-        return self._request_object_json(
+        return await self._request_object_json(
             token=token,
             method="POST",
             path=f"/repos/{owner}/{repo}/statuses/{sha}",
             json_body=payload,
         )
 
-    def _request_object_json(
+    async def _request_object_json(
         self,
         *,
         token: str,
@@ -287,7 +287,7 @@ class GitHubApiClient:
         query_params: Mapping[str, str] | None = None,
         allow_empty_response: bool = False,
     ) -> JsonObject:
-        payload = self._request_json(
+        payload = await self._request_json(
             token=token,
             method=method,
             path=path,
@@ -299,7 +299,7 @@ class GitHubApiClient:
             return payload
         raise GitHubApiError(message="Unexpected GitHub API response payload shape")
 
-    def _request_json(
+    async def _request_json(
         self,
         *,
         token: str,
@@ -315,13 +315,13 @@ class GitHubApiClient:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": _API_VERSION,
         }
-        with create_sync_http_client(
+        async with create_async_http_client(
             proxy_config=self._get_proxy_config(),
             follow_redirects=True,
             timeout_seconds=_DEFAULT_TIMEOUT_SECONDS,
         ) as client:
             try:
-                response = client.request(
+                response = await client.request(
                     method,
                     url,
                     headers=headers,

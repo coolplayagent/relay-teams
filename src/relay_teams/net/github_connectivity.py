@@ -26,7 +26,7 @@ from relay_teams.env.proxy_env import (
     build_subprocess_env,
     proxy_applies_to_url,
 )
-from relay_teams.net.clients import create_sync_http_client
+from relay_teams.net.clients import create_async_http_client
 from relay_teams.net.github_cli import BIN_DIR, get_gh_path
 from relay_teams.net.github_cli_errors import GitHubCliNotFoundError
 
@@ -369,6 +369,12 @@ class GitHubWebhookConnectivityProbeService:
         self,
         request: GitHubWebhookConnectivityProbeRequest,
     ) -> GitHubWebhookConnectivityProbeResult:
+        return asyncio.run(self.probe_async(request))
+
+    async def probe_async(
+        self,
+        request: GitHubWebhookConnectivityProbeRequest,
+    ) -> GitHubWebhookConnectivityProbeResult:
         checked_at = datetime.now(timezone.utc)
         started = perf_counter()
         configured_base_url = (
@@ -401,14 +407,14 @@ class GitHubWebhookConnectivityProbeService:
         )
         proxy_config = self._get_proxy_config()
         used_proxy = proxy_applies_to_url(health_url, proxy_config)
-        with create_sync_http_client(
+        async with create_async_http_client(
             proxy_config=proxy_config,
             timeout_seconds=timeout_seconds,
             connect_timeout_seconds=timeout_seconds,
             follow_redirects=True,
         ) as client:
             try:
-                response = client.get(health_url)
+                response = await client.get(health_url)
             except Exception as exc:  # narrow below without duplicating client setup
                 return _build_github_webhook_transport_error_result(
                     health_url=health_url,

@@ -23,6 +23,14 @@ from relay_teams.env.clawhub_cli import clear_clawhub_path_cache
 from relay_teams.skills import installer_support
 
 
+def _join_env_paths(first: Path | str, second: str) -> str:
+    delimiter = ";" if os.name == "nt" else ":"
+    first_value = str(first)
+    if not second:
+        return first_value
+    return delimiter.join((first_value, second))
+
+
 def _write_fake_clawhub(
     *,
     bin_dir: Path,
@@ -285,7 +293,7 @@ def test_search_clawhub_skills_script_reports_search_results(tmp_path: Path) -> 
         repo_root=Path(__file__).resolve().parents[3],
         home_dir=tmp_path,
         extra_env={
-            "PATH": f"{clawhub_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            "PATH": _join_env_paths(clawhub_bin_dir, os.environ.get("PATH", ""))
         },
     )
 
@@ -330,7 +338,7 @@ def test_install_clawhub_skill_script_reports_runtime_identity(
         repo_root=Path(__file__).resolve().parents[3],
         home_dir=tmp_path,
         extra_env={
-            "PATH": f"{clawhub_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            "PATH": _join_env_paths(clawhub_bin_dir, os.environ.get("PATH", ""))
         },
     )
 
@@ -371,7 +379,7 @@ def test_search_and_install_clawhub_skill_script_runs_both_steps(
         repo_root=Path(__file__).resolve().parents[3],
         home_dir=tmp_path,
         extra_env={
-            "PATH": f"{clawhub_bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+            "PATH": _join_env_paths(clawhub_bin_dir, os.environ.get("PATH", ""))
         },
     )
 
@@ -594,13 +602,19 @@ def test_resolve_role_mount_targets_defaults_to_current_role_env(
 def test_request_bytes_reports_timeout_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mock_client = MagicMock()
-    mock_client.get.side_effect = httpx.TimeoutException("timed out")
-    mock_client.__enter__ = lambda s: mock_client
-    mock_client.__exit__ = MagicMock(return_value=False)
+    class _TimeoutClient:
+        async def __aenter__(self) -> "_TimeoutClient":
+            return self
 
-    mock_factory = MagicMock(return_value=mock_client)
-    monkeypatch.setattr(installer_support, "create_sync_http_client", mock_factory)
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            _ = (url, headers)
+            raise httpx.TimeoutException("timed out")
+
+    mock_factory = MagicMock(return_value=_TimeoutClient())
+    monkeypatch.setattr(installer_support, "create_async_http_client", mock_factory)
 
     with pytest.raises(installer_support.SkillInstallerError) as exc_info:
         installer_support._request_bytes("https://example.com/skills")
@@ -711,11 +725,7 @@ def _run_script(
     env = os.environ.copy()
     existing_python_path = env.get("PYTHONPATH", "").strip()
     source_path = (repo_root / "src").resolve().as_posix()
-    env["PYTHONPATH"] = (
-        source_path
-        if not existing_python_path
-        else source_path + os.pathsep + existing_python_path
-    )
+    env["PYTHONPATH"] = _join_env_paths(source_path, existing_python_path)
     home_value = home_dir.resolve().as_posix()
     env["HOME"] = home_value
     env["USERPROFILE"] = home_value

@@ -1,7 +1,8 @@
 # Gateway Async HTTP Runtime
 
-Gateway integrations use native async HTTP clients for all outbound provider
-traffic. Feishu, WeChat, and Xiaoluban gateway code must create HTTP clients
+All outbound provider traffic uses native async HTTP clients. Feishu, WeChat,
+Xiaoluban, GitHub triggers, provider connectivity probes, provider auth helpers,
+model catalog fetches, and skill installer downloads must create HTTP clients
 through `relay_teams.net.create_async_http_client()` or
 `relay_teams.net.create_runtime_async_http_client()`.
 
@@ -19,10 +20,11 @@ This contract applies to:
   lookup, and CDN upload.
 - Xiaoluban text notification, keep-alive, and utility-route requests.
 
+The net module is async-only for HTTP. Synchronous public APIs may remain where
+they are deliberate compatibility boundaries, but those methods must delegate to
+async HTTP implementations instead of creating a second synchronous transport.
+
 Xiaoluban inbound IM callback handling enters the gateway through
 `handle_im_inbound_async()`. The listener may enqueue that coroutine as a
 FastAPI background task, but it must not call a duplicate synchronous inbound
 handler.
-
-Non-gateway modules may still use the shared sync HTTP factory when they have a
-deliberate synchronous boundary. Gateway outbound HTTP is async-only.
