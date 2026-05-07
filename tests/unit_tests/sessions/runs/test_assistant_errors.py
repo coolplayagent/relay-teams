@@ -75,6 +75,24 @@ def test_build_assistant_error_message_uses_auth_invalid_code() -> None:
     assert "API key is invalid" in message
 
 
+def test_build_assistant_error_message_includes_full_proxy_block_detail() -> None:
+    detail = (
+        "status_code: 403\n"
+        "model_name: deepseek-v4-flash\n"
+        "body:\n"
+        '<html><head><meta name="keywords" content="SWG,Proxy,NetentSec" /></head></html>'
+    )
+
+    message = build_assistant_error_message(
+        error_code="proxy_blocked",
+        error_message=detail,
+    )
+
+    assert "enterprise proxy block page" in message
+    assert "```text" in message
+    assert detail in message
+
+
 def test_build_assistant_error_message_uses_incomplete_todos_guidance() -> None:
     message = build_assistant_error_message(
         error_code="incomplete_todos",

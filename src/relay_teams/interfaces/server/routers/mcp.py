@@ -93,11 +93,17 @@ async def list_mcp_server_tools(
         return await service.list_server_tools(server_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to load MCP tools for '{server_name}': {exc}",
-        ) from exc
+
+
+@router.post("/servers/{server_name}/tools:refresh")
+async def refresh_mcp_server_tools(
+    server_name: str,
+    service: McpService = Depends(get_mcp_service),
+) -> McpServerToolsSummary:
+    try:
+        return service.refresh_server_tools(server_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/servers/{server_name}/test")

@@ -38,6 +38,7 @@ def trace_span(
     operation: str,
     attributes: dict[str, JsonValue] | None = None,
     level: int = logging.DEBUG,
+    failure_level: int | None = logging.ERROR,
     **context_updates: str | None,
 ) -> Generator[TraceContext, None, None]:
     parent_context = get_trace_context()
@@ -61,18 +62,19 @@ def trace_span(
         try:
             yield current_context
         except Exception as exc:
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            _emit_trace_log(
-                logger=logger,
-                level=logging.ERROR,
-                event="trace.span.failed",
-                message=f"{component}.{operation} failed",
-                component=component,
-                operation=operation,
-                attributes=attributes,
-                duration_ms=duration_ms,
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
+            if failure_level is not None:
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                _emit_trace_log(
+                    logger=logger,
+                    level=failure_level,
+                    event="trace.span.failed",
+                    message=f"{component}.{operation} failed",
+                    component=component,
+                    operation=operation,
+                    attributes=attributes,
+                    duration_ms=duration_ms,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
             raise
         duration_ms = int((time.perf_counter() - started) * 1000)
         _emit_trace_log(

@@ -13,10 +13,25 @@ const fetchConfigStatus = api.fetchConfigStatus;
 const fetchMcpServers = api.fetchMcpServers || fetchMcpServersFromConfigStatus;
 const fetchMcpServerTools = api.fetchMcpServerTools;
 const reloadMcpConfig = api.reloadMcpConfig;
+const refreshMcpServerTools = api.refreshMcpServerTools || postMcpServerToolsRefresh;
 const reloadSkillsConfig = api.reloadSkillsConfig;
 const setMcpServerEnabled = api.setMcpServerEnabled || putMcpServerEnabled;
 const testMcpServerConnection = api.testMcpServerConnection || postMcpServerConnectionTest;
 const updateMcpServer = api.updateMcpServer || putMcpServer;
+const DEFAULT_MCP_REFRESH_POLL_DELAYS_MS = [
+    1200,
+    1800,
+    2500,
+    3500,
+    5000,
+    7500,
+    10000,
+    10000,
+    10000,
+    10000,
+    10000,
+    10000,
+];
 
 const collapsedMcpServers = new Set();
 let lastLoadedMcpServerViews = [];
@@ -74,6 +89,13 @@ async function postMcpServerConnectionTest(serverName) {
     );
 }
 
+async function postMcpServerToolsRefresh(serverName) {
+    return requestMcpJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools:refresh`,
+        { method: 'POST' },
+    );
+}
+
 async function requestMcpJson(url, options) {
     const response = await fetch(url, options);
     const payload = await response.json().catch(() => ({}));
@@ -101,6 +123,7 @@ export function bindSystemStatusHandlers() {
     globalThis.__agentTeamsToggleMcpTools = toggleMcpTools;
     globalThis.__agentTeamsToggleAllMcpTools = toggleAllMcpTools;
     globalThis.__agentTeamsTestMcpServer = testMcpServer;
+    globalThis.__agentTeamsRefreshMcpTools = refreshMcpServerToolsFromPanel;
     globalThis.__agentTeamsSetMcpServerEnabled = setMcpServerEnabledFromPanel;
     globalThis.__agentTeamsEditMcpServer = editMcpServer;
     if (!languageBound && typeof document.addEventListener === 'function') {
@@ -288,6 +311,78 @@ async function testMcpServer(serverName) {
     renderMcpStatusPanel();
 }
 
+async function refreshMcpServerToolsFromPanel(serverName) {
+    const safeName = String(serverName || '').trim();
+    if (!safeName) {
+        return;
+    }
+    try {
+        const summary = await refreshMcpServerTools(safeName);
+        const serverView = createMcpServerViewFromToolsSummary(safeName, summary);
+        replaceMcpServerView(serverView);
+        renderMcpStatusPanel();
+        showToast({
+            title: t('settings.mcp.refresh_started'),
+            message: formatMessage('settings.mcp.refresh_started_message', { name: safeName }),
+            tone: 'success',
+        });
+        if (shouldPollMcpDiscovery(serverView)) {
+            void pollMcpServerDiscovery(safeName);
+        }
+    } catch (e) {
+        showToast({
+            title: t('settings.mcp.refresh_failed'),
+            message: e.message || t('settings.mcp.refresh_failed_message'),
+            tone: 'danger',
+        });
+    }
+}
+
+async function pollMcpServerDiscovery(serverName) {
+    for (const delayMs of getMcpRefreshPollDelays()) {
+        await delay(delayMs);
+        try {
+            const summary = await fetchMcpServerTools(serverName);
+            const serverView = createMcpServerViewFromToolsSummary(serverName, summary);
+            replaceMcpServerView(serverView);
+            renderMcpStatusPanel();
+            if (!shouldPollMcpDiscovery(serverView)) {
+                return;
+            }
+        } catch (e) {
+            logError(
+                'frontend.system_status.mcp_refresh_poll_failed',
+                'Failed to poll MCP discovery status',
+                errorToPayload(e, { server_name: serverName }),
+            );
+            return;
+        }
+    }
+
+    await loadMcpStatusPanel();
+}
+
+function shouldPollMcpDiscovery(serverView) {
+    return serverView?.enabled !== false
+        && (serverView?.discoveryStatus === 'loading' || serverView?.discoveryStatus === 'pending');
+}
+
+function getMcpRefreshPollDelays() {
+    const override = globalThis.__agentTeamsMcpRefreshPollDelaysMs;
+    if (Array.isArray(override)) {
+        return override
+            .map(value => Number(value))
+            .filter(value => Number.isFinite(value) && value >= 0);
+    }
+    return DEFAULT_MCP_REFRESH_POLL_DELAYS_MS;
+}
+
+function delay(ms) {
+    return new Promise(resolve => {
+        setTimeout(resolve, ms);
+    });
+}
+
 async function setMcpServerEnabledFromPanel(serverName, enabled) {
     const safeName = String(serverName || '').trim();
     if (!safeName) {
@@ -334,11 +429,12 @@ async function hydrateMcpServerView(requestId, serverSummary) {
         return;
     }
 
-    lastLoadedMcpServerViews = lastLoadedMcpServerViews.map(existingView => (
-        existingView.name === serverView.name ? serverView : existingView
-    ));
+    replaceMcpServerView(serverView);
     pruneCollapsedServers(lastLoadedMcpServerViews.map(existingView => existingView.name));
     renderMcpStatusPanel();
+    if (shouldPollMcpDiscovery(serverView)) {
+        void pollMcpServerDiscovery(serverView.name);
+    }
 }
 
 async function loadMcpServerView(serverSummary) {
@@ -352,15 +448,7 @@ async function loadMcpServerView(serverSummary) {
     }
     try {
         const summary = await fetchMcpServerTools(serverName);
-        return {
-            name: serverName,
-            source: typeof summary?.source === 'string' ? summary.source : '',
-            transport: typeof summary?.transport === 'string' ? summary.transport : '',
-            enabled: summary?.enabled !== false,
-            tools: Array.isArray(summary?.tools) ? summary.tools : [],
-            errorMessage: '',
-            loading: false,
-        };
+        return createMcpServerViewFromToolsSummary(serverName, summary);
     } catch (e) {
         logError(
             'frontend.system_status.mcp_tools_load_failed',
@@ -373,6 +461,7 @@ async function loadMcpServerView(serverSummary) {
             transport: baseView.transport,
             enabled: baseView.enabled,
             tools: [],
+            discoveryStatus: 'failed',
             errorMessage: e?.message || t('settings.system.load_tools_failed_detail'),
             loading: false,
         };
@@ -384,8 +473,8 @@ function createLoadingMcpServerView(serverSummary) {
     return {
         ...baseView,
         tools: [],
-        errorMessage: '',
-        loading: baseView.enabled !== false,
+        errorMessage: baseView.errorMessage,
+        loading: baseView.enabled !== false && baseView.discoveryStatus === 'loading',
     };
 }
 
@@ -396,14 +485,40 @@ function createBaseMcpServerView(serverSummary) {
             source: '',
             transport: '',
             enabled: true,
+            discoveryStatus: 'pending',
+            errorMessage: '',
         };
     }
+    const status = normalizeMcpDiscoveryStatus(serverSummary?.discovery_status || serverSummary?.status);
     return {
         name: normalizeMcpServerName(serverSummary),
         source: typeof serverSummary?.source === 'string' ? serverSummary.source : '',
         transport: typeof serverSummary?.transport === 'string' ? serverSummary.transport : '',
         enabled: serverSummary?.enabled !== false,
+        discoveryStatus: status,
+        errorMessage: typeof serverSummary?.error === 'string' ? serverSummary.error : '',
     };
+}
+
+function createMcpServerViewFromToolsSummary(serverName, summary) {
+    const hasToolsArray = Array.isArray(summary?.tools);
+    const status = normalizeMcpDiscoveryStatus(summary?.status, hasToolsArray ? 'ready' : 'pending');
+    return {
+        name: serverName,
+        source: typeof summary?.source === 'string' ? summary.source : '',
+        transport: typeof summary?.transport === 'string' ? summary.transport : '',
+        enabled: summary?.enabled !== false,
+        tools: hasToolsArray ? summary.tools : [],
+        discoveryStatus: status,
+        errorMessage: typeof summary?.error === 'string' ? summary.error : '',
+        loading: status === 'loading',
+    };
+}
+
+function replaceMcpServerView(serverView) {
+    lastLoadedMcpServerViews = lastLoadedMcpServerViews.map(existingView => (
+        existingView.name === serverView.name ? serverView : existingView
+    ));
 }
 
 function normalizeMcpServerName(serverSummary) {
@@ -411,6 +526,14 @@ function normalizeMcpServerName(serverSummary) {
         return serverSummary;
     }
     return typeof serverSummary?.name === 'string' ? serverSummary.name : '';
+}
+
+function normalizeMcpDiscoveryStatus(value, fallback = 'pending') {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (['disabled', 'pending', 'loading', 'ready', 'failed'].includes(normalized)) {
+        return normalized;
+    }
+    return fallback;
 }
 
 function renderMcpStatusPanel() {
@@ -513,6 +636,14 @@ function renderMcpServerCard(serverView) {
                         ${testState?.loading || serverView.enabled === false ? 'disabled' : ''}
                     >
                         ${testState?.loading ? t('settings.mcp.testing') : t('settings.action.test')}
+                    </button>
+                    <button
+                        class="mcp-status-toggle"
+                        type="button"
+                        onclick='globalThis.__agentTeamsRefreshMcpTools(${serializeForInlineScript(serverView.name)})'
+                        ${serverView.enabled === false || serverView.discoveryStatus === 'loading' ? 'disabled' : ''}
+                    >
+                        ${t('settings.action.refresh')}
                     </button>
                     <button
                         class="mcp-status-toggle"
@@ -890,6 +1021,12 @@ function renderMcpServerTools(serverView, collapsed) {
         `;
     }
 
+    if (serverView.discoveryStatus === 'pending') {
+        return `
+            <div class="mcp-tools-empty">${t('settings.system.discovery_pending')}</div>
+        `;
+    }
+
     if (serverView.tools.length === 0) {
         return `
             <div class="mcp-tools-empty">${t('settings.system.no_tools_exposed')}</div>
@@ -1028,7 +1165,10 @@ function getMcpServerStateLabel(serverView) {
     if (serverView.loading) {
         return t('settings.system.loading_state');
     }
-    if (serverView.errorMessage) {
+    if (serverView.discoveryStatus === 'pending') {
+        return t('settings.system.pending_state');
+    }
+    if (serverView.errorMessage || serverView.discoveryStatus === 'failed') {
         return t('settings.system.unavailable_state');
     }
     return t('settings.system.loaded_state');

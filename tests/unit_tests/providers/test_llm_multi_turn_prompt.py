@@ -2647,7 +2647,7 @@ async def test_generate_reserves_context_for_registered_tools_and_skills(
 
 
 @pytest.mark.asyncio
-async def test_generate_scales_mcp_context_budget_with_actual_toolset_size(
+async def test_generate_uses_conservative_mcp_context_budget_without_schema_probe(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -2681,21 +2681,22 @@ async def test_generate_scales_mcp_context_budget_with_actual_toolset_size(
                 )
                 for index in range(10)
             ),
-        }
+        },
+        fail_on_list=True,
     )
-    provider_small, _ = _build_provider(
-        tmp_path / "mcp_budget_small.db",
+    provider_with_mcp, _ = _build_provider(
+        tmp_path / "mcp_budget_with_mcp.db",
         fake_hub,
         allowed_mcp_servers=("small",),
         mcp_registry=fake_registry,
     )
-    provider_large, _ = _build_provider(
-        tmp_path / "mcp_budget_large.db",
+    provider_without_mcp, _ = _build_provider(
+        tmp_path / "mcp_budget_without_mcp.db",
         fake_hub,
-        allowed_mcp_servers=("large",),
+        allowed_mcp_servers=(),
         mcp_registry=fake_registry,
     )
-    for provider in (provider_small, provider_large):
+    for provider in (provider_with_mcp, provider_without_mcp):
         updated_config = provider._config.model_copy(
             update={
                 "context_window": 100_300,
@@ -2720,27 +2721,27 @@ async def test_generate_scales_mcp_context_budget_with_actual_toolset_size(
 
     monkeypatch.setattr(llm_module, "build_coordination_agent", _fake_builder)
 
-    await provider_small.generate(
+    await provider_with_mcp.generate(
         LLMRequest(
-            run_id="run-mcp-budget-small",
-            trace_id="run-mcp-budget-small",
-            task_id="task-mcp-budget-small",
-            session_id="session-mcp-budget-small",
+            run_id="run-mcp-budget-with-mcp",
+            trace_id="run-mcp-budget-with-mcp",
+            task_id="task-mcp-budget-with-mcp",
+            session_id="session-mcp-budget-with-mcp",
             workspace_id="default",
-            instance_id="inst-mcp-budget-small",
+            instance_id="inst-mcp-budget-with-mcp",
             role_id="Coordinator",
             system_prompt="system",
             user_prompt="current turn",
         )
     )
-    await provider_large.generate(
+    await provider_without_mcp.generate(
         LLMRequest(
-            run_id="run-mcp-budget-large",
-            trace_id="run-mcp-budget-large",
-            task_id="task-mcp-budget-large",
-            session_id="session-mcp-budget-large",
+            run_id="run-mcp-budget-without-mcp",
+            trace_id="run-mcp-budget-without-mcp",
+            task_id="task-mcp-budget-without-mcp",
+            session_id="session-mcp-budget-without-mcp",
             workspace_id="default",
-            instance_id="inst-mcp-budget-large",
+            instance_id="inst-mcp-budget-without-mcp",
             role_id="Coordinator",
             system_prompt="system",
             user_prompt="current turn",
@@ -2748,11 +2749,12 @@ async def test_generate_scales_mcp_context_budget_with_actual_toolset_size(
     )
 
     assert len(captured_settings) == 2
-    small_budget = captured_settings[0]["max_tokens"]
-    large_budget = captured_settings[1]["max_tokens"]
-    assert isinstance(small_budget, int)
-    assert isinstance(large_budget, int)
-    assert large_budget < small_budget
+    with_mcp_budget = captured_settings[0]["max_tokens"]
+    without_mcp_budget = captured_settings[1]["max_tokens"]
+    assert isinstance(with_mcp_budget, int)
+    assert isinstance(without_mcp_budget, int)
+    assert with_mcp_budget < without_mcp_budget
+    assert fake_registry.list_calls == 0
 
 
 @pytest.mark.asyncio

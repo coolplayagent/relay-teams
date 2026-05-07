@@ -126,8 +126,26 @@ def test_mcp_list_supports_json_output(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert json.loads(result.output) == [
-        {"name": "filesystem", "source": "app", "transport": "stdio", "enabled": True},
-        {"name": "browser", "source": "app", "transport": "http", "enabled": True},
+        {
+            "name": "filesystem",
+            "source": "app",
+            "transport": "stdio",
+            "enabled": True,
+            "discovery_status": "pending",
+            "tool_count": 0,
+            "last_checked_at": None,
+            "error": None,
+        },
+        {
+            "name": "browser",
+            "source": "app",
+            "transport": "http",
+            "enabled": True,
+            "discovery_status": "pending",
+            "tool_count": 0,
+            "last_checked_at": None,
+            "error": None,
+        },
     ]
 
 
@@ -311,6 +329,10 @@ def test_mcp_add_supports_remote_config_json(monkeypatch) -> None:
         "source": "app",
         "transport": "http",
         "enabled": True,
+        "discovery_status": "pending",
+        "tool_count": 0,
+        "last_checked_at": None,
+        "error": None,
     }
 
 

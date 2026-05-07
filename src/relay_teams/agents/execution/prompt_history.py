@@ -56,6 +56,7 @@ from relay_teams.hooks import (
     UserPromptSubmitInput,
 )
 from relay_teams.logger import get_logger, log_event
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.media import (
@@ -359,6 +360,7 @@ class PromptHistoryService:
         conversation_compaction_service: ConversationCompactionService | None,
         conversation_microcompact_service: ConversationMicrocompactService | None,
         mcp_registry: McpRegistry,
+        mcp_discovery_service: McpDiscoveryService | None,
         mcp_tool_context_token_cache: dict[str, int],
         media_asset_service: object | None,
         hook_service: object | None,
@@ -378,6 +380,7 @@ class PromptHistoryService:
         self._conversation_compaction_service = conversation_compaction_service
         self._conversation_microcompact_service = conversation_microcompact_service
         self._mcp_registry = mcp_registry
+        self._mcp_discovery_service = mcp_discovery_service
         self._mcp_tool_context_token_cache = mcp_tool_context_token_cache
         self._media_asset_service = media_asset_service
         self._hook_service = hook_service
@@ -393,6 +396,7 @@ class PromptHistoryService:
             config=self._config,
             mcp_registry=self._mcp_registry,
             mcp_tool_context_token_cache=self._mcp_tool_context_token_cache,
+            mcp_discovery_service=self._mcp_discovery_service,
         )
 
     async def _get_history_for_conversation_async(

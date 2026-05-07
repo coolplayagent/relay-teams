@@ -413,7 +413,7 @@ def test_invalid_plugin_mcp_config_is_reported_and_skipped(tmp_path: Path) -> No
     assert "Invalid plugin MCP config" in diagnostic.message
 
 
-def test_plugin_mcp_specs_receive_app_proxy_env(tmp_path: Path) -> None:
+def test_plugin_stdio_mcp_specs_do_not_persist_app_proxy_env(tmp_path: Path) -> None:
     app_config_dir = tmp_path / "app"
     app_config_dir.mkdir()
     (app_config_dir / ".env").write_text(
@@ -432,9 +432,7 @@ def test_plugin_mcp_specs_receive_app_proxy_env(tmp_path: Path) -> None:
     )
 
     loaded = registry.get_spec("quality:docs")
-    env = loaded.server_config.get("env")
-    assert isinstance(env, dict)
-    assert env["HTTPS_PROXY"] == "http://proxy.local:8080"
+    assert "env" not in loaded.server_config
 
 
 def test_plugin_role_hooks_use_local_namespace(tmp_path: Path) -> None:

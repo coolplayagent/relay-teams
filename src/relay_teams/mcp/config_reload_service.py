@@ -4,8 +4,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 import logging
+import re
 import subprocess
+from urllib.parse import unquote, urlparse
 
+from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import JsonValue
 
 from relay_teams.logger import get_logger, log_event
@@ -121,7 +124,7 @@ def _resolve_uv_tool_package(args: tuple[str, ...]) -> str | None:
     for arg in args:
         if arg.startswith("--from="):
             resolved = arg.partition("=")[2].strip()
-            return resolved or None
+            return _normalize_uv_cache_package_target(resolved)
     for index, arg in enumerate(args):
         if arg != "--from":
             continue
@@ -129,13 +132,54 @@ def _resolve_uv_tool_package(args: tuple[str, ...]) -> str | None:
         if next_index >= len(args):
             return None
         resolved = args[next_index].strip()
-        return resolved or None
-    if not args:
+        return _normalize_uv_cache_package_target(resolved)
+    command_args = _strip_uv_tool_args(args)
+    if not command_args:
         return None
-    first_arg = args[0].strip()
+    first_arg = command_args[0].strip()
     if not first_arg or first_arg.startswith("-"):
         return None
-    return first_arg
+    return _normalize_uv_cache_package_target(first_arg)
+
+
+def _normalize_uv_cache_package_target(value: str) -> str | None:
+    raw_value = value.strip()
+    if not raw_value:
+        return None
+    requirement_name = _requirement_distribution_name(raw_value)
+    if requirement_name is not None:
+        return requirement_name
+    parsed = urlparse(raw_value)
+    if parsed.scheme and parsed.netloc:
+        candidate = unquote(Path(parsed.path).name)
+    else:
+        candidate = Path(raw_value).name
+    if not candidate:
+        return None
+    for suffix in (".tar.gz", ".tar.bz2", ".tar.xz"):
+        if candidate.casefold().endswith(suffix):
+            return _distribution_name_from_archive(candidate[: -len(suffix)])
+    return _distribution_name_from_archive(candidate)
+
+
+def _requirement_distribution_name(value: str) -> str | None:
+    try:
+        requirement = Requirement(value)
+    except InvalidRequirement:
+        return None
+    resolved = requirement.name.strip()
+    return resolved or None
+
+
+def _distribution_name_from_archive(stem: str) -> str | None:
+    normalized_stem = stem.strip()
+    if not normalized_stem:
+        return None
+    match = re.match(r"(?P<name>.+?)[_-]\d+(?:[._-].*)?$", normalized_stem)
+    if match is None:
+        return normalized_stem
+    resolved = match.group("name").strip()
+    return resolved or None
 
 
 def _required_server_config_string(
@@ -156,6 +200,14 @@ def _server_config_args(server_config: dict[str, JsonValue]) -> tuple[str, ...]:
 
 
 def _strip_uv_global_args(args: tuple[str, ...]) -> tuple[str, ...]:
+    return _strip_leading_uv_options(args)
+
+
+def _strip_uv_tool_args(args: tuple[str, ...]) -> tuple[str, ...]:
+    return _strip_leading_uv_options(args)
+
+
+def _strip_leading_uv_options(args: tuple[str, ...]) -> tuple[str, ...]:
     index = 0
     while index < len(args):
         arg = args[index]
@@ -186,8 +238,48 @@ _UV_OPTIONS_WITH_VALUE: frozenset[str] = frozenset(
         "--cache-dir",
         "--color",
         "--config-file",
+        "--config-setting",
+        "--config-settings-package",
+        "--constraints",
+        "--default-index",
         "--directory",
+        "--env-file",
+        "--exclude-newer",
+        "--exclude-newer-package",
+        "--extra-index-url",
+        "--find-links",
+        "--fork-strategy",
+        "--from",
+        "--index",
+        "--index-strategy",
+        "--index-url",
+        "--keyring-provider",
+        "--link-mode",
+        "--no-binary-package",
+        "--no-build-isolation-package",
+        "--no-build-package",
+        "--no-sources-package",
+        "--overrides",
+        "--prerelease",
         "--project",
+        "--python",
+        "--python-platform",
+        "--refresh-package",
+        "--reinstall-package",
+        "--resolution",
+        "--torch-backend",
+        "--upgrade-package",
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "-b",
+        "-c",
+        "-C",
+        "-f",
+        "-i",
+        "-P",
+        "-p",
+        "-w",
     }
 )
 

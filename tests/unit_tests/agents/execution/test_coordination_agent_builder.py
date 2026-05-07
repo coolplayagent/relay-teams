@@ -6,6 +6,12 @@ from typing import cast
 import pytest
 
 import relay_teams.agents.execution.coordination_agent_builder as coordination_agent
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
+from relay_teams.mcp.mcp_models import (
+    McpConfigScope,
+    McpDiscoveryStatus,
+    McpServerToolsSummary,
+)
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelEndpointConfig
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
@@ -123,6 +129,21 @@ class _MarkedFailedMcpRegistry(_FakeMcpRegistry):
         if server_names == ("broken",):
             raise AssertionError("failed MCP server should have been skipped")
         return tuple(f"toolset:{name}" for name in server_names)
+
+
+class _FakeMcpDiscoveryService:
+    def __init__(self, status: McpDiscoveryStatus) -> None:
+        self.status = status
+        self.calls: list[str] = []
+
+    def get_tools_summary(self, name: str) -> McpServerToolsSummary:
+        self.calls.append(name)
+        return McpServerToolsSummary(
+            server=name,
+            source=McpConfigScope.APP,
+            transport="stdio",
+            status=self.status,
+        )
 
 
 def _patch_runtime_chat_model_builder(
@@ -370,6 +391,85 @@ def test_build_coordination_agent_skips_mcp_servers_marked_runtime_failed(
         allowed_mcp_servers=("docs", "broken"),
         tool_registry=cast(ToolRegistry, fake_tool_registry),
         mcp_registry=cast(McpRegistry, fake_mcp_registry),
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert built_agent.kwargs["toolsets"] == ["toolset:docs"]
+    assert fake_mcp_registry.toolset_calls == [("docs",)]
+
+
+def test_build_coordination_agent_skips_mcp_toolsets_that_are_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_tool_registry = _FakeToolRegistry()
+    fake_mcp_registry = _PartiallyFailingMcpRegistry()
+    discovery_service = _FakeMcpDiscoveryService(McpDiscoveryStatus.LOADING)
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_llm_http_client",
+        lambda **_: object(),
+    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=("docs",),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        mcp_registry=cast(McpRegistry, fake_mcp_registry),
+        mcp_discovery_service=cast(McpDiscoveryService, discovery_service),
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert built_agent.kwargs["toolsets"] == []
+    assert fake_mcp_registry.toolset_calls == []
+    assert discovery_service.calls == ["docs"]
+
+
+def test_build_coordination_agent_attaches_ready_mcp_toolsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_tool_registry = _FakeToolRegistry()
+    fake_mcp_registry = _PartiallyFailingMcpRegistry()
+    discovery_service = _FakeMcpDiscoveryService(McpDiscoveryStatus.READY)
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_llm_http_client",
+        lambda **_: object(),
+    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=("docs",),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        mcp_registry=cast(McpRegistry, fake_mcp_registry),
+        mcp_discovery_service=cast(McpDiscoveryService, discovery_service),
     )
 
     built_agent = cast(_FakeAgent, captured["agent"])

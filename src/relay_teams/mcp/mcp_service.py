@@ -7,8 +7,10 @@ from pydantic import JsonValue
 
 from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_config_manager import McpConfigManager
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_models import (
     McpConfigScope,
+    McpDiscoveryStatus,
     McpServerAddResult,
     McpServerConfigResult,
     McpServerConnectionTestResult,
@@ -33,6 +35,7 @@ class McpService:
         config_manager: McpConfigManager | None = None,
         on_registry_changed: Callable[[McpRegistry], None] | None = None,
         extra_specs: tuple[McpServerSpec, ...] = (),
+        discovery_service: McpDiscoveryService | None = None,
     ) -> None:
         self._registry: McpRegistry = registry
         self._config_manager: McpConfigManager | None = config_manager
@@ -40,9 +43,12 @@ class McpService:
             on_registry_changed
         )
         self._extra_specs: tuple[McpServerSpec, ...] = extra_specs
+        self._discovery_service: McpDiscoveryService | None = discovery_service
 
     def replace_registry(self, registry: McpRegistry) -> None:
         self._registry = registry
+        if self._discovery_service is not None:
+            self._discovery_service.replace_registry(registry)
 
     def replace_extra_specs(self, extra_specs: tuple[McpServerSpec, ...]) -> None:
         self._extra_specs = extra_specs
@@ -53,9 +59,11 @@ class McpService:
         return self._config_manager.load_registry(extra_specs=self._extra_specs)
 
     def _publish_registry(self, registry: McpRegistry) -> None:
-        self.replace_registry(registry)
         if self._on_registry_changed is not None:
+            self._registry = registry
             self._on_registry_changed(registry)
+            return
+        self.replace_registry(registry)
 
     def list_servers(self) -> tuple[McpServerSummary, ...]:
         with trace_span(
@@ -63,12 +71,19 @@ class McpService:
             component="mcp.service",
             operation="list_servers",
         ):
+            if self._discovery_service is not None:
+                return self._discovery_service.list_server_summaries()
             return tuple(
                 McpServerSummary(
                     name=spec.name,
                     source=spec.source,
                     transport=_detect_transport(spec.server_config),
                     enabled=spec.enabled,
+                    discovery_status=(
+                        McpDiscoveryStatus.PENDING
+                        if spec.enabled
+                        else McpDiscoveryStatus.DISABLED
+                    ),
                 )
                 for spec in self._registry.list_specs()
             )
@@ -97,6 +112,11 @@ class McpService:
                     source=spec.source,
                     transport=_detect_transport(spec.server_config),
                     enabled=spec.enabled,
+                    discovery_status=(
+                        McpDiscoveryStatus.PENDING
+                        if spec.enabled
+                        else McpDiscoveryStatus.DISABLED
+                    ),
                 ),
                 config=config,
             )
@@ -109,6 +129,16 @@ class McpService:
             attributes={"server_name": name},
         ):
             spec = self._registry.get_spec(name)
+            if self._discovery_service is not None:
+                return self._discovery_service.get_tools_summary(name)
+            if not spec.enabled:
+                return McpServerToolsSummary(
+                    server=spec.name,
+                    source=spec.source,
+                    transport=_detect_transport(spec.server_config),
+                    enabled=spec.enabled,
+                    status=McpDiscoveryStatus.DISABLED,
+                )
             tools = await self._registry.list_tools(name)
             return McpServerToolsSummary(
                 server=spec.name,
@@ -116,6 +146,30 @@ class McpService:
                 transport=_detect_transport(spec.server_config),
                 enabled=spec.enabled,
                 tools=tools,
+                status=McpDiscoveryStatus.READY,
+            )
+
+    def refresh_server_tools(self, name: str) -> McpServerToolsSummary:
+        with trace_span(
+            LOGGER,
+            component="mcp.service",
+            operation="refresh_server_tools",
+            attributes={"server_name": name},
+        ):
+            self._registry.get_spec(name)
+            if self._discovery_service is not None:
+                return self._discovery_service.refresh_server(name)
+            spec = self._registry.get_spec(name)
+            return McpServerToolsSummary(
+                server=spec.name,
+                source=spec.source,
+                transport=_detect_transport(spec.server_config),
+                enabled=spec.enabled,
+                status=(
+                    McpDiscoveryStatus.PENDING
+                    if spec.enabled
+                    else McpDiscoveryStatus.DISABLED
+                ),
             )
 
     def add_server(
@@ -149,6 +203,11 @@ class McpService:
                     source=spec.source,
                     transport=_detect_transport(spec.server_config),
                     enabled=spec.enabled,
+                    discovery_status=(
+                        McpDiscoveryStatus.PENDING
+                        if spec.enabled
+                        else McpDiscoveryStatus.DISABLED
+                    ),
                 ),
                 config_path=str(config_path),
             )
@@ -178,6 +237,11 @@ class McpService:
                 source=spec.source,
                 transport=_detect_transport(spec.server_config),
                 enabled=spec.enabled,
+                discovery_status=(
+                    McpDiscoveryStatus.PENDING
+                    if spec.enabled
+                    else McpDiscoveryStatus.DISABLED
+                ),
             )
 
     def update_server(
@@ -206,6 +270,11 @@ class McpService:
                     source=spec.source,
                     transport=_detect_transport(spec.server_config),
                     enabled=spec.enabled,
+                    discovery_status=(
+                        McpDiscoveryStatus.PENDING
+                        if spec.enabled
+                        else McpDiscoveryStatus.DISABLED
+                    ),
                 ),
                 config=self._config_manager.get_server_config(name),
             )
@@ -222,6 +291,8 @@ class McpService:
             try:
                 tools = await self._registry.list_tools(name)
             except Exception as exc:
+                if self._discovery_service is not None:
+                    self._discovery_service.mark_failed(name, exc)
                 return McpServerConnectionTestResult(
                     server=spec.name,
                     source=spec.source,
@@ -230,6 +301,8 @@ class McpService:
                     ok=False,
                     error=str(exc),
                 )
+            if self._discovery_service is not None:
+                self._discovery_service.mark_ready(name, tools)
             return McpServerConnectionTestResult(
                 server=spec.name,
                 source=spec.source,

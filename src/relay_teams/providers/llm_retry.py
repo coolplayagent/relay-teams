@@ -26,6 +26,17 @@ except ImportError:  # pragma: no cover
 
 T = TypeVar("T")
 
+_ENTERPRISE_PROXY_BLOCK_MARKERS = (
+    "<title>his proxy",
+    "his proxy notification",
+    "netentsec",
+    "swg,proxy",
+    "proxy notification",
+    "proxycontrolwarn",
+    "httpwarning_2907",
+    "blocked-by-allowlist",
+)
+
 
 class LlmRetryErrorInfo(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -151,6 +162,14 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
     if invalid_json_error is not None:
         return invalid_json_error
     if isinstance(exc, ModelHTTPError):
+        if _is_enterprise_proxy_block_error(
+            message=str(exc),
+            body=getattr(exc, "body", None),
+        ):
+            return _enterprise_proxy_block_error_info(
+                message=str(exc),
+                status_code=exc.status_code,
+            )
         retryable = _is_retryable_status_code(exc.status_code)
         return LlmRetryErrorInfo(
             message=str(exc),
@@ -165,6 +184,15 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
             ),
         )
     if isinstance(exc, ModelAPIError):
+        if _is_enterprise_proxy_block_error(
+            message=str(exc),
+            body=getattr(exc, "body", None),
+        ):
+            parsed = _parse_message_metadata(str(exc))
+            return _enterprise_proxy_block_error_info(
+                message=str(exc),
+                status_code=parsed.status_code if parsed is not None else None,
+            )
         parsed = _parse_message_metadata(str(exc))
         if parsed is None:
             return None
@@ -229,6 +257,11 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         body = getattr(exc, "body", None)
         error_payload = _extract_error_payload(body)
         status_code = getattr(exc, "status_code", None)
+        if _is_enterprise_proxy_block_error(message=str(exc), body=body):
+            return _enterprise_proxy_block_error_info(
+                message=error_payload.message or str(exc),
+                status_code=status_code,
+            )
         retry_override = _explicit_retry_override(headers)
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
@@ -263,6 +296,11 @@ def _extract_single_error_info(exc: BaseException) -> LlmRetryErrorInfo | None:
         status_code = fallback.status_code if fallback is not None else None
         if status_code is None:
             status_code = _status_code_from_error_code(resolved_error_code)
+        if _is_enterprise_proxy_block_error(message=str(exc), body=body):
+            return _enterprise_proxy_block_error_info(
+                message=error_payload.message or str(exc),
+                status_code=status_code,
+            )
         retry_override = _explicit_retry_override(getattr(exc, "headers", None))
         return LlmRetryErrorInfo(
             message=error_payload.message or str(exc),
@@ -302,6 +340,37 @@ def _extract_invalid_json_error_info(
         rate_limited=False,
         transport_error=False,
         timeout_error=False,
+    )
+
+
+def _enterprise_proxy_block_error_info(
+    *,
+    message: str,
+    status_code: int | None,
+) -> LlmRetryErrorInfo:
+    return LlmRetryErrorInfo(
+        message=message,
+        status_code=status_code,
+        error_code="proxy_blocked",
+        retryable=False,
+        rate_limited=False,
+        transport_error=True,
+        timeout_error=False,
+    )
+
+
+def _is_enterprise_proxy_block_error(*, message: str, body: object) -> bool:
+    scan_values = [message]
+    if isinstance(body, str):
+        scan_values.append(body)
+    elif isinstance(body, bytes):
+        scan_values.append(body.decode("utf-8", errors="ignore"))
+    elif body is not None:
+        scan_values.append(str(body))
+    return any(
+        marker in scan_value.casefold()
+        for scan_value in scan_values
+        for marker in _ENTERPRISE_PROXY_BLOCK_MARKERS
     )
 
 

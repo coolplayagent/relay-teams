@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -10,6 +11,14 @@ class McpConfigScope(str, Enum):
     APP = "app"
     PLUGIN = "plugin"
     SESSION = "session"
+
+
+class McpDiscoveryStatus(str, Enum):
+    DISABLED = "disabled"
+    PENDING = "pending"
+    LOADING = "loading"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class McpToolInfo(BaseModel):
@@ -44,6 +53,10 @@ class McpServerSummary(BaseModel):
     source: McpConfigScope
     transport: str
     enabled: bool = True
+    discovery_status: McpDiscoveryStatus = McpDiscoveryStatus.PENDING
+    tool_count: int = 0
+    last_checked_at: datetime | None = None
+    error: str | None = None
 
 
 class McpServerToolsSummary(BaseModel):
@@ -54,6 +67,9 @@ class McpServerToolsSummary(BaseModel):
     transport: str
     enabled: bool = True
     tools: tuple[McpToolInfo, ...] = ()
+    status: McpDiscoveryStatus = McpDiscoveryStatus.PENDING
+    last_checked_at: datetime | None = None
+    error: str | None = None
 
 
 class McpServerAddRequest(BaseModel):

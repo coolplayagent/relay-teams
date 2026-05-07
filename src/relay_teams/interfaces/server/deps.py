@@ -37,6 +37,7 @@ from relay_teams.interfaces.server.config_status_service import ConfigStatusServ
 from relay_teams.interfaces.server.container import ServerContainer
 from relay_teams.interfaces.server.ui_language_service import UiLanguageSettingsService
 from relay_teams.mcp.config_reload_service import McpConfigReloadService
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.mcp.mcp_service import McpService
 from relay_teams.media import MediaAssetService
@@ -180,6 +181,10 @@ def get_mcp_service(request: Request) -> McpService:
 
 def get_mcp_registry(request: Request) -> McpRegistry:
     return get_container(request).mcp_registry
+
+
+def get_mcp_discovery_service(request: Request) -> McpDiscoveryService:
+    return get_container(request).mcp_discovery_service
 
 
 def get_proxy_config_service(request: Request) -> ProxyConfigService:

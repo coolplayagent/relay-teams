@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 from openai import APIError, APIStatusError
-from pydantic_ai.exceptions import ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from relay_teams.providers.llm_retry import (
     compute_retry_delay_ms,
@@ -147,6 +147,43 @@ def test_extract_retry_error_info_marks_model_api_error_without_status_non_retry
     assert info.status_code is None
     assert info.error_code == "2062"
     assert info.retryable is False
+
+
+def test_extract_retry_error_info_maps_enterprise_proxy_block_to_proxy_blocked() -> (
+    None
+):
+    info = extract_retry_error_info(
+        ModelHTTPError(
+            status_code=403,
+            model_name="deepseek-v4-flash",
+            body=(
+                '<html><head><meta name="keywords" '
+                'content="SWG,Proxy,NetentSec" /><title>HIS Proxy</title></head></html>'
+            ),
+        )
+    )
+
+    assert info is not None
+    assert info.status_code == 403
+    assert info.error_code == "proxy_blocked"
+    assert info.retryable is False
+    assert info.transport_error is True
+
+
+def test_extract_retry_error_info_does_not_treat_this_proxy_as_his_proxy_block() -> (
+    None
+):
+    info = extract_retry_error_info(
+        ModelHTTPError(
+            status_code=503,
+            model_name="deepseek-v4-flash",
+            body="this proxy path returned a transient upstream error",
+        )
+    )
+
+    assert info is not None
+    assert info.error_code != "proxy_blocked"
+    assert info.retryable is True
 
 
 def test_extract_retry_error_info_marks_remote_protocol_interrupt_as_retryable() -> (

@@ -633,6 +633,14 @@ export async function fetchMcpServerTools(serverName) {
     );
 }
 
+export async function refreshMcpServerTools(serverName) {
+    return requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}/tools:refresh`,
+        { method: 'POST' },
+        `Failed to refresh MCP tools for ${serverName}`,
+    );
+}
+
 export async function reloadSkillsConfig() {
     const result = await requestJson(
         '/api/system/configs/skills:reload',

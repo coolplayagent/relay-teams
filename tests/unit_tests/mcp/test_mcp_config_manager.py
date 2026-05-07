@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic_ai.mcp import MCPServerStdio
 
 import relay_teams.mcp.mcp_config_manager as config_manager
+from relay_teams.env import runtime_env
 from relay_teams.mcp.mcp_models import McpConfigScope
 from relay_teams.mcp.mcp_registry import build_mcp_server
 
@@ -44,6 +45,15 @@ def _set_test_app_config_dir(monkeypatch, config_dir: Path) -> None:
     )
 
 
+class _FakeProxySecretStore:
+    def __init__(self, password: str | None) -> None:
+        self._password = password
+
+    def get_password(self, config_dir: Path) -> str | None:
+        _ = config_dir
+        return self._password
+
+
 def test_load_registry_reads_app_scope_only(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
@@ -72,7 +82,7 @@ def test_load_registry_reads_app_scope_only(tmp_path: Path) -> None:
     assert registry.get_spec("shared").server_config["command"] == "app-shared"
 
 
-def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
+def test_load_registry_applies_proxy_env_to_remote_mcp_server_configs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -92,6 +102,14 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
                     "filesystem": {
                         "command": "uvx",
                         "args": ["mcp-server-filesystem"],
+                    },
+                    "stdio_proxy": {
+                        "transport": "stdio",
+                        "command": "uvx",
+                        "args": ["mcp-server-filesystem"],
+                        "env": {
+                            "HTTP_PROXY": "http://stdio-proxy.internal:9000",
+                        },
                     },
                     "events": {
                         "transport": "sse",
@@ -124,7 +142,10 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
         "NPM_CONFIG_NOPROXY": "localhost,127.0.0.1",
         "npm_config_noproxy": "localhost,127.0.0.1",
     }
-    assert registry.get_spec("filesystem").server_config["env"] == expected_proxy_env
+    assert "env" not in registry.get_spec("filesystem").server_config
+    assert registry.get_spec("stdio_proxy").server_config["env"] == {
+        "HTTP_PROXY": "http://stdio-proxy.internal:9000",
+    }
     assert registry.get_spec("events").server_config["env"] == expected_proxy_env
     assert registry.get_spec("api").server_config["env"] == expected_proxy_env
     assert os.environ["HTTP_PROXY"] == "http://proxy.internal:8080"
@@ -135,6 +156,121 @@ def test_load_registry_applies_proxy_env_to_all_mcp_server_configs(
     assert os.environ["npm_config_proxy"] == "http://proxy.internal:8080"
     assert os.environ["npm_config_https_proxy"] == "http://proxy.internal:8080"
     assert os.environ["npm_config_noproxy"] == "localhost,127.0.0.1"
+
+
+def test_load_registry_hydrates_saved_proxy_password_for_mcp_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    _set_test_app_config_dir(monkeypatch, app_config_dir)
+    monkeypatch.setattr(
+        "relay_teams.env.proxy_env.get_proxy_secret_store",
+        lambda: _FakeProxySecretStore("secret"),
+    )
+    (app_config_dir / ".env").write_text(
+        "HTTPS_PROXY=http://alice@proxy.internal:8443\n",
+        encoding="utf-8",
+    )
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "stdio": {
+                        "command": "uvx",
+                        "args": ["mcp-server-filesystem"],
+                    },
+                    "remote": {
+                        "transport": "http",
+                        "url": "https://example.com/mcp",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+    remote_env = registry.get_spec("remote").server_config["env"]
+    stdio_toolset = registry.get_toolsets(("stdio",))[0]
+
+    assert isinstance(remote_env, dict)
+    assert remote_env["HTTPS_PROXY"] == "http://alice:secret@proxy.internal:8443"
+    assert (
+        remote_env["NPM_CONFIG_HTTPS_PROXY"]
+        == "http://alice:secret@proxy.internal:8443"
+    )
+    assert "env" not in registry.get_spec("stdio").server_config
+    assert isinstance(stdio_toolset, MCPServerStdio)
+    assert stdio_toolset.env is not None
+    assert stdio_toolset.env["HTTPS_PROXY"] == "http://alice:secret@proxy.internal:8443"
+    assert (
+        stdio_toolset.env["NPM_CONFIG_HTTPS_PROXY"]
+        == "http://alice:secret@proxy.internal:8443"
+    )
+    assert os.environ["HTTPS_PROXY"] == "http://alice:secret@proxy.internal:8443"
+
+
+def test_load_registry_preserves_process_proxy_for_mcp_runtime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("HTTPS_PROXY", "http://process-proxy.internal:8443")
+    monkeypatch.setenv("NO_PROXY", "localhost,.internal")
+    monkeypatch.setitem(
+        runtime_env._PROCESS_ENV_BASELINE,
+        "HTTPS_PROXY",
+        "http://process-proxy.internal:8443",
+    )
+    monkeypatch.setitem(
+        runtime_env._PROCESS_ENV_BASELINE,
+        "NO_PROXY",
+        "localhost,.internal",
+    )
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    _set_test_app_config_dir(monkeypatch, app_config_dir)
+    (app_config_dir / "mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "stdio": {
+                        "command": "uvx",
+                        "args": ["mcp-server-filesystem"],
+                    },
+                    "remote": {
+                        "transport": "http",
+                        "url": "https://example.com/mcp",
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    registry = manager.load_registry()
+    remote_env = registry.get_spec("remote").server_config["env"]
+    stdio_toolset = registry.get_toolsets(("stdio",))[0]
+
+    assert isinstance(remote_env, dict)
+    assert remote_env["HTTPS_PROXY"] == "http://process-proxy.internal:8443"
+    assert remote_env["NO_PROXY"] == "localhost,.internal"
+    assert remote_env["NPM_CONFIG_NOPROXY"] == "localhost,.internal"
+    assert "env" not in registry.get_spec("stdio").server_config
+    assert isinstance(stdio_toolset, MCPServerStdio)
+    assert stdio_toolset.env is not None
+    assert stdio_toolset.env["HTTPS_PROXY"] == "http://process-proxy.internal:8443"
+    assert stdio_toolset.env["NO_PROXY"] == "localhost,.internal"
+    assert stdio_toolset.env["NPM_CONFIG_NOPROXY"] == "localhost,.internal"
+    assert os.environ["HTTPS_PROXY"] == "http://process-proxy.internal:8443"
+    assert os.environ["NO_PROXY"] == "localhost,.internal"
 
 
 def test_load_registry_preserves_explicit_server_env_over_proxy_defaults(
@@ -617,7 +753,9 @@ def test_load_registry_ignores_invalid_mcp_servers_value(tmp_path: Path) -> None
     assert registry.list_names() == ()
 
 
-def test_load_registry_syncs_app_environment_for_stdio_mcp(tmp_path: Path) -> None:
+def test_load_registry_syncs_app_environment_for_stdio_mcp(
+    tmp_path: Path,
+) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)
     env_key = "MCP_SYNCED_APP_ENV"

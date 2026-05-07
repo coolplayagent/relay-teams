@@ -49,6 +49,7 @@ from relay_teams.computer import ComputerActionDescriptor, ComputerRuntime
 from relay_teams.gateway.im.service import ImToolService
 from relay_teams.hooks import HookService
 from relay_teams.media import MediaAssetService, UserPromptContent
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.metrics import MetricRecorder
 from relay_teams.monitors import MonitorService
@@ -117,6 +118,7 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     _conversation_microcompact_service: ConversationMicrocompactService | None
     _tool_registry: ToolRegistry
     _mcp_registry: McpRegistry
+    _mcp_discovery_service: McpDiscoveryService | None
     _skill_registry: SkillRegistry
     _allowed_tools: tuple[str, ...]
     _allowed_mcp_servers: tuple[str, ...]

@@ -133,6 +133,7 @@ export {
     stopGitHubWebhookTunnel,
     reloadModelConfig,
     refreshModelCatalog,
+    refreshMcpServerTools,
     reloadProxyConfig,
     reloadMcpConfig,
     reloadSkillsConfig,

@@ -8,6 +8,8 @@ from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
 from relay_teams.logger import get_logger, log_event
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
+from relay_teams.mcp.mcp_models import McpDiscoveryStatus
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.agents.execution.model_builder import (
     build_runtime_chat_model,
@@ -50,6 +52,7 @@ def build_coordination_agent(
     tool_registry: ToolRegistry,
     role_registry: RoleRegistry | None = None,
     mcp_registry: McpRegistry | None = None,
+    mcp_discovery_service: McpDiscoveryService | None = None,
     skill_registry: SkillRegistry | None = None,
 ) -> Agent[ToolDeps, str]:
     """Build the lean meta-orchestrator for collaboration management.
@@ -65,6 +68,11 @@ def build_coordination_agent(
             consumer="agents.execution.coordination_agent_builder",
         )
         for server_name in resolved_mcp_servers:
+            if not _mcp_server_is_ready_for_agent(
+                server_name,
+                discovery_service=mcp_discovery_service,
+            ):
+                continue
             is_runtime_failed = getattr(
                 mcp_registry,
                 "is_server_runtime_failed",
@@ -150,3 +158,28 @@ def build_coordination_agent(
         register(agent)
 
     return agent
+
+
+def _mcp_server_is_ready_for_agent(
+    server_name: str,
+    *,
+    discovery_service: McpDiscoveryService | None,
+) -> bool:
+    if discovery_service is None:
+        return True
+    summary = discovery_service.get_tools_summary(server_name)
+    if summary.status == McpDiscoveryStatus.READY:
+        return True
+    log_event(
+        LOGGER,
+        logging.INFO,
+        event="llm.mcp_toolset.skip_not_ready",
+        message=(
+            "Skipping MCP server that is not ready while building coordination agent"
+        ),
+        payload={
+            "server_name": server_name,
+            "discovery_status": summary.status.value,
+        },
+    )
+    return False

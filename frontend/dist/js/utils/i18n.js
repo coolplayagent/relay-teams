@@ -648,6 +648,7 @@ const TRANSLATIONS = {
         'settings.action.edit': 'Edit',
         'settings.action.delete': 'Delete',
         'settings.action.cancel': 'Cancel',
+        'settings.action.refresh': 'Refresh',
         'media.preview_title': 'Image Preview',
         'media.preview_alt': 'Preview image',
         'media.preview_open': 'Open image preview',
@@ -1858,6 +1859,7 @@ const TRANSLATIONS = {
         'settings.action.edit': '编辑',
         'settings.action.delete': '删除',
         'settings.action.cancel': '取消',
+        'settings.action.refresh': '刷新',
         'media.preview_title': '图片预览',
         'media.preview_alt': '预览图片',
         'media.preview_open': '打开图片预览',
@@ -3316,9 +3318,11 @@ Object.assign(TRANSLATIONS['en-US'], {
     'settings.system.server_count_loading': '{count} servers configured, {loading} loading...',
     'settings.system.server_count_loaded': '{count} servers loaded',
     'settings.system.loading_tools': 'Loading tools...',
+    'settings.system.discovery_pending': 'Tool discovery is pending.',
     'settings.system.no_tools_exposed': 'No tools exposed by this MCP server.',
     'settings.system.no_description': 'No description provided.',
     'settings.system.loading_state': 'Loading...',
+    'settings.system.pending_state': 'Pending',
     'settings.system.unavailable_state': 'Unavailable',
     'settings.system.loaded_state': 'Loaded',
 });
@@ -3640,9 +3644,11 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.system.server_count_loading': '已配置 {count} 个服务，{loading} 个加载中...',
     'settings.system.server_count_loaded': '已加载 {count} 个服务',
     'settings.system.loading_tools': '正在加载工具...',
+    'settings.system.discovery_pending': '工具发现正在等待执行。',
     'settings.system.no_tools_exposed': '这个 MCP 服务没有暴露任何工具。',
     'settings.system.no_description': '没有提供描述。',
     'settings.system.loading_state': '加载中...',
+    'settings.system.pending_state': '等待中',
     'settings.system.unavailable_state': '不可用',
     'settings.system.loaded_state': '已加载',
 });
@@ -4252,6 +4258,10 @@ Object.assign(TRANSLATIONS['en-US'], {
     'settings.mcp.testing': 'Testing...',
     'settings.mcp.test_ok': 'Connection succeeded. {count} tools loaded.',
     'settings.mcp.test_failed_message': 'Connection test failed.',
+    'settings.mcp.refresh_started': 'Discovery Started',
+    'settings.mcp.refresh_started_message': '{name} tool discovery was queued.',
+    'settings.mcp.refresh_failed': 'Refresh Failed',
+    'settings.mcp.refresh_failed_message': 'Failed to refresh MCP tools.',
 });
 
 Object.assign(TRANSLATIONS['zh-CN'], {
@@ -4285,6 +4295,10 @@ Object.assign(TRANSLATIONS['zh-CN'], {
     'settings.mcp.testing': '\u6d4b\u8bd5\u4e2d...',
     'settings.mcp.test_ok': '\u8fde\u63a5\u6210\u529f\uff0c\u5df2\u52a0\u8f7d {count} \u4e2a\u5de5\u5177\u3002',
     'settings.mcp.test_failed_message': '\u8fde\u63a5\u6d4b\u8bd5\u5931\u8d25\u3002',
+    'settings.mcp.refresh_started': '\u5df2\u5f00\u59cb\u53d1\u73b0',
+    'settings.mcp.refresh_started_message': '{name} \u7684\u5de5\u5177\u53d1\u73b0\u5df2\u5165\u961f\u3002',
+    'settings.mcp.refresh_failed': '\u5237\u65b0\u5931\u8d25',
+    'settings.mcp.refresh_failed_message': '\u5237\u65b0 MCP \u5de5\u5177\u5931\u8d25\u3002',
 });
 
 Object.assign(TRANSLATIONS['en-US'], {

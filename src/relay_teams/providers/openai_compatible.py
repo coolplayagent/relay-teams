@@ -33,6 +33,7 @@ from relay_teams.hooks import HookService
 from relay_teams.media import ContentPart, MediaAssetService, MediaModality
 from relay_teams.metrics import MetricRecorder
 from relay_teams.monitors import MonitorService
+from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.net.llm_client import build_llm_http_client
 from relay_teams.notifications import NotificationService
@@ -144,6 +145,7 @@ class OpenAICompatibleProvider(LLMProvider):
         reminder_service: SystemReminderService | None = None,
         auto_harness_service: object | None = None,
         audit_service: AuditService | None = None,
+        mcp_discovery_service: McpDiscoveryService | None = None,
     ) -> None:
         self._config_ref = config
         self._media_asset_service = media_asset_service
@@ -180,6 +182,7 @@ class OpenAICompatibleProvider(LLMProvider):
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_registry=skill_registry,
+            mcp_discovery_service=mcp_discovery_service,
             allowed_tools=allowed_tools,
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,

@@ -102,6 +102,7 @@ export {
     reloadMcpConfig,
     reloadModelConfig,
     refreshModelCatalog,
+    refreshMcpServerTools,
     reloadProxyConfig,
     reloadSkillsConfig,
     saveClawHubConfig,

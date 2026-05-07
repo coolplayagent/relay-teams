@@ -39,24 +39,42 @@ const reloadedSkillsStatus = {
 
 const initialToolSummaries = {
     'time-mcp': {
+        server: 'time-mcp',
         source: 'project',
         transport: 'stdio',
+        enabled: true,
+        status: 'ready',
         tools: [
             { name: 'current_time', description: 'Return the current time.' },
             { name: 'format_timezone', description: '' },
         ],
     },
     'empty-mcp': {
+        server: 'empty-mcp',
         source: 'user',
         transport: 'http',
+        enabled: true,
+        status: 'ready',
+        tools: [],
+    },
+    'broken-mcp': {
+        server: 'broken-mcp',
+        source: 'project',
+        transport: 'stdio',
+        enabled: true,
+        status: 'failed',
+        error: 'Connection closed',
         tools: [],
     },
 };
 
 const reloadedToolSummaries = {
     'time-mcp': {
+        server: 'time-mcp',
         source: 'project',
         transport: 'stdio',
+        enabled: true,
+        status: 'ready',
         tools: [
             { name: 'format_time_range', description: 'Format a time range.' },
         ],
@@ -76,9 +94,6 @@ export async function fetchMcpServerTools(serverName) {
     const toolSummaries = globalThis.__reloadMcpCalls > 0
         ? reloadedToolSummaries
         : initialToolSummaries;
-    if (serverName === 'broken-mcp') {
-        throw new Error('Connection closed');
-    }
     return toolSummaries[serverName];
 }
 
@@ -102,6 +117,9 @@ export async function fetchMcpServers() {
         source: name === 'empty-mcp' ? 'user' : 'project',
         transport: name === 'empty-mcp' ? 'http' : 'stdio',
         enabled: name !== 'disabled-mcp',
+        discovery_status: name === 'broken-mcp' ? 'failed' : (name === 'slow-mcp' ? 'loading' : 'ready'),
+        tool_count: name === 'time-mcp' ? 2 : 0,
+        error: name === 'broken-mcp' ? 'Connection closed' : null,
     }));
 }
 
@@ -118,6 +136,11 @@ export async function setMcpServerEnabled(serverName, enabled) {
 export async function testMcpServerConnection(serverName) {
     globalThis.__testMcpServerCalls.push(serverName);
     return { server: serverName, ok: true, tool_count: 2, tools: [] };
+}
+
+export async function refreshMcpServerTools(serverName) {
+    globalThis.__refreshMcpToolsCalls.push(serverName);
+    return fetchMcpServerTools(serverName);
 }
 """.strip()
 
@@ -168,16 +191,7 @@ console.log(JSON.stringify({
     assert "2 tools hidden." in collapsed_html
     assert "current_time" not in collapsed_html
     assert payload["toolFetchCalls"] == ["time-mcp", "empty-mcp", "broken-mcp"]
-    assert log_entries == [
-        {
-            "eventName": "frontend.system_status.mcp_tools_load_failed",
-            "message": "Failed to load MCP tools",
-            "payload": {
-                "error_message": "Connection closed",
-                "server_name": "broken-mcp",
-            },
-        }
-    ]
+    assert log_entries == []
 
 
 def test_mcp_status_panel_shows_loading_shell_before_tools_finish(
@@ -232,8 +246,11 @@ await Promise.resolve();
 const loadingHtml = document.getElementById('mcp-status').innerHTML;
 
 globalThis.__resolveSlowTools({
+    server: 'slow-mcp',
     source: 'project',
     transport: 'stdio',
+    enabled: true,
+    status: 'ready',
     tools: [
         { name: 'slow_tool', description: 'Eventually available.' },
     ],
@@ -313,6 +330,105 @@ console.log(JSON.stringify({
             "message": "MCP config reloaded.",
             "tone": "success",
         }
+    ]
+
+
+def test_refresh_mcp_tools_polls_until_discovery_finishes(tmp_path: Path) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: ['slow-mcp'],
+    },
+    skills: {
+        skills: [],
+    },
+};
+
+export async function fetchConfigStatus() {
+    globalThis.__fetchConfigStatusCalls += 1;
+    return status;
+}
+
+export async function fetchMcpServerTools(serverName) {
+    globalThis.__toolFetchCalls.push(serverName);
+    if (globalThis.__refreshMcpToolsCalls.length === 0) {
+        return {
+            server: serverName,
+            source: 'project',
+            transport: 'stdio',
+            enabled: true,
+            status: 'ready',
+            tools: [
+                { name: 'initial_tool', description: 'Loaded before refresh.' },
+            ],
+        };
+    }
+    globalThis.__slowRefreshReads += 1;
+    if (globalThis.__slowRefreshReads < 3) {
+        return {
+            server: serverName,
+            source: 'project',
+            transport: 'stdio',
+            enabled: true,
+            status: 'loading',
+            tools: [],
+        };
+    }
+    return {
+        server: serverName,
+        source: 'project',
+        transport: 'stdio',
+        enabled: true,
+        status: 'ready',
+        tools: [
+            { name: 'refreshed_tool', description: 'Loaded after polling.' },
+        ],
+    };
+}
+
+export async function reloadMcpConfig() {
+    globalThis.__reloadMcpCalls += 1;
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    globalThis.__reloadSkillsCalls += 1;
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers, loadMcpStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+globalThis.__agentTeamsMcpRefreshPollDelaysMs = [0, 0, 0];
+globalThis.__slowRefreshReads = 0;
+
+bindSystemStatusHandlers();
+await loadMcpStatusPanel();
+await globalThis.__agentTeamsRefreshMcpTools('slow-mcp');
+await new Promise(resolve => setTimeout(resolve, 0));
+await new Promise(resolve => setTimeout(resolve, 0));
+await new Promise(resolve => setTimeout(resolve, 0));
+
+console.log(JSON.stringify({
+    html: document.getElementById('mcp-status').innerHTML,
+    refreshCalls: globalThis.__refreshMcpToolsCalls,
+    toolFetchCalls: globalThis.__toolFetchCalls,
+}));
+""".strip(),
+    )
+
+    html = cast(str, payload["html"])
+    assert "refreshed_tool" in html
+    assert "Loaded after polling." in html
+    assert payload["refreshCalls"] == ["slow-mcp"]
+    assert payload["toolFetchCalls"] == [
+        "slow-mcp",
+        "slow-mcp",
+        "slow-mcp",
+        "slow-mcp",
     ]
 
 
@@ -1002,6 +1118,7 @@ function installGlobals(elements) {{
     globalThis.__reloadMcpCalls = 0;
     globalThis.__reloadSkillsCalls = 0;
     globalThis.__toolFetchCalls = [];
+    globalThis.__refreshMcpToolsCalls = [];
     globalThis.__addMcpServerCalls = [];
     globalThis.__setMcpServerEnabledCalls = [];
     globalThis.__testMcpServerCalls = [];
