@@ -88,7 +88,8 @@ def test_xiaoluban_account_create_persists_im_config_in_one_request(
     assert loaded.im_config.workspace_id == "im-workspace"
 
 
-def test_xiaoluban_account_update_persists_im_config_in_one_request(
+@pytest.mark.asyncio
+async def test_xiaoluban_account_update_persists_im_config_in_one_request(
     tmp_path: Path,
 ) -> None:
     service = _build_service(tmp_path)
@@ -112,7 +113,8 @@ def test_xiaoluban_account_update_persists_im_config_in_one_request(
     assert loaded.im_config.workspace_id == "im-workspace"
 
 
-def test_handle_im_inbound_starts_run_and_replies_terminal_output(
+@pytest.mark.asyncio
+async def test_handle_im_inbound_starts_run_and_replies_terminal_output(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -137,7 +139,7 @@ def test_handle_im_inbound_starts_run_and_replies_terminal_output(
         XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="inspect this repo",
@@ -154,7 +156,7 @@ def test_handle_im_inbound_starts_run_and_replies_terminal_output(
     assert fake_ingress.requests[0].intent.intent == "inspect this repo"
     assert fake_ingress.requests[0].intent.session_id == "session-1"
     assert fake_client.keep_alive_calls == [("uidself", "session-1")]
-    service._drain_im_replies()
+    await service._drain_im_replies_async()
     assert fake_client.sent_messages[-1] == (
         _formatted_xiaoluban_text(
             session_id="session-1",
@@ -166,7 +168,8 @@ def test_handle_im_inbound_starts_run_and_replies_terminal_output(
     assert service.should_suppress_xiaoluban_terminal_notification("run-1") is True
 
 
-def test_handle_im_inbound_reuses_gateway_session_for_same_xiaoluban_session(
+@pytest.mark.asyncio
+async def test_handle_im_inbound_reuses_gateway_session_for_same_xiaoluban_session(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -180,7 +183,7 @@ def test_handle_im_inbound_reuses_gateway_session_for_same_xiaoluban_session(
     )
 
     for text in ("first task", "second task"):
-        service.handle_im_inbound(
+        await service.handle_im_inbound_async(
             account_id=account.account_id,
             message=XiaolubanInboundMessage(
                 content=text,
@@ -206,7 +209,10 @@ def test_handle_im_inbound_reuses_gateway_session_for_same_xiaoluban_session(
     ]
 
 
-def test_handle_im_inbound_empty_input_sends_hint_without_run(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_handle_im_inbound_empty_input_sends_hint_without_run(
+    tmp_path: Path,
+) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -217,7 +223,7 @@ def test_handle_im_inbound_empty_input_sends_hint_without_run(tmp_path: Path) ->
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="   ",
@@ -238,7 +244,8 @@ def test_handle_im_inbound_empty_input_sends_hint_without_run(tmp_path: Path) ->
     )
 
 
-def test_handle_im_inbound_busy_session_replies_without_second_run(
+@pytest.mark.asyncio
+async def test_handle_im_inbound_busy_session_replies_without_second_run(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -251,7 +258,7 @@ def test_handle_im_inbound_busy_session_replies_without_second_run(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="inspect this repo",
@@ -272,7 +279,8 @@ def test_handle_im_inbound_busy_session_replies_without_second_run(
     )
 
 
-def test_handle_im_inbound_rejected_submit_replies_busy(
+@pytest.mark.asyncio
+async def test_handle_im_inbound_rejected_submit_replies_busy(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -285,7 +293,7 @@ def test_handle_im_inbound_rejected_submit_replies_busy(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="inspect this repo",
@@ -642,7 +650,8 @@ class _FakeIngressService:
         )
 
 
-def test_handle_im_inbound_fallback_session_id_without_session_id_param(
+@pytest.mark.asyncio
+async def test_handle_im_inbound_fallback_session_id_without_session_id_param(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -655,7 +664,7 @@ def test_handle_im_inbound_fallback_session_id_without_session_id_param(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="inspect this repo",
@@ -740,14 +749,18 @@ def test_get_im_callback_auth_token_disabled_account(tmp_path: Path) -> None:
         service.get_im_callback_auth_token(account.account_id)
 
 
-def test_should_suppress_empty_run_id(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_should_suppress_empty_run_id(tmp_path: Path) -> None:
     service = _build_service(tmp_path)
 
     assert service.should_suppress_xiaoluban_terminal_notification("") is False
     assert service.should_suppress_xiaoluban_terminal_notification(None) is False
 
 
-def test_handle_im_inbound_missing_gateway_session_service(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_handle_im_inbound_missing_gateway_session_service(
+    tmp_path: Path,
+) -> None:
     service = XiaolubanGatewayService(
         config_dir=tmp_path,
         repository=XiaolubanAccountRepository(tmp_path / "xiaoluban.db"),
@@ -769,7 +782,7 @@ def test_handle_im_inbound_missing_gateway_session_service(tmp_path: Path) -> No
         XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="hello",
@@ -780,7 +793,8 @@ def test_handle_im_inbound_missing_gateway_session_service(tmp_path: Path) -> No
     )
 
 
-def test_handle_im_inbound_missing_run_and_ingress(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_handle_im_inbound_missing_run_and_ingress(tmp_path: Path) -> None:
     fake_gateway_sessions = _FakeGatewaySessionService()
     service = XiaolubanGatewayService(
         config_dir=tmp_path,
@@ -803,7 +817,7 @@ def test_handle_im_inbound_missing_run_and_ingress(tmp_path: Path) -> None:
         XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="hello",
@@ -814,7 +828,8 @@ def test_handle_im_inbound_missing_run_and_ingress(tmp_path: Path) -> None:
     )
 
 
-def test_handle_im_inbound_missing_workspace_id(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_handle_im_inbound_missing_workspace_id(tmp_path: Path) -> None:
     fake_gateway_sessions = _FakeGatewaySessionService()
     service = XiaolubanGatewayService(
         config_dir=tmp_path,
@@ -834,7 +849,7 @@ def test_handle_im_inbound_missing_workspace_id(tmp_path: Path) -> None:
         )
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="hello",
@@ -845,7 +860,8 @@ def test_handle_im_inbound_missing_workspace_id(tmp_path: Path) -> None:
     )
 
 
-def test_handle_im_inbound_missing_token(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_handle_im_inbound_missing_token(tmp_path: Path) -> None:
     fake_store = _FakeSecretStore()
     fake_gateway_sessions = _FakeGatewaySessionService()
     service = XiaolubanGatewayService(
@@ -871,7 +887,7 @@ def test_handle_im_inbound_missing_token(tmp_path: Path) -> None:
     )
     fake_store.tokens.clear()
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="hello",
@@ -882,7 +898,8 @@ def test_handle_im_inbound_missing_token(tmp_path: Path) -> None:
     )
 
 
-def test_start_im_run_via_run_service(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_start_im_run_via_run_service(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     event_log = _FakeEventLog()
@@ -909,7 +926,7 @@ def test_start_im_run_via_run_service(tmp_path: Path) -> None:
         XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="hello",
@@ -1022,7 +1039,8 @@ def test_resolve_im_config_requires_workspace_id(tmp_path: Path) -> None:
         )
 
 
-def test_resolve_im_config_default_without_workspace_id(
+@pytest.mark.asyncio
+async def test_resolve_im_config_default_without_workspace_id(
     tmp_path: Path,
 ) -> None:
     service = _build_service(tmp_path)
@@ -1032,7 +1050,8 @@ def test_resolve_im_config_default_without_workspace_id(
     assert result.workspace_id is None
 
 
-def test_start_im_run_via_create_detached_run(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_start_im_run_via_create_detached_run(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     event_log = _FakeEventLog()
@@ -1059,7 +1078,7 @@ def test_start_im_run_via_create_detached_run(tmp_path: Path) -> None:
         XiaolubanImConfigUpdateInput(workspace_id="im-workspace"),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="hello",
@@ -1077,7 +1096,8 @@ def test_start_im_run_via_create_detached_run(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_command_new_creates_session_and_sends_reply(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_command_new_creates_session_and_sends_reply(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1088,7 +1108,7 @@ def test_command_new_creates_session_and_sends_reply(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1107,7 +1127,8 @@ def test_command_new_creates_session_and_sends_reply(tmp_path: Path) -> None:
     assert resolved_ids[0].startswith(base_id + ":")
 
 
-def test_command_new_with_task_creates_session_and_starts_run(
+@pytest.mark.asyncio
+async def test_command_new_with_task_creates_session_and_starts_run(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1120,7 +1141,7 @@ def test_command_new_with_task_creates_session_and_starts_run(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new 帮我看一下这个项目",
@@ -1139,7 +1160,8 @@ def test_command_new_with_task_creates_session_and_starts_run(
     assert resolved_ids[0].startswith(base_id + ":")
 
 
-def test_command_new_routes_subsequent_messages(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_command_new_routes_subsequent_messages(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1150,7 +1172,7 @@ def test_command_new_routes_subsequent_messages(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1159,7 +1181,7 @@ def test_command_new_routes_subsequent_messages(tmp_path: Path) -> None:
             session_id="welink-session-1",
         ),
     )
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="继续做任务",
@@ -1178,7 +1200,8 @@ def test_command_new_routes_subsequent_messages(tmp_path: Path) -> None:
     assert fake_ingress.requests[0].intent.intent == "继续做任务"
 
 
-def test_command_resume_lists_sessions(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_command_resume_lists_sessions(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1189,7 +1212,7 @@ def test_command_resume_lists_sessions(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1199,7 +1222,7 @@ def test_command_resume_lists_sessions(tmp_path: Path) -> None:
         ),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/resume",
@@ -1214,7 +1237,8 @@ def test_command_resume_lists_sessions(tmp_path: Path) -> None:
     assert "/resume" in list_message
 
 
-def test_command_resume_by_session_id_switches_session(
+@pytest.mark.asyncio
+async def test_command_resume_by_session_id_switches_session(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1227,7 +1251,7 @@ def test_command_resume_by_session_id_switches_session(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1239,7 +1263,7 @@ def test_command_resume_by_session_id_switches_session(
     new_call = fake_gateway_sessions.resolved_calls[0]
     target_internal_id = new_call.internal_session_id
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content=f"/resume {target_internal_id}",
@@ -1252,7 +1276,7 @@ def test_command_resume_by_session_id_switches_session(
     switch_reply = fake_client.sent_messages[-1][0]
     assert "已切换到会话" in switch_reply
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="在旧会话继续",
@@ -1264,7 +1288,8 @@ def test_command_resume_by_session_id_switches_session(
     assert fake_ingress.requests[0].intent.session_id == target_internal_id
 
 
-def test_command_resume_by_index_switches_session(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_command_resume_by_index_switches_session(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1275,7 +1300,7 @@ def test_command_resume_by_index_switches_session(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1285,7 +1310,7 @@ def test_command_resume_by_index_switches_session(tmp_path: Path) -> None:
         ),
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/resume 1",
@@ -1298,7 +1323,8 @@ def test_command_resume_by_index_switches_session(tmp_path: Path) -> None:
     assert "已切换到会话" in fake_client.sent_messages[-1][0]
 
 
-def test_command_resume_binds_existing_internal_session(
+@pytest.mark.asyncio
+async def test_command_resume_binds_existing_internal_session(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1318,7 +1344,7 @@ def test_command_resume_binds_existing_internal_session(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/resume session-existing",
@@ -1327,7 +1353,7 @@ def test_command_resume_binds_existing_internal_session(
             session_id="welink-session-1",
         ),
     )
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="继续这个会话",
@@ -1349,7 +1375,8 @@ def test_command_resume_binds_existing_internal_session(
     assert fake_ingress.requests[0].intent.session_id == "session-existing"
 
 
-def test_command_resume_ignores_stale_gateway_session(
+@pytest.mark.asyncio
+async def test_command_resume_ignores_stale_gateway_session(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1370,7 +1397,7 @@ def test_command_resume_ignores_stale_gateway_session(
         internal_session_id="session-stale",
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/resume session-stale",
@@ -1384,7 +1411,8 @@ def test_command_resume_ignores_stale_gateway_session(
     assert fake_gateway_sessions.bound_internal_calls == []
 
 
-def test_command_resume_rejects_stale_existing_gateway_binding(
+@pytest.mark.asyncio
+async def test_command_resume_rejects_stale_existing_gateway_binding(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1420,7 +1448,8 @@ def test_command_resume_rejects_stale_existing_gateway_binding(
     assert result is None
 
 
-def test_command_resume_invalid_session_shows_error(
+@pytest.mark.asyncio
+async def test_command_resume_invalid_session_shows_error(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1433,7 +1462,7 @@ def test_command_resume_invalid_session_shows_error(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/resume nonexistent",
@@ -1446,7 +1475,8 @@ def test_command_resume_invalid_session_shows_error(
     assert "未找到会话" in fake_client.sent_messages[-1][0]
 
 
-def test_command_help_shows_help_text(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_command_help_shows_help_text(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1457,7 +1487,7 @@ def test_command_help_shows_help_text(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/help",
@@ -1473,7 +1503,8 @@ def test_command_help_shows_help_text(tmp_path: Path) -> None:
     assert "/help" in help_message
 
 
-def test_slash_only_command_shows_help(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_slash_only_command_shows_help(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1484,7 +1515,7 @@ def test_slash_only_command_shows_help(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/   ",
@@ -1500,7 +1531,8 @@ def test_slash_only_command_shows_help(tmp_path: Path) -> None:
     assert fake_ingress.requests == []
 
 
-def test_normal_message_sends_ack_after_run_submit(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_normal_message_sends_ack_after_run_submit(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1511,7 +1543,7 @@ def test_normal_message_sends_ack_after_run_submit(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="帮我分析一下",
@@ -1527,7 +1559,8 @@ def test_normal_message_sends_ack_after_run_submit(tmp_path: Path) -> None:
     assert len(fake_ingress.requests) == 1
 
 
-def test_processing_ack_failure_keeps_terminal_reply_registered(
+@pytest.mark.asyncio
+async def test_processing_ack_failure_keeps_terminal_reply_registered(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient(fail_send_when_contains="处理中")
@@ -1540,7 +1573,7 @@ def test_processing_ack_failure_keeps_terminal_reply_registered(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="帮我分析一下",
@@ -1553,7 +1586,7 @@ def test_processing_ack_failure_keeps_terminal_reply_registered(
     assert len(fake_ingress.requests) == 1
     assert fake_gateway_sessions.bound_runs == [("gws-session-1", "run-1")]
     assert fake_client.sent_messages == []
-    service._drain_im_replies()
+    await service._drain_im_replies_async()
     assert fake_client.sent_messages[-1] == (
         _formatted_xiaoluban_text(
             session_id="session-1",
@@ -1564,7 +1597,10 @@ def test_processing_ack_failure_keeps_terminal_reply_registered(
     )
 
 
-def test_submit_rejection_sends_busy_without_processing_ack(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_submit_rejection_sends_busy_without_processing_ack(
+    tmp_path: Path,
+) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService(reject_submit=True)
@@ -1575,7 +1611,7 @@ def test_submit_rejection_sends_busy_without_processing_ack(tmp_path: Path) -> N
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="帮我分析一下",
@@ -1591,7 +1627,8 @@ def test_submit_rejection_sends_busy_without_processing_ack(tmp_path: Path) -> N
     assert "处理中" not in fake_client.sent_messages[-1][0]
 
 
-def test_non_slash_text_not_treated_as_command(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_non_slash_text_not_treated_as_command(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1602,7 +1639,7 @@ def test_non_slash_text_not_treated_as_command(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="用 /new 语法 ...",
@@ -1618,7 +1655,8 @@ def test_non_slash_text_not_treated_as_command(tmp_path: Path) -> None:
     assert fake_gateway_sessions.resolved_calls[0].external_session_id == base_id
 
 
-def test_command_new_without_platform_session_id_isolated_by_peer(
+@pytest.mark.asyncio
+async def test_command_new_without_platform_session_id_isolated_by_peer(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1631,7 +1669,7 @@ def test_command_new_without_platform_session_id_isolated_by_peer(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1640,7 +1678,7 @@ def test_command_new_without_platform_session_id_isolated_by_peer(
             session_id="",
         ),
     )
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="sender b task",
@@ -1659,7 +1697,8 @@ def test_command_new_without_platform_session_id_isolated_by_peer(
     assert fake_ingress.requests[0].intent.intent == "sender b task"
 
 
-def test_command_resume_without_existing_sessions(
+@pytest.mark.asyncio
+async def test_command_resume_without_existing_sessions(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1672,7 +1711,7 @@ def test_command_resume_without_existing_sessions(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/resume",
@@ -1761,7 +1800,8 @@ async def test_command_resume_replies_unavailable_without_gateway_sessions(
     assert fake_client.sent_messages[-1][1] == "uidself"
 
 
-def test_command_resume_by_prefix_match(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_command_resume_by_prefix_match(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService()
@@ -1772,7 +1812,7 @@ def test_command_resume_by_prefix_match(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/new",
@@ -1784,7 +1824,7 @@ def test_command_resume_by_prefix_match(tmp_path: Path) -> None:
     target_internal_id = fake_gateway_sessions.resolved_calls[0].internal_session_id
     prefix = target_internal_id[:6]
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content=f"/resume {prefix}",
@@ -1797,7 +1837,8 @@ def test_command_resume_by_prefix_match(tmp_path: Path) -> None:
     assert "已切换到会话" in fake_client.sent_messages[-1][0]
 
 
-def test_handle_im_inbound_unknown_command_routes_as_task(
+@pytest.mark.asyncio
+async def test_handle_im_inbound_unknown_command_routes_as_task(
     tmp_path: Path,
 ) -> None:
     fake_client = _FakeXiaolubanClient()
@@ -1810,7 +1851,7 @@ def test_handle_im_inbound_unknown_command_routes_as_task(
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="/some-unknown-command 参数",
@@ -1824,7 +1865,8 @@ def test_handle_im_inbound_unknown_command_routes_as_task(
     assert fake_ingress.requests[0].intent.intent == "/some-unknown-command 参数"
 
 
-def test_handle_im_inbound_busy_does_not_send_ack(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_handle_im_inbound_busy_does_not_send_ack(tmp_path: Path) -> None:
     fake_client = _FakeXiaolubanClient()
     fake_gateway_sessions = _FakeGatewaySessionService()
     fake_ingress = _FakeIngressService(active_run_id="run-active")
@@ -1835,7 +1877,7 @@ def test_handle_im_inbound_busy_does_not_send_ack(tmp_path: Path) -> None:
         session_ingress_service=fake_ingress,
     )
 
-    service.handle_im_inbound(
+    await service.handle_im_inbound_async(
         account_id=account.account_id,
         message=XiaolubanInboundMessage(
             content="帮我分析一下",

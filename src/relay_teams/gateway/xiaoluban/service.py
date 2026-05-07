@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
-import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Protocol, cast
@@ -292,16 +292,6 @@ class XiaolubanGatewayService:
 
         return await asyncio.to_thread(self.update_im_config, account_id, request)
 
-    def handle_im_inbound(
-        self,
-        *,
-        account_id: str,
-        message: XiaolubanInboundMessage,
-    ) -> None:
-        asyncio.run(
-            self.handle_im_inbound_async(account_id=account_id, message=message)
-        )
-
     async def handle_im_inbound_async(
         self,
         *,
@@ -325,7 +315,9 @@ class XiaolubanGatewayService:
                 workspace_id = ""
                 session_id = message.session_id
                 try:
-                    account = self._repository.get_account(account_id)
+                    account = await asyncio.to_thread(
+                        self._repository.get_account, account_id
+                    )
                     workspace_id = str(account.im_config.workspace_id or "")
                 except KeyError as lookup_exc:
                     log_event(
@@ -691,25 +683,12 @@ class XiaolubanGatewayService:
             )
             + f":{uuid4().hex[:8]}"
         )
-        gateway_session = self._gateway_session_service.resolve_or_create_session(
-            channel_type=GatewayChannelType.XIAOLUBAN,
-            external_session_id=new_external_id,
+        gateway_session = await asyncio.to_thread(
+            self._resolve_new_im_gateway_session,
+            account_id=account_id,
+            message=message,
             workspace_id=workspace_id,
-            metadata={
-                "source_provider": XIAOLUBAN_PLATFORM,
-                "source_kind": "im",
-                "xiaoluban_account_id": account_id,
-            },
-            cwd=None,
-            capabilities={},
-            channel_state={
-                "account_id": account_id,
-                "receiver": message.receiver,
-                "sender": message.sender,
-                "xiaoluban_session_id": message.session_id,
-            },
-            peer_user_id=message.sender or None,
-            peer_chat_id=message.receiver or None,
+            external_session_id=new_external_id,
         )
         conversation_key = self._im_conversation_key(
             account_id=account_id,
@@ -749,8 +728,10 @@ class XiaolubanGatewayService:
                 text="服务暂不可用，请稍后重试",
             )
             return None
-        gateway_sessions, internal_sessions = self._list_workspace_sessions(
-            account_id, workspace_id
+        gateway_sessions, internal_sessions = await asyncio.to_thread(
+            self._list_workspace_sessions,
+            account_id,
+            workspace_id,
         )
         if not arg:
             combined = _merge_and_sort_session_list(gateway_sessions, internal_sessions)
@@ -773,7 +754,8 @@ class XiaolubanGatewayService:
                 text=body,
             )
             return None
-        matched = self._find_session_for_resume(
+        matched = await asyncio.to_thread(
+            self._find_session_for_resume,
             arg,
             gateway_sessions,
             internal_sessions,
@@ -866,6 +848,38 @@ class XiaolubanGatewayService:
                 )
         return None
 
+    def _resolve_new_im_gateway_session(
+        self,
+        *,
+        account_id: str,
+        message: XiaolubanInboundMessage,
+        workspace_id: str,
+        external_session_id: str,
+    ) -> GatewaySessionRecord:
+        gateway_session_service = self._gateway_session_service
+        if gateway_session_service is None:
+            raise RuntimeError("xiaoluban_im_runtime_unavailable")
+        return gateway_session_service.resolve_or_create_session(
+            channel_type=GatewayChannelType.XIAOLUBAN,
+            external_session_id=external_session_id,
+            workspace_id=workspace_id,
+            metadata={
+                "source_provider": XIAOLUBAN_PLATFORM,
+                "source_kind": "im",
+                "xiaoluban_account_id": account_id,
+            },
+            cwd=None,
+            capabilities={},
+            channel_state={
+                "account_id": account_id,
+                "receiver": message.receiver,
+                "sender": message.sender,
+                "xiaoluban_session_id": message.session_id,
+            },
+            peer_user_id=message.sender or None,
+            peer_chat_id=message.receiver or None,
+        )
+
     def _ensure_gateway_session_for_internal_id(
         self,
         internal_session_id: str,
@@ -874,9 +888,10 @@ class XiaolubanGatewayService:
         workspace_id: str,
         message: XiaolubanInboundMessage,
     ) -> GatewaySessionRecord | None:
-        if self._gateway_session_service is None:
+        gateway_session_service = self._gateway_session_service
+        if gateway_session_service is None:
             raise RuntimeError("xiaoluban_im_runtime_unavailable")
-        existing = self._gateway_session_service.get_by_internal_session_id(
+        existing = gateway_session_service.get_by_internal_session_id(
             internal_session_id
         )
         xlb_prefix = f"xiaoluban:{account_id}:{workspace_id}:"
@@ -892,22 +907,20 @@ class XiaolubanGatewayService:
         ):
             if existing.external_session_id.startswith(xlb_prefix):
                 try:
-                    return (
-                        self._gateway_session_service.resolve_or_bind_internal_session(
-                            channel_type=GatewayChannelType.XIAOLUBAN,
-                            external_session_id=existing.external_session_id,
-                            internal_session_id=internal_session_id,
-                            workspace_id=workspace_id,
-                            channel_state=channel_state,
-                            capabilities={},
-                            peer_user_id=message.sender or None,
-                            peer_chat_id=message.receiver or None,
-                        )
+                    return gateway_session_service.resolve_or_bind_internal_session(
+                        channel_type=GatewayChannelType.XIAOLUBAN,
+                        external_session_id=existing.external_session_id,
+                        internal_session_id=internal_session_id,
+                        workspace_id=workspace_id,
+                        channel_state=channel_state,
+                        capabilities={},
+                        peer_user_id=message.sender or None,
+                        peer_chat_id=message.receiver or None,
                     )
                 except (KeyError, ValueError):
                     return None
         external_id = f"{xlb_prefix}internal:{internal_session_id}"
-        return self._gateway_session_service.resolve_or_bind_internal_session(
+        return gateway_session_service.resolve_or_bind_internal_session(
             channel_type=GatewayChannelType.XIAOLUBAN,
             external_session_id=external_id,
             internal_session_id=internal_session_id,
@@ -973,18 +986,21 @@ class XiaolubanGatewayService:
         account_id: str,
         message: XiaolubanInboundMessage,
     ) -> None:
-        if self._gateway_session_service is None:
+        gateway_session_service = self._gateway_session_service
+        if gateway_session_service is None:
             raise RuntimeError("xiaoluban_im_runtime_unavailable")
         if self._run_service is None and self._session_ingress_service is None:
             raise RuntimeError("xiaoluban_im_runtime_unavailable")
-        account = self._repository.get_account(account_id)
+        account = await asyncio.to_thread(self._repository.get_account, account_id)
         if account.status != XiaolubanAccountStatus.ENABLED:
             raise RuntimeError("xiaoluban_account_disabled")
         workspace_id = account.im_config.workspace_id
         if workspace_id is None:
             raise RuntimeError("xiaoluban_im_workspace_missing")
-        self._validate_im_workspace(workspace_id)
-        token = self._secret_store.get_token(self._config_dir, account_id)
+        await asyncio.to_thread(self._validate_im_workspace, workspace_id)
+        token = await asyncio.to_thread(
+            self._secret_store.get_token, self._config_dir, account_id
+        )
         if token is None:
             raise RuntimeError("missing_xiaoluban_token")
         await self._keep_alive_if_possible(account, token, message)
@@ -1016,7 +1032,8 @@ class XiaolubanGatewayService:
             if result is None:
                 return
             text = result
-        external_session_id = self._resolve_effective_external_session_id(
+        external_session_id = await asyncio.to_thread(
+            self._resolve_effective_external_session_id,
             account_id=account_id,
             message=message,
             workspace_id=workspace_id,
@@ -1037,7 +1054,8 @@ class XiaolubanGatewayService:
                 "external_session_id": external_session_id,
             },
         )
-        gateway_session = self._gateway_session_service.resolve_or_create_session(
+        gateway_session = await asyncio.to_thread(
+            gateway_session_service.resolve_or_create_session,
             channel_type=GatewayChannelType.XIAOLUBAN,
             external_session_id=external_session_id,
             workspace_id=workspace_id,
@@ -1073,7 +1091,10 @@ class XiaolubanGatewayService:
                 "external_session_id": external_session_id,
             },
         )
-        if self._active_run_id(gateway_session.internal_session_id) is not None:
+        active_run_id = await asyncio.to_thread(
+            self._active_run_id, gateway_session.internal_session_id
+        )
+        if active_run_id is not None:
             await self.send_notification_message(
                 account_id=account_id,
                 workspace_id=workspace_id,
@@ -1092,7 +1113,7 @@ class XiaolubanGatewayService:
                 source_kind="im",
             ),
         )
-        run_id = self._start_im_run(intent)
+        run_id = await asyncio.to_thread(self._start_im_run, intent)
         if run_id is None:
             await self.send_notification_message(
                 account_id=account_id,
@@ -1103,12 +1124,14 @@ class XiaolubanGatewayService:
                 receiver_uid=reply_target,
             )
             return
-        self._mark_im_terminal_notification_suppressed(run_id)
-        self._gateway_session_service.bind_active_run(
+        await asyncio.to_thread(self._mark_im_terminal_notification_suppressed, run_id)
+        await asyncio.to_thread(
+            gateway_session_service.bind_active_run,
             gateway_session.gateway_session_id,
             run_id,
         )
-        self._register_im_reply(
+        await asyncio.to_thread(
+            self._register_im_reply,
             account_id=account_id,
             gateway_session_id=gateway_session.gateway_session_id,
             workspace_id=workspace_id,
@@ -1116,7 +1139,7 @@ class XiaolubanGatewayService:
             run_id=run_id,
             reply_target=reply_target,
         )
-        self._ensure_poller_started()
+        await asyncio.to_thread(self._ensure_poller_started)
         log_event(
             LOGGER,
             logging.INFO,
@@ -1242,6 +1265,9 @@ class XiaolubanGatewayService:
                 )
 
     def _drain_im_replies(self) -> None:
+        asyncio.run(self._drain_im_replies_async())
+
+    async def _drain_im_replies_async(self) -> None:
         self._cleanup_im_terminal_suppression()
         with self._pending_im_replies_lock:
             pending = list(self._pending_im_replies.items())
@@ -1250,15 +1276,13 @@ class XiaolubanGatewayService:
                 terminal_text = self._terminal_text_for_run(run_id)
                 if not terminal_text:
                     continue
-                asyncio.run(
-                    self.send_notification_message(
-                        account_id=ctx.account_id,
-                        workspace_id=ctx.workspace_id,
-                        session_id=ctx.session_id,
-                        status="completed",
-                        body=terminal_text,
-                        receiver_uid=ctx.reply_target,
-                    )
+                await self.send_notification_message(
+                    account_id=ctx.account_id,
+                    workspace_id=ctx.workspace_id,
+                    session_id=ctx.session_id,
+                    status="completed",
+                    body=terminal_text,
+                    receiver_uid=ctx.reply_target,
                 )
                 with self._pending_im_replies_lock:
                     self._pending_im_replies.pop(run_id, None)

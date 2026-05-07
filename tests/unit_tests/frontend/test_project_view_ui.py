@@ -4043,8 +4043,8 @@ export async function fetchAutomationProject() {
         schedule_mode: "cron",
         cron_expression: "0 9 * * *",
         timezone: "Asia/Shanghai",
-        next_run_at: "2026-03-14T09:00:00Z",
-        last_run_started_at: "2026-03-14T08:00:00Z",
+        next_run_at: "2026-05-07T08:30:00+08:00",
+        last_run_started_at: "",
         delivery_events: [],
     };
 }
@@ -4168,8 +4168,25 @@ export async function updateAutomationProject() {
     )
     assert "automation-prompt-card" not in content_html
     assert "automation-prompt-inline" in content_html
+    assert "2026-05-07 00:30 UTC" in content_html
+    assert "Never" in content_html
     assert "feature-card automation-runs-card" not in content_html
     assert "automation-flat-section automation-runs-section" in content_html
+
+
+def test_project_view_formats_automation_project_detail_times_as_utc() -> None:
+    source = Path("frontend/dist/js/components/projectView.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "function formatAutomationUtcDateTime" in source
+    assert (
+        "const nextRunAt = formatAutomationUtcDateTime(project?.next_run_at" in source
+    )
+    assert (
+        "const lastRunAt = formatAutomationUtcDateTime(project?.last_run_started_at"
+        in source
+    )
 
 
 def test_project_view_keeps_automation_detail_visible_when_session_config_helpers_fail(

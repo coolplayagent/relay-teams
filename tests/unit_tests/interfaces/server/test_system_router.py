@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from collections.abc import Awaitable
 from typing import Callable, cast
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -145,6 +146,8 @@ class _FakeSystemService:
             None
         )
         self.last_verified_codeagent_profile_name: str | None = None
+        self.last_model_probe_request: ModelConnectivityProbeRequest | None = None
+        self.last_model_discovery_request: ModelDiscoveryRequest | None = None
         self.codeagent_auth_verify_result = CodeAgentAuthVerifyResult(
             status="valid",
             checked_at=datetime.now(UTC),
@@ -292,6 +295,11 @@ class _FakeSystemService:
             stale=refresh,
             providers=(),
         )
+
+    async def get_model_catalog_async(
+        self, *, refresh: bool = False
+    ) -> ModelCatalogResult:
+        return self.get_model_catalog(refresh=refresh)
 
     def save_model_profile(
         self,
@@ -733,6 +741,15 @@ class _FakeSystemService:
             }
         )
 
+    async def probe_connectivity_async(
+        self,
+        request: ModelConnectivityProbeRequest,
+    ) -> ModelConnectivityProbeResult:
+        self.last_model_probe_request = request
+        result = self.probe_connectivity(request)
+        assert isinstance(result, ModelConnectivityProbeResult)
+        return result
+
     def probe(
         self,
         request: object,
@@ -762,6 +779,8 @@ class _FakeSystemService:
         self,
         _request: object,
     ) -> ModelDiscoveryResult:
+        assert isinstance(_request, ModelDiscoveryRequest)
+        self.last_model_discovery_request = _request
         return ModelDiscoveryResult.model_validate(
             {
                 "ok": True,
@@ -779,6 +798,12 @@ class _FakeSystemService:
             }
         )
 
+    async def discover_models_async(
+        self,
+        request: ModelDiscoveryRequest,
+    ) -> ModelDiscoveryResult:
+        return self.discover_models(request)
+
     def verify_codeagent_auth(
         self,
         *,
@@ -786,6 +811,13 @@ class _FakeSystemService:
     ) -> CodeAgentAuthVerifyResult:
         self.last_verified_codeagent_profile_name = profile_name
         return self.codeagent_auth_verify_result
+
+    async def verify_codeagent_auth_async(
+        self,
+        *,
+        profile_name: str,
+    ) -> CodeAgentAuthVerifyResult:
+        return self.verify_codeagent_auth(profile_name=profile_name)
 
     def probe_webhook_connectivity(
         self,
@@ -1302,7 +1334,6 @@ def test_sync_system_read_routes_run_service_calls_in_threadpool(monkeypatch) ->
         "get_model_config",
         "get_model_profiles",
         "get_model_fallback_config",
-        "get_model_catalog",
         "get_provider_models",
         "get_notification_config",
         "get_saved_proxy_config",
@@ -1504,7 +1535,6 @@ def test_sync_system_write_routes_run_service_calls_in_threadpool(monkeypatch) -
         "delete_skill",
         "save_orchestration_config",
         "reload_model_config",
-        "get_model_catalog",
         "reload_proxy_config",
         "reload_mcp_config",
         "reload_skills_config",
@@ -2424,29 +2454,30 @@ def test_probe_model_connectivity() -> None:
     assert payload["token_usage"]["total_tokens"] == 9
 
 
-def test_probe_model_connectivity_runs_service_call_in_threadpool(
+def test_probe_model_connectivity_runs_service_call_in_network_probe_wrapper(
     monkeypatch,
 ) -> None:
     calls: list[ModelConnectivityProbeRequest] = []
 
-    async def fake_to_thread(
+    async def fake_network_probe(
         operation: str,
         func: Callable[
             [ModelConnectivityProbeRequest],
-            ModelConnectivityProbeResult,
+            Awaitable[ModelConnectivityProbeResult],
         ],
         request: ModelConnectivityProbeRequest,
     ) -> ModelConnectivityProbeResult:
         assert operation == "model.probe_connectivity"
         calls.append(request)
-        return func(request)
+        return await func(request)
 
     monkeypatch.setattr(
         system,
         "call_maybe_async_in_network_probe_thread",
-        fake_to_thread,
+        fake_network_probe,
     )
-    client = _create_test_client(_FakeSystemService())
+    service = _FakeSystemService()
+    client = _create_test_client(service)
 
     response = client.post(
         "/api/system/configs/model:probe",
@@ -2455,6 +2486,8 @@ def test_probe_model_connectivity_runs_service_call_in_threadpool(
 
     assert response.status_code == 200
     assert [call.profile_name for call in calls] == ["default"]
+    assert service.last_model_probe_request is not None
+    assert service.last_model_probe_request.profile_name == "default"
 
 
 def test_discover_model_catalog() -> None:
@@ -2477,26 +2510,27 @@ def test_discover_model_catalog() -> None:
     assert payload["models"] == ["fake-chat-model", "reasoning-model"]
 
 
-def test_discover_model_catalog_runs_service_call_in_threadpool(
+def test_discover_model_catalog_runs_service_call_in_network_probe_wrapper(
     monkeypatch,
 ) -> None:
     calls: list[ModelDiscoveryRequest] = []
 
-    async def fake_to_thread(
+    async def fake_network_probe(
         operation: str,
-        func: Callable[[ModelDiscoveryRequest], ModelDiscoveryResult],
+        func: Callable[[ModelDiscoveryRequest], Awaitable[ModelDiscoveryResult]],
         request: ModelDiscoveryRequest,
     ) -> ModelDiscoveryResult:
         assert operation == "model.discover_models"
         calls.append(request)
-        return func(request)
+        return await func(request)
 
     monkeypatch.setattr(
         system,
         "call_maybe_async_in_network_probe_thread",
-        fake_to_thread,
+        fake_network_probe,
     )
-    client = _create_test_client(_FakeSystemService())
+    service = _FakeSystemService()
+    client = _create_test_client(service)
 
     response = client.post(
         "/api/system/configs/model:discover",
@@ -2505,6 +2539,8 @@ def test_discover_model_catalog_runs_service_call_in_threadpool(
 
     assert response.status_code == 200
     assert [call.profile_name for call in calls] == ["default"]
+    assert service.last_model_discovery_request is not None
+    assert service.last_model_discovery_request.profile_name == "default"
 
 
 def test_reload_model_config_returns_bad_request_for_invalid_config() -> None:
@@ -3456,7 +3492,7 @@ def test_verify_codeagent_auth_returns_service_result() -> None:
 
 def test_verify_codeagent_auth_returns_bad_request_for_validation_errors() -> None:
     class _InvalidCodeAgentService(_FakeSystemService):
-        def verify_codeagent_auth(
+        async def verify_codeagent_auth_async(
             self,
             *,
             profile_name: str,

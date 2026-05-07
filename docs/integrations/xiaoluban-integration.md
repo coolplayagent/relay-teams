@@ -121,6 +121,9 @@ still shows `http://127.0.0.1:8000`.
 Xiaoluban gateway outbound provider traffic uses the shared async net client
 factories for text notification, keep-alive, and utility-route requests. The
 gateway does not keep a duplicate synchronous HTTP path for those operations.
+Inbound forwarding callbacks are dispatched to `handle_im_inbound_async()` as
+the single service entry point; tests and internal callers should await the async
+method instead of using a sync wrapper.
 
 Once in forwarding mode, the following interactive commands are available:
 

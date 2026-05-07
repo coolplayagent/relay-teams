@@ -93,9 +93,6 @@ class ModelCatalogService:
         self._source_url = source_url
         self._ttl_seconds = ttl_seconds
 
-    def get_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
-        return asyncio.run(self.get_catalog_async(refresh=refresh))
-
     def _load_cache(self) -> _ModelCatalogCacheEnvelope | None:
         cache_path = self._cache_path()
         if not cache_path.exists():
@@ -162,10 +159,8 @@ class ModelCatalogService:
             error_message=error_message,
         )
 
-    # -- async counterparts --
-
     async def get_catalog_async(self, *, refresh: bool = False) -> ModelCatalogResult:
-        cached = self._load_cache()
+        cached = await asyncio.to_thread(self._load_cache)
         if cached is not None and not refresh:
             return self._result_from_cache(
                 cached,
@@ -181,7 +176,7 @@ class ModelCatalogService:
                 providers=fetched.providers,
             )
             try:
-                self._write_cache(envelope)
+                await asyncio.to_thread(self._write_cache, envelope)
             except OSError as exc:
                 LOGGER.warning(
                     "Failed to write model catalog cache.",

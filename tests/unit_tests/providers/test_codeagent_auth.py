@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Lock
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
@@ -95,7 +94,8 @@ def test_codeagent_token_result_tracks_token_expiry() -> None:
     assert token_result.expires_at == expires_at
 
 
-def test_poll_token_sync_posts_client_code_json(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_poll_token_posts_client_code_json(monkeypatch) -> None:
     session = create_codeagent_oauth_session(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         client_id=DEFAULT_CODEAGENT_CLIENT_ID,
@@ -135,7 +135,7 @@ def test_poll_token_sync_posts_client_code_json(monkeypatch) -> None:
         lambda **kwargs: _FakeHttpClient(),
     )
 
-    token_result = CodeAgentTokenService().poll_token_sync(
+    token_result = await CodeAgentTokenService().poll_token(
         session=session,
         ssl_verify=None,
         connect_timeout_seconds=15.0,
@@ -151,7 +151,8 @@ def test_poll_token_sync_posts_client_code_json(monkeypatch) -> None:
     assert captured["headers"] == {"Content-Type": "application/json"}
 
 
-def test_poll_token_sync_returns_none_until_token_available(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_poll_token_returns_none_until_token_available(monkeypatch) -> None:
     session = create_codeagent_oauth_session(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         client_id=DEFAULT_CODEAGENT_CLIENT_ID,
@@ -184,7 +185,7 @@ def test_poll_token_sync_returns_none_until_token_available(monkeypatch) -> None
     )
 
     assert (
-        CodeAgentTokenService().poll_token_sync(
+        await CodeAgentTokenService().poll_token(
             session=session,
             ssl_verify=None,
             connect_timeout_seconds=15.0,
@@ -193,7 +194,8 @@ def test_poll_token_sync_returns_none_until_token_available(monkeypatch) -> None
     )
 
 
-def test_poll_token_sync_raises_for_http_error_response(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_poll_token_raises_for_http_error_response(monkeypatch) -> None:
     session = create_codeagent_oauth_session(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         client_id=DEFAULT_CODEAGENT_CLIENT_ID,
@@ -227,14 +229,15 @@ def test_poll_token_sync_raises_for_http_error_response(monkeypatch) -> None:
     )
 
     with pytest.raises(CodeAgentOAuthError, match="oauth upstream unavailable"):
-        CodeAgentTokenService().poll_token_sync(
+        await CodeAgentTokenService().poll_token(
             session=session,
             ssl_verify=None,
             connect_timeout_seconds=15.0,
         )
 
 
-def test_codeagent_token_service_uses_configured_access_token_first(
+@pytest.mark.asyncio
+async def test_codeagent_token_service_uses_configured_access_token_first(
     monkeypatch,
 ) -> None:
     def build_client(**kwargs: object) -> object:
@@ -246,7 +249,7 @@ def test_codeagent_token_service_uses_configured_access_token_first(
         build_client,
     )
 
-    token = CodeAgentTokenService().get_token_sync(
+    token = await CodeAgentTokenService().get_token(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         auth_config=CodeAgentAuthConfig(
             access_token="fresh-access-token",
@@ -259,13 +262,14 @@ def test_codeagent_token_service_uses_configured_access_token_first(
     assert token == "fresh-access-token"
 
 
-def test_codeagent_token_service_password_login_reuses_maas_token_service(
+@pytest.mark.asyncio
+async def test_codeagent_token_service_password_login_reuses_maas_token_service(
     monkeypatch,
 ) -> None:
     captured: dict[str, object] = {}
 
     class _FakeMaaSTokenService:
-        def get_auth_context_sync(
+        async def get_auth_context(
             self,
             *,
             auth_config: object,
@@ -285,7 +289,7 @@ def test_codeagent_token_service_password_login_reuses_maas_token_service(
         lambda: _FakeMaaSTokenService(),
     )
 
-    token = CodeAgentTokenService().get_token_sync(
+    token = await CodeAgentTokenService().get_token(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         auth_config=CodeAgentAuthConfig(
             auth_method=CodeAgentAuthMethod.PASSWORD,
@@ -305,14 +309,15 @@ def test_codeagent_token_service_password_login_reuses_maas_token_service(
     assert captured["force_refresh"] is False
 
 
-def test_codeagent_token_service_password_login_sync_requires_username_and_password() -> (
+@pytest.mark.asyncio
+async def test_codeagent_token_service_password_login_requires_username_and_password() -> (
     None
 ):
     with pytest.raises(
         CodeAgentOAuthError,
         match="CodeAgent username/password is not configured.",
     ):
-        CodeAgentTokenService().get_token_result_sync(
+        await CodeAgentTokenService().get_token_result(
             base_url=DEFAULT_CODEAGENT_BASE_URL,
             auth_config=CodeAgentAuthConfig(
                 auth_method=CodeAgentAuthMethod.PASSWORD,
@@ -323,11 +328,12 @@ def test_codeagent_token_service_password_login_sync_requires_username_and_passw
         )
 
 
-def test_codeagent_token_service_password_login_sync_maps_maas_login_error(
+@pytest.mark.asyncio
+async def test_codeagent_token_service_password_login_maps_maas_login_error(
     monkeypatch,
 ) -> None:
     class _FailingMaaSTokenService:
-        def get_auth_context_sync(
+        def get_auth_context(
             self,
             *,
             auth_config: object,
@@ -345,7 +351,7 @@ def test_codeagent_token_service_password_login_sync_maps_maas_login_error(
     )
 
     with pytest.raises(CodeAgentOAuthError, match="password login denied") as exc_info:
-        CodeAgentTokenService().get_token_result_sync(
+        await CodeAgentTokenService().get_token_result(
             base_url=DEFAULT_CODEAGENT_BASE_URL,
             auth_config=CodeAgentAuthConfig(
                 auth_method=CodeAgentAuthMethod.PASSWORD,
@@ -359,7 +365,8 @@ def test_codeagent_token_service_password_login_sync_maps_maas_login_error(
     assert exc_info.value.status_code == 401
 
 
-def test_codeagent_token_service_get_token_result_sync_uses_cached_result() -> None:
+@pytest.mark.asyncio
+async def test_codeagent_token_service_get_token_result_uses_cached_result() -> None:
     service = CodeAgentTokenService()
     auth_config = CodeAgentAuthConfig(refresh_token="refresh-token")
     token_result = CodeAgentOAuthTokenResult(
@@ -375,7 +382,7 @@ def test_codeagent_token_service_get_token_result_sync_uses_cached_result() -> N
         token_result=token_result
     )
 
-    result = service.get_token_result_sync(
+    result = await service.get_token_result(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         auth_config=auth_config,
         ssl_verify=None,
@@ -398,50 +405,6 @@ def test_codeagent_token_service_token_result_from_config_skips_password_auth() 
         )
         is None
     )
-
-
-def test_codeagent_token_service_get_token_result_sync_rechecks_cache_inside_lock(
-    monkeypatch,
-) -> None:
-    service = CodeAgentTokenService()
-    auth_config = CodeAgentAuthConfig(refresh_token="refresh-token")
-    cache_key = service._cache_key(
-        base_url=DEFAULT_CODEAGENT_BASE_URL,
-        auth_config=auth_config,
-    )
-    token_result = CodeAgentOAuthTokenResult(
-        access_token="late-access-token",
-        refresh_token="late-refresh-token",
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-
-    class _PrimingLock:
-        def __enter__(self) -> "_PrimingLock":
-            service._tokens[cache_key] = codeagent_auth_module._CodeAgentTokenRecord(
-                token_result=token_result
-            )
-            return self
-
-        def __exit__(self, *exc_info: object) -> None:
-            return None
-
-    monkeypatch.setattr(
-        service,
-        "refresh_token_sync",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("refresh endpoint should not be called")
-        ),
-    )
-    service._sync_locks[cache_key] = cast(Lock, _PrimingLock())
-
-    result = service.get_token_result_sync(
-        base_url=DEFAULT_CODEAGENT_BASE_URL,
-        auth_config=auth_config,
-        ssl_verify=None,
-        connect_timeout_seconds=15.0,
-    )
-
-    assert result == token_result
 
 
 def test_codeagent_token_service_cache_key_includes_secret_owner_id() -> None:
@@ -471,7 +434,8 @@ def test_codeagent_token_service_cache_key_includes_secret_owner_id() -> None:
     assert profile_a_key != profile_b_key
 
 
-def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
+@pytest.mark.asyncio
+async def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
     monkeypatch,
 ) -> None:
     clear_codeagent_oauth_session_store()
@@ -534,7 +498,7 @@ def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
     )
 
     service = CodeAgentTokenService()
-    token_result = service.get_token_result_sync(
+    token_result = await service.get_token_result(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         auth_config=CodeAgentAuthConfig(
             refresh_token="stale-refresh-token",
@@ -544,7 +508,7 @@ def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
         connect_timeout_seconds=15.0,
         force_refresh=True,
     )
-    refreshed_again = service.get_token_result_sync(
+    refreshed_again = await service.get_token_result(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         auth_config=CodeAgentAuthConfig(
             refresh_token="stale-refresh-token",
@@ -570,7 +534,8 @@ def test_codeagent_token_service_refreshes_with_rotated_refresh_token(
     clear_codeagent_token_service_cache()
 
 
-def test_codeagent_token_service_persists_rotated_tokens_for_secret_owner(
+@pytest.mark.asyncio
+async def test_codeagent_token_service_persists_rotated_tokens_for_secret_owner(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -623,7 +588,7 @@ def test_codeagent_token_service_persists_rotated_tokens_for_secret_owner(
         lambda **kwargs: _FakeHttpClient(),
     )
 
-    token_result = CodeAgentTokenService().get_token_result_sync(
+    token_result = await CodeAgentTokenService().get_token_result(
         base_url=DEFAULT_CODEAGENT_BASE_URL,
         auth_config=CodeAgentAuthConfig(
             refresh_token="stale-refresh-token",
@@ -704,19 +669,6 @@ def test_build_codeagent_request_headers_uses_access_token() -> None:
     assert headers["Accept"] == "text/event-stream"
     assert headers["X-snap-traceid"]
     assert headers["X-session-id"].startswith("ses_")
-
-
-def test_codeagent_token_service_refresh_token_sync_requires_refresh_token() -> None:
-    with pytest.raises(
-        CodeAgentOAuthError,
-        match="CodeAgent refresh token is not configured.",
-    ):
-        CodeAgentTokenService().refresh_token_sync(
-            base_url=DEFAULT_CODEAGENT_BASE_URL,
-            auth_config=CodeAgentAuthConfig(),
-            ssl_verify=None,
-            connect_timeout_seconds=15.0,
-        )
 
 
 @pytest.mark.asyncio
@@ -1076,88 +1028,6 @@ def test_codeagent_token_service_store_token_result_persists_when_session_missin
             "stored-refresh-token",
         ),
     ]
-
-
-def test_codeagent_request_auth_sync_flow_retries_after_unauthorized() -> None:
-    calls: list[bool] = []
-
-    class _FakeTokenService:
-        def get_token_sync(
-            self,
-            *,
-            base_url: str,
-            auth_config: CodeAgentAuthConfig,
-            ssl_verify: bool | None,
-            connect_timeout_seconds: float,
-            force_refresh: bool = False,
-        ) -> str:
-            _ = (base_url, auth_config, ssl_verify, connect_timeout_seconds)
-            calls.append(force_refresh)
-            return "retry-token" if force_refresh else "initial-token"
-
-    request = httpx.Request(
-        "POST",
-        "https://codeagent.example/codeAgentPro/chat/completions",
-        content=b'{"model":"codeagent-chat"}',
-    )
-    auth = codeagent_auth_module.CodeAgentRequestAuth(
-        base_url=DEFAULT_CODEAGENT_BASE_URL,
-        auth_config=CodeAgentAuthConfig(refresh_token="refresh-token"),
-        ssl_verify=None,
-        connect_timeout_seconds=15.0,
-        token_service=cast(CodeAgentTokenService, _FakeTokenService()),
-    )
-
-    flow = auth.sync_auth_flow(request)
-    first_request = next(flow)
-    retry_request = flow.send(httpx.Response(401, request=first_request))
-
-    assert first_request.headers["X-Auth-Token"] == "initial-token"
-    assert retry_request.headers["X-Auth-Token"] == "retry-token"
-    assert calls == [False, True]
-
-    with pytest.raises(StopIteration):
-        flow.send(httpx.Response(200, request=retry_request))
-
-
-def test_codeagent_request_auth_sync_flow_stops_after_success() -> None:
-    calls: list[bool] = []
-
-    class _FakeTokenService:
-        def get_token_sync(
-            self,
-            *,
-            base_url: str,
-            auth_config: CodeAgentAuthConfig,
-            ssl_verify: bool | None,
-            connect_timeout_seconds: float,
-            force_refresh: bool = False,
-        ) -> str:
-            _ = (base_url, auth_config, ssl_verify, connect_timeout_seconds)
-            calls.append(force_refresh)
-            return "initial-token"
-
-    request = httpx.Request(
-        "POST",
-        "https://codeagent.example/codeAgentPro/chat/completions",
-        content=b'{"model":"codeagent-chat"}',
-    )
-    auth = codeagent_auth_module.CodeAgentRequestAuth(
-        base_url=DEFAULT_CODEAGENT_BASE_URL,
-        auth_config=CodeAgentAuthConfig(refresh_token="refresh-token"),
-        ssl_verify=None,
-        connect_timeout_seconds=15.0,
-        token_service=cast(CodeAgentTokenService, _FakeTokenService()),
-    )
-
-    flow = auth.sync_auth_flow(request)
-    first_request = next(flow)
-
-    with pytest.raises(StopIteration):
-        flow.send(httpx.Response(200, request=first_request))
-
-    assert first_request.headers["X-Auth-Token"] == "initial-token"
-    assert calls == [False]
 
 
 @pytest.mark.asyncio

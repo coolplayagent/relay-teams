@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Callable
 from datetime import datetime, timezone
 import json
@@ -68,28 +67,6 @@ _MAX_PROBE_TIMEOUT_MS = 300_000
 ModelDiscoveryMetadataPolicy = Literal["allow_inference", "endpoint_only"]
 
 LOGGER = get_logger(__name__)
-
-
-def _run_async_http_request(
-    *,
-    method: Literal["GET", "POST"],
-    url: str,
-    headers: dict[str, str],
-    timeout_seconds: float,
-    ssl_verify: bool | None,
-    json_body: dict[str, object] | None = None,
-) -> httpx.Response:
-    async def request() -> httpx.Response:
-        async with create_async_http_client(
-            timeout_seconds=timeout_seconds,
-            connect_timeout_seconds=timeout_seconds,
-            ssl_verify=ssl_verify,
-        ) as client:
-            if method == "GET":
-                return await client.get(url, headers=headers)
-            return await client.post(url, headers=headers, json=json_body)
-
-    return asyncio.run(request())
 
 
 def _uses_openai_compatible_transport(provider: ProviderType) -> bool:
@@ -267,7 +244,7 @@ class ModelConnectivityProbeService:
     ) -> None:
         self._get_runtime: Callable[[], RuntimeConfig] = get_runtime
 
-    def probe(
+    async def probe_async(
         self,
         request: ModelConnectivityProbeRequest,
     ) -> ModelConnectivityProbeResult:
@@ -276,22 +253,22 @@ class ModelConnectivityProbeService:
         if resolved_config.provider == ProviderType.ECHO:
             return self._build_echo_result(resolved_config)
         if resolved_config.provider == ProviderType.MAAS:
-            return self._probe_maas(
+            return await self._probe_maas_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
             )
         if resolved_config.provider == ProviderType.CODEAGENT:
-            return self._probe_codeagent(
+            return await self._probe_codeagent_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
             )
         if _uses_openai_compatible_transport(resolved_config.provider):
-            return self._probe_openai_compatible(
+            return await self._probe_openai_compatible_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
             )
         if _uses_anthropic_transport(resolved_config.provider):
-            return self._probe_anthropic(
+            return await self._probe_anthropic_async(
                 config=resolved_config,
                 temperature=(
                     request.override.temperature
@@ -305,7 +282,7 @@ class ModelConnectivityProbeService:
             f"Connectivity probe is not supported for provider '{resolved_config.provider.value}'."
         )
 
-    def discover_models(
+    async def discover_models_async(
         self,
         request: ModelDiscoveryRequest,
     ) -> ModelDiscoveryResult:
@@ -329,25 +306,25 @@ class ModelConnectivityProbeService:
                 models=("echo",),
             )
         if resolved_config.provider == ProviderType.MAAS:
-            return self._discover_maas_models(
+            return await self._discover_maas_models_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
                 metadata_policy=request.metadata_policy,
             )
         if resolved_config.provider == ProviderType.CODEAGENT:
-            return self._discover_codeagent_models(
+            return await self._discover_codeagent_models_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
                 metadata_policy=request.metadata_policy,
             )
         if _uses_openai_compatible_transport(resolved_config.provider):
-            return self._discover_openai_compatible_models(
+            return await self._discover_openai_compatible_models_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
                 metadata_policy=request.metadata_policy,
             )
         if _uses_anthropic_transport(resolved_config.provider):
-            return self._discover_anthropic_models(
+            return await self._discover_anthropic_models_async(
                 config=resolved_config,
                 timeout_ms=timeout_ms,
                 metadata_policy=request.metadata_policy,
@@ -356,7 +333,7 @@ class ModelConnectivityProbeService:
             f"Model discovery is not supported for provider '{resolved_config.provider.value}'."
         )
 
-    def verify_codeagent_auth(
+    async def verify_codeagent_auth_async(
         self,
         *,
         profile_name: str,
@@ -384,50 +361,24 @@ class ModelConnectivityProbeService:
                 f"Model profile '{profile_name}' does not have CodeAgent auth configured."
             )
         checked_at = datetime.now(timezone.utc)
-        return self._verify_codeagent_auth_config(
+        return await self._verify_codeagent_auth_config_async(
             config=config,
             checked_at=checked_at,
         )
 
-    # -- async bridge methods --
-
-    async def probe_async(
-        self,
-        request: ModelConnectivityProbeRequest,
-    ) -> ModelConnectivityProbeResult:
-        """Async version of :meth:`probe`."""
-        return await asyncio.to_thread(self.probe, request)
-
-    async def discover_models_async(
-        self,
-        request: ModelDiscoveryRequest,
-    ) -> ModelDiscoveryResult:
-        """Async version of :meth:`discover_models`."""
-        return await asyncio.to_thread(self.discover_models, request)
-
-    async def verify_codeagent_auth_async(
-        self,
-        *,
-        profile_name: str,
-    ) -> CodeAgentAuthVerifyResult:
-        """Async version of :meth:`verify_codeagent_auth`."""
-        return await asyncio.to_thread(
-            self.verify_codeagent_auth, profile_name=profile_name
-        )
-
-    def _verify_codeagent_auth_config(
+    async def _verify_codeagent_auth_config_async(
         self,
         *,
         config: ModelEndpointConfig,
         checked_at: datetime,
     ) -> CodeAgentAuthVerifyResult:
-        token_or_result = self._get_codeagent_token_for_verify(
+        token_or_result = await self._get_codeagent_token_for_verify_async(
             config=config,
             checked_at=checked_at,
         )
         if isinstance(token_or_result, CodeAgentAuthVerifyResult):
             return token_or_result
-        response_or_result = self._send_codeagent_auth_verify_request(
+        response_or_result = await self._send_codeagent_auth_verify_request_async(
             config=config,
             checked_at=checked_at,
             token=token_or_result,
@@ -436,23 +387,20 @@ class ModelConnectivityProbeService:
             return response_or_result
         response = response_or_result
         if 200 <= response.status_code < 300:
-            return CodeAgentAuthVerifyResult(
-                status="valid",
-                checked_at=checked_at,
-            )
+            return CodeAgentAuthVerifyResult(status="valid", checked_at=checked_at)
         if response.status_code not in {401, 403}:
             return self._build_codeagent_auth_verify_http_error_result(
                 checked_at=checked_at,
                 response=response,
             )
-        retry_token_or_result = self._get_codeagent_token_for_verify(
+        retry_token_or_result = await self._get_codeagent_token_for_verify_async(
             config=config,
             checked_at=checked_at,
             force_refresh=True,
         )
         if isinstance(retry_token_or_result, CodeAgentAuthVerifyResult):
             return retry_token_or_result
-        retry_response_or_result = self._send_codeagent_auth_verify_request(
+        retry_response_or_result = await self._send_codeagent_auth_verify_request_async(
             config=config,
             checked_at=checked_at,
             token=retry_token_or_result,
@@ -461,10 +409,7 @@ class ModelConnectivityProbeService:
             return retry_response_or_result
         retry_response = retry_response_or_result
         if 200 <= retry_response.status_code < 300:
-            return CodeAgentAuthVerifyResult(
-                status="valid",
-                checked_at=checked_at,
-            )
+            return CodeAgentAuthVerifyResult(status="valid", checked_at=checked_at)
         if retry_response.status_code in {401, 403}:
             return CodeAgentAuthVerifyResult(
                 status="reauth_required",
@@ -504,9 +449,7 @@ class ModelConnectivityProbeService:
         if base_config is None:
             override = request.override
             if override is None:
-                raise ValueError(
-                    "Override config is required when profile_name is omitted."
-                )
+                raise ValueError("Provide profile_name, override, or both.")
             override_provider = override.provider or ProviderType.OPENAI_COMPATIBLE
             missing_fields: list[str] = []
             if override.model is None:
@@ -914,7 +857,7 @@ class ModelConnectivityProbeService:
             ),
         )
 
-    def _probe_maas(
+    async def _probe_maas_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -937,7 +880,7 @@ class ModelConnectivityProbeService:
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
         try:
-            token = get_maas_token_service().get_token_sync(
+            token = await get_maas_token_service().get_token(
                 auth_config=config.maas_auth,
                 ssl_verify=config.ssl_verify,
                 connect_timeout_seconds=timeout_ms / 1000,
@@ -968,7 +911,7 @@ class ModelConnectivityProbeService:
 
         headers["X-Auth-Token"] = token
         headers["app-id"] = DEFAULT_MAAS_APP_ID
-        response = self._post_probe_request(
+        response = await self._post_probe_request_async(
             config=config,
             endpoint=endpoint,
             headers=headers,
@@ -982,7 +925,7 @@ class ModelConnectivityProbeService:
 
         if response.status_code in {401, 403}:
             try:
-                refreshed_token = get_maas_token_service().get_token_sync(
+                refreshed_token = await get_maas_token_service().get_token(
                     auth_config=config.maas_auth,
                     ssl_verify=config.ssl_verify,
                     connect_timeout_seconds=timeout_ms / 1000,
@@ -1013,7 +956,7 @@ class ModelConnectivityProbeService:
                 )
             retry_headers = dict(headers)
             retry_headers["X-Auth-Token"] = refreshed_token
-            response = self._post_probe_request(
+            response = await self._post_probe_request_async(
                 config=config,
                 endpoint=endpoint,
                 headers=retry_headers,
@@ -1032,7 +975,7 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
-    def _probe_openai_compatible(
+    async def _probe_openai_compatible_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -1052,32 +995,17 @@ class ModelConnectivityProbeService:
         }
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        try:
-            response = _run_async_http_request(
-                method="POST",
-                url=endpoint,
-                headers=headers,
-                json_body=payload,
-                timeout_seconds=timeout_ms / 1000,
-                ssl_verify=config.ssl_verify,
-            )
-        except httpx.TimeoutException as exc:
-            return self._build_transport_error_result(
-                config=config,
-                checked_at=checked_at,
-                started=started,
-                error_code="network_timeout",
-                error_message=str(exc) or "Connection timed out.",
-            )
-        except httpx.RequestError as exc:
-            return self._build_transport_error_result(
-                config=config,
-                checked_at=checked_at,
-                started=started,
-                error_code="network_error",
-                error_message=str(exc) or "Failed to reach model endpoint.",
-            )
-
+        response = await self._post_probe_request_async(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            payload=payload,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelConnectivityProbeResult):
+            return response
         return self._build_probe_result_from_response(
             config=config,
             response=response,
@@ -1085,7 +1013,7 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
-    def _probe_anthropic(
+    async def _probe_anthropic_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -1106,7 +1034,7 @@ class ModelConnectivityProbeService:
             payload["temperature"] = temperature
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        response = self._post_probe_request(
+        response = await self._post_probe_request_async(
             config=config,
             endpoint=endpoint,
             headers=headers,
@@ -1124,7 +1052,7 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
-    def _probe_codeagent(
+    async def _probe_codeagent_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -1143,7 +1071,7 @@ class ModelConnectivityProbeService:
         }
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        token_or_result = self._get_codeagent_token_for_probe(
+        token_or_result = await self._get_codeagent_token_for_probe_async(
             config=config,
             checked_at=checked_at,
             started=started,
@@ -1156,7 +1084,7 @@ class ModelConnectivityProbeService:
             content_type="application/json",
             accept="text/event-stream",
         )
-        response = self._post_probe_request(
+        response = await self._post_probe_request_async(
             config=config,
             endpoint=endpoint,
             headers=headers,
@@ -1168,7 +1096,7 @@ class ModelConnectivityProbeService:
         if isinstance(response, ModelConnectivityProbeResult):
             return response
         if response.status_code in {401, 403}:
-            retry_token_or_result = self._get_codeagent_token_for_probe(
+            retry_token_or_result = await self._get_codeagent_token_for_probe_async(
                 config=config,
                 checked_at=checked_at,
                 started=started,
@@ -1177,15 +1105,14 @@ class ModelConnectivityProbeService:
             )
             if isinstance(retry_token_or_result, ModelConnectivityProbeResult):
                 return retry_token_or_result
-            retry_headers = build_codeagent_request_headers(
-                token=retry_token_or_result,
-                content_type="application/json",
-                accept="text/event-stream",
-            )
-            response = self._post_probe_request(
+            response = await self._post_probe_request_async(
                 config=config,
                 endpoint=endpoint,
-                headers=retry_headers,
+                headers=build_codeagent_request_headers(
+                    token=retry_token_or_result,
+                    content_type="application/json",
+                    accept="text/event-stream",
+                ),
                 payload=payload,
                 checked_at=checked_at,
                 started=started,
@@ -1200,7 +1127,7 @@ class ModelConnectivityProbeService:
             started=started,
         )
 
-    def _discover_maas_models(
+    async def _discover_maas_models_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1211,38 +1138,37 @@ class ModelConnectivityProbeService:
             raise ValueError("MAAS model discovery requires maas_auth configuration.")
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        auth_context_or_result = self._get_maas_model_discovery_auth_context(
-            config=config,
-            checked_at=checked_at,
-            started=started,
-            timeout_ms=timeout_ms,
+        auth_context_or_result = (
+            await self._get_maas_model_discovery_auth_context_async(
+                config=config,
+                checked_at=checked_at,
+                started=started,
+                timeout_ms=timeout_ms,
+            )
         )
         if isinstance(auth_context_or_result, ModelDiscoveryResult):
             return auth_context_or_result
         auth_context = auth_context_or_result
-
         department = auth_context.department
         assert department is not None
         headers = {
             "Content-Type": "application/json",
             "X-Auth-Token": auth_context.token,
         }
-        payload = self._build_maas_model_discovery_payload(department=department)
-        response = self._post_model_discovery_request(
+        response = await self._post_model_discovery_request_async(
             config=config,
             endpoint=DEFAULT_MAAS_DISCOVERY_URL,
             headers=headers,
-            payload=payload,
+            payload=self._build_maas_model_discovery_payload(department=department),
             checked_at=checked_at,
             started=started,
             timeout_ms=timeout_ms,
         )
         if isinstance(response, ModelDiscoveryResult):
             return response
-
         if response.status_code in {401, 403}:
             refreshed_auth_context_or_result = (
-                self._get_maas_model_discovery_auth_context(
+                await self._get_maas_model_discovery_auth_context_async(
                     config=config,
                     checked_at=checked_at,
                     started=started,
@@ -1253,26 +1179,23 @@ class ModelConnectivityProbeService:
             if isinstance(refreshed_auth_context_or_result, ModelDiscoveryResult):
                 return refreshed_auth_context_or_result
             refreshed_auth_context = refreshed_auth_context_or_result
-
             refreshed_department = refreshed_auth_context.department
             assert refreshed_department is not None
             retry_headers = dict(headers)
             retry_headers["X-Auth-Token"] = refreshed_auth_context.token
-            retry_payload = self._build_maas_model_discovery_payload(
-                department=refreshed_department
-            )
-            response = self._post_model_discovery_request(
+            response = await self._post_model_discovery_request_async(
                 config=config,
                 endpoint=DEFAULT_MAAS_DISCOVERY_URL,
                 headers=retry_headers,
-                payload=retry_payload,
+                payload=self._build_maas_model_discovery_payload(
+                    department=refreshed_department
+                ),
                 checked_at=checked_at,
                 started=started,
                 timeout_ms=timeout_ms,
             )
             if isinstance(response, ModelDiscoveryResult):
                 return response
-
         return self._build_model_discovery_result_from_response(
             config=config,
             response=response,
@@ -1281,7 +1204,7 @@ class ModelConnectivityProbeService:
             metadata_policy=metadata_policy,
         )
 
-    def _discover_openai_compatible_models(
+    async def _discover_openai_compatible_models_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1302,117 +1225,25 @@ class ModelConnectivityProbeService:
         )
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        try:
-            response = _run_async_http_request(
-                method="GET",
-                url=endpoint,
-                headers=headers,
-                timeout_seconds=timeout_ms / 1000,
-                ssl_verify=config.ssl_verify,
-            )
-        except httpx.TimeoutException as exc:
-            return self._build_model_discovery_transport_error_result(
-                config=config,
-                checked_at=checked_at,
-                started=started,
-                error_code="network_timeout",
-                error_message=str(exc) or "Connection timed out.",
-            )
-        except httpx.RequestError as exc:
-            return self._build_model_discovery_transport_error_result(
-                config=config,
-                checked_at=checked_at,
-                started=started,
-                error_code="network_error",
-                error_message=str(exc) or "Failed to reach model endpoint.",
-            )
-
-        latency_ms = self._latency_ms(started)
-        response_payload = self._response_payload(response)
-        if response.status_code >= 400:
-            error_message = (
-                self._extract_error_message(response_payload) or response.text
-            )
-            return self._build_model_discovery_http_error_result(
-                config=config,
-                checked_at=checked_at,
-                latency_ms=latency_ms,
-                status_code=response.status_code,
-                error_message=error_message or "Model discovery failed.",
-            )
-
-        if response_payload is _INVALID_RESPONSE_PAYLOAD:
-            return ModelDiscoveryResult(
-                ok=False,
-                provider=config.provider,
-                base_url=config.base_url,
-                latency_ms=latency_ms,
-                checked_at=checked_at,
-                diagnostics=ModelConnectivityDiagnostics(
-                    endpoint_reachable=True,
-                    auth_valid=True,
-                    rate_limited=False,
-                ),
-                error_code="invalid_response",
-                error_message="Provider returned invalid JSON.",
-                retryable=False,
-            )
-
-        if not isinstance(response_payload, dict | list):
-            return ModelDiscoveryResult(
-                ok=False,
-                provider=config.provider,
-                base_url=config.base_url,
-                latency_ms=latency_ms,
-                checked_at=checked_at,
-                diagnostics=ModelConnectivityDiagnostics(
-                    endpoint_reachable=True,
-                    auth_valid=True,
-                    rate_limited=False,
-                ),
-                error_code="invalid_response",
-                error_message="Provider returned a non-object JSON payload.",
-                retryable=False,
-            )
-
-        model_entries = self._extract_model_entries(
-            payload=response_payload,
-            provider=config.provider,
+        response = await self._get_model_discovery_request_async(
+            config=config,
+            endpoint=endpoint,
+            headers=headers,
+            checked_at=checked_at,
+            started=started,
+            timeout_ms=timeout_ms,
+        )
+        if isinstance(response, ModelDiscoveryResult):
+            return response
+        return self._build_model_discovery_result_from_response(
+            config=config,
+            response=response,
+            checked_at=checked_at,
+            started=started,
             metadata_policy=metadata_policy,
         )
-        if model_entries is None:
-            return ModelDiscoveryResult(
-                ok=False,
-                provider=config.provider,
-                base_url=config.base_url,
-                latency_ms=latency_ms,
-                checked_at=checked_at,
-                diagnostics=ModelConnectivityDiagnostics(
-                    endpoint_reachable=True,
-                    auth_valid=True,
-                    rate_limited=False,
-                ),
-                error_code="invalid_response",
-                error_message="Provider returned an invalid model catalog payload.",
-                retryable=False,
-            )
 
-        return ModelDiscoveryResult(
-            ok=True,
-            provider=config.provider,
-            base_url=config.base_url,
-            latency_ms=latency_ms,
-            checked_at=checked_at,
-            diagnostics=ModelConnectivityDiagnostics(
-                endpoint_reachable=True,
-                auth_valid=True,
-                rate_limited=False,
-            ),
-            models=tuple(entry.model for entry in model_entries),
-            model_entries=model_entries,
-        )
-
-    def _discover_anthropic_models(
+    async def _discover_anthropic_models_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1432,7 +1263,7 @@ class ModelConnectivityProbeService:
         )
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        response = self._get_model_discovery_request(
+        response = await self._get_model_discovery_request_async(
             config=config,
             endpoint=endpoint,
             headers=headers,
@@ -1450,7 +1281,7 @@ class ModelConnectivityProbeService:
             metadata_policy=metadata_policy,
         )
 
-    def _discover_codeagent_models(
+    async def _discover_codeagent_models_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1464,7 +1295,7 @@ class ModelConnectivityProbeService:
         endpoint = f"{config.base_url.rstrip('/')}/chat/modles?checkUserPermission=TRUE"
         started = perf_counter()
         checked_at = datetime.now(timezone.utc)
-        token_or_result = self._get_codeagent_token_for_discovery(
+        token_or_result = await self._get_codeagent_token_for_discovery_async(
             config=config,
             checked_at=checked_at,
             started=started,
@@ -1472,11 +1303,10 @@ class ModelConnectivityProbeService:
         )
         if isinstance(token_or_result, ModelDiscoveryResult):
             return token_or_result
-        headers = build_codeagent_request_headers(token=token_or_result)
-        response = self._get_model_discovery_request(
+        response = await self._get_model_discovery_request_async(
             config=config,
             endpoint=endpoint,
-            headers=headers,
+            headers=build_codeagent_request_headers(token=token_or_result),
             checked_at=checked_at,
             started=started,
             timeout_ms=timeout_ms,
@@ -1484,7 +1314,7 @@ class ModelConnectivityProbeService:
         if isinstance(response, ModelDiscoveryResult):
             return response
         if response.status_code in {401, 403}:
-            retry_token_or_result = self._get_codeagent_token_for_discovery(
+            retry_token_or_result = await self._get_codeagent_token_for_discovery_async(
                 config=config,
                 checked_at=checked_at,
                 started=started,
@@ -1493,7 +1323,7 @@ class ModelConnectivityProbeService:
             )
             if isinstance(retry_token_or_result, ModelDiscoveryResult):
                 return retry_token_or_result
-            response = self._get_model_discovery_request(
+            response = await self._get_model_discovery_request_async(
                 config=config,
                 endpoint=endpoint,
                 headers=build_codeagent_request_headers(token=retry_token_or_result),
@@ -1511,7 +1341,7 @@ class ModelConnectivityProbeService:
             metadata_policy=metadata_policy,
         )
 
-    def _get_maas_model_discovery_auth_context(
+    async def _get_maas_model_discovery_auth_context_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1522,7 +1352,7 @@ class ModelConnectivityProbeService:
     ) -> MaaSAuthContext | ModelDiscoveryResult:
         auth_config = cast(MaaSAuthConfig, config.maas_auth)
         try:
-            auth_context = get_maas_token_service().get_auth_context_sync(
+            auth_context = await get_maas_token_service().get_auth_context(
                 auth_config=auth_config,
                 ssl_verify=config.ssl_verify,
                 connect_timeout_seconds=timeout_ms / 1000,
@@ -1551,11 +1381,10 @@ class ModelConnectivityProbeService:
                 started=started,
                 error=exc,
             )
-
         if auth_context.department is not None:
             return auth_context
         if not force_refresh:
-            return self._get_maas_model_discovery_auth_context(
+            return await self._get_maas_model_discovery_auth_context_async(
                 config=config,
                 checked_at=checked_at,
                 started=started,
@@ -1607,7 +1436,7 @@ class ModelConnectivityProbeService:
             "department": department,
         }
 
-    def _post_model_discovery_request(
+    async def _post_model_discovery_request_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1619,14 +1448,12 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> httpx.Response | ModelDiscoveryResult:
         try:
-            return _run_async_http_request(
-                method="POST",
-                url=endpoint,
-                headers=headers,
-                json_body=payload,
+            async with create_async_http_client(
                 timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            )
+            ) as client:
+                return await client.post(endpoint, headers=headers, json=payload)
         except httpx.TimeoutException as exc:
             return self._build_model_discovery_transport_error_result(
                 config=config,
@@ -1644,7 +1471,7 @@ class ModelConnectivityProbeService:
                 error_message=str(exc) or "Failed to reach model endpoint.",
             )
 
-    def _get_model_discovery_request(
+    async def _get_model_discovery_request_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1655,13 +1482,12 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> httpx.Response | ModelDiscoveryResult:
         try:
-            return _run_async_http_request(
-                method="GET",
-                url=endpoint,
-                headers=headers,
+            async with create_async_http_client(
                 timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            )
+            ) as client:
+                return await client.get(endpoint, headers=headers)
         except httpx.TimeoutException as exc:
             return self._build_model_discovery_transport_error_result(
                 config=config,
@@ -1773,7 +1599,7 @@ class ModelConnectivityProbeService:
             model_entries=model_entries,
         )
 
-    def _post_probe_request(
+    async def _post_probe_request_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -1785,14 +1611,12 @@ class ModelConnectivityProbeService:
         timeout_ms: int,
     ) -> httpx.Response | ModelConnectivityProbeResult:
         try:
-            return _run_async_http_request(
-                method="POST",
-                url=endpoint,
-                headers=headers,
-                json_body=payload,
+            async with create_async_http_client(
                 timeout_seconds=timeout_ms / 1000,
+                connect_timeout_seconds=timeout_ms / 1000,
                 ssl_verify=config.ssl_verify,
-            )
+            ) as client:
+                return await client.post(endpoint, headers=headers, json=payload)
         except httpx.TimeoutException as exc:
             return self._build_transport_error_result(
                 config=config,
@@ -1858,7 +1682,7 @@ class ModelConnectivityProbeService:
             retryable=retryable,
         )
 
-    def _get_codeagent_token_for_probe(
+    async def _get_codeagent_token_for_probe_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -1871,7 +1695,7 @@ class ModelConnectivityProbeService:
             auth_config = self._resolve_codeagent_auth_for_request(
                 self._require_codeagent_auth_config(config.codeagent_auth)
             )
-            return get_codeagent_token_service().get_token_sync(
+            return await get_codeagent_token_service().get_token(
                 base_url=config.base_url,
                 auth_config=auth_config,
                 ssl_verify=config.ssl_verify,
@@ -1902,7 +1726,7 @@ class ModelConnectivityProbeService:
                 error=exc,
             )
 
-    def _get_codeagent_token_for_verify(
+    async def _get_codeagent_token_for_verify_async(
         self,
         *,
         config: ModelEndpointConfig,
@@ -1913,7 +1737,7 @@ class ModelConnectivityProbeService:
             auth_config = self._resolve_codeagent_auth_for_request(
                 self._require_codeagent_auth_config(config.codeagent_auth)
             )
-            return get_codeagent_token_service().get_token_sync(
+            return await get_codeagent_token_service().get_token(
                 base_url=config.base_url,
                 auth_config=auth_config,
                 ssl_verify=config.ssl_verify,
@@ -1943,7 +1767,7 @@ class ModelConnectivityProbeService:
                 detail=str(exc) or "CodeAgent OAuth request failed.",
             )
 
-    def _get_codeagent_token_for_discovery(
+    async def _get_codeagent_token_for_discovery_async(
         self,
         *,
         config: ModelDiscoveryResolvedConfig,
@@ -1956,7 +1780,7 @@ class ModelConnectivityProbeService:
             auth_config = self._resolve_codeagent_auth_for_request(
                 self._require_codeagent_auth_config(config.codeagent_auth)
             )
-            return get_codeagent_token_service().get_token_sync(
+            return await get_codeagent_token_service().get_token(
                 base_url=config.base_url,
                 auth_config=auth_config,
                 ssl_verify=config.ssl_verify,
@@ -2043,7 +1867,7 @@ class ModelConnectivityProbeService:
         return auth_config
 
     @staticmethod
-    def _send_codeagent_auth_verify_request(
+    async def _send_codeagent_auth_verify_request_async(
         *,
         config: ModelEndpointConfig,
         checked_at: datetime,
@@ -2051,13 +1875,15 @@ class ModelConnectivityProbeService:
     ) -> httpx.Response | CodeAgentAuthVerifyResult:
         endpoint = f"{config.base_url.rstrip('/')}/chat/modles?checkUserPermission=TRUE"
         try:
-            return _run_async_http_request(
-                method="GET",
-                url=endpoint,
-                headers=build_codeagent_request_headers(token=token),
+            async with create_async_http_client(
                 timeout_seconds=config.connect_timeout_seconds,
+                connect_timeout_seconds=config.connect_timeout_seconds,
                 ssl_verify=config.ssl_verify,
-            )
+            ) as client:
+                return await client.get(
+                    endpoint,
+                    headers=build_codeagent_request_headers(token=token),
+                )
         except httpx.TimeoutException as exc:
             return CodeAgentAuthVerifyResult(
                 status="error",

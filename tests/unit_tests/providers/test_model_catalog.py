@@ -35,7 +35,8 @@ class _FakeCatalogClient:
         return self._response
 
 
-def test_model_catalog_fetches_models_dev_payload(
+@pytest.mark.asyncio
+async def test_model_catalog_fetches_models_dev_payload(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -79,7 +80,7 @@ def test_model_catalog_fetches_models_dev_payload(
         get_proxy_config=ProxyEnvConfig,
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert client.requested_urls == ["https://models.dev/api.json"]
@@ -94,7 +95,8 @@ def test_model_catalog_fetches_models_dev_payload(
     assert provider.models[0].input_modalities[0].value == "image"
 
 
-def test_model_catalog_marks_anthropic_compatible_marketplace_provider(
+@pytest.mark.asyncio
+async def test_model_catalog_marks_anthropic_compatible_marketplace_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -126,14 +128,15 @@ def test_model_catalog_marks_anthropic_compatible_marketplace_provider(
         get_proxy_config=ProxyEnvConfig,
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert result.providers[0].runtime_provider == ProviderType.ANTHROPIC
     assert result.providers[0].models[0].context_window == 204800
 
 
-def test_model_catalog_marks_anthropic_api_path_as_anthropic_provider(
+@pytest.mark.asyncio
+async def test_model_catalog_marks_anthropic_api_path_as_anthropic_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -159,13 +162,14 @@ def test_model_catalog_marks_anthropic_api_path_as_anthropic_provider(
         get_proxy_config=ProxyEnvConfig,
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert result.providers[0].runtime_provider == ProviderType.ANTHROPIC
 
 
-def test_model_catalog_marks_anthropic_api_root_as_anthropic_provider(
+@pytest.mark.asyncio
+async def test_model_catalog_marks_anthropic_api_root_as_anthropic_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -191,13 +195,14 @@ def test_model_catalog_marks_anthropic_api_root_as_anthropic_provider(
         get_proxy_config=ProxyEnvConfig,
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert result.providers[0].runtime_provider == ProviderType.ANTHROPIC
 
 
-def test_model_catalog_uses_proxy_config_and_30_second_timeout(
+@pytest.mark.asyncio
+async def test_model_catalog_uses_proxy_config_and_30_second_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,7 +230,7 @@ def test_model_catalog_uses_proxy_config_and_30_second_timeout(
         get_proxy_config=lambda: proxy_config,
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert len(captured_kwargs) == 1
@@ -234,7 +239,8 @@ def test_model_catalog_uses_proxy_config_and_30_second_timeout(
     assert captured_kwargs[0]["connect_timeout_seconds"] == 30.0
 
 
-def test_model_catalog_returns_fetched_data_when_cache_write_fails(
+@pytest.mark.asyncio
+async def test_model_catalog_returns_fetched_data_when_cache_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -261,13 +267,14 @@ def test_model_catalog_returns_fetched_data_when_cache_write_fails(
         get_proxy_config=lambda: ProxyEnvConfig(),
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert result.providers[0].models[0].id == "gpt-4o"
 
 
-def test_model_catalog_retries_transient_network_errors(
+@pytest.mark.asyncio
+async def test_model_catalog_retries_transient_network_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -298,14 +305,15 @@ def test_model_catalog_retries_transient_network_errors(
         get_proxy_config=lambda: ProxyEnvConfig(),
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is True
     assert len(created_clients) == 2
     assert result.providers[0].models[0].id == "gpt-4o"
 
 
-def test_model_catalog_uses_fresh_cache_without_fetching(
+@pytest.mark.asyncio
+async def test_model_catalog_uses_fresh_cache_without_fetching(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -334,21 +342,22 @@ def test_model_catalog_uses_fresh_cache_without_fetching(
         "create_async_http_client",
         lambda **_kwargs: first_client,
     )
-    assert service.get_catalog(refresh=True).ok is True
+    assert (await service.get_catalog_async(refresh=True)).ok is True
 
     def fail_fetch(**_kwargs: object) -> _FakeCatalogClient:
         raise AssertionError("fresh cache should avoid network")
 
     monkeypatch.setattr(model_catalog, "create_async_http_client", fail_fetch)
 
-    cached = service.get_catalog()
+    cached = await service.get_catalog_async()
 
     assert cached.ok is True
     assert cached.cache_age_seconds is not None
     assert cached.providers[0].models[0].id == "gpt-4o"
 
 
-def test_model_catalog_returns_stale_cache_when_refresh_fails(
+@pytest.mark.asyncio
+async def test_model_catalog_returns_stale_cache_when_refresh_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -373,7 +382,7 @@ def test_model_catalog_returns_stale_cache_when_refresh_fails(
         "create_async_http_client",
         lambda **_kwargs: success_client,
     )
-    assert service.get_catalog(refresh=True).ok is True
+    assert (await service.get_catalog_async(refresh=True)).ok is True
 
     failed_client = _FakeCatalogClient(httpx.ConnectError("offline"))
     monkeypatch.setattr(
@@ -382,7 +391,7 @@ def test_model_catalog_returns_stale_cache_when_refresh_fails(
         lambda **_kwargs: failed_client,
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is False
     assert result.stale is True
@@ -390,7 +399,8 @@ def test_model_catalog_returns_stale_cache_when_refresh_fails(
     assert result.providers[0].models[0].id == "gpt-4o"
 
 
-def test_model_catalog_prefers_stale_cache_without_fetching(
+@pytest.mark.asyncio
+async def test_model_catalog_prefers_stale_cache_without_fetching(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -415,21 +425,22 @@ def test_model_catalog_prefers_stale_cache_without_fetching(
         "create_async_http_client",
         lambda **_kwargs: success_client,
     )
-    assert service.get_catalog(refresh=True).ok is True
+    assert (await service.get_catalog_async(refresh=True)).ok is True
 
     def fail_fetch(**_kwargs: object) -> _FakeCatalogClient:
         raise AssertionError("cached catalog should be returned before refresh")
 
     monkeypatch.setattr(model_catalog, "create_async_http_client", fail_fetch)
 
-    result = service.get_catalog()
+    result = await service.get_catalog_async()
 
     assert result.ok is True
     assert result.stale is True
     assert result.providers[0].models[0].id == "gpt-4o"
 
 
-def test_model_catalog_without_cache_reports_fetch_error(
+@pytest.mark.asyncio
+async def test_model_catalog_without_cache_reports_fetch_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -444,7 +455,7 @@ def test_model_catalog_without_cache_reports_fetch_error(
         get_proxy_config=lambda: ProxyEnvConfig(),
     )
 
-    result = service.get_catalog(refresh=True)
+    result = await service.get_catalog_async(refresh=True)
 
     assert result.ok is False
     assert result.providers == ()

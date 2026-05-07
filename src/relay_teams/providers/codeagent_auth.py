@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections.abc import AsyncGenerator, Generator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from secrets import token_hex, token_urlsafe
@@ -124,91 +124,11 @@ class CodeAgentOAuthError(RuntimeError):
 class CodeAgentTokenService:
     def __init__(self) -> None:
         self._tokens: dict[str, _CodeAgentTokenRecord] = {}
-        self._sync_locks: dict[str, Lock] = {}
         self._async_locks: dict[str, asyncio.Lock] = {}
 
     def clear(self) -> None:
         self._tokens.clear()
-        self._sync_locks.clear()
         self._async_locks.clear()
-
-    def get_token_sync(
-        self,
-        *,
-        base_url: str,
-        auth_config: CodeAgentAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-        force_refresh: bool = False,
-    ) -> str:
-        return self.get_token_result_sync(
-            base_url=base_url,
-            auth_config=auth_config,
-            ssl_verify=ssl_verify,
-            connect_timeout_seconds=connect_timeout_seconds,
-            force_refresh=force_refresh,
-        ).access_token
-
-    def get_token_result_sync(
-        self,
-        *,
-        base_url: str,
-        auth_config: CodeAgentAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-        force_refresh: bool = False,
-    ) -> CodeAgentOAuthTokenResult:
-        cache_key = self._cache_key(base_url=base_url, auth_config=auth_config)
-        cached = self._tokens.get(cache_key)
-        if (
-            not force_refresh
-            and cached is not None
-            and not self._should_refresh(cached.token_result)
-        ):
-            return cached.token_result
-        lock = self._sync_locks.setdefault(cache_key, Lock())
-        with lock:
-            cached = self._tokens.get(cache_key)
-            if (
-                not force_refresh
-                and cached is not None
-                and not self._should_refresh(cached.token_result)
-            ):
-                return cached.token_result
-            if auth_config.auth_method == CodeAgentAuthMethod.PASSWORD:
-                result = self._login_with_password_sync(
-                    auth_config=auth_config,
-                    ssl_verify=ssl_verify,
-                    connect_timeout_seconds=connect_timeout_seconds,
-                    force_refresh=force_refresh,
-                )
-                self._store_token_result(
-                    cache_key=cache_key,
-                    auth_config=auth_config,
-                    token_result=result,
-                )
-                return result
-            config_token_result = self._token_result_from_config(auth_config)
-            if not force_refresh and config_token_result is not None:
-                self._tokens[cache_key] = _CodeAgentTokenRecord(
-                    token_result=config_token_result
-                )
-                return config_token_result
-            result = self.refresh_token_sync(
-                base_url=base_url,
-                auth_config=self._build_refresh_auth_config(
-                    auth_config=auth_config,
-                    cached=cached,
-                ),
-                ssl_verify=ssl_verify,
-                connect_timeout_seconds=connect_timeout_seconds,
-            )
-            self._store_token_result(
-                cache_key=cache_key,
-                auth_config=auth_config,
-                token_result=result,
-            )
-            return result
 
     async def get_token(
         self,
@@ -290,23 +210,6 @@ class CodeAgentTokenService:
             )
             return result
 
-    def refresh_token_sync(
-        self,
-        *,
-        base_url: str,
-        auth_config: CodeAgentAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-    ) -> CodeAgentOAuthTokenResult:
-        return asyncio.run(
-            self.refresh_token(
-                base_url=base_url,
-                auth_config=auth_config,
-                ssl_verify=ssl_verify,
-                connect_timeout_seconds=connect_timeout_seconds,
-            )
-        )
-
     async def refresh_token(
         self,
         *,
@@ -332,21 +235,6 @@ class CodeAgentTokenService:
             )
         return _build_token_result(
             response, fallback_refresh_token=auth_config.refresh_token
-        )
-
-    def poll_token_sync(
-        self,
-        *,
-        session: CodeAgentOAuthSession,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-    ) -> CodeAgentOAuthTokenResult | None:
-        return asyncio.run(
-            self.poll_token(
-                session=session,
-                ssl_verify=ssl_verify,
-                connect_timeout_seconds=connect_timeout_seconds,
-            )
         )
 
     # noinspection PyMethodMayBeStatic
@@ -394,40 +282,6 @@ class CodeAgentTokenService:
             )
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _login_with_password_sync(
-        *,
-        auth_config: CodeAgentAuthConfig,
-        ssl_verify: bool | None,
-        connect_timeout_seconds: float,
-        force_refresh: bool,
-    ) -> CodeAgentOAuthTokenResult:
-        if auth_config.username is None or auth_config.password is None:
-            raise CodeAgentOAuthError(
-                "CodeAgent username/password is not configured.",
-                status_code=None,
-            )
-        try:
-            auth_context = get_maas_token_service().get_auth_context_sync(
-                auth_config=MaaSAuthConfig(
-                    username=auth_config.username,
-                    password=auth_config.password,
-                ),
-                ssl_verify=ssl_verify,
-                connect_timeout_seconds=connect_timeout_seconds,
-                force_refresh=force_refresh,
-            )
-        except MaaSLoginError as exc:
-            raise CodeAgentOAuthError(
-                str(exc) or "CodeAgent password login failed.",
-                status_code=exc.status_code,
-            ) from exc
-        return CodeAgentOAuthTokenResult(
-            access_token=auth_context.token,
-            refresh_token=auth_context.token,
-            expires_at=datetime.now(UTC) + _CODEAGENT_TOKEN_TTL,
-        )
 
     @staticmethod
     async def _login_with_password(
@@ -547,37 +401,6 @@ class CodeAgentRequestAuth(httpx.Auth):
         self._ssl_verify = ssl_verify
         self._connect_timeout_seconds = connect_timeout_seconds
         self._token_service = token_service
-
-    def sync_auth_flow(
-        self,
-        request: httpx.Request,
-    ) -> Generator[httpx.Request, httpx.Response, None]:
-        token = self._token_service.get_token_sync(
-            base_url=self._base_url,
-            auth_config=self._auth_config,
-            ssl_verify=self._ssl_verify,
-            connect_timeout_seconds=self._connect_timeout_seconds,
-        )
-        response = yield _clone_request_with_codeagent_headers(
-            request,
-            base_url=self._base_url,
-            token=token,
-        )
-        if response.status_code not in {401, 403}:
-            return
-        response.close()
-        retry_token = self._token_service.get_token_sync(
-            base_url=self._base_url,
-            auth_config=self._auth_config,
-            ssl_verify=self._ssl_verify,
-            connect_timeout_seconds=self._connect_timeout_seconds,
-            force_refresh=True,
-        )
-        yield _clone_request_with_codeagent_headers(
-            response.request,
-            base_url=self._base_url,
-            token=retry_token,
-        )
 
     async def async_auth_flow(
         self,

@@ -81,6 +81,7 @@ MAAS 使用 `MaaSAuthConfig`，包含 `username` 和 `password` 两个字段。
 - 在内存中缓存 MAAS auth context
 - 支持临近过期刷新，在 `401/403` 时强制刷新一次
 - 构造 MAAS 推理请求使用的鉴权对象
+- 仅维护异步登录、token 获取和 `httpx.Auth.async_auth_flow` 路径；不再保留同步登录或同步 token 方法
 
 ### 6.3 OpenAI-compatible 复用层
 
@@ -109,7 +110,7 @@ MAAS 使用 `MaaSAuthConfig`，包含 `username` 和 `password` 两个字段。
 ### 7.1 主推理链路
 
 1. 读取 profile，得到 `model`、固定 `base_url` 和 `maas_auth`。
-2. 调用 `MaaSTokenService.get_token_sync()` 或异步版本。
+2. 调用 `MaaSTokenService.get_token()` 异步获取 token。
 3. 若本地没有有效 token，则先发起登录。
 4. 登录成功后在内存中缓存 auth context。
 5. 调用 `POST {base_url}/chat/completions`。

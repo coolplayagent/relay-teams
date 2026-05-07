@@ -23,3 +23,8 @@ This contract applies to:
 The net module is async-only for HTTP. Synchronous public APIs may remain where
 they are deliberate compatibility boundaries, but those methods must delegate to
 async HTTP implementations instead of creating a second synchronous transport.
+
+Xiaoluban inbound IM callback handling enters the gateway through
+`handle_im_inbound_async()`. The listener may enqueue that coroutine as a
+FastAPI background task, but it must not call a duplicate synchronous inbound
+handler.
