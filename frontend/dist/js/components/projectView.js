@@ -1027,6 +1027,25 @@ function formatIsoToLocalTime(isoValue, timezone) {
     return `${parts.hour}:${parts.minute}`;
 }
 
+function formatAutomationUtcDateTime(value, fallback) {
+    const rawValue = String(value || '').trim();
+    if (!rawValue) {
+        return fallback;
+    }
+    const date = new Date(rawValue);
+    if (Number.isNaN(date.getTime())) {
+        return rawValue;
+    }
+    return [
+        date.getUTCFullYear(),
+        String(date.getUTCMonth() + 1).padStart(2, '0'),
+        String(date.getUTCDate()).padStart(2, '0'),
+    ].join('-') + ' ' + [
+        String(date.getUTCHours()).padStart(2, '0'),
+        String(date.getUTCMinutes()).padStart(2, '0'),
+    ].join(':') + ' UTC';
+}
+
 function createDefaultOneShotDate(timezone) {
     const now = new Date();
     const parts = getFormatterParts(now, timezone);
@@ -4839,8 +4858,8 @@ function renderAutomationHomeDetail(detail) {
                                 ? resolveAutomationPresetDisplayName(orchestrationPresetId, orchestrationPresets)
                                 : resolveAutomationRoleDisplayName(normalRootRoleId, normalRoles)
                         )}</strong></div>
-                        <div><span>${escapeHtml(t('automation.detail.next_run'))}</span><strong>${escapeHtml(String(project?.next_run_at || t('automation.detail.not_scheduled')))}</strong></div>
-                        <div><span>${escapeHtml(t('automation.detail.last_run'))}</span><strong>${escapeHtml(String(project?.last_run_started_at || t('automation.detail.never')))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.next_run'))}</span><strong>${escapeHtml(formatAutomationUtcDateTime(project?.next_run_at, t('automation.detail.not_scheduled')))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.last_run'))}</span><strong>${escapeHtml(formatAutomationUtcDateTime(project?.last_run_started_at, t('automation.detail.never')))}</strong></div>
                     </div>
                 </section>
                 <section class="automation-flat-section automation-meta-section">
@@ -6187,8 +6206,8 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
     const timezone = String(project?.timezone || 'UTC').trim() || 'UTC';
     const workspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
     const workspaceRootPath = String(workspaceRecord?.root_path || '').trim() || t('automation.workspace.missing');
-    const nextRunAt = String(project?.next_run_at || '').trim() || t('automation.detail.not_scheduled');
-    const lastRunAt = String(project?.last_run_started_at || '').trim() || t('automation.detail.never');
+    const nextRunAt = formatAutomationUtcDateTime(project?.next_run_at, t('automation.detail.not_scheduled'));
+    const lastRunAt = formatAutomationUtcDateTime(project?.last_run_started_at, t('automation.detail.never'));
     const lastError = String(project?.last_error || '').trim() || t('automation.detail.none');
     const deliveryBinding = project?.delivery_binding && typeof project.delivery_binding === 'object'
         ? project.delivery_binding

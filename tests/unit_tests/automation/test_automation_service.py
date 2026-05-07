@@ -494,6 +494,96 @@ def test_async_run_now_uses_session_ingress_service(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+def test_async_run_now_finishes_startup_when_caller_is_cancelled(
+    tmp_path: Path,
+) -> None:
+    service, run_service, _ = _build_service(tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def wait_for_release(run_id: str) -> None:
+        started.set()
+        await release.wait()
+        run_service.ensure_run_started(run_id)
+
+    run_service.ensure_run_started_async = wait_for_release
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="cancelled-report",
+                workspace_id="default",
+                prompt="Draft a report after caller cancellation.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+            )
+        )
+        task = asyncio.create_task(service.run_now_async(created.automation_project_id))
+
+        await started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            _ = await task
+
+        updated = await service.get_project_async(created.automation_project_id)
+        assert updated.last_session_id is not None
+        assert updated.last_run_started_at is not None
+        assert len(run_service.create_calls) == 1
+        assert run_service.started_run_ids == ["run-1"]
+
+    asyncio.run(exercise())
+
+
+def test_async_run_now_logs_startup_failure_when_cancelled_caller_waits(
+    tmp_path: Path,
+) -> None:
+    service, run_service, _ = _build_service(tmp_path)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_after_release(run_id: str) -> None:
+        _ = run_id
+        started.set()
+        await release.wait()
+        raise RuntimeError("startup exploded")
+
+    run_service.ensure_run_started_async = fail_after_release
+
+    async def exercise() -> None:
+        created = await service.create_project_async(
+            AutomationProjectCreateInput(
+                name="cancelled-failure-report",
+                workspace_id="default",
+                prompt="Draft a report after failed startup.",
+                schedule_mode=AutomationScheduleMode.CRON,
+                cron_expression="0 1 * * *",
+                timezone="UTC",
+            )
+        )
+        task = asyncio.create_task(service.run_now_async(created.automation_project_id))
+
+        await started.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            _ = await task
+
+        updated = await service.get_project_async(created.automation_project_id)
+        assert updated.last_error == "startup exploded"
+        assert len(run_service.create_calls) == 1
+        assert run_service.started_run_ids == []
+
+    asyncio.run(exercise())
+
+
 def test_async_run_now_offloads_bound_session_execution(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

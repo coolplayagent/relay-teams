@@ -635,9 +635,27 @@ class AutomationService:
 
     async def run_now_async(self, automation_project_id: str) -> dict[str, JsonValue]:
         project = await self._repository.get_async(automation_project_id)
-        execution_handle = await self._materialize_execution_async(
-            project, reason="manual"
+        execution_task = asyncio.create_task(
+            self._materialize_execution_async(project, reason="manual")
         )
+        try:
+            execution_handle = await asyncio.shield(execution_task)
+        except asyncio.CancelledError:
+            try:
+                _ = await _await_execution_after_cancellation(execution_task)
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.ERROR,
+                    event="automation.run_now.cancelled_start_failed",
+                    message="Automation run startup failed after caller cancellation",
+                    payload={
+                        "automation_project_id": automation_project_id,
+                        "error": str(exc),
+                    },
+                    exc_info=exc,
+                )
+            raise
         return {
             "automation_project_id": automation_project_id,
             "session_id": execution_handle.session_id,
@@ -1252,6 +1270,25 @@ class AutomationService:
                 created_at=occurred_at,
             )
         )
+
+
+async def _await_execution_after_cancellation(
+    task: asyncio.Task[AutomationExecutionHandle],
+) -> AutomationExecutionHandle:
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            _clear_current_task_cancellation_requests()
+    return task.result()
+
+
+def _clear_current_task_cancellation_requests() -> None:
+    current_task = asyncio.current_task()
+    if current_task is None:
+        return
+    while current_task.cancelling():
+        current_task.uncancel()
 
 
 def _validate_timezone(timezone_name: str) -> str:
