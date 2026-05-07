@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import JsonValue
 
 import json
@@ -1438,15 +1440,10 @@ class MessageRepository(SharedSqliteRepository):
             include_cleared=False,
             include_hidden_from_context=False,
         )
-        allowed_ids = _safe_row_ids(filtered_rows)
-        result: list[ModelMessage] = []
-        for row in filtered_rows:
-            row_id = row["id"]
-            if not isinstance(row_id, int) or row_id not in allowed_ids:
-                continue
-            msgs = _validate_message_row(row)
-            result.extend(msgs)
-        return _truncate_model_history_to_safe_boundary(result)
+        return await asyncio.to_thread(
+            _validated_history_from_rows,
+            tuple(filtered_rows),
+        )
 
     def _prune_to_safe_boundary(
         self,
@@ -1765,7 +1762,10 @@ class MessageRepository(SharedSqliteRepository):
             filtered_rows = await self._filter_rows_for_active_segments_async(
                 filtered_rows
             )
-        filtered_rows = _drop_duplicate_tool_outcome_rows(filtered_rows)
+        filtered_rows = await asyncio.to_thread(
+            _drop_duplicate_tool_outcome_rows,
+            tuple(filtered_rows),
+        )
         if include_hidden_from_context:
             return filtered_rows
         return self._filter_rows_for_visible_context(filtered_rows)
@@ -2328,6 +2328,20 @@ def _validate_message_row(row: sqlite3.Row) -> list[ModelMessage]:
             },
         )
         return []
+
+
+def _validated_history_from_rows(
+    rows: Sequence[sqlite3.Row],
+) -> list[ModelMessage]:
+    allowed_ids = _safe_row_ids(rows)
+    result: list[ModelMessage] = []
+    for row in rows:
+        row_id = row["id"]
+        if not isinstance(row_id, int) or row_id not in allowed_ids:
+            continue
+        msgs = _validate_message_row(row)
+        result.extend(msgs)
+    return _truncate_model_history_to_safe_boundary(result)
 
 
 def _row_id(row: sqlite3.Row) -> int:

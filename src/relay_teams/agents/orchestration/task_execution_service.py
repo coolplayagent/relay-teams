@@ -398,11 +398,13 @@ class TaskExecutionService(BaseModel):
         # OP-3: Create artifact container (spec phase).
         if self.artifact_repo is not None:
             try:
-                self.artifact_repo.ensure_artifact(
+                await asyncio.to_thread(
+                    self.artifact_repo.ensure_artifact,
                     task_id=task.task_id,
                     spec_artifact_id=task.spec_artifact_id or "",
                 )
-                self.artifact_repo.append_entry(
+                await asyncio.to_thread(
+                    self.artifact_repo.append_entry,
                     task_id=task.task_id,
                     entry=TaskArtifactEntry(
                         entry_id=f"start-{task.task_id}",
@@ -439,7 +441,8 @@ class TaskExecutionService(BaseModel):
             # OP-3: Append implementation phase entry.
             if self.artifact_repo is not None:
                 try:
-                    self.artifact_repo.append_entry(
+                    await asyncio.to_thread(
+                        self.artifact_repo.append_entry,
                         task_id=task.task_id,
                         entry=TaskArtifactEntry(
                             entry_id=f"impl-{task.task_id}",
@@ -543,7 +546,8 @@ class TaskExecutionService(BaseModel):
             # OP-3: Append verification phase entry.
             if self.artifact_repo is not None:
                 try:
-                    self.artifact_repo.append_entry(
+                    await asyncio.to_thread(
+                        self.artifact_repo.append_entry,
                         task_id=task.task_id,
                         entry=TaskArtifactEntry(
                             entry_id=f"verify-{task.task_id}",
@@ -568,7 +572,8 @@ class TaskExecutionService(BaseModel):
             # OP-3: Append delivery phase entry and update summary.
             if self.artifact_repo is not None:
                 try:
-                    self.artifact_repo.append_entry(
+                    await asyncio.to_thread(
+                        self.artifact_repo.append_entry,
                         task_id=task.task_id,
                         entry=TaskArtifactEntry(
                             entry_id=f"delivery-{task.task_id}",
@@ -581,8 +586,10 @@ class TaskExecutionService(BaseModel):
                             payload_json="{}",
                         ),
                     )
-                    self.artifact_repo.update_summary(
-                        task_id=task.task_id, summary=result
+                    await asyncio.to_thread(
+                        self.artifact_repo.update_summary,
+                        task_id=task.task_id,
+                        summary=result,
                     )
                 except Exception as exc:
                     log_event(

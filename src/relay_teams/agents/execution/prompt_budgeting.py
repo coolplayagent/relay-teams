@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Sequence
@@ -105,8 +106,10 @@ class PromptBudgetingService:
         context_window = self._config.context_window
         if context_window is None or context_window <= 0:
             return configured_max_tokens
-        estimator = ConversationTokenEstimator()
-        estimated_history_tokens = estimator.estimate_history_tokens(history)
+        estimated_history_tokens = await asyncio.to_thread(
+            ConversationTokenEstimator().estimate_history_tokens,
+            tuple(history),
+        )
         budget = await self.estimate_compaction_budget(
             request=request,
             history=history,

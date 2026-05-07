@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import sqlite3
+from typing import cast
 
 import pytest
 
 from relay_teams.agents.tasks.artifact_repository import (
     TaskArtifactRepository,
+    _enable_wal_if_available,
+    _last_insert_row_id,
 )
 from relay_teams.agents.tasks.enums import TaskArtifactPhase, VerificationEvidenceKind
 from relay_teams.agents.tasks.models import (
@@ -34,6 +39,19 @@ def test_ensure_artifact_idempotent(repo: TaskArtifactRepository):
     assert a1.task_id == a2.task_id
 
 
+def test_ensure_artifact_raises_when_insert_cannot_be_read(
+    repo: TaskArtifactRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_artifact(_task_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(repo, "get_artifact", missing_artifact)
+
+    with pytest.raises(RuntimeError, match="Failed to create task artifact"):
+        repo.ensure_artifact("task-1", "spec-1")
+
+
 def test_get_artifact_missing(repo: TaskArtifactRepository):
     assert repo.get_artifact("nonexistent") is None
 
@@ -53,6 +71,61 @@ def test_append_entry(repo: TaskArtifactRepository):
     )
     row_id = repo.append_entry("task-1", entry)
     assert row_id > 0
+
+
+class _WalFailingConnection:
+    def execute(self, sql: str) -> object:
+        if sql == "PRAGMA journal_mode = WAL":
+            raise sqlite3.OperationalError("readonly filesystem")
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+class _CursorWithNonIntegerRowId:
+    def fetchone(self) -> tuple[str]:
+        return ("not-an-int",)
+
+
+class _NonIntegerRowIdConnection:
+    def execute(self, sql: str) -> _CursorWithNonIntegerRowId:
+        assert sql == "SELECT last_insert_rowid()"
+        return _CursorWithNonIntegerRowId()
+
+
+def test_enable_wal_logs_and_continues_when_wal_unavailable() -> None:
+    _enable_wal_if_available(cast(sqlite3.Connection, _WalFailingConnection()))
+
+
+def test_last_insert_row_id_rejects_non_integer_value() -> None:
+    with pytest.raises(RuntimeError, match="non-integer"):
+        _last_insert_row_id(cast(sqlite3.Connection, _NonIntegerRowIdConnection()))
+
+
+def test_concurrent_append_entry_uses_sqlite_retry_coordination(tmp_path: Path) -> None:
+    db_path = tmp_path / "concurrent_artifacts.db"
+    repo = TaskArtifactRepository(db_path)
+    repo.ensure_artifact("task-1", "spec-1")
+
+    def append_entry(index: int) -> int:
+        worker_repo = TaskArtifactRepository(db_path)
+        return worker_repo.append_entry(
+            "task-1",
+            TaskArtifactEntry(
+                entry_id=f"entry-{index}",
+                phase=TaskArtifactPhase.EXECUTION,
+                timestamp="2024-01-01T00:00:00",
+                event_type="tool_call",
+                description=f"Ran shell command {index}",
+            ),
+        )
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        row_ids = tuple(executor.map(append_entry, range(36)))
+
+    entries, total = repo.query_entries(task_id="task-1")
+    assert len(row_ids) == 36
+    assert all(row_id > 0 for row_id in row_ids)
+    assert total == 36
+    assert len(entries) == 36
 
 
 def test_get_artifact_with_entries(repo: TaskArtifactRepository):

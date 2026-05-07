@@ -20,7 +20,9 @@ from relay_teams.agents.instances.instance_repository import AgentInstanceReposi
 from relay_teams.agents.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.harnesses.tool_harness import TaskToolHarness
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
 from relay_teams.agents.tasks.enums import TaskStatus
+from relay_teams.agents.tasks.enums import TaskArtifactPhase
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.agents.tasks.task_repository import TaskRepository
@@ -285,6 +287,7 @@ class _PartiallyFailingToolSchemaMcpRegistry(McpRegistry):
 def _build_service(
     db_path: Path,
     provider: object,
+    artifact_repo: TaskArtifactRepository | None = None,
 ) -> tuple[
     TaskExecutionService,
     TaskRepository,
@@ -328,6 +331,7 @@ def _build_service(
         skill_registry=_StaticSkillRegistry(),
         mcp_registry=McpRegistry(),
         run_intent_repo=RunIntentRepository(db_path),
+        artifact_repo=artifact_repo,
     )
     return service, task_repo, agent_repo, message_repo
 
@@ -481,6 +485,42 @@ async def test_execute_omits_objective_when_task_history_exists(
 
     assert result.output == "ok"
     assert provider.prompts == [None]
+
+
+@pytest.mark.asyncio
+async def test_execute_records_task_artifact_entries(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_artifacts.db"
+    artifact_repo = TaskArtifactRepository(tmp_path / "task_artifacts.db")
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        provider,
+        artifact_repo=artifact_repo,
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    artifact = artifact_repo.get_artifact(task.task_id)
+    assert result.output == "ok"
+    assert artifact is not None
+    assert artifact.summary == "ok"
+    assert tuple(entry.phase for entry in artifact.entries) == (
+        TaskArtifactPhase.SPEC,
+        TaskArtifactPhase.EXECUTION,
+        TaskArtifactPhase.VERIFICATION,
+        TaskArtifactPhase.DELIVERY,
+    )
 
 
 @pytest.mark.asyncio
