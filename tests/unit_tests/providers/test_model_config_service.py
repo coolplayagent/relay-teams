@@ -60,7 +60,7 @@ class _RecordingModelFallbackConfigManager:
 
 
 class _RecordingModelCatalogService:
-    def get_catalog(self, *, refresh: bool = False) -> ModelCatalogResult:
+    async def get_catalog_async(self, *, refresh: bool = False) -> ModelCatalogResult:
         return ModelCatalogResult(
             ok=True,
             source_url="https://models.dev/api.json",
@@ -128,7 +128,8 @@ def test_save_model_config_preserves_omitted_optional_fields() -> None:
     }
 
 
-def test_verify_codeagent_auth_delegates_to_probe_service() -> None:
+@pytest.mark.asyncio
+async def test_verify_codeagent_auth_async_delegates_to_probe_service() -> None:
     service = ModelConfigService(
         config_dir=Path("."),
         roles_dir=Path("."),
@@ -152,7 +153,7 @@ def test_verify_codeagent_auth_delegates_to_probe_service() -> None:
     captured: dict[str, object] = {}
 
     class _FakeProbeService:
-        def verify_codeagent_auth(
+        async def verify_codeagent_auth_async(
             self, *, profile_name: str
         ) -> CodeAgentAuthVerifyResult:
             captured["profile_name"] = profile_name
@@ -162,7 +163,7 @@ def test_verify_codeagent_auth_delegates_to_probe_service() -> None:
         ModelConnectivityProbeService, _FakeProbeService()
     )
 
-    result = service.verify_codeagent_auth(profile_name="default")
+    result = await service.verify_codeagent_auth_async(profile_name="default")
 
     assert captured["profile_name"] == "default"
     assert result == expected

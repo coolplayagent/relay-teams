@@ -21,7 +21,7 @@ class _FakeInboundHandler:
         self.calls: list[tuple[str, XiaolubanInboundMessage]] = []
         self.callback_tokens: dict[str, str] = {}
 
-    def handle_im_inbound(
+    async def handle_im_inbound_async(
         self,
         *,
         account_id: str,

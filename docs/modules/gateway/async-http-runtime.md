@@ -19,5 +19,10 @@ This contract applies to:
   lookup, and CDN upload.
 - Xiaoluban text notification, keep-alive, and utility-route requests.
 
+Xiaoluban inbound IM callback handling enters the gateway through
+`handle_im_inbound_async()`. The listener may enqueue that coroutine as a
+FastAPI background task, but it must not call a duplicate synchronous inbound
+handler.
+
 Non-gateway modules may still use the shared sync HTTP factory when they have a
 deliberate synchronous boundary. Gateway outbound HTTP is async-only.

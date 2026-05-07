@@ -308,6 +308,9 @@ Unknown profile fields and invalid profile ids are rejected at request validatio
 ### `POST /system/configs/model:probe`
 
 Tests model connectivity for a saved profile and/or draft override.
+The backend implementation is async-only for provider network I/O; routes call
+the async model connectivity service directly rather than dispatching sync probe
+work through a thread bridge.
 Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `false`.
 Draft overrides may include `headers[]` and may omit `api_key` when headers are provided. MAAS draft overrides use `maas_auth` instead of `api_key` and perform a login before probing `/chat/completions`. CodeAgent draft overrides use `codeagent_auth`; `sso` reuses the saved OAuth session/tokens, while `password` logs in with username/password before probing.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
@@ -315,6 +318,8 @@ If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeo
 ### `POST /system/configs/model:discover`
 
 Fetches the available model catalog for a saved profile and/or draft override.
+Catalog and provider discovery fetches use async HTTP clients. The public HTTP
+contract is unchanged, but there is no backend sync catalog fetch path.
 Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`. For `provider = "codeagent"`, the override must provide `codeagent_auth`; the backend still forces the fixed CodeAgent base URL.
 When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
@@ -335,6 +340,9 @@ For a small set of known provider/model pairs, the backend also applies a built-
 
 Verifies whether a saved CodeAgent profile still has usable auth state.
 The request body is `{ "profile_name": "<saved profile name>" }`.
+Verification resolves and refreshes CodeAgent tokens through the async token
+service and sends the lightweight verification request with the shared async
+HTTP client.
 The backend only accepts saved `codeagent` profiles for this endpoint. It validates the saved auth state by making a lightweight authenticated CodeAgent request with the currently available token. For SSO profiles it retries once through the refresh path after `401/403`. For password profiles it retries once by logging in again with the saved username/password.
 
 The response shape is:

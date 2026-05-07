@@ -26,7 +26,7 @@ XIAOLUBAN_IM_PUBLIC_HOST_ENV = "RELAY_TEAMS_XIAOLUBAN_IM_PUBLIC_HOST"
 
 
 class XiaolubanImInboundHandler(Protocol):
-    def handle_im_inbound(
+    async def handle_im_inbound_async(
         self,
         *,
         account_id: str,
@@ -208,7 +208,7 @@ class XiaolubanImListenerService:
             },
         )
         background_tasks.add_task(
-            self._service.handle_im_inbound,
+            self._service.handle_im_inbound_async,
             account_id=account_id,
             message=req,
         )
