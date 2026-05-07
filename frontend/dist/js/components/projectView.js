@@ -153,12 +153,19 @@ const DEFAULT_THINKING_EFFORT = 'medium';
 const DEFAULT_AUTOMATION_TIMEZONE = 'Asia/Shanghai';
 const THINKING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high'];
 const AUTOMATION_SCHEDULE_KINDS = Object.freeze({
+    interval: 'interval',
     daily: 'daily',
     weekdays: 'weekdays',
     weekly: 'weekly',
     monthly: 'monthly',
+    advancedCron: 'advanced_cron',
     oneShot: 'one_shot',
     unsupported: 'unsupported',
+});
+const AUTOMATION_INTERVAL_UNITS = Object.freeze({
+    minutes: 'minutes',
+    hours: 'hours',
+    days: 'days',
 });
 
 function createInitialAutomationHomeDetail() {
@@ -966,6 +973,15 @@ function splitTimeValue(value) {
     };
 }
 
+function isFixedCronNumber(value, minimum, maximum) {
+    const rawValue = String(value || '').trim();
+    if (!/^\d+$/.test(rawValue)) {
+        return false;
+    }
+    const numberValue = Number.parseInt(rawValue, 10);
+    return !Number.isNaN(numberValue) && numberValue >= minimum && numberValue <= maximum;
+}
+
 function getFormatterParts(date, timezone) {
     try {
         return new Intl.DateTimeFormat('en-CA', {
@@ -1066,12 +1082,27 @@ function parseAutomationScheduleDraft(project, timezone) {
     const fallback = {
         kind: AUTOMATION_SCHEDULE_KINDS.daily,
         time: '09:00',
+        intervalEvery: '1',
+        intervalUnit: AUTOMATION_INTERVAL_UNITS.hours,
         weekday: '1',
         dayOfMonth: '1',
         runDate: createDefaultOneShotDate(selectedTimezone),
+        cronExpression: '',
         unsupportedExpression: '',
         requiresReset: false,
     };
+    if (scheduleMode === 'interval') {
+        const intervalEvery = Number.parseInt(String(project?.interval_every || '1').trim(), 10);
+        const intervalUnit = String(project?.interval_unit || AUTOMATION_INTERVAL_UNITS.hours).trim() || AUTOMATION_INTERVAL_UNITS.hours;
+        return {
+            ...fallback,
+            kind: AUTOMATION_SCHEDULE_KINDS.interval,
+            intervalEvery: Number.isNaN(intervalEvery) || intervalEvery < 1 ? '1' : String(intervalEvery),
+            intervalUnit: Object.values(AUTOMATION_INTERVAL_UNITS).includes(intervalUnit)
+                ? intervalUnit
+                : AUTOMATION_INTERVAL_UNITS.hours,
+        };
+    }
     if (scheduleMode === 'one_shot' || scheduleMode === 'one-shot') {
         return {
             ...fallback,
@@ -1088,12 +1119,20 @@ function parseAutomationScheduleDraft(project, timezone) {
     if (parts.length !== 5) {
         return {
             ...fallback,
-            kind: AUTOMATION_SCHEDULE_KINDS.unsupported,
+            kind: AUTOMATION_SCHEDULE_KINDS.advancedCron,
+            cronExpression: cron,
             unsupportedExpression: cron,
-            requiresReset: true,
         };
     }
     const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+    if (!isFixedCronNumber(minute, 0, 59) || !isFixedCronNumber(hour, 0, 23)) {
+        return {
+            ...fallback,
+            kind: AUTOMATION_SCHEDULE_KINDS.advancedCron,
+            cronExpression: cron,
+            unsupportedExpression: cron,
+        };
+    }
     const time = splitTimeValue(`${hour}:${minute}`)?.normalized || '09:00';
     if (month === '*' && dayOfMonth === '*' && dayOfWeek === '*') {
         return { ...fallback, kind: AUTOMATION_SCHEDULE_KINDS.daily, time };
@@ -1109,9 +1148,9 @@ function parseAutomationScheduleDraft(project, timezone) {
     }
     return {
         ...fallback,
-        kind: AUTOMATION_SCHEDULE_KINDS.unsupported,
+        kind: AUTOMATION_SCHEDULE_KINDS.advancedCron,
+        cronExpression: cron,
         unsupportedExpression: cron,
-        requiresReset: true,
     };
 }
 
@@ -1152,9 +1191,12 @@ function createAutomationEditorDraft(project, workspaces, normalRoles = [], orch
         delivery_event_failed: hasDeliveryBinding ? deliveryEvents.failed : true,
         schedule_kind: schedule.kind,
         time_of_day: schedule.time,
+        interval_every: schedule.intervalEvery,
+        interval_unit: schedule.intervalUnit,
         weekly_day: schedule.weekday,
         monthly_day: schedule.dayOfMonth,
         run_date: schedule.runDate,
+        cron_expression: schedule.cronExpression,
         unsupported_expression: schedule.unsupportedExpression,
         requires_schedule_reset: schedule.requiresReset,
     };
@@ -1162,6 +1204,12 @@ function createAutomationEditorDraft(project, workspaces, normalRoles = [], orch
 
 function resolveAutomationScheduleSummary(draft) {
     const time = splitTimeValue(draft?.time_of_day)?.normalized || '09:00';
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.interval) {
+        return formatMessage('automation.schedule.summary.interval', {
+            count: String(draft?.interval_every || '1'),
+            unit: t(`automation.schedule.interval_unit.${String(draft?.interval_unit || AUTOMATION_INTERVAL_UNITS.hours)}`),
+        });
+    }
     if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekdays) {
         return formatMessage('automation.schedule.summary.weekdays', { time });
     }
@@ -1183,16 +1231,51 @@ function resolveAutomationScheduleSummary(draft) {
             time,
         });
     }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.advancedCron) {
+        return formatMessage('automation.schedule.summary.advanced_cron', {
+            expression: String(draft?.cron_expression || '').trim(),
+        });
+    }
     return formatMessage('automation.schedule.summary.daily', { time });
 }
 
 function buildAutomationSchedulePayload(draft) {
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported) {
+        throw new Error(t('automation.schedule.validation.reset_required'));
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.interval) {
+        const intervalEvery = Number.parseInt(String(draft?.interval_every || '').trim(), 10);
+        const intervalUnit = String(draft?.interval_unit || '').trim();
+        if (Number.isNaN(intervalEvery) || intervalEvery < 1) {
+            throw new Error(t('automation.schedule.validation.interval_every'));
+        }
+        if (!Object.values(AUTOMATION_INTERVAL_UNITS).includes(intervalUnit)) {
+            throw new Error(t('automation.schedule.validation.interval_unit'));
+        }
+        return {
+            schedule_mode: 'interval',
+            cron_expression: null,
+            interval_every: intervalEvery,
+            interval_unit: intervalUnit,
+            run_at: null,
+        };
+    }
+    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.advancedCron) {
+        const cronExpression = String(draft?.cron_expression || '').trim();
+        if (!cronExpression || cronExpression.split(/\s+/).length !== 5) {
+            throw new Error(t('automation.schedule.validation.cron_expression'));
+        }
+        return {
+            schedule_mode: 'cron',
+            cron_expression: cronExpression,
+            interval_every: null,
+            interval_unit: null,
+            run_at: null,
+        };
+    }
     const time = splitTimeValue(draft?.time_of_day);
     if (!time) {
         throw new Error(t('automation.schedule.validation.time'));
-    }
-    if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported) {
-        throw new Error(t('automation.schedule.validation.reset_required'));
     }
     if (draft?.schedule_kind === AUTOMATION_SCHEDULE_KINDS.oneShot) {
         const runDate = String(draft?.run_date || '').trim();
@@ -1206,6 +1289,8 @@ function buildAutomationSchedulePayload(draft) {
         return {
             schedule_mode: 'one_shot',
             cron_expression: null,
+            interval_every: null,
+            interval_unit: null,
             run_at: runAt,
         };
     }
@@ -1217,6 +1302,8 @@ function buildAutomationSchedulePayload(draft) {
         return {
             schedule_mode: 'cron',
             cron_expression: `${time.minute} ${time.hour} * * ${weekday}`,
+            interval_every: null,
+            interval_unit: null,
             run_at: null,
         };
     }
@@ -1228,6 +1315,8 @@ function buildAutomationSchedulePayload(draft) {
         return {
             schedule_mode: 'cron',
             cron_expression: `${time.minute} ${time.hour} ${monthlyDay} * *`,
+            interval_every: null,
+            interval_unit: null,
             run_at: null,
         };
     }
@@ -1235,12 +1324,16 @@ function buildAutomationSchedulePayload(draft) {
         return {
             schedule_mode: 'cron',
             cron_expression: `${time.minute} ${time.hour} * * 1-5`,
+            interval_every: null,
+            interval_unit: null,
             run_at: null,
         };
     }
     return {
         schedule_mode: 'cron',
         cron_expression: `${time.minute} ${time.hour} * * *`,
+        interval_every: null,
+        interval_unit: null,
         run_at: null,
     };
 }
@@ -1368,9 +1461,12 @@ function syncAutomationEditorDraftFromDom() {
         delivery_event_failed: readAutomationEditorChecked('automation-editor-delivery-failed-input', currentAutomationEditorState.draft.delivery_event_failed),
         schedule_kind: readAutomationEditorValue('automation-editor-schedule-kind-input', currentAutomationEditorState.draft.schedule_kind),
         time_of_day: readAutomationEditorValue('automation-editor-time-input', currentAutomationEditorState.draft.time_of_day),
+        interval_every: readAutomationEditorValue('automation-editor-interval-every-input', currentAutomationEditorState.draft.interval_every),
+        interval_unit: readAutomationEditorValue('automation-editor-interval-unit-input', currentAutomationEditorState.draft.interval_unit),
         weekly_day: readAutomationEditorValue('automation-editor-weekday-input', currentAutomationEditorState.draft.weekly_day),
         monthly_day: readAutomationEditorValue('automation-editor-monthly-day-input', currentAutomationEditorState.draft.monthly_day),
         run_date: readAutomationEditorValue('automation-editor-run-date-input', currentAutomationEditorState.draft.run_date),
+        cron_expression: readAutomationEditorValue('automation-editor-cron-expression-input', currentAutomationEditorState.draft.cron_expression),
     };
     currentAutomationEditorState = {
         ...currentAutomationEditorState,
@@ -1430,6 +1526,20 @@ function resolveAutomationSessionModeOptions() {
 
 function renderAutomationEditorScheduleDetail(draft) {
     const scheduleKind = String(draft?.schedule_kind || AUTOMATION_SCHEDULE_KINDS.daily).trim();
+    if (scheduleKind === AUTOMATION_SCHEDULE_KINDS.interval) {
+        return `
+            <label class="automation-editor-field">
+                <span>${escapeHtml(t('automation.schedule.interval_every'))}</span>
+                <input id="automation-editor-interval-every-input" data-automation-editor-interval-every type="number" min="1" value="${escapeHtml(String(draft?.interval_every || '1'))}">
+            </label>
+            <label class="automation-editor-field">
+                <span>${escapeHtml(t('automation.schedule.interval_unit'))}</span>
+                <select id="automation-editor-interval-unit-input" data-automation-editor-interval-unit>
+                    ${renderAutomationEditorFieldOptions(resolveAutomationIntervalUnitOptions(), draft?.interval_unit || AUTOMATION_INTERVAL_UNITS.hours)}
+                </select>
+            </label>
+        `;
+    }
     if (scheduleKind === AUTOMATION_SCHEDULE_KINDS.weekly) {
         return `
             <label class="automation-editor-field">
@@ -1456,7 +1566,23 @@ function renderAutomationEditorScheduleDetail(draft) {
             </label>
         `;
     }
+    if (scheduleKind === AUTOMATION_SCHEDULE_KINDS.advancedCron) {
+        return `
+            <label class="automation-editor-field">
+                <span>${escapeHtml(t('automation.schedule.cron_expression'))}</span>
+                <input id="automation-editor-cron-expression-input" data-automation-editor-cron-expression type="text" value="${escapeHtml(String(draft?.cron_expression || draft?.unsupported_expression || ''))}" placeholder="*/15 * * * *">
+            </label>
+        `;
+    }
     return '';
+}
+
+function resolveAutomationIntervalUnitOptions() {
+    return [
+        { value: AUTOMATION_INTERVAL_UNITS.minutes, label: t('automation.schedule.interval_unit.minutes') },
+        { value: AUTOMATION_INTERVAL_UNITS.hours, label: t('automation.schedule.interval_unit.hours') },
+        { value: AUTOMATION_INTERVAL_UNITS.days, label: t('automation.schedule.interval_unit.days') },
+    ];
 }
 
 function ensureAutomationEditorModalRoot() {
@@ -1559,10 +1685,12 @@ function renderAutomationEditorModal() {
                                     <span>${escapeHtml(t('automation.schedule.kind'))}</span>
                                     <select id="automation-editor-schedule-kind-input" data-automation-editor-schedule-kind>
                                         <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.unsupported)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.unsupported ? ' selected' : ''}>${escapeHtml(t('automation.schedule.choose'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.interval)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.interval ? ' selected' : ''}>${escapeHtml(t('automation.schedule.interval'))}</option>
                                         <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.daily)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.daily ? ' selected' : ''}>${escapeHtml(t('automation.schedule.daily'))}</option>
                                         <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.weekdays)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekdays ? ' selected' : ''}>${escapeHtml(t('automation.schedule.weekdays'))}</option>
                                         <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.weekly)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.weekly ? ' selected' : ''}>${escapeHtml(t('automation.schedule.weekly'))}</option>
                                         <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.monthly)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.monthly ? ' selected' : ''}>${escapeHtml(t('automation.schedule.monthly'))}</option>
+                                        <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.advancedCron)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.advancedCron ? ' selected' : ''}>${escapeHtml(t('automation.schedule.advanced_cron'))}</option>
                                         <option value="${escapeHtml(AUTOMATION_SCHEDULE_KINDS.oneShot)}"${draft.schedule_kind === AUTOMATION_SCHEDULE_KINDS.oneShot ? ' selected' : ''}>${escapeHtml(t('automation.schedule.one_shot'))}</option>
                                     </select>
                                 </label>
@@ -4040,7 +4168,7 @@ function renderAutomationHomeView() {
                                     <button class="automation-record${projectId === selectedProjectId ? ' is-active' : ''}" type="button" data-automation-home-project-id="${escapeHtml(projectId)}">
                                         <div class="automation-record-copy">
                                             <strong>${escapeHtml(String(project?.display_name || project?.name || projectId))}</strong>
-                                            <span>${escapeHtml(String(project?.cron_expression || t('automation.detail.not_scheduled')))}</span>
+                                            <span>${escapeHtml(describeAutomationScheduleText(project))}</span>
                                         </div>
                                         ${renderFeatureStatusPill(t(`automation.status.${status}`), status)}
                                     </button>
@@ -4703,7 +4831,7 @@ function renderAutomationHomeDetail(detail) {
                         </div>
                     </div>
                     <div class="feature-meta-list automation-meta-list">
-                        <div><span>${escapeHtml(t('automation.detail.schedule'))}</span><strong>${escapeHtml(String(project?.cron_expression || t('automation.detail.not_scheduled')))}</strong></div>
+                        <div><span>${escapeHtml(t('automation.detail.schedule'))}</span><strong>${escapeHtml(describeAutomationScheduleText(project))}</strong></div>
                         <div><span>${escapeHtml(t('automation.detail.timezone'))}</span><strong>${escapeHtml(String(project?.timezone || 'UTC'))}</strong></div>
                         <div><span>${escapeHtml(t('settings.triggers.mode'))}</span><strong>${escapeHtml(sessionMode === 'orchestration' ? t('composer.mode_orchestration') : t('composer.mode_normal'))}</strong></div>
                         <div><span>${escapeHtml(sessionMode === 'orchestration' ? t('settings.triggers.orchestration_preset_id') : t('settings.triggers.normal_root_role_id'))}</span><strong>${escapeHtml(
@@ -6054,12 +6182,8 @@ function renderAutomationProjectView(project, sessions, workspaceRecord = null, 
     const safeSessions = Array.isArray(sessions) ? sessions : [];
     const status = String(project?.status || '').trim() || 'unknown';
     const scheduleMode = String(project?.schedule_mode || '').trim() || 'cron';
-    const scheduleText = scheduleMode === 'one_shot'
-        ? (String(project?.run_at || '').trim() || t('automation.detail.not_scheduled'))
-        : (String(project?.cron_expression || '').trim() || t('automation.detail.not_scheduled'));
-    const cronDescription = scheduleMode === 'one_shot'
-        ? t('automation.cron.one_shot')
-        : describeCronExpression(project?.cron_expression);
+    const scheduleText = describeAutomationScheduleText(project);
+    const cronDescription = describeAutomationSchedule(project);
     const timezone = String(project?.timezone || 'UTC').trim() || 'UTC';
     const workspaceId = String(project?.workspace_id || '').trim() || 'automation-system';
     const workspaceRootPath = String(workspaceRecord?.root_path || '').trim() || t('automation.workspace.missing');
@@ -8060,6 +8184,30 @@ function describeCronExpression(expression) {
         });
     }
     return formatTemplate(t('automation.cron.fallback'), { expression: cron });
+}
+
+function describeAutomationSchedule(project) {
+    const scheduleMode = String(project?.schedule_mode || '').trim();
+    if (scheduleMode === 'interval') {
+        const count = String(project?.interval_every || '1');
+        const unit = t(`automation.schedule.interval_unit.${String(project?.interval_unit || AUTOMATION_INTERVAL_UNITS.hours)}`);
+        return formatTemplate(t('automation.schedule.summary.interval'), { count, unit });
+    }
+    if (scheduleMode === 'one_shot') {
+        return t('automation.cron.one_shot');
+    }
+    return describeCronExpression(project?.cron_expression);
+}
+
+function describeAutomationScheduleText(project) {
+    const scheduleMode = String(project?.schedule_mode || '').trim();
+    if (scheduleMode === 'interval') {
+        return describeAutomationSchedule(project);
+    }
+    if (scheduleMode === 'one_shot') {
+        return String(project?.run_at || '').trim() || t('automation.detail.not_scheduled');
+    }
+    return String(project?.cron_expression || '').trim() || t('automation.detail.not_scheduled');
 }
 
 function formatCronTime(hour, minute) {

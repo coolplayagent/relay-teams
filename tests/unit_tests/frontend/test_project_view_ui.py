@@ -3153,6 +3153,127 @@ def test_project_view_github_rule_payload_clears_pr_only_filters_for_issue_rules
     assert "paths_ignore:" not in source
 
 
+def test_project_view_automation_schedule_editor_supports_interval_and_advanced_cron() -> (
+    None
+):
+    repo_root = Path(__file__).resolve().parents[3]
+    source = (
+        repo_root / "frontend" / "dist" / "js" / "components" / "projectView.js"
+    ).read_text(encoding="utf-8")
+    i18n_source = (
+        repo_root / "frontend" / "dist" / "js" / "utils" / "i18n.js"
+    ).read_text(encoding="utf-8")
+
+    assert "interval: 'interval'" in source
+    assert "advancedCron: 'advanced_cron'" in source
+    assert "schedule_mode: 'interval'" in source
+    assert "interval_every: intervalEvery" in source
+    assert "interval_unit: intervalUnit" in source
+    assert "automation-editor-cron-expression-input" in source
+    assert "schedule_mode: 'cron'" in source
+    assert "cron_expression: cronExpression" in source
+    assert "'automation.schedule.interval': 'Every interval'" in i18n_source
+    assert "'automation.schedule.advanced_cron': 'Advanced cron'" in i18n_source
+    assert "'automation.schedule.interval': '固定间隔'" in i18n_source
+    assert "'automation.schedule.advanced_cron': '高级 Cron'" in i18n_source
+
+
+def test_project_view_keeps_non_fixed_cron_as_advanced_cron(tmp_path: Path) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openAutomationProjectView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openAutomationProjectView({ automation_project_id: "aut_1", workspace_id: "alpha-project" });
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-automation-edit]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const scheduleKindInput = document.getElementById("automation-editor-schedule-kind-input");
+const cronExpressionInput = document.getElementById("automation-editor-cron-expression-input");
+document.querySelector("[data-automation-editor-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+console.log(JSON.stringify({
+    scheduleKind: scheduleKindInput?.value || "",
+    cronExpression: cronExpressionInput?.value || "",
+    updatePayload: globalThis.__updatedAutomationPayload,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchAutomationProject() {
+    return {
+        automation_project_id: "aut_1",
+        name: "quarter-hour-build-check",
+        display_name: "Quarter-hour build check",
+        status: "enabled",
+        workspace_id: "alpha-project",
+        prompt: "Check build health.",
+        schedule_mode: "cron",
+        cron_expression: "*/15 * * * *",
+        timezone: "UTC",
+        delivery_binding: null,
+        delivery_events: [],
+        run_config: {
+            session_mode: "normal",
+            normal_root_role_id: "Writer",
+            orchestration_preset_id: null,
+            execution_mode: "ai",
+            yolo: false,
+            thinking: { enabled: false, effort: null },
+        },
+        next_run_at: "2026-03-14T09:15:00Z",
+    };
+}
+
+export async function fetchAutomationProjects() {
+    return [
+        {
+            automation_project_id: "aut_1",
+            display_name: "Quarter-hour build check",
+            name: "quarter-hour-build-check",
+            status: "enabled",
+            workspace_id: "alpha-project",
+        },
+    ];
+}
+
+export async function fetchWorkspaces() {
+    return [
+        {
+            workspace_id: "alpha-project",
+            root_path: "/work/alpha-project",
+        },
+    ];
+}
+
+export async function fetchRoleConfigOptions() {
+    return { normal_mode_roles: [{ role_id: "Writer", name: "Writer" }] };
+}
+
+export async function updateAutomationProject(_automationProjectId, payload) {
+    globalThis.__updatedAutomationPayload = payload;
+    return { status: "ok" };
+}
+""".strip(),
+    )
+
+    update_payload = cast(dict[str, object], payload["updatePayload"])
+    assert payload["scheduleKind"] == "advanced_cron"
+    assert payload["cronExpression"] == "*/15 * * * *"
+    assert update_payload["schedule_mode"] == "cron"
+    assert update_payload["cron_expression"] == "*/15 * * * *"
+
+
 def test_feedback_form_dialog_supports_multiselect_fields() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     source = (

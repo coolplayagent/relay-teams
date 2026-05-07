@@ -1347,6 +1347,8 @@ CREATE TABLE IF NOT EXISTS automation_projects (
     prompt TEXT NOT NULL,
     schedule_mode TEXT NOT NULL,
     cron_expression TEXT,
+    interval_every INTEGER,
+    interval_unit TEXT,
     run_at TEXT,
     timezone TEXT NOT NULL,
     run_config_json TEXT NOT NULL,
@@ -1368,13 +1370,15 @@ CREATE INDEX IF NOT EXISTS idx_automation_projects_schedule
 Purpose: stores virtual automation projects shown in the sidebar, their schedule definition, run configuration, and the latest execution pointers.
 
 Notes:
-- `schedule_mode` is `cron` or `one_shot`.
+- `schedule_mode` is `interval`, `cron`, or `one_shot`.
+- `interval_every` and `interval_unit` are set only for interval schedules, where unit is `minutes`, `hours`, or `days`.
+- `cron_expression` stores five-field cron schedules, including advanced cron expressions entered directly in the UI.
 - `run_config_json` stores session mode, normal-mode root role id, orchestration preset, execution mode, YOLO, and thinking configuration.
 - `delivery_binding_json` stores the selected Feishu chat target plus the exact bound `session_id` chosen from the current Feishu binding candidates.
 - `delivery_events_json` stores which Feishu notifications are enabled for that automation project.
 - `trigger_id` is a legacy compatibility field and now stores `schedule-{automation_project_id}`.
 - `last_session_id` points at the most recent session used by that automation project, including a reused bound IM session.
-- `next_run_at` is the scheduler cursor used to find due projects.
+- `next_run_at` is the scheduler cursor used to find due projects. Interval schedules advance from the scheduler fire time by one interval and do not backfill missed periods.
 
 ### 2.1.3 `automation_deliveries`
 

@@ -14,6 +14,7 @@ from relay_teams.automation.errors import AutomationProjectNameConflictError
 from relay_teams.automation.automation_models import (
     AutomationDeliveryBinding,
     AutomationDeliveryEvent,
+    AutomationIntervalUnit,
     AutomationProjectRecord,
     AutomationProjectStatus,
     AutomationRunConfig,
@@ -53,6 +54,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
                     prompt TEXT NOT NULL,
                     schedule_mode TEXT NOT NULL,
                     cron_expression TEXT,
+                    interval_every INTEGER,
+                    interval_unit TEXT,
                     run_at TEXT,
                     timezone TEXT NOT NULL,
                     run_config_json TEXT NOT NULL,
@@ -89,6 +92,16 @@ class AutomationProjectRepository(SharedSqliteRepository):
                 "delivery_events_json",
                 "TEXT NOT NULL DEFAULT '[]'",
             )
+            self._ensure_column(
+                "automation_projects",
+                "interval_every",
+                "INTEGER",
+            )
+            self._ensure_column(
+                "automation_projects",
+                "interval_unit",
+                "TEXT",
+            )
 
         self._run_write(operation_name="init_tables", operation=operation)
 
@@ -106,12 +119,13 @@ class AutomationProjectRepository(SharedSqliteRepository):
                     """
                     INSERT INTO automation_projects(
                         automation_project_id, name, display_name, status, workspace_id, prompt,
-                        schedule_mode, cron_expression, run_at, timezone,
+                        schedule_mode, cron_expression, interval_every,
+                        interval_unit, run_at, timezone,
                         run_config_json, delivery_binding_json, delivery_events_json,
                         trigger_id, last_session_id, last_run_started_at,
                         last_error, next_run_at, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     self._to_row(record),
                 ),
@@ -132,12 +146,13 @@ class AutomationProjectRepository(SharedSqliteRepository):
                 """
                 INSERT INTO automation_projects(
                     automation_project_id, name, display_name, status, workspace_id, prompt,
-                    schedule_mode, cron_expression, run_at, timezone,
-                    run_config_json, delivery_binding_json, delivery_events_json,
-                    trigger_id, last_session_id, last_run_started_at,
-                    last_error, next_run_at, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        schedule_mode, cron_expression, interval_every,
+                        interval_unit, run_at, timezone,
+                        run_config_json, delivery_binding_json, delivery_events_json,
+                        trigger_id, last_session_id, last_run_started_at,
+                        last_error, next_run_at, created_at, updated_at
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._to_row(record),
             )
@@ -170,6 +185,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
                         prompt=?,
                         schedule_mode=?,
                         cron_expression=?,
+                        interval_every=?,
+                        interval_unit=?,
                         run_at=?,
                         timezone=?,
                         run_config_json=?,
@@ -191,6 +208,10 @@ class AutomationProjectRepository(SharedSqliteRepository):
                         record.prompt,
                         record.schedule_mode.value,
                         record.cron_expression,
+                        record.interval_every,
+                        record.interval_unit.value
+                        if record.interval_unit is not None
+                        else None,
                         _to_iso(record.run_at),
                         record.timezone,
                         json.dumps(record.run_config.model_dump(mode="json")),
@@ -228,6 +249,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
                     prompt=?,
                     schedule_mode=?,
                     cron_expression=?,
+                    interval_every=?,
+                    interval_unit=?,
                     run_at=?,
                     timezone=?,
                     run_config_json=?,
@@ -249,6 +272,10 @@ class AutomationProjectRepository(SharedSqliteRepository):
                     record.prompt,
                     record.schedule_mode.value,
                     record.cron_expression,
+                    record.interval_every,
+                    record.interval_unit.value
+                    if record.interval_unit is not None
+                    else None,
                     _to_iso(record.run_at),
                     record.timezone,
                     json.dumps(record.run_config.model_dump(mode="json")),
@@ -424,6 +451,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
             record.prompt,
             record.schedule_mode.value,
             record.cron_expression,
+            record.interval_every,
+            record.interval_unit.value if record.interval_unit is not None else None,
             _to_iso(record.run_at),
             record.timezone,
             json.dumps(record.run_config.model_dump(mode="json")),
@@ -460,6 +489,8 @@ class AutomationProjectRepository(SharedSqliteRepository):
             prompt=str(row["prompt"]),
             schedule_mode=AutomationScheduleMode(str(row["schedule_mode"])),
             cron_expression=normalize_persisted_text(row["cron_expression"]),
+            interval_every=_optional_interval_every(row["interval_every"]),
+            interval_unit=_optional_interval_unit(row["interval_unit"]),
             run_at=_optional_project_timestamp(
                 row=row,
                 automation_project_id=automation_project_id,
@@ -501,6 +532,22 @@ class AutomationProjectRepository(SharedSqliteRepository):
 
 def _to_iso(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _optional_interval_every(value: object) -> int | None:
+    if value is None:
+        return None
+    parsed = int(str(value))
+    if parsed < 1:
+        raise ValueError("interval_every must be greater than zero")
+    return parsed
+
+
+def _optional_interval_unit(value: object) -> AutomationIntervalUnit | None:
+    normalized = normalize_persisted_text(value)
+    if normalized is None:
+        return None
+    return AutomationIntervalUnit(normalized)
 
 
 def _binding_to_json(binding: AutomationDeliveryBinding | None) -> str | None:

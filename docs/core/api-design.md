@@ -3403,7 +3403,9 @@ Each record includes:
 - `display_name`
 - `status`: `enabled` or `disabled`
 - `prompt`
-- `schedule_mode`: `cron` or `one_shot`
+- `schedule_mode`: `interval`, `cron`, or `one_shot`
+- `interval_every`
+- `interval_unit`: `minutes`, `hours`, or `days`
 - `cron_expression`
 - `run_at`
 - `timezone`
@@ -3430,6 +3432,7 @@ Request fields:
 - `display_name` optional
 - `prompt`
 - `schedule_mode`
+- `interval_every` and `interval_unit` for `interval`
 - `cron_expression` for `cron`
 - `run_at` for `one_shot`
 - `timezone`
@@ -3452,6 +3455,11 @@ Request fields:
 - `enabled`
 
 Notes:
+- Interval schedules run every `interval_every` `interval_unit` and do not
+  backfill missed periods after downtime or polling delays.
+- Friendly daily, weekday, weekly, and monthly UI schedules are persisted as
+  five-field cron expressions. Advanced cron mode writes the same
+  `cron_expression` field directly.
 - `delivery_binding` must reference an existing Feishu IM chat binding returned by `GET /automation/feishu-bindings`.
 - `delivery_binding.session_id` is required for explicit create/update requests and binds the automation project to that exact saved session.
 - When `delivery_binding` is present and `delivery_events` is omitted, the backend defaults to `started`, `completed`, and `failed`.
@@ -3470,6 +3478,8 @@ Returns one automation project.
 
 Updates automation project definition, schedule, stored run config, and optional Feishu delivery binding.
 Explicit `run_config` updates follow the same validation rules as create requests.
+Schedule validation is mode-specific: `interval` accepts only interval fields,
+`cron` accepts only `cron_expression`, and `one_shot` accepts only `run_at`.
 
 ### `DELETE /automation/projects/{automation_project_id}`
 
@@ -3492,6 +3502,9 @@ Behavior notes:
   ingress path and always starts detached runs.
 - If the bound session is busy, the automation job queues behind the current
   session backlog instead of inserting prompt text into the active run.
+- Manual runs do not advance the scheduled `next_run_at` cursor for recurring
+  `interval` and `cron` schedules. Manual `one_shot` runs still disable the
+  project and clear `next_run_at`.
 
 ### `POST /automation/projects/{automation_project_id}:enable`
 
