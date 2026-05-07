@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import RLock
+from typing import TypeVar, cast
 
 from relay_teams.agents.tasks.enums import TaskArtifactPhase
 from relay_teams.logger import get_logger
@@ -14,6 +17,14 @@ from relay_teams.agents.tasks.models import (
     TaskArtifactSummary,
     VerificationEvidenceBundle,
 )
+from relay_teams.persistence.db import (
+    BlockingSqliteConnection,
+    SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_TIMEOUT_SECONDS,
+    run_sqlite_write_with_retry,
+)
+
+ResultT = TypeVar("ResultT")
 
 _CREATE_TABLES_SQL = """\
 CREATE TABLE IF NOT EXISTS task_artifacts (
@@ -53,19 +64,48 @@ class TaskArtifactRepository:
 
     def __init__(self, db_path: Path | str) -> None:
         self._db_path = Path(db_path)
+        self._lock = RLock()
         self._init_tables()
 
     def _init_tables(self) -> None:
-        conn = sqlite3.connect(str(self._db_path))
-        try:
+        def operation(conn: sqlite3.Connection) -> None:
             conn.executescript(_CREATE_TABLES_SQL)
-            conn.commit()
+
+        self._run_write(operation_name="init_tables", operation=operation)
+
+    def _connect(self) -> sqlite3.Connection:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(self._db_path), timeout=SQLITE_TIMEOUT_SECONDS)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA temp_store = MEMORY")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        _enable_wal_if_available(conn)
+        return conn
+
+    def _run_write(
+        self,
+        *,
+        operation_name: str,
+        operation: Callable[[sqlite3.Connection], ResultT],
+    ) -> ResultT:
+        conn = self._connect()
+        try:
+            return run_sqlite_write_with_retry(
+                conn=cast(BlockingSqliteConnection, conn),
+                db_path=self._db_path,
+                operation=lambda: operation(conn),
+                lock=self._lock,
+                repository_name=type(self).__name__,
+                operation_name=operation_name,
+            )
         finally:
             conn.close()
 
     def get_artifact(self, task_id: str) -> TaskArtifact | None:
         """Load the full artifact including all entries."""
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         try:
             row = conn.execute(
                 "SELECT * FROM task_artifacts WHERE task_id = ?",
@@ -74,28 +114,13 @@ class TaskArtifactRepository:
             if row is None:
                 return None
 
-            columns = [
-                desc[0]
-                for desc in conn.execute(
-                    "SELECT * FROM task_artifacts WHERE task_id = ?",
-                    (task_id,),
-                ).description
-            ]
-            artifact_row = dict(zip(columns, row))
+            artifact_row = dict(row)
 
             entry_rows = conn.execute(
                 "SELECT * FROM task_artifact_entries WHERE task_id = ? ORDER BY id ASC",
                 (task_id,),
             ).fetchall()
-            columns_e = [
-                desc[0]
-                for desc in conn.execute(
-                    "SELECT * FROM task_artifact_entries "
-                    "WHERE task_id = ? ORDER BY id ASC",
-                    (task_id,),
-                ).description
-            ]
-            entries = [self._row_to_entry(dict(zip(columns_e, r))) for r in entry_rows]
+            entries = [self._row_to_entry(dict(row)) for row in entry_rows]
 
             evidence_bundle = None
             eb_json = artifact_row.get("evidence_bundle_json")
@@ -150,31 +175,22 @@ class TaskArtifactRepository:
 
     def ensure_artifact(self, task_id: str, spec_artifact_id: str) -> TaskArtifact:
         """Create the artifact record if it does not exist."""
-        existing = self.get_artifact(task_id)
-        if existing is not None:
-            return existing
-
         now = datetime.now(tz=timezone.utc).isoformat()
-        conn = sqlite3.connect(str(self._db_path))
-        try:
+
+        def operation(conn: sqlite3.Connection) -> None:
             conn.execute(
-                "INSERT INTO task_artifacts "
+                "INSERT OR IGNORE INTO task_artifacts "
                 "(task_id, spec_artifact_id, summary, "
                 "created_at, updated_at) "
                 "VALUES (?, ?, '', ?, ?)",
                 (task_id, spec_artifact_id, now, now),
             )
-            conn.commit()
-        finally:
-            conn.close()
 
-        return TaskArtifact(
-            task_id=task_id,
-            spec_artifact_id=spec_artifact_id,
-            entries=[],
-            created_at=now,
-            updated_at=now,
-        )
+        self._run_write(operation_name="ensure_artifact", operation=operation)
+        artifact = self.get_artifact(task_id)
+        if artifact is None:
+            raise RuntimeError(f"Failed to create task artifact for task_id={task_id}")
+        return artifact
 
     def append_entry(
         self,
@@ -182,8 +198,8 @@ class TaskArtifactRepository:
         entry: TaskArtifactEntry,
     ) -> int:
         """Append an entry to the artifact."""
-        conn = sqlite3.connect(str(self._db_path))
-        try:
+
+        def operation(conn: sqlite3.Connection) -> int:
             conn.execute(
                 "INSERT INTO task_artifact_entries "
                 "(entry_id, task_id, phase, timestamp, role_id, "
@@ -208,12 +224,9 @@ class TaskArtifactRepository:
                 "UPDATE task_artifacts SET updated_at = ? WHERE task_id = ?",
                 (now, task_id),
             )
-            conn.commit()
-            cursor = conn.execute("SELECT last_insert_rowid()")
-            row_id = cursor.fetchone()[0]
-            return row_id
-        finally:
-            conn.close()
+            return _last_insert_row_id(conn)
+
+        return self._run_write(operation_name="append_entry", operation=operation)
 
     def update_evidence_bundle(
         self,
@@ -222,17 +235,16 @@ class TaskArtifactRepository:
     ) -> None:
         """Update the evidence bundle for an artifact."""
         now = datetime.now(tz=timezone.utc).isoformat()
-        conn = sqlite3.connect(str(self._db_path))
-        try:
+
+        def operation(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "UPDATE task_artifacts "
                 "SET evidence_bundle_json = ?, updated_at = ? "
                 "WHERE task_id = ?",
                 (bundle.model_dump_json(), now, task_id),
             )
-            conn.commit()
-        finally:
-            conn.close()
+
+        self._run_write(operation_name="update_evidence_bundle", operation=operation)
 
     def update_summary(
         self,
@@ -241,16 +253,15 @@ class TaskArtifactRepository:
     ) -> None:
         """Update the summary text for an artifact."""
         now = datetime.now(tz=timezone.utc).isoformat()
-        conn = sqlite3.connect(str(self._db_path))
-        try:
+
+        def operation(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "UPDATE task_artifacts SET summary = ?, updated_at = ? "
                 "WHERE task_id = ?",
                 (summary, now, task_id),
             )
-            conn.commit()
-        finally:
-            conn.close()
+
+        self._run_write(operation_name="update_summary", operation=operation)
 
     def query_entries(
         self,
@@ -265,7 +276,7 @@ class TaskArtifactRepository:
 
         Returns (entries, total_count).
         """
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._connect()
         try:
             conditions: list[str] = ["task_id = ?"]
             params: list[object] = [task_id]
@@ -292,16 +303,7 @@ class TaskArtifactRepository:
                 f"ORDER BY id ASC LIMIT ? OFFSET ?",
                 tuple(params),
             ).fetchall()
-            col_names = [
-                desc[0]
-                for desc in conn.execute(
-                    f"SELECT * FROM task_artifact_entries "
-                    f"WHERE {where} "
-                    f"ORDER BY id ASC LIMIT ? OFFSET ?",
-                    tuple(params),
-                ).description
-            ]
-            entries = [self._row_to_entry(dict(zip(col_names, r))) for r in rows]
+            entries = [self._row_to_entry(dict(row)) for row in rows]
             return entries, total
         finally:
             conn.close()
@@ -345,3 +347,20 @@ class TaskArtifactRepository:
             payload_json=payload,
             linked_evidence_ids=linked,
         )
+
+
+def _enable_wal_if_available(conn: sqlite3.Connection) -> None:
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        get_logger(__name__).debug(
+            "WAL mode is unavailable for task artifacts; using default journal mode"
+        )
+
+
+def _last_insert_row_id(conn: sqlite3.Connection) -> int:
+    cursor = conn.execute("SELECT last_insert_rowid()")
+    row_id = cursor.fetchone()[0]
+    if not isinstance(row_id, int):
+        raise RuntimeError("SQLite last_insert_rowid returned a non-integer")
+    return row_id

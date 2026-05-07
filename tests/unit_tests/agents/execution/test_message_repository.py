@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sqlite3
+import time
 from typing import cast
 
 import pytest
 from pydantic_ai.messages import (
     ImageUrl,
+    ModelMessage,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -21,6 +26,7 @@ from relay_teams.agents.execution.message_repository import (
     MessageRepository,
     _is_system_reminder_projection_message,
 )
+from relay_teams.agents.execution import message_repository as message_repo_module
 from relay_teams.reminders import render_system_reminder
 from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
@@ -103,6 +109,96 @@ def test_message_repo_sanitizes_stale_task_status_error_on_read(tmp_path: Path) 
     history_task_status = history_part.content["data"]["task_status"]["ask_time"]
     assert history_task_status["status"] == "completed"
     assert "error" not in history_task_status
+
+
+def test_validated_history_skips_rows_outside_safe_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "message_repo_safe_boundary.db"
+    repo = MessageRepository(db_path)
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content="keep")]),
+            ModelRequest(parts=[UserPromptPart(content="drop")]),
+        ],
+    )
+    rows = tuple(repo._conn.execute("SELECT id, message_json FROM messages").fetchall())
+    assert len(rows) == 2
+    first_id = rows[0]["id"]
+    assert isinstance(first_id, int)
+
+    def safe_first_row_only(_rows: Sequence[sqlite3.Row]) -> set[int]:
+        return {first_id}
+
+    def validate_row(row: sqlite3.Row) -> list[ModelMessage]:
+        return [ModelRequest(parts=[UserPromptPart(content=f"row-{row['id']}")])]
+
+    monkeypatch.setattr(message_repo_module, "_safe_row_ids", safe_first_row_only)
+    monkeypatch.setattr(message_repo_module, "_validate_message_row", validate_row)
+
+    history = message_repo_module._validated_history_from_rows(rows)
+
+    assert len(history) == 1
+    assert isinstance(history[0], ModelRequest)
+    assert history[0].parts[0].content == f"row-{first_id}"
+
+
+@pytest.mark.asyncio
+async def test_async_history_replay_validation_does_not_block_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "message_repo_async_replay.db"
+    repo = MessageRepository(db_path)
+    message_count = 30
+    repo.append(
+        session_id="session-1",
+        workspace_id="default",
+        conversation_id="conversation-1",
+        agent_role_id="time",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[
+            ModelRequest(parts=[UserPromptPart(content=f"query {index}")])
+            for index in range(message_count)
+        ],
+    )
+
+    def slow_validate_message_row(_row: sqlite3.Row) -> list[ModelMessage]:
+        time.sleep(0.01)
+        return [ModelRequest(parts=[UserPromptPart(content="validated")])]
+
+    monkeypatch.setattr(
+        message_repo_module,
+        "_validate_message_row",
+        slow_validate_message_row,
+    )
+
+    samples: list[float] = []
+    previous = time.perf_counter()
+    replay_task = asyncio.create_task(
+        repo.get_history_for_conversation_async("conversation-1")
+    )
+    while not replay_task.done():
+        await asyncio.sleep(0.02)
+        now = time.perf_counter()
+        samples.append(now - previous)
+        previous = now
+
+    history = await replay_task
+
+    assert len(history) == message_count
+    assert samples
+    assert max(samples) < 0.2
 
 
 def test_message_repo_hides_duplicate_task_objective_messages(tmp_path: Path) -> None:

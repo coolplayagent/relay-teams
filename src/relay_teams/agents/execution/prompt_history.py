@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, cast, runtime_checkable
@@ -579,15 +580,16 @@ class PromptHistoryService:
             allowed_mcp_servers=allowed_mcp_servers,
             allowed_skills=allowed_skills,
         )
-        estimated_before_microcompact = (
-            ConversationTokenEstimator().estimate_history_tokens(history)
+        estimated_before_microcompact = await self._estimate_history_tokens_async(
+            history
         )
         estimated_after_microcompact = estimated_before_microcompact
         compacted_message_count = 0
         compacted_part_count = 0
         if self._conversation_microcompact_service is not None:
-            microcompact_result = self._conversation_microcompact_service.apply(
-                history=history,
+            microcompact_result = await asyncio.to_thread(
+                self._conversation_microcompact_service.apply,
+                history=tuple(history),
                 budget=budget,
             )
             history = list(microcompact_result.messages)
@@ -1036,6 +1038,15 @@ class PromptHistoryService:
             allowed_skills=allowed_skills,
         )
 
+    @staticmethod
+    async def _estimate_history_tokens_async(
+        history: Sequence[ModelRequest | ModelResponse],
+    ) -> int:
+        return await asyncio.to_thread(
+            ConversationTokenEstimator().estimate_history_tokens,
+            tuple(history),
+        )
+
     async def safe_max_output_tokens(
         self,
         *,
@@ -1114,8 +1125,9 @@ class PromptHistoryService:
     ) -> list[ModelRequest | ModelResponse]:
         if self._conversation_compaction_service is None:
             return history
-        plan = self._conversation_compaction_service.plan_compaction(
-            history=history,
+        plan = await asyncio.to_thread(
+            self._conversation_compaction_service.plan_compaction,
+            history=tuple(history),
             budget=budget,
         )
         if not plan.should_compact:
@@ -1196,7 +1208,7 @@ class PromptHistoryService:
                     message_count_before=len(history),
                     message_count_after=len(compacted_history),
                     estimated_tokens_before=estimated_tokens_before_microcompact or 0,
-                    estimated_tokens_after=ConversationTokenEstimator().estimate_history_tokens(
+                    estimated_tokens_after=await self._estimate_history_tokens_async(
                         compacted_history
                     ),
                 ),
@@ -1216,7 +1228,7 @@ class PromptHistoryService:
                     message_count_before=len(history),
                     message_count_after=len(compacted_history),
                     estimated_tokens_before=estimated_tokens_before_microcompact or 0,
-                    estimated_tokens_after=ConversationTokenEstimator().estimate_history_tokens(
+                    estimated_tokens_after=await self._estimate_history_tokens_async(
                         compacted_history
                     ),
                     threshold_tokens=plan.threshold_tokens,
