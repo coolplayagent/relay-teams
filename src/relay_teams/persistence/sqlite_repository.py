@@ -5,7 +5,7 @@ import asyncio
 import sqlite3
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import Awaitable, Callable, TypeVar
 from weakref import WeakKeyDictionary, WeakSet
 
@@ -172,6 +172,7 @@ class SharedSqliteRepository:
         self._db_path = Path(db_path)
         self._conn = BlockingAsyncSqliteConnection(self)
         self._lock = RLock()
+        self._write_gate = _write_gate_for_path(self._db_path)
         self._async_conn_guard = RLock()
         self._async_conns: WeakKeyDictionary[
             asyncio.AbstractEventLoop, aiosqlite.Connection
@@ -211,14 +212,15 @@ class SharedSqliteRepository:
         operation_name: str,
         operation: Callable[[], ResultT],
     ) -> ResultT:
-        return run_sqlite_write_with_retry(
-            conn=self._conn,
-            db_path=self._db_path,
-            operation=operation,
-            lock=self._lock,
-            repository_name=self._repository_name,
-            operation_name=operation_name,
-        )
+        with self._write_gate:
+            return run_sqlite_write_with_retry(
+                conn=self._conn,
+                db_path=self._db_path,
+                operation=operation,
+                lock=self._lock,
+                repository_name=self._repository_name,
+                operation_name=operation_name,
+            )
 
     async def close_async(self) -> None:
         _LIVE_REPOSITORIES.discard(self)
@@ -292,17 +294,38 @@ class SharedSqliteRepository:
         operation: Callable[[aiosqlite.Connection], Awaitable[ResultT]],
     ) -> ResultT:
         conn = await self._get_async_conn()
-        return await run_async_sqlite_write_with_retry(
-            conn=conn,
-            db_path=self._db_path,
-            operation=lambda: operation(conn),
-            lock=self._async_lock_for_current_loop(),
-            repository_name=self._repository_name,
-            operation_name=operation_name,
-        )
+        await _acquire_write_gate_async(self._write_gate)
+        try:
+            return await run_async_sqlite_write_with_retry(
+                conn=conn,
+                db_path=self._db_path,
+                operation=lambda: operation(conn),
+                lock=self._async_lock_for_current_loop(),
+                repository_name=self._repository_name,
+                operation_name=operation_name,
+            )
+        finally:
+            self._write_gate.release()
 
 
 _LIVE_REPOSITORIES: WeakSet[SharedSqliteRepository] = WeakSet()
+_WRITE_GATES: dict[Path, Lock] = {}
+_WRITE_GATES_GUARD = RLock()
+
+
+def _write_gate_for_path(db_path: Path) -> Lock:
+    normalized_path = db_path.resolve()
+    with _WRITE_GATES_GUARD:
+        write_gate = _WRITE_GATES.get(normalized_path)
+        if write_gate is None:
+            write_gate = Lock()
+            _WRITE_GATES[normalized_path] = write_gate
+        return write_gate
+
+
+async def _acquire_write_gate_async(write_gate: Lock) -> None:
+    while not write_gate.acquire(blocking=False):
+        await asyncio.sleep(0.001)
 
 
 async def close_live_sqlite_repositories_async() -> None:

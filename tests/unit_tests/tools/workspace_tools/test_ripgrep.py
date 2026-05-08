@@ -126,7 +126,11 @@ class TestRipgrepFilepath:
                     "relay_teams.tools.workspace_tools.ripgrep._download_rg",
                     new=AsyncMock(side_effect=RuntimeError("no network")),
                 ):
-                    path = await ripgrep.get_rg_path()
+                    with patch(
+                        "relay_teams.tools.workspace_tools.ripgrep._is_usable_rg",
+                        return_value=True,
+                    ):
+                        path = await ripgrep.get_rg_path()
                     assert path == system_rg
 
     @pytest.mark.asyncio

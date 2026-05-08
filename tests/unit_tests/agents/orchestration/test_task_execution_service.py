@@ -573,6 +573,7 @@ async def test_execute_records_task_artifact_entries(
         task=task,
     )
 
+    assert artifact_repo.drain_write_queue()
     artifact = artifact_repo.get_artifact(task.task_id)
     assert result.output == "ok"
     assert artifact is not None

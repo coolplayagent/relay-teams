@@ -21,7 +21,12 @@ from relay_teams.agents.execution.user_prompts import (
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
-from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from relay_teams.mcp.mcp_models import (
+    McpConfigScope,
+    McpServerSpec,
+    McpToolInfo,
+    McpToolSchema,
+)
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.secrets import AppSecretStore
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
@@ -221,6 +226,16 @@ class _FakeMcpRegistry(McpRegistry):
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
         assert name == "docs"
         return (McpToolInfo(name="docs_search", description="Search docs"),)
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        assert name == "docs"
+        return (
+            McpToolSchema(
+                name="docs_search",
+                description="Search docs",
+                input_schema={"type": "object"},
+            ),
+        )
 
 
 class _NoRealtimeMcpRegistry(_FakeMcpRegistry):

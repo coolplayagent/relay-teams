@@ -7,14 +7,19 @@ from types import SimpleNamespace, TracebackType
 from typing import cast
 
 import pytest
+from pydantic import JsonValue
 from pydantic_ai.messages import (
     FunctionToolResultEvent,
     SystemPromptPart,
     ToolCallPart,
+    ToolReturn,
     ToolReturnPart,
 )
 
 from relay_teams.agents.execution import session_runtime as session_runtime_module
+from relay_teams.agents.execution import (
+    relay_tool_step_executor as relay_tool_step_executor_module,
+)
 from relay_teams.agents.tasks.models import (
     SpecCheckpointPolicy,
     TaskEnvelope,
@@ -27,6 +32,13 @@ from relay_teams.agents.tasks.models import (
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.tools.registry import ToolRegistry
+from relay_teams.tools.runtime.context import ToolContext
+from relay_teams.tools.runtime.persisted_state import ToolExecutionStatus
+from relay_teams.tools.runtime.tool_result_batching import (
+    ToolResultCommitItem,
+    current_tool_result_commit_buffer,
+    tool_result_batch_scope,
+)
 from .agent_llm_session_test_support import (
     AgentLlmSession,
     APIStatusError,
@@ -358,6 +370,669 @@ async def _wait_for_abandoned_stream_context_cleanup() -> None:
             asyncio.gather(*cleanup_tasks),
             timeout=1.0,
         )
+
+
+class _ValidatedToolCall:
+    def __init__(self, index: int) -> None:
+        self.index = index
+
+
+class _BoundedToolManager:
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+
+    async def execute_tool_call(self, validated: object) -> dict[str, JsonValue]:
+        call = cast(_ValidatedToolCall, validated)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.01)
+            return {"index": call.index}
+        finally:
+            self.active -= 1
+
+
+class _RelayToolDef:
+    kind = "function"
+    sequential = False
+
+
+class _RelayValidatedToolCall:
+    def __init__(self, call: ToolCallPart, *, args_valid: bool = True) -> None:
+        self.call = call
+        self.args_valid = args_valid
+
+
+class _RelayToolManager:
+    def __init__(self, *, args_valid: bool = True) -> None:
+        self.args_valid = args_valid
+        self.validated: list[str] = []
+        self.executed: list[str] = []
+
+    async def for_run_step(self, run_context: object) -> "_RelayToolManager":
+        _ = run_context
+        return self
+
+    def get_tool_def(self, tool_name: str) -> _RelayToolDef | None:
+        if tool_name == "missing":
+            return None
+        return _RelayToolDef()
+
+    async def validate_tool_call(self, call: ToolCallPart) -> _RelayValidatedToolCall:
+        self.validated.append(call.tool_call_id or "")
+        return _RelayValidatedToolCall(call, args_valid=self.args_valid)
+
+    async def execute_tool_call(self, validated: object) -> ToolReturn:
+        call = cast(_RelayValidatedToolCall, validated).call
+        self.executed.append(call.tool_call_id or "")
+        return ToolReturn(
+            return_value={"tool_call_id": call.tool_call_id},
+            content=f"content:{call.tool_call_id}",
+            metadata={"source": "relay-test"},
+        )
+
+
+class _RelaySequentialToolDef:
+    kind = "function"
+    sequential = True
+
+
+class _RelayOutputToolDef:
+    kind = "output"
+    sequential = False
+
+
+class _RelayValidationErrorManager(_RelayToolManager):
+    async def validate_tool_call(self, call: ToolCallPart) -> _RelayValidatedToolCall:
+        _ = call
+        raise ValueError("invalid relay args")
+
+
+class _RelayNestedReturnManager:
+    async def for_run_step(self, run_context: object) -> "_RelayNestedReturnManager":
+        _ = run_context
+        return self
+
+    def get_tool_def(self, tool_name: str) -> _RelayToolDef:
+        _ = tool_name
+        return _RelayToolDef()
+
+    async def validate_tool_call(self, call: ToolCallPart) -> _RelayValidatedToolCall:
+        return _RelayValidatedToolCall(call)
+
+    async def execute_tool_call(self, validated: object) -> list[ToolReturn]:
+        call = cast(_RelayValidatedToolCall, validated).call
+        return [
+            ToolReturn(
+                return_value={"tool_call_id": call.tool_call_id},
+                content=None,
+                metadata=None,
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_bounded_executor_preserves_order_and_limit() -> None:
+    manager = _BoundedToolManager()
+    calls = tuple(
+        ToolCallPart(
+            tool_name="read",
+            args={"path": "AGENTS.md"},
+            tool_call_id=f"call-{index}",
+        )
+        for index in range(20)
+    )
+    validated = tuple(_ValidatedToolCall(index) for index in range(20))
+
+    results = (
+        await relay_tool_step_executor_module._execute_relay_tool_step_bounded_async(
+            tool_manager=manager,
+            calls=calls,
+            validated_calls=validated,
+            concurrency=3,
+        )
+    )
+
+    assert manager.max_active <= 3
+    assert [item.part.tool_call_id for item in results] == [
+        f"call-{index}" for index in range(20)
+    ]
+    assert [item.part.content for item in results] == [
+        {"index": index} for index in range(20)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_bounded_executor_respects_global_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "RELAY_TOOL_STEP_GLOBAL_SEMAPHORE",
+        asyncio.Semaphore(2),
+    )
+    manager = _BoundedToolManager()
+    calls = tuple(
+        ToolCallPart(
+            tool_name="read",
+            args={"path": "AGENTS.md"},
+            tool_call_id=f"call-{index}",
+        )
+        for index in range(12)
+    )
+    validated = tuple(_ValidatedToolCall(index) for index in range(12))
+
+    results = (
+        await relay_tool_step_executor_module._execute_relay_tool_step_bounded_async(
+            tool_manager=manager,
+            calls=calls,
+            validated_calls=validated,
+            concurrency=8,
+        )
+    )
+
+    assert manager.max_active <= 2
+    assert [item.part.tool_call_id for item in results] == [
+        f"call-{index}" for index in range(12)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_bounded_executor_coalesces_duplicate_calls() -> None:
+    class _BufferedDuplicateToolManager(_BoundedToolManager):
+        async def execute_tool_call(self, validated: object) -> dict[str, JsonValue]:
+            result = await super().execute_tool_call(validated)
+            call = cast(_ValidatedToolCall, validated)
+            buffer = current_tool_result_commit_buffer()
+            if buffer is None:
+                raise RuntimeError("expected active tool result buffer")
+            tool_call_id = f"call-{call.index}"
+            envelope: dict[str, JsonValue] = {
+                "ok": True,
+                "data": result,
+                "error": None,
+                "meta": {"duration_ms": 1},
+            }
+            await buffer.add_async(
+                ToolResultCommitItem(
+                    ctx=cast(ToolContext, object()),
+                    tool_call_id=tool_call_id,
+                    tool_name="read",
+                    args_summary={"path": "AGENTS.md"},
+                    visible_envelope=envelope,
+                    internal_data=result,
+                    runtime_meta={"duration_ms": 1},
+                    execution_status=ToolExecutionStatus.COMPLETED,
+                    tool_content_parts=(),
+                    duration_ms=1,
+                    success=True,
+                )
+            )
+            return envelope
+
+    manager = _BufferedDuplicateToolManager()
+    calls = tuple(
+        ToolCallPart(
+            tool_name="read",
+            args={"path": "AGENTS.md", "offset": 1, "limit": 1},
+            tool_call_id=f"call-{index}",
+        )
+        for index in range(20)
+    )
+    validated = tuple(_ValidatedToolCall(index) for index in range(20))
+
+    with tool_result_batch_scope() as buffer:
+        results = await relay_tool_step_executor_module._execute_relay_tool_step_bounded_async(
+            tool_manager=manager,
+            calls=calls,
+            validated_calls=validated,
+            concurrency=8,
+        )
+        buffered_items = await buffer.pop_items_async()
+
+    assert manager.max_active == 1
+    assert [item.part.tool_call_id for item in results] == [
+        f"call-{index}" for index in range(20)
+    ]
+    assert [item.tool_call_id for item in buffered_items] == [
+        f"call-{index}" for index in range(20)
+    ]
+    assert (
+        sum(
+            1
+            for item in buffered_items
+            if item.runtime_meta.get("relay_tool_step_coalesced_result") is True
+        )
+        == 19
+    )
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_bounded_executor_cancels_pending_on_failure() -> None:
+    class _FailingBoundedToolManager(_BoundedToolManager):
+        async def execute_tool_call(self, validated: object) -> dict[str, JsonValue]:
+            call = cast(_ValidatedToolCall, validated)
+            if call.index == 1:
+                raise RuntimeError("boom")
+            return await super().execute_tool_call(validated)
+
+    manager = _FailingBoundedToolManager()
+    calls = tuple(
+        ToolCallPart(
+            tool_name="read",
+            args={"path": "AGENTS.md"},
+            tool_call_id=f"call-{index}",
+        )
+        for index in range(5)
+    )
+    validated = tuple(_ValidatedToolCall(index) for index in range(5))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await relay_tool_step_executor_module._execute_relay_tool_step_bounded_async(
+            tool_manager=manager,
+            calls=calls,
+            validated_calls=validated,
+            concurrency=5,
+        )
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_bounded_executor_rejects_mismatched_validation_count() -> (
+    None
+):
+    calls = (
+        ToolCallPart(
+            tool_name="read",
+            args={"path": "AGENTS.md"},
+            tool_call_id="call-1",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Validated tool call count"):
+        await relay_tool_step_executor_module._execute_relay_tool_step_bounded_async(
+            tool_manager=_BoundedToolManager(),
+            calls=calls,
+            validated_calls=(),
+            concurrency=1,
+        )
+
+
+def test_relay_tool_step_falls_back_for_non_batchable_tool() -> None:
+    node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="write",
+                    args={"path": "out.txt", "content": "hello"},
+                    tool_call_id="call-1",
+                )
+            ]
+        )
+    )
+
+    assert (
+        relay_tool_step_executor_module._relay_tool_step_disabled_reason(node)
+        == "non_batchable_tool:write"
+    )
+
+
+def test_relay_tool_step_falls_back_for_spawn_subagent_sync_wait() -> None:
+    node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="spawn_subagent",
+                    args={
+                        "role_id": "Crafter",
+                        "description": "Investigate failures",
+                        "prompt": "Inspect the failing run.",
+                    },
+                    tool_call_id="call-spawn-1",
+                ),
+                ToolCallPart(
+                    tool_name="spawn_subagent",
+                    args={
+                        "role_id": "Crafter",
+                        "description": "Review logs",
+                        "prompt": "Summarize the log tail.",
+                    },
+                    tool_call_id="call-spawn-2",
+                ),
+            ]
+        )
+    )
+
+    assert (
+        relay_tool_step_executor_module._relay_tool_step_disabled_reason(node)
+        == "non_batchable_tool:spawn_subagent"
+    )
+
+
+def test_relay_tool_step_disabled_reason_handles_deferred_and_metadata() -> None:
+    node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-1",
+                )
+            ]
+        )
+    )
+    node.tool_call_results = {"call-1": "skip"}
+    assert (
+        relay_tool_step_executor_module._relay_tool_step_disabled_reason(node)
+        == "deferred_results"
+    )
+    node.tool_call_results = None
+    node.tool_call_metadata = {"call-1": {}}
+    assert (
+        relay_tool_step_executor_module._relay_tool_step_disabled_reason(node)
+        == "tool_call_metadata"
+    )
+
+
+def test_relay_tool_step_calls_require_all_parts_to_be_tool_calls() -> None:
+    node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-1",
+                ),
+                TextPart(content="interrupt"),
+            ]
+        )
+    )
+
+    assert relay_tool_step_executor_module._relay_tool_step_calls(node) == ()
+    assert (
+        relay_tool_step_executor_module._relay_tool_step_disabled_reason(node)
+        == "no_batchable_tool_calls"
+    )
+
+
+def test_relay_tool_step_dedupes_duplicate_tool_returns_for_history() -> None:
+    first = relay_tool_step_executor_module.RelayToolStepItemResult(
+        index=0,
+        part=ToolReturnPart(
+            tool_name="read",
+            tool_call_id="call-read-1",
+            content={"path": "AGENTS.md", "content": "same"},
+        ),
+        user_content=None,
+    )
+    second = relay_tool_step_executor_module.RelayToolStepItemResult(
+        index=1,
+        part=ToolReturnPart(
+            tool_name="read",
+            tool_call_id="call-read-2",
+            content={"content": "same", "path": "AGENTS.md"},
+        ),
+        user_content=None,
+    )
+
+    deduped, compressed_count = (
+        relay_tool_step_executor_module._dedupe_tool_returns_for_history(
+            (first, second)
+        )
+    )
+
+    assert compressed_count == 1
+    assert deduped[0].part.content == {"path": "AGENTS.md", "content": "same"}
+    assert deduped[1].part.tool_call_id == "call-read-2"
+    compressed_content = deduped[1].part.content
+    assert isinstance(compressed_content, dict)
+    assert compressed_content["content_omitted"] is True
+    assert compressed_content["duplicate_of_tool_call_id"] == "call-read-1"
+
+
+def test_relay_tool_step_keeps_unserializable_results_without_dedupe() -> None:
+    item = relay_tool_step_executor_module.RelayToolStepItemResult(
+        index=0,
+        part=ToolReturnPart(
+            tool_name="read",
+            tool_call_id="call-read-1",
+            content={"opaque": object()},
+        ),
+        user_content=None,
+    )
+
+    deduped, compressed_count = (
+        relay_tool_step_executor_module._dedupe_tool_returns_for_history((item,))
+    )
+
+    assert deduped == (item,)
+    assert compressed_count == 0
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_executes_batch_and_updates_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "build_run_context",
+        lambda _ctx: object(),
+    )
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "replace",
+        lambda run_context, **changes: SimpleNamespace(
+            run_context=run_context,
+            **changes,
+        ),
+    )
+    manager = _RelayToolManager()
+    node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-1",
+                ),
+                ToolCallPart(
+                    tool_name="grep",
+                    args={"pattern": "x"},
+                    tool_call_id="call-2",
+                ),
+            ]
+        )
+    )
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(retries=0),
+        deps=SimpleNamespace(
+            max_result_retries=2,
+            tool_manager=manager,
+        ),
+    )
+
+    result = await relay_tool_step_executor_module._try_execute_relay_tool_step_async(
+        node=node,
+        agent_run_ctx=ctx,
+    )
+
+    assert result is not None
+    assert manager.validated == ["call-1", "call-2"]
+    assert manager.executed == ["call-1", "call-2"]
+    assert [
+        part.tool_call_id
+        for part in result.output_parts
+        if isinstance(part, ToolReturnPart)
+    ] == [
+        "call-1",
+        "call-2",
+    ]
+    assert [
+        part.content for part in result.output_parts if isinstance(part, UserPromptPart)
+    ] == [
+        "content:call-1",
+        "content:call-2",
+    ]
+    next_node = getattr(node, "_next_node")
+    assert next_node is not None
+    assert [message.parts for message in result.observed_messages]
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_falls_back_for_validation_failure_and_unknown_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "build_run_context",
+        lambda _ctx: object(),
+    )
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "replace",
+        lambda run_context, **changes: SimpleNamespace(
+            run_context=run_context,
+            **changes,
+        ),
+    )
+    invalid_manager = _RelayToolManager(args_valid=False)
+    invalid_node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-invalid",
+                )
+            ]
+        )
+    )
+    invalid_ctx = SimpleNamespace(
+        state=SimpleNamespace(retries=0),
+        deps=SimpleNamespace(max_result_retries=2, tool_manager=invalid_manager),
+    )
+
+    assert (
+        await relay_tool_step_executor_module._try_execute_relay_tool_step_async(
+            node=invalid_node,
+            agent_run_ctx=invalid_ctx,
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_falls_back_for_validation_exception_and_tool_defs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "build_run_context",
+        lambda _ctx: object(),
+    )
+    monkeypatch.setattr(
+        relay_tool_step_executor_module,
+        "replace",
+        lambda run_context, **changes: SimpleNamespace(
+            run_context=run_context,
+            **changes,
+        ),
+    )
+
+    def make_ctx(manager: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            state=SimpleNamespace(retries=0),
+            deps=SimpleNamespace(max_result_retries=2, tool_manager=manager),
+        )
+
+    node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read",
+                    args={"path": "a.txt"},
+                    tool_call_id="call-1",
+                )
+            ]
+        )
+    )
+
+    assert (
+        await relay_tool_step_executor_module._try_execute_relay_tool_step_async(
+            node=node,
+            agent_run_ctx=make_ctx(_RelayValidationErrorManager()),
+        )
+        is None
+    )
+
+    class _SequentialManager(_RelayToolManager):
+        def get_tool_def(self, tool_name: str) -> _RelayToolDef | None:
+            _ = tool_name
+            return cast(_RelayToolDef, _RelaySequentialToolDef())
+
+    assert (
+        await relay_tool_step_executor_module._try_execute_relay_tool_step_async(
+            node=node,
+            agent_run_ctx=make_ctx(_SequentialManager()),
+        )
+        is None
+    )
+
+    class _OutputManager(_RelayToolManager):
+        def get_tool_def(self, tool_name: str) -> _RelayToolDef | None:
+            _ = tool_name
+            return cast(_RelayToolDef, _RelayOutputToolDef())
+
+    assert (
+        await relay_tool_step_executor_module._try_execute_relay_tool_step_async(
+            node=node,
+            agent_run_ctx=make_ctx(_OutputManager()),
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_step_rejects_nested_tool_return_objects() -> None:
+    call = ToolCallPart(
+        tool_name="read",
+        args={"path": "a.txt"},
+        tool_call_id="call-1",
+    )
+    validated = (_RelayValidatedToolCall(call),)
+
+    with pytest.raises(RuntimeError, match="nested ToolReturn"):
+        await relay_tool_step_executor_module._execute_relay_tool_step_bounded_async(
+            tool_manager=_RelayNestedReturnManager(),
+            calls=(call,),
+            validated_calls=validated,
+            concurrency=1,
+        )
+
+    unknown_manager = _RelayToolManager()
+    unknown_node = session_runtime_module.CallToolsNode(
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="missing",
+                    args={},
+                    tool_call_id="call-missing",
+                )
+            ]
+        )
+    )
+    unknown_ctx = SimpleNamespace(
+        state=SimpleNamespace(retries=0),
+        deps=SimpleNamespace(max_result_retries=2, tool_manager=unknown_manager),
+    )
+
+    assert (
+        await relay_tool_step_executor_module._try_execute_relay_tool_step_async(
+            node=unknown_node,
+            agent_run_ctx=unknown_ctx,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

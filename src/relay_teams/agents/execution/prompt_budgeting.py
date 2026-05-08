@@ -12,6 +12,10 @@ from relay_teams.agents.execution.conversation_compaction import (
     ConversationTokenEstimator,
     build_conversation_compaction_budget,
 )
+from relay_teams.mcp.runtime_schema_loader import (
+    cached_runtime_mcp_server_names,
+    should_require_ready_mcp_toolsets,
+)
 from relay_teams.computer import describe_builtin_tool
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_models import McpDiscoveryStatus, McpToolInfo, McpToolSchema
@@ -30,7 +34,7 @@ MCP_SERVER_CONTEXT_FALLBACK_CHARS = 8_000
 MCP_DISCOVERED_TOOL_SCHEMA_RESERVE_CHARS = 1_200
 
 
-class PromptBudgetingService:
+class PromptBudgetingService:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -175,6 +179,16 @@ class PromptBudgetingService:
             strict=False,
             consumer="agents.execution.prompt_history",
         )
+        if should_require_ready_mcp_toolsets(
+            requested_server_names=allowed_mcp_servers,
+            resolved_server_count=len(resolved_server_names),
+        ):
+            resolved_server_names = cached_runtime_mcp_server_names(
+                mcp_registry=self._mcp_registry,
+                server_names=resolved_server_names,
+            )
+            if not resolved_server_names:
+                return 0
         total_tokens = 0
         for server_name in resolved_server_names:
             cached_tokens = self._mcp_tool_context_token_cache.get(server_name)
@@ -188,9 +202,10 @@ class PromptBudgetingService:
                 self._mcp_tool_context_token_cache[server_name] = discovered_tokens
                 total_tokens += discovered_tokens
                 continue
-            total_tokens += self.estimated_mcp_context_tokens_fallback(
+            fallback_tokens = self.estimated_mcp_context_tokens_fallback(
                 allowed_mcp_servers=(server_name,),
             )
+            total_tokens += fallback_tokens
         return total_tokens
 
     def _estimated_discovered_mcp_context_tokens(

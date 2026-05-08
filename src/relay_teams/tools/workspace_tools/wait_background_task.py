@@ -26,8 +26,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         async def _action():
             service = require_background_task_service(ctx)
-            record, completed = await service.wait_for_run(
-                run_id=ctx.deps.run_id,
+            record, completed = await service.wait_for_session(
+                session_id=ctx.deps.session_id,
                 background_task_id=background_task_id,
             )
             return project_background_task_tool_result(

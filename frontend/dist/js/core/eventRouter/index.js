@@ -5,6 +5,8 @@
 import {
     applyBackgroundTaskEvent,
     isDisplayableBackgroundTaskPayload,
+    markUserQuestionAnswered,
+    markUserQuestionRequested,
     scheduleRecoveryContinuityRefresh,
 } from '../../app/recovery.js';
 import {
@@ -73,7 +75,8 @@ export function routeEvent(evType, payload, eventMeta) {
     if (isDuplicateRunEvent(eventRunId, eventMeta?.event_id)) {
         return;
     }
-    const isSubagentRun = eventRunId.startsWith('subagent_run_');
+    const isSubagentRun = eventRunId.startsWith('subagent_run_')
+        || eventMeta?.normal_mode_subagent_event === true;
     const backgroundTaskEvent = isBackgroundTaskEventType(evType);
     const displayableBackgroundTaskEvent = backgroundTaskEvent
         && isDisplayableBackgroundTaskPayload(payload);
@@ -207,7 +210,15 @@ export function routeEvent(evType, payload, eventMeta) {
         handleToolApprovalResolved(payload, instanceId, eventMeta, roleId);
     } else if (evType === 'injection_enqueued' || evType === 'injection_applied') {
         handleInjection(evType, payload, eventMeta);
-    } else if (evType === 'user_question_requested' || evType === 'user_question_answered') {
+    } else if (evType === 'user_question_requested') {
+        if (!isSubagentRun) {
+            markUserQuestionRequested(payload, eventMeta);
+        }
+        return;
+    } else if (evType === 'user_question_answered') {
+        if (!isSubagentRun) {
+            markUserQuestionAnswered(payload?.question_id || '');
+        }
         return;
     } else if (evType === 'notification_requested') {
         handleNotificationRequested(payload);

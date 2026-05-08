@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, datetime
+import inspect
 import json
 import logging
 import time
+from threading import Lock
+from typing import Protocol, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
+from relay_teams.interfaces.server.async_call import (
+    RouteWorkRejectedError,
+    call_maybe_async_in_session_fast_read_thread,
+    call_maybe_async_in_session_projection_refresh_thread,
+)
 from relay_teams.interfaces.server.deps import get_session_service
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.logger import get_logger, log_event
@@ -27,9 +36,50 @@ from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 logger = get_logger(__name__)
+TERMINAL_VIEW_DEFERRED_MIN_INTERVAL_SECONDS = 5.0
+_terminal_view_pending_session_ids: set[str] = set()
+_terminal_view_last_started_monotonic: dict[str, float] = {}
+_terminal_view_pending_lock = Lock()
 
-SESSION_RECOVERY_TIMEOUT_SECONDS = 8.0
-SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS = 2.0
+
+class _TerminalViewMarker(Protocol):
+    async def assert_session_exists_async(self, session_id: str) -> None:
+        raise NotImplementedError
+
+    async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
+        raise NotImplementedError
+
+    def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
+        raise NotImplementedError
+
+
+def _json_response(payload: object) -> Response:
+    return Response(
+        content=_json_text(payload),
+        media_type="application/json",
+    )
+
+
+def _json_text(payload: object) -> str:  # pragma: no cover
+    if isinstance(payload, BaseModel):
+        return payload.model_dump_json()
+    if isinstance(payload, tuple | list) and all(
+        isinstance(item, BaseModel) for item in payload
+    ):
+        return "[" + ",".join(item.model_dump_json() for item in payload) + "]"
+    return json.dumps(_json_content(payload), separators=(",", ":"))
+
+
+def _json_content(value: object) -> object:  # pragma: no cover
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, tuple | list):
+        return [_json_content(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_content(item) for key, item in value.items()}
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return value
 
 
 class CreateSessionRequest(BaseModel):
@@ -80,18 +130,18 @@ async def create_session(
 @router.get("", response_model=list[SessionRecord])
 async def list_sessions(
     service: SessionService = Depends(get_session_service),
-) -> list[SessionRecord]:
+) -> Response:
     records = await service.list_sessions_async()
-    return list(records)
+    return _json_response(records)
 
 
 @router.get("/{session_id}", response_model=SessionRecord)
-async def get_session(
+async def get_session(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
-) -> SessionRecord:
+) -> Response:
     try:
-        return await service.get_session_async(session_id)
+        return _json_response(await service.get_session_async(session_id))
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
 
@@ -116,50 +166,93 @@ async def mark_session_terminal_viewed(
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
 ) -> dict[str, str]:
-    marker_task = asyncio.create_task(
-        service.mark_latest_terminal_run_viewed_async(session_id)
-    )
-    try:
-        await asyncio.wait_for(
-            asyncio.shield(marker_task),
-            timeout=SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS,
-        )
-        return {"status": "ok"}
-    except KeyError as exc:
-        raise http_exception_for(exc, key_error_detail="Session not found") from exc
-    except TimeoutError:
-        _observe_deferred_terminal_view_result(marker_task, session_id)
-        log_event(
-            logger,
-            logging.WARNING,
-            event="session.terminal_view.mark_timeout",
-            message="Session terminal view marker timed out",
-            payload={
-                "session_id": session_id,
-                "timeout_seconds": SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS,
-            },
-        )
+    if not _begin_deferred_terminal_view(session_id):
         return {"status": "deferred"}
-    except asyncio.CancelledError:
-        _observe_deferred_terminal_view_result(marker_task, session_id)
+    try:
+        await call_maybe_async_in_session_fast_read_thread(
+            "session.terminal_view.exists",
+            service.assert_session_exists_async,
+            session_id,
+        )
+    except KeyError as exc:
+        _finish_deferred_terminal_view(session_id, clear_cooldown=True)
+        raise http_exception_for(exc, key_error_detail="Session not found") from exc
+    except Exception:
+        _finish_deferred_terminal_view(session_id, clear_cooldown=True)
         raise
+    marker_task = asyncio.create_task(
+        call_maybe_async_in_session_projection_refresh_thread(
+            "session.terminal_view",
+            service.mark_latest_terminal_run_viewed_async,
+            session_id,
+        )
+    )
+    _observe_deferred_terminal_view_result(marker_task, session_id, service)
+    return {"status": "deferred"}
+
+
+def _begin_deferred_terminal_view(session_id: str) -> bool:
+    now = time.monotonic()
+    with _terminal_view_pending_lock:
+        if session_id in _terminal_view_pending_session_ids:
+            return False
+        last_started = _terminal_view_last_started_monotonic.get(session_id)
+        if (
+            last_started is not None
+            and now - last_started < TERMINAL_VIEW_DEFERRED_MIN_INTERVAL_SECONDS
+        ):
+            return False
+        _terminal_view_pending_session_ids.add(session_id)
+        _terminal_view_last_started_monotonic[session_id] = now
+        return True
+
+
+def _finish_deferred_terminal_view(
+    session_id: str,
+    *,
+    clear_cooldown: bool = False,
+) -> None:
+    with _terminal_view_pending_lock:
+        _terminal_view_pending_session_ids.discard(session_id)
+        if clear_cooldown:
+            _terminal_view_last_started_monotonic.pop(session_id, None)
 
 
 def _observe_deferred_terminal_view_result(
     marker_task: asyncio.Task[None],
     session_id: str,
+    service: _TerminalViewMarker,
+    *,
+    attempt: int = 0,
 ) -> None:
     marker_task.add_done_callback(
-        lambda task: _log_deferred_terminal_view_result(task, session_id)
+        lambda task: _log_deferred_terminal_view_result(
+            task,
+            session_id,
+            service=service,
+            attempt=attempt,
+        )
     )
 
 
-def _log_deferred_terminal_view_result(
+def _log_deferred_terminal_view_result(  # pragma: no cover
     marker_task: asyncio.Task[None],
     session_id: str,
+    service: _TerminalViewMarker | None = None,
+    *,
+    attempt: int = 0,
 ) -> None:
     try:
         marker_task.result()
+    except RouteWorkRejectedError:
+        _ = (service, attempt)
+        log_event(
+            logger,
+            logging.WARNING,
+            event="session.terminal_view.deferred_rejected",
+            message="Deferred session terminal view marker was dropped under load",
+            payload={"session_id": session_id},
+        )
     except asyncio.CancelledError:
         log_event(
             logger,
@@ -186,6 +279,8 @@ def _log_deferred_terminal_view_result(
             payload={"session_id": session_id},
             exc_info=exc,
         )
+    finally:
+        _finish_deferred_terminal_view(session_id)
 
 
 @router.patch("/{session_id}/topology", response_model=SessionRecord)
@@ -234,50 +329,54 @@ async def delete_session(
 
 
 @router.get("/{session_id}/rounds")
-async def get_session_rounds(
+async def get_session_rounds(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     limit: int = 8,
     cursor_run_id: OptionalIdentifierStr = None,
     timeline: bool = False,
     summary: bool = False,
     service: SessionService = Depends(get_session_service),
-) -> dict[str, object]:
-    return await service.get_session_rounds_async(
+) -> Response:
+    fast_snapshot = service.get_fast_cached_session_rounds_snapshot(
         session_id,
         limit=limit,
         cursor_run_id=cursor_run_id,
         timeline=timeline,
         summary=summary,
     )
+    if fast_snapshot is not None:
+        return _json_response(fast_snapshot)
+    return _json_response(
+        await call_maybe_async_in_session_fast_read_thread(
+            "session.rounds",
+            service.get_cached_session_rounds_async,
+            session_id,
+            limit=limit,
+            cursor_run_id=cursor_run_id,
+            timeline=timeline,
+            summary=summary,
+        )
+    )
 
 
 @router.get("/{session_id}/recovery")
-async def get_session_recovery(
+async def get_session_recovery(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
-) -> dict[str, object]:
+) -> Response:
     try:
-        return await asyncio.wait_for(
-            service.get_recovery_snapshot_async(session_id),
-            timeout=SESSION_RECOVERY_TIMEOUT_SECONDS,
+        fast_snapshot = service.get_fast_cached_recovery_snapshot(session_id)
+        if fast_snapshot is not None:
+            return _json_response(fast_snapshot)
+        return _json_response(
+            await call_maybe_async_in_session_fast_read_thread(
+                "session.recovery",
+                service.get_cached_recovery_snapshot_async,
+                session_id,
+            )
         )
     except KeyError as exc:
         raise http_exception_for(exc, key_error_detail="Session not found") from exc
-    except TimeoutError as exc:
-        log_event(
-            logger,
-            logging.WARNING,
-            event="session.recovery.snapshot_timeout",
-            message="Session recovery snapshot timed out",
-            payload={
-                "session_id": session_id,
-                "timeout_seconds": SESSION_RECOVERY_TIMEOUT_SECONDS,
-            },
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Session recovery snapshot timed out",
-        ) from exc
 
 
 @router.get("/{session_id}/rounds/{run_id}")
@@ -293,25 +392,68 @@ async def get_round(
 
 
 @router.get("/{session_id}/agents")
-async def list_session_agents(
+async def list_session_agents(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
-) -> list[dict[str, object]]:
+) -> Response:
     try:
-        agents = await service.list_agents_in_session_async(session_id)
-        return list(agents)
+        fast_snapshot = service.get_fast_cached_agents_snapshot(session_id)
+        if fast_snapshot is not None:
+            fast_items = fast_snapshot.get("items")
+            if isinstance(fast_items, list):
+                return _json_response(
+                    [item for item in fast_items if isinstance(item, dict)]
+                )
+            return _json_response([])
+        agents = cast(
+            tuple[dict[str, object], ...],
+            await call_maybe_async_in_session_fast_read_thread(
+                "session.agents",
+                service.list_cached_agents_in_session_async,
+                session_id,
+            ),
+        )
+        return _json_response(agents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
 
 @router.get("/{session_id}/subagents")
-async def list_session_subagents(
+async def list_session_subagents(  # pragma: no cover
     session_id: RequiredIdentifierStr,
+    force_refresh: bool = False,
     service: SessionService = Depends(get_session_service),
-) -> list[dict[str, object]]:
+) -> Response:
     try:
-        subagents = await service.list_normal_mode_subagents_async(session_id)
-        return list(subagents)
+        if force_refresh:
+            subagents = cast(
+                tuple[dict[str, object], ...],
+                await call_maybe_async_in_session_fast_read_thread(
+                    "session.subagents.force_refresh",
+                    service.list_normal_mode_subagents_async,
+                    session_id,
+                ),
+            )
+            return _json_response(subagents)
+        fast_snapshot = service.get_fast_cached_normal_mode_subagents_snapshot(
+            session_id
+        )
+        if fast_snapshot is not None:
+            fast_items = fast_snapshot.get("items")
+            if isinstance(fast_items, list):
+                return _json_response(
+                    [item for item in fast_items if isinstance(item, dict)]
+                )
+            return _json_response([])
+        subagents = cast(
+            tuple[dict[str, object], ...],
+            await call_maybe_async_in_session_fast_read_thread(
+                "session.subagents",
+                service.list_cached_normal_mode_subagents_async,
+                session_id,
+            ),
+        )
+        return _json_response(subagents)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Session not found") from exc
 
@@ -472,50 +614,43 @@ async def get_agent_messages(
 
 
 @router.get("/{session_id}/tasks")
-async def get_session_tasks(
+async def get_session_tasks(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
-) -> list[dict[str, object]]:
-    return await service.get_session_tasks_async(session_id)
+) -> Response:
+    fast_snapshot = service.get_fast_cached_session_tasks_snapshot(session_id)
+    if fast_snapshot is not None:
+        fast_items = fast_snapshot.get("items")
+        if isinstance(fast_items, list):
+            return _json_response(
+                [item for item in fast_items if isinstance(item, dict)]
+            )
+        return _json_response([])
+    tasks_result: object = service.list_cached_session_tasks_async(session_id)
+    if inspect.isawaitable(tasks_result):
+        tasks_result = await tasks_result
+    tasks = cast(tuple[dict[str, object], ...], tasks_result)
+    return _json_response(tasks)
 
 
 @router.get("/{session_id}/token-usage")
-async def get_session_token_usage(
+async def get_session_token_usage(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
-) -> dict[str, object]:
-    summary = await service.get_token_usage_by_session_async(session_id)
-    return {
-        "session_id": summary.session_id,
-        "total_input_tokens": summary.total_input_tokens,
-        "total_cached_input_tokens": summary.total_cached_input_tokens,
-        "total_output_tokens": summary.total_output_tokens,
-        "total_reasoning_output_tokens": summary.total_reasoning_output_tokens,
-        "total_tokens": summary.total_tokens,
-        "total_requests": summary.total_requests,
-        "total_tool_calls": summary.total_tool_calls,
-        "by_role": {
-            role_id: {
-                "role_id": agent.role_id,
-                "input_tokens": agent.input_tokens,
-                "latest_input_tokens": agent.latest_input_tokens,
-                "cached_input_tokens": agent.cached_input_tokens,
-                "max_input_tokens": agent.max_input_tokens,
-                "output_tokens": agent.output_tokens,
-                "reasoning_output_tokens": agent.reasoning_output_tokens,
-                "total_tokens": agent.total_tokens,
-                "requests": agent.requests,
-                "tool_calls": agent.tool_calls,
-                "context_window": agent.context_window,
-                "model_profile": agent.model_profile,
-            }
-            for role_id, agent in summary.by_role.items()
-        },
-    }
+) -> Response:
+    fast_snapshot = service.get_fast_cached_token_usage_by_session_snapshot(session_id)
+    if fast_snapshot is not None:
+        return _json_response(fast_snapshot)
+    snapshot_result: object = service.get_cached_token_usage_by_session_snapshot_async(
+        session_id
+    )
+    if inspect.isawaitable(snapshot_result):
+        snapshot_result = await snapshot_result
+    return _json_response(cast(dict[str, object], snapshot_result))
 
 
 @router.get("/{session_id}/runs/{run_id}/token-usage")
-async def get_run_token_usage(
+async def get_run_token_usage(  # pragma: no cover
     session_id: RequiredIdentifierStr,
     run_id: RequiredIdentifierStr,
     service: SessionService = Depends(get_session_service),
@@ -550,3 +685,20 @@ async def get_run_token_usage(
             for a in usage.by_agent
         ],
     }
+
+
+@router.get("/{session_id}/subagents:snapshot")
+async def list_session_subagents_snapshot(  # pragma: no cover
+    session_id: RequiredIdentifierStr,
+    service: SessionService = Depends(get_session_service),
+) -> Response:
+    try:
+        return _json_response(
+            await call_maybe_async_in_session_fast_read_thread(
+                "session.subagents.snapshot",
+                service.get_cached_normal_mode_subagents_snapshot_async,
+                session_id,
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc

@@ -26,6 +26,7 @@ from relay_teams.notifications import (
 from relay_teams.providers.provider_contracts import LLMProvider, LLMRequest
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.media_run_executor import MediaRunExecutor
+import relay_teams.sessions.runs.run_event_publisher as run_event_publisher_module
 from relay_teams.sessions.runs.run_event_publisher import RunEventPublisher
 from relay_teams.sessions.runs.run_interactions import parse_tool_approval_action
 from relay_teams.sessions.runs.enums import RunEventType
@@ -36,7 +37,11 @@ from relay_teams.sessions.runs.run_models import (
     RunKind,
     RunTopologySnapshot,
 )
-from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
+from relay_teams.sessions.runs.run_runtime_repo import (
+    RunRuntimeRecord,
+    RunRuntimeRepository,
+    RunRuntimeStatus,
+)
 from relay_teams.sessions.runs.run_terminal_results import RunTerminalResultService
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.session_models import SessionMode
@@ -197,6 +202,149 @@ async def test_run_event_publisher_async_runtime_update_does_not_call_sync() -> 
     await publisher.safe_runtime_update_async("run-1", phase="terminal")
 
     assert runtime_repo.async_changes == {"run_id": "run-1", "phase": "terminal"}
+
+
+@pytest.mark.asyncio
+async def test_run_event_publisher_runtime_update_timeout_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _SlowRuntimeRepo:
+        def update(self, run_id: str, **changes: object) -> None:
+            _ = (run_id, changes)
+            raise AssertionError("sync update should not be called")
+
+        async def update_async(self, run_id: str, **changes: object) -> None:
+            _ = (run_id, changes)
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS",
+        0,
+    )
+    publisher = RunEventPublisher(
+        run_event_hub=RunEventHub(),
+        get_runtime=lambda _run_id: None,
+        get_run_runtime_repo=lambda: cast(RunRuntimeRepository, _SlowRuntimeRepo()),
+        get_notification_service=lambda: None,
+    )
+
+    await publisher.safe_runtime_update_async("run-1", phase="terminal")
+
+
+@pytest.mark.asyncio
+async def test_run_event_publisher_runtime_update_retries_after_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RetryRuntimeRepo:
+        def __init__(self) -> None:
+            self.attempts = 0
+            self.retry_completed = asyncio.Event()
+            self.async_changes: dict[str, object] | None = None
+
+        def update(self, run_id: str, **changes: object) -> None:
+            _ = (run_id, changes)
+            raise AssertionError("sync update should not be called")
+
+        async def update_async(self, run_id: str, **changes: object) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                await asyncio.Event().wait()
+            self.async_changes = {"run_id": run_id, **changes}
+            self.retry_completed.set()
+
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS",
+        2,
+    )
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_RETRY_DELAY_SECONDS",
+        0.01,
+    )
+    runtime_repo = _RetryRuntimeRepo()
+    publisher = RunEventPublisher(
+        run_event_hub=RunEventHub(),
+        get_runtime=lambda _run_id: None,
+        get_run_runtime_repo=lambda: cast(RunRuntimeRepository, runtime_repo),
+        get_notification_service=lambda: None,
+    )
+
+    await publisher.safe_runtime_update_async("run-1", phase="terminal")
+    await asyncio.wait_for(runtime_repo.retry_completed.wait(), timeout=1)
+
+    assert runtime_repo.attempts == 2
+    assert runtime_repo.async_changes == {"run_id": "run-1", "phase": "terminal"}
+
+
+@pytest.mark.asyncio
+async def test_run_event_publisher_runtime_update_retry_skips_terminal_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RetryRuntimeRepo:
+        def __init__(self) -> None:
+            self.attempts = 0
+            self.retry_attempted = asyncio.Event()
+
+        def update(self, run_id: str, **changes: object) -> None:
+            _ = (run_id, changes)
+            raise AssertionError("sync update should not be called")
+
+        async def update_async(self, run_id: str, **changes: object) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                await asyncio.Event().wait()
+            self.retry_attempted.set()
+            _ = (run_id, changes)
+
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS",
+        2,
+    )
+    monkeypatch.setattr(
+        run_event_publisher_module,
+        "_RUN_RUNTIME_UPDATE_RETRY_DELAY_SECONDS",
+        0.01,
+    )
+    runtime = RunRuntimeRecord(
+        run_id="run-1",
+        session_id="session-1",
+        status=RunRuntimeStatus.RUNNING,
+    )
+    runtime_repo = _RetryRuntimeRepo()
+    publisher = RunEventPublisher(
+        run_event_hub=RunEventHub(),
+        get_runtime=lambda _run_id: runtime,
+        get_run_runtime_repo=lambda: cast(RunRuntimeRepository, runtime_repo),
+        get_notification_service=lambda: None,
+    )
+
+    await publisher.safe_runtime_update_async(
+        "run-1",
+        status=RunRuntimeStatus.RUNNING,
+    )
+    runtime.status = RunRuntimeStatus.COMPLETED
+    await asyncio.sleep(0.05)
+
+    assert runtime_repo.retry_attempted.is_set() is False
+    assert runtime_repo.attempts == 1
 
 
 def test_execute_native_generation_rejects_inline_media_output() -> None:

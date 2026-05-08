@@ -50,6 +50,7 @@ from relay_teams.sessions.runs.background_tasks.manager import (
 )
 from relay_teams.sessions.runs.run_recovery import AutoRecoveryReason
 from relay_teams.sessions.runs.run_service import SessionRunService
+from relay_teams.sessions.runs.run_worker_capacity import RunWorkerCapacityLimiter
 from relay_teams.sessions.runs.run_models import (
     AudioGenerationConfig,
     ImageGenerationConfig,
@@ -129,6 +130,89 @@ class _MetaAgent:
         raise AssertionError(f"not expected: {trace_id}")
 
 
+class _BlockingQueuedRunRuntimeRepo:
+    def __init__(self) -> None:
+        self.queued_started = asyncio.Event()
+        self.release_queued = asyncio.Event()
+        self.ensure_statuses: list[RunRuntimeStatus] = []
+
+    async def ensure_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        root_task_id: str | None = None,
+        status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
+        phase: RunRuntimePhase = RunRuntimePhase.IDLE,
+    ) -> RunRuntimeRecord:
+        del root_task_id
+        self.ensure_statuses.append(status)
+        if status == RunRuntimeStatus.QUEUED:
+            self.queued_started.set()
+            await self.release_queued.wait()
+        return RunRuntimeRecord(
+            run_id=run_id,
+            session_id=session_id,
+            status=status,
+            phase=phase,
+        )
+
+    async def update_async(self, run_id: str, **changes: object) -> RunRuntimeRecord:
+        status = changes.get("status")
+        phase = changes.get("phase")
+        return RunRuntimeRecord(
+            run_id=run_id,
+            session_id="session-1",
+            status=(
+                status
+                if isinstance(status, RunRuntimeStatus)
+                else RunRuntimeStatus.RUNNING
+            ),
+            phase=(
+                phase
+                if isinstance(phase, RunRuntimePhase)
+                else RunRuntimePhase.COORDINATOR_RUNNING
+            ),
+        )
+
+
+class _FailingQueuedRunRuntimeRepo:
+    async def ensure_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        root_task_id: str | None = None,
+        status: RunRuntimeStatus = RunRuntimeStatus.QUEUED,
+        phase: RunRuntimePhase = RunRuntimePhase.IDLE,
+    ) -> RunRuntimeRecord:
+        _ = (run_id, session_id, root_task_id, status, phase)
+        raise RuntimeError("queued runtime persist failed")
+
+    async def get_async(self, run_id: str) -> RunRuntimeRecord | None:
+        _ = run_id
+        return None
+
+    def get(self, run_id: str) -> RunRuntimeRecord | None:
+        _ = run_id
+        return None
+
+
+class _BlockingQueuedRunIntentRepo:
+    def __init__(self) -> None:
+        self.upsert_started = asyncio.Event()
+        self.release_upsert = asyncio.Event()
+        self.upserted_run_ids: list[str] = []
+
+    async def upsert_async(
+        self, *, run_id: str, session_id: str, intent: IntentInput
+    ) -> None:
+        del session_id, intent
+        self.upsert_started.set()
+        await self.release_upsert.wait()
+        self.upserted_run_ids.append(run_id)
+
+
 class _SessionRepo:
     def get(self, session_id: str) -> SessionRecord:
         return SessionRecord(
@@ -154,6 +238,17 @@ class _SessionRepo:
         return self.get(session_id)
 
     async def mark_started_async(self, session_id: str) -> SessionRecord:
+        return self.mark_started(session_id)
+
+
+class _BlockingMarkStartedSessionRepo(_SessionRepo):
+    def __init__(self) -> None:
+        self.mark_started_called = asyncio.Event()
+        self.release_mark_started = asyncio.Event()
+
+    async def mark_started_async(self, session_id: str) -> SessionRecord:
+        self.mark_started_called.set()
+        await self.release_mark_started.wait()
         return self.mark_started(session_id)
 
 
@@ -706,6 +801,112 @@ async def test_media_generation_returns_terminal_error_for_empty_output(
     assert result.error_message == "Provider returned no media output"
 
 
+@pytest.mark.asyncio
+async def test_create_run_async_awaits_started_marker_before_queued_run_persistence(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path / "deferred_queue_persist.db")
+    runtime_repo = _BlockingQueuedRunRuntimeRepo()
+    intent_repo = _BlockingQueuedRunIntentRepo()
+    session_repo = _BlockingMarkStartedSessionRepo()
+    manager._run_runtime_repo = cast(RunRuntimeRepository, cast(object, runtime_repo))
+    manager._run_intent_repo = cast(RunIntentRepository, cast(object, intent_repo))
+    manager._session_repo = cast(SessionRepository, cast(object, session_repo))
+
+    create_task = asyncio.create_task(
+        manager.create_run_async(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
+    )
+
+    await asyncio.wait_for(session_repo.mark_started_called.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert not create_task.done()
+    assert manager._active_run_registry.get_active_run_id("session-1") is None
+
+    session_repo.release_mark_started.set()
+    run_id, session_id = await asyncio.wait_for(create_task, timeout=0.2)
+
+    assert session_id == "session-1"
+    assert manager._active_run_registry.get_active_run_id("session-1") == run_id
+    assert run_id in manager._pending_runs
+    await asyncio.wait_for(runtime_repo.queued_started.wait(), timeout=1)
+    assert intent_repo.upserted_run_ids == []
+
+    start_task = asyncio.create_task(manager.ensure_run_started_async(run_id))
+    await asyncio.sleep(0)
+    assert not start_task.done()
+    assert run_id in manager._running_run_ids
+
+    runtime_repo.release_queued.set()
+    session_repo.release_mark_started.set()
+    await asyncio.wait_for(intent_repo.upsert_started.wait(), timeout=1)
+    intent_repo.release_upsert.set()
+    await asyncio.wait_for(start_task, timeout=1)
+
+    assert intent_repo.upserted_run_ids == [run_id]
+    assert runtime_repo.ensure_statuses == [
+        RunRuntimeStatus.QUEUED,
+        RunRuntimeStatus.RUNNING,
+    ]
+    assert run_id in manager._running_run_ids
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_cleans_pending_state_when_fast_persist_fails(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path / "failed_deferred_queue_persist.db")
+    runtime_repo = _FailingQueuedRunRuntimeRepo()
+    manager._run_runtime_repo = cast(RunRuntimeRepository, cast(object, runtime_repo))
+
+    with pytest.raises(RuntimeError, match="queued runtime persist failed"):
+        await manager.create_run_async(
+            IntentInput(
+                session_id="session-1",
+                input=content_parts_from_text("hello"),
+            )
+        )
+
+    assert manager._pending_runs == {}
+    assert manager._pending_run_persist_tasks == {}
+    assert manager._active_run_registry.get_active_run_id("session-1") is None
+
+
+@pytest.mark.asyncio
+async def test_start_new_run_worker_cleans_up_cancelled_persistence(
+    tmp_path: Path,
+) -> None:
+    manager = _build_manager(tmp_path / "cancelled_deferred_queue_persist.db")
+    run_id = "run-cancelled-persist"
+    session_id = "session-1"
+    manager._pending_runs[run_id] = IntentInput(
+        session_id=session_id,
+        input=content_parts_from_text("hello"),
+    )
+    manager._active_run_registry.remember_active_run(
+        session_id=session_id,
+        run_id=run_id,
+    )
+    persist_task = asyncio.create_task(asyncio.sleep(60))
+    persist_task.cancel()
+    try:
+        await persist_task
+    except asyncio.CancelledError:
+        pass
+    manager._pending_run_persist_tasks[run_id] = persist_task
+
+    await manager._start_new_run_worker_async(run_id)
+
+    assert run_id not in manager._running_run_ids
+    assert run_id not in manager._pending_runs
+    assert manager._injection_manager.is_active(run_id) is False
+    assert manager._active_run_registry.get_active_run_id(session_id) is None
+
+
 def test_create_run_injects_into_active_run(tmp_path: Path) -> None:
     db_path = tmp_path / "run_recovery.db"
     manager = _build_manager(db_path)
@@ -1099,16 +1300,34 @@ async def test_run_service_background_task_endpoints_delegate_to_service(
             self.calls.append(("list", (run_id,)))
             return (self.record,)
 
+        def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+            self.calls.append(("list", (session_id,)))
+            return (self.record,)
+
         def get_for_run(
             self, *, run_id: str, background_task_id: str
         ) -> BackgroundTaskRecord:
             self.calls.append(("get", (run_id, background_task_id)))
             return self.record
 
+        def get_for_session(
+            self, *, session_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            self.calls.append(("get", (session_id, background_task_id)))
+            return self.record
+
         async def stop_for_run(
             self, *, run_id: str, background_task_id: str
         ) -> BackgroundTaskRecord:
             self.calls.append(("stop", (run_id, background_task_id)))
+            return self.record.model_copy(
+                update={"status": BackgroundTaskStatus.STOPPED}
+            )
+
+        async def stop_for_session(
+            self, *, session_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            self.calls.append(("stop", (session_id, background_task_id)))
             return self.record.model_copy(
                 update={"status": BackgroundTaskStatus.STOPPED}
             )
@@ -1152,16 +1371,39 @@ async def test_run_service_background_task_endpoints_fall_back_to_manager(
             self.calls.append(("list", (run_id,)))
             return (self.record,)
 
+        def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+            self.calls.append(("list", (session_id,)))
+            return (self.record,)
+
         def get_for_run(
             self, *, run_id: str, background_task_id: str
         ) -> BackgroundTaskRecord:
             self.calls.append(("get", (run_id, background_task_id)))
             return self.record
 
+        def get_for_session(
+            self, *, session_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            self.calls.append(("get", (session_id, background_task_id)))
+            return self.record
+
         async def stop_for_run(
             self, *, run_id: str, background_task_id: str
         ) -> BackgroundTaskRecord:
             self.calls.append(("stop", (run_id, background_task_id)))
+            return self.record.model_copy(
+                update={"status": BackgroundTaskStatus.STOPPED}
+            )
+
+        async def stop_for_session(
+            self,
+            *,
+            session_id: str,
+            background_task_id: str,
+            reason: str = "stopped_by_user",
+        ) -> BackgroundTaskRecord:
+            _ = reason
+            self.calls.append(("stop", (session_id, background_task_id)))
             return self.record.model_copy(
                 update={"status": BackgroundTaskStatus.STOPPED}
             )
@@ -1204,10 +1446,22 @@ def test_create_monitor_validates_background_task_belongs_to_run(
             _ = run_id
             return (self.record,)
 
+        def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+            _ = session_id
+            return (self.record,)
+
         def get_for_run(
             self, *, run_id: str, background_task_id: str
         ) -> BackgroundTaskRecord:
             _ = run_id
+            if background_task_id != self.record.background_task_id:
+                raise KeyError(background_task_id)
+            return self.record
+
+        def get_for_session(
+            self, *, session_id: str, background_task_id: str
+        ) -> BackgroundTaskRecord:
+            _ = session_id
             if background_task_id != self.record.background_task_id:
                 raise KeyError(background_task_id)
             return self.record
@@ -3952,7 +4206,7 @@ async def test_create_run_async_rejects_detached_and_media_followups(
 
 
 @pytest.mark.asyncio
-async def test_create_run_async_enqueues_followup_to_active_run(
+async def test_create_run_async_merges_starting_followup_before_coordinator_startup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3990,9 +4244,64 @@ async def test_create_run_async_enqueues_followup_to_active_run(
     )
 
     persisted = RunIntentRepository(db_path).get(run_id)
+    pending = manager._pending_runs[run_id]
     assert (next_run_id, next_session_id) == (run_id, session_id)
-    assert appended == [(run_id, "follow", True, InjectionSource.USER)]
+    assert appended == []
+    assert pending.intent == "first\n\nfollow"
+    assert pending.yolo is True
+    assert persisted.intent == "first\n\nfollow"
     assert persisted.yolo is True
+
+
+@pytest.mark.asyncio
+async def test_create_run_async_ignores_terminal_stale_active_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_terminal_stale_active.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+        )
+    )
+    assert await manager._await_pending_run_persistence_async(run_id) is True
+    _ = manager._pending_runs.pop(run_id)
+    manager._running_run_ids.add(run_id)
+    manager._injection_manager.activate(run_id)
+    runtime_repo = RunRuntimeRepository(db_path)
+    runtime_repo.update(
+        run_id,
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+
+    def _append_followup(
+        run_id: str,
+        content: str,
+        *,
+        enqueue: bool,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> bool:
+        _ = (run_id, content, enqueue, source)
+        raise AssertionError("terminal stale run must not receive follow-up")
+
+    monkeypatch.setattr(manager, "_append_followup_to_coordinator", _append_followup)
+
+    next_run_id, next_session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("second"),
+            yolo=True,
+        )
+    )
+
+    assert next_session_id == session_id
+    assert next_run_id != run_id
+    assert manager._active_run_registry.get_active_run_id(session_id) == next_run_id
+    assert next_run_id in manager._pending_runs
 
 
 @pytest.mark.asyncio
@@ -4009,6 +4318,7 @@ async def test_create_run_async_queues_followup_for_recoverable_run(
             input=content_parts_from_text("first"),
         )
     )
+    assert await manager._await_pending_run_persistence_async(run_id) is True
     _ = manager._pending_runs.pop(run_id)
     runtime_repo = RunRuntimeRepository(db_path)
     runtime_repo.update(
@@ -4249,6 +4559,7 @@ async def test_stop_run_async_cancels_worker_during_startup_writes(
             input=content_parts_from_text("hello"),
         )
     )
+    assert await manager._await_pending_run_persistence_async(run_id) is True
 
     startup_entered = asyncio.Event()
     allow_startup = asyncio.Event()
@@ -4699,6 +5010,109 @@ async def test_stop_run_async_stops_pending_run_without_sync_entrypoint(
     assert json.loads(str(events[-1]["payload_json"])) == {
         "reason": "stopped_before_start"
     }
+
+
+@pytest.mark.asyncio
+async def test_stop_run_async_stops_pending_run_after_persist_failure(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_stop_pending_failed_persist.db"
+    manager = _build_manager(db_path)
+    run_id = "run-pending-failed-persist"
+    session_id = "session-1"
+    manager._pending_runs[run_id] = IntentInput(
+        session_id=session_id,
+        input=content_parts_from_text("hello"),
+    )
+
+    async def _failed_persist() -> None:
+        raise RuntimeError("queued persist failed")
+
+    failed_task = asyncio.create_task(_failed_persist())
+    await asyncio.wait({failed_task}, timeout=1)
+    manager._pending_run_persist_tasks[run_id] = failed_task
+
+    await manager.stop_run_async(run_id)
+
+    assert run_id not in manager._pending_runs
+    assert run_id not in manager._pending_run_persist_tasks
+    runtime = RunRuntimeRepository(db_path).get(run_id)
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert runtime.last_error == "stopped_before_start"
+
+
+@pytest.mark.asyncio
+async def test_stop_run_async_finalizes_run_waiting_for_worker_capacity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_stop_waiting_capacity.db"
+    manager = _build_manager(db_path)
+    limiter = RunWorkerCapacityLimiter(limit=1)
+    manager._run_worker_capacity = limiter
+
+    capacity_occupied = asyncio.Event()
+    release_capacity = asyncio.Event()
+
+    async def _occupy_capacity() -> None:
+        capacity_occupied.set()
+        await release_capacity.wait()
+
+    occupy_task = asyncio.create_task(
+        limiter.run(
+            run_id="run-occupying-capacity",
+            session_id="session-1",
+            worker=_occupy_capacity,
+        )
+    )
+    await asyncio.wait_for(capacity_occupied.wait(), timeout=5)
+
+    worker_started = asyncio.Event()
+    cleanup_called = asyncio.Event()
+
+    async def _capture_worker(
+        *,
+        run_id: str,
+        session_id: str,
+        runner: Callable[[], Awaitable[RunResult]],
+    ) -> None:
+        _ = (run_id, session_id, runner)
+        worker_started.set()
+
+    monkeypatch.setattr(manager, "_worker", _capture_worker)
+
+    async def _capture_cleanup(*, run_id: str, session_id: str) -> None:
+        assert run_id == "run-waiting"
+        assert session_id == "session-1"
+        cleanup_called.set()
+
+    monkeypatch.setattr(
+        manager,
+        "_handle_startup_cancelled_async",
+        _capture_cleanup,
+    )
+
+    async def _runner() -> RunResult:
+        raise AssertionError("runner must not start while capacity is saturated")
+
+    startup_ready, startup_done, _startup_failed, task = (
+        manager._register_startup_gated_worker(
+            run_id="run-waiting",
+            session_id="session-1",
+            runner=_runner,
+        )
+    )
+    startup_done.set()
+    startup_ready.set()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.wait_for(task, timeout=5)
+    release_capacity.set()
+    await asyncio.wait_for(occupy_task, timeout=5)
+
+    assert not worker_started.is_set()
+    assert cleanup_called.is_set()
 
 
 @pytest.mark.asyncio

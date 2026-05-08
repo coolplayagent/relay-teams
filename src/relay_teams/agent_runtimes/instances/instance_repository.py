@@ -482,10 +482,11 @@ class AgentInstanceRepository(SharedSqliteRepository):
                     SELECT session_id, COUNT(*) AS subagent_count
                     FROM agent_instances
                     WHERE session_id IN ({placeholders})
-                      AND run_id GLOB 'subagent_run_*'
+                      AND lifecycle = ?
+                      AND parent_instance_id IS NOT NULL
                     GROUP BY session_id
                     """,
-                    session_id_chunk,
+                    (*session_id_chunk, InstanceLifecycle.EPHEMERAL.value),
                 ).fetchall()
                 for row in rows:
                     subagent_counts[str(row["session_id"])] = int(row["subagent_count"])
@@ -510,10 +511,11 @@ class AgentInstanceRepository(SharedSqliteRepository):
                     SELECT session_id, COUNT(*) AS subagent_count
                     FROM agent_instances
                     WHERE session_id IN ({placeholders})
-                      AND run_id GLOB 'subagent_run_*'
+                      AND lifecycle = ?
+                      AND parent_instance_id IS NOT NULL
                     GROUP BY session_id
                     """,
-                    session_id_chunk,
+                    (*session_id_chunk, InstanceLifecycle.EPHEMERAL.value),
                 )
                 for row in rows:
                     subagent_counts[str(row["session_id"])] = int(row["subagent_count"])

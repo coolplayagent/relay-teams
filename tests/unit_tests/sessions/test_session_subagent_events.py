@@ -5,6 +5,7 @@ import asyncio
 
 import pytest
 
+from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agent_runtimes.instances.instance_repository import (
     AgentInstanceRepository,
@@ -51,6 +52,16 @@ async def test_stream_normal_mode_subagent_events_replays_only_subagent_runs(
     event_log = EventLog(db_path)
     service = _build_service(db_path, event_log)
     _ = service.create_session(session_id="session-1", workspace_id="default")
+    service._agent_repo.upsert_instance(
+        run_id="delegated-run-1",
+        trace_id="delegated-run-1",
+        session_id="session-1",
+        instance_id="instance-sub-1",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.RUNNING,
+        parent_instance_id="instance-main",
+    )
     _ = event_log.emit_run_event(
         RunEvent(
             session_id="session-1",
@@ -63,8 +74,8 @@ async def test_stream_normal_mode_subagent_events_replays_only_subagent_runs(
     subagent_event_id = event_log.emit_run_event(
         RunEvent(
             session_id="session-1",
-            run_id="subagent_run_1",
-            trace_id="subagent_run_1",
+            run_id="delegated-run-1",
+            trace_id="delegated-run-1",
             instance_id="instance-sub-1",
             role_id="Explorer",
             event_type=RunEventType.MODEL_STEP_STARTED,
@@ -80,7 +91,7 @@ async def test_stream_normal_mode_subagent_events_replays_only_subagent_runs(
         )
     ]
 
-    assert [event.run_id for event in events] == ["subagent_run_1"]
+    assert [event.run_id for event in events] == ["delegated-run-1"]
     assert events[0].event_id == subagent_event_id
     assert events[0].instance_id == "instance-sub-1"
 
@@ -97,6 +108,16 @@ async def test_stream_normal_mode_subagent_events_delivers_live_session_events(
     )
     service = _build_service(db_path, event_log, run_event_hub=run_event_hub)
     _ = service.create_session(session_id="session-1", workspace_id="default")
+    service._agent_repo.upsert_instance(
+        run_id="delegated-run-live",
+        trace_id="delegated-run-live",
+        session_id="session-1",
+        instance_id="instance-sub-live",
+        role_id="Explorer",
+        workspace_id="default",
+        status=InstanceStatus.RUNNING,
+        parent_instance_id="instance-main",
+    )
 
     async def read_first_live_subagent_event() -> RunEvent:
         async for event in service.stream_normal_mode_subagent_events(
@@ -125,8 +146,8 @@ async def test_stream_normal_mode_subagent_events_delivers_live_session_events(
     await run_event_hub.publish_async(
         RunEvent(
             session_id="session-1",
-            run_id="subagent_run_live",
-            trace_id="subagent_run_live",
+            run_id="delegated-run-live",
+            trace_id="delegated-run-live",
             event_type=RunEventType.MODEL_STEP_STARTED,
             payload_json="{}",
         )
@@ -134,7 +155,7 @@ async def test_stream_normal_mode_subagent_events_delivers_live_session_events(
 
     delivered = await asyncio.wait_for(task, timeout=1.0)
 
-    assert delivered.run_id == "subagent_run_live"
+    assert delivered.run_id == "delegated-run-live"
     assert delivered.event_id == 2
     for _ in range(20):
         if not run_event_hub.has_session_subscribers("session-1"):
@@ -208,5 +229,5 @@ def test_run_event_from_log_row_rejects_invalid_persisted_rows() -> None:
     assert event is not None
     assert event.event_id == 2
     assert event.run_id == "subagent_run_1"
-    assert SessionService._is_subagent_run_id("subagent_run_1") is True
-    assert SessionService._is_subagent_run_id("run-main") is False
+    assert SessionService._is_legacy_subagent_run_id("subagent_run_1") is True
+    assert SessionService._is_legacy_subagent_run_id("run-main") is False

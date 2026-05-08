@@ -66,12 +66,13 @@ const unavailableSessionCooldownUntil = new Map();
 const SESSION_NOT_FOUND_COOLDOWN_MS = 30000;
 const unavailableRunCooldownUntil = new Map();
 const RUN_NOT_FOUND_COOLDOWN_MS = 30000;
+const terminalRunIds = new Set();
 const MAX_MULTIPLEX_RUN_STREAMS = 32;
 const MULTIPLEX_RECONNECT_MAX_DELAY_MS = 5000;
 const FOREGROUND_NAVIGATION_STREAM_PAUSE_MS = 1200;
 const NORMAL_MODE_SUBAGENT_DISCOVERY_DELAY_MS = 2500;
 const NORMAL_MODE_SUBAGENT_RECONNECT_DELAY_MS = 900;
-const RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS = 360;
+const RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS = 5000;
 
 function setStreamUiBusy(isBusy, { focusPrompt = true } = {}) {
     state.isGenerating = isBusy;
@@ -139,6 +140,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
     creatingRun = true;
     state.activeRunId = null;
     setStreamUiBusy(true);
+    dispatchSessionRunActive(safeSessionId, '', 'queued');
 
     releaseActiveStreamHandle();
 
@@ -168,12 +170,13 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
             thinking_effort: thinking.effort,
             target_role_id: run.target_role_id || options.targetRoleId || null,
         });
+        dispatchSessionRunActive(safeSessionId, runId, 'queued');
         if (shouldKeepCreatedRunInBackground(runStart)) {
             finishPendingRunStart(runStart, {
                 clearStopRequest: true,
                 releaseUi: false,
             });
-            scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: true });
+            scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: false });
             attachRunStreamAsBackground(runId, safeSessionId, {
                 reason: 'start-background',
             });
@@ -181,10 +184,11 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
         }
         state.activeRunId = runId;
         setStreamUiBusy(true, { focusPrompt: false });
+        primeRecoveryContinuityForCreatedRun(runId, safeSessionId);
         if (typeof options.onRunCreated === 'function') {
             options.onRunCreated(run);
         }
-        scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: true });
+        scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: false });
     } catch (err) {
         logError(
             'frontend.run.create_failed',
@@ -196,7 +200,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
                 clearStopRequest: true,
                 releaseUi: false,
             });
-            scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: true });
+            scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, { forceRefresh: false });
             return;
         }
         finishPendingRunStart(runStart, {
@@ -229,6 +233,7 @@ export async function startIntentStream(promptText, sessionId, onCompleted, opti
 
 async function startDetachedIntentStream(promptText, sessionId, options) {
     try {
+        dispatchSessionRunActive(sessionId, '', 'queued');
         const run = await sendUserPrompt(
             sessionId,
             promptText,
@@ -256,8 +261,9 @@ async function startDetachedIntentStream(promptText, sessionId, options) {
             thinking_effort: options.thinking?.effort || null,
             target_role_id: run.target_role_id || options.targetRoleId || null,
         });
+        dispatchSessionRunActive(sessionId, runId, 'queued');
         scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, {
-            forceRefresh: true,
+            forceRefresh: false,
         });
         attachRunStreamAsBackground(runId, sessionId, {
             reason: 'start-background',
@@ -269,7 +275,7 @@ async function startDetachedIntentStream(promptText, sessionId, options) {
             errorToPayload(err, { session_id: sessionId, detached: true }),
         );
         scheduleSessionsRefresh(RUN_CREATED_SIDEBAR_REFRESH_DELAY_MS, {
-            forceRefresh: true,
+            forceRefresh: false,
         });
     }
 }
@@ -285,6 +291,35 @@ export function endStream(options = {}) {
         messageRenderer.clearRunStreamState(finishedRunId);
     }
     setStreamUiBusy(false, { focusPrompt });
+}
+
+function primeRecoveryContinuityForCreatedRun(runId, sessionId) {
+    const safeRunId = String(runId || '').trim();
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeRunId || !safeSessionId) return;
+    void import('../app/recovery.js')
+        .then(recoveryModule => {
+            if (state.currentSessionId !== safeSessionId) return;
+            if (typeof recoveryModule.markRunStreamConnected === 'function') {
+                recoveryModule.markRunStreamConnected(safeRunId, { phase: 'running' });
+            }
+            if (typeof recoveryModule.scheduleRecoveryContinuityRefresh === 'function') {
+                recoveryModule.scheduleRecoveryContinuityRefresh({
+                    sessionId: safeSessionId,
+                    delayMs: 0,
+                    includeRounds: false,
+                    quiet: true,
+                    reason: 'run-created',
+                });
+            }
+        })
+        .catch(error => {
+            logWarn(
+                'frontend.recovery.prime_continuity_failed',
+                error?.message || 'Failed to prime recovery continuity after run creation',
+                errorToPayload(error, { run_id: safeRunId, session_id: safeSessionId }),
+            );
+        });
 }
 
 function finishPendingRunStart(runStart, options = {}) {
@@ -402,6 +437,21 @@ export function hasPendingRunCreation(sessionId = '') {
     return !safeSessionId || pendingRunStart.sessionId === safeSessionId;
 }
 
+export function restorePendingRunStartForSessionSwitch(sessionId = '', options = {}) {
+    if (!pendingRunStart) {
+        return false;
+    }
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || pendingRunStart.sessionId !== safeSessionId) {
+        return false;
+    }
+    pendingRunStart.detached = false;
+    creatingRun = true;
+    pendingStopRequest = false;
+    setStreamUiBusy(true, { focusPrompt: options.focusPrompt === true });
+    return true;
+}
+
 export function detachNormalModeSubagentStreamsForSessionSwitch(sessionId = '') {
     const safeSessionId = String(sessionId || '').trim();
     if (
@@ -458,6 +508,10 @@ export function attachRunStream(runId, sessionId = state.currentSessionId, onCom
         : null;
     const ignoreUnavailable = options.ignoreUnavailable === true;
     if (!ignoreUnavailable && isRunUnavailable(safeRunId)) {
+        return;
+    }
+    if (isRunKnownTerminal(safeRunId)) {
+        setStreamUiBusy(false, { focusPrompt: options.focusPrompt !== false });
         return;
     }
     const sameRunAlreadyStreaming = !!(
@@ -823,6 +877,7 @@ function applyMultiplexRunEvent(data) {
             event_type: evType,
             mode: connection.mode,
         });
+        markRunKnownTerminal(runId);
         connection.terminal = true;
         if (connection.mode === 'active') {
             finishActiveConnection(connection);
@@ -1115,6 +1170,12 @@ function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {
         });
     }
     if (isTerminalRunEvent(evType)) {
+        dispatchSessionRunTerminal(
+            connection.sessionId,
+            connection.runId,
+            terminalStatusFromEventType(evType),
+            false,
+        );
         scheduleSessionsRefresh();
     }
 }
@@ -1234,6 +1295,9 @@ async function runNormalModeSubagentDiscovery() {
     }
     normalModeSubagentDiscoveryPromise = (async () => {
         try {
+            if (!await shouldFetchNormalModeSubagents(sessionId)) {
+                return;
+            }
             const payload = await fetchSessionSubagents(sessionId);
             if (String(state.currentSessionId || '').trim() !== sessionId) {
                 return;
@@ -1262,6 +1326,24 @@ async function runNormalModeSubagentDiscovery() {
         }
     })();
     await normalModeSubagentDiscoveryPromise;
+}
+
+async function shouldFetchNormalModeSubagents(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return false;
+    }
+    const activeSubagentSessionId = String(
+        state.activeSubagentSession?.sessionId || '',
+    ).trim();
+    if (activeSubagentSessionId === safeSessionId) {
+        return true;
+    }
+    const subagentSessions = await import('../components/subagentSessions.js');
+    return !!(
+        subagentSessions.isSubagentSessionListExpanded?.(safeSessionId)
+        || subagentSessions.hasLoadedSessionSubagents?.(safeSessionId)
+    );
 }
 
 function shouldRunBackgroundDiscovery() {
@@ -1569,18 +1651,29 @@ function openNormalModeSubagentSessionStreamConnection(connection, { afterEventI
                 finishNormalModeSubagentSessionConnection(connection);
                 return;
             }
+            const eventSessionId = String(data.session_id || '').trim();
+            if (eventSessionId && eventSessionId !== connection.sessionId) {
+                return;
+            }
+            const runId = String(data.run_id || data.trace_id || '').trim();
+            if (!runId) {
+                return;
+            }
             const eventId = Number(data.event_id || 0);
             if (eventId > 0) {
                 connection.lastEventId = Math.max(connection.lastEventId, eventId);
             }
-            const runId = String(data.run_id || data.trace_id || '').trim();
-            if (!runId.startsWith('subagent_run_')) {
-                return;
+            if (!connection.desiredRunIds.has(runId)) {
+                connection.desiredRunIds.add(runId);
+                scheduleCurrentSessionSubagentDiscovery({ delayMs: 250 });
             }
             clearRunUnavailableCooldown(runId);
             const evType = data.event_type;
             const payload = JSON.parse(data.payload_json || '{}');
-            routeEvent(evType, payload, data);
+            routeEvent(evType, payload, {
+                ...data,
+                normal_mode_subagent_event: true,
+            });
             if (isTerminalRunEvent(evType)) {
                 scheduleCurrentSessionSubagentDiscovery({ delayMs: 250 });
             }
@@ -1706,7 +1799,10 @@ function openNormalModeSubagentRunStreamConnection(connection, { afterEventId = 
             }
             const evType = data.event_type;
             const payload = JSON.parse(data.payload_json || '{}');
-            routeEvent(evType, payload, data);
+            routeEvent(evType, payload, {
+                ...data,
+                normal_mode_subagent_event: true,
+            });
             if (isTerminalRunEvent(evType)) {
                 connection.terminal = true;
                 finishNormalModeSubagentConnection(connection);
@@ -1794,6 +1890,69 @@ function markRunUnavailable(runId) {
         safeRunId,
         Date.now() + RUN_NOT_FOUND_COOLDOWN_MS,
     );
+}
+
+function dispatchSessionRunActive(sessionId, runId, status = 'running') {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    if (!safeSessionId || typeof CustomEvent !== 'function') {
+        return;
+    }
+    globalThis.document?.dispatchEvent?.(
+        new CustomEvent('agent-teams-session-run-active', {
+            detail: {
+                sessionId: safeSessionId,
+                runId: safeRunId,
+                status: String(status || 'running').trim() || 'running',
+            },
+        }),
+    );
+}
+
+function dispatchSessionRunTerminal(sessionId, runId, status = 'completed', viewed = false) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    if (!safeSessionId || typeof CustomEvent !== 'function') {
+        return;
+    }
+    globalThis.document?.dispatchEvent?.(
+        new CustomEvent('agent-teams-session-run-terminal', {
+            detail: {
+                sessionId: safeSessionId,
+                runId: safeRunId,
+                status: String(status || 'completed').trim() || 'completed',
+                viewed: viewed === true,
+            },
+        }),
+    );
+}
+
+function terminalStatusFromEventType(evType) {
+    if (evType === 'run_failed') {
+        return 'failed';
+    }
+    if (evType === 'run_stopped' || evType === 'run_paused') {
+        return 'stopped';
+    }
+    return 'completed';
+}
+
+function markRunKnownTerminal(runId) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return;
+    }
+    terminalRunIds.add(safeRunId);
+    if (terminalRunIds.size > 2048) {
+        Array.from(terminalRunIds)
+            .slice(0, terminalRunIds.size - 2048)
+            .forEach(item => terminalRunIds.delete(item));
+    }
+}
+
+function isRunKnownTerminal(runId) {
+    const safeRunId = String(runId || '').trim();
+    return !!safeRunId && terminalRunIds.has(safeRunId);
 }
 
 function clearRunUnavailableCooldown(runId) {

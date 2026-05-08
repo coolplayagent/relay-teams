@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from relay_teams.agents.tasks.artifact_repository import (
+    TASK_ARTIFACT_SQLITE_BUSY_TIMEOUT_MS,
     TaskArtifactRepository,
     _enable_wal_if_available,
     _last_insert_row_id,
@@ -22,8 +23,12 @@ from relay_teams.agents.tasks.models import (
 
 
 @pytest.fixture
-def repo(tmp_path: Path) -> TaskArtifactRepository:
-    return TaskArtifactRepository(tmp_path / "test_artifact.db")
+def repo(tmp_path: Path):
+    repository = TaskArtifactRepository(tmp_path / "test_artifact.db")
+    try:
+        yield repository
+    finally:
+        repository.close()
 
 
 def test_ensure_artifact_creates_new(repo: TaskArtifactRepository):
@@ -50,6 +55,20 @@ def test_ensure_artifact_raises_when_insert_cannot_be_read(
 
     with pytest.raises(RuntimeError, match="Failed to create task artifact"):
         repo.ensure_artifact("task-1", "spec-1")
+
+
+def test_connections_use_busy_timeout_and_wal(repo: TaskArtifactRepository) -> None:
+    conn = repo._connect(enable_wal=True)
+    try:
+        busy_timeout_row = conn.execute("PRAGMA busy_timeout").fetchone()
+        journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+    finally:
+        conn.close()
+
+    assert busy_timeout_row is not None
+    assert busy_timeout_row[0] == TASK_ARTIFACT_SQLITE_BUSY_TIMEOUT_MS
+    assert journal_mode_row is not None
+    assert str(journal_mode_row[0]).lower() in {"wal", "memory"}
 
 
 def test_get_artifact_missing(repo: TaskArtifactRepository):
@@ -214,16 +233,19 @@ def test_concurrent_append_entry_uses_sqlite_retry_coordination(tmp_path: Path) 
 
     def append_entry(index: int) -> int:
         worker_repo = TaskArtifactRepository(db_path)
-        return worker_repo.append_entry(
-            "task-1",
-            TaskArtifactEntry(
-                entry_id=f"entry-{index}",
-                phase=TaskArtifactPhase.EXECUTION,
-                timestamp="2024-01-01T00:00:00",
-                event_type="tool_call",
-                description=f"Ran shell command {index}",
-            ),
-        )
+        try:
+            return worker_repo.append_entry(
+                "task-1",
+                TaskArtifactEntry(
+                    entry_id=f"entry-{index}",
+                    phase=TaskArtifactPhase.EXECUTION,
+                    timestamp="2024-01-01T00:00:00",
+                    event_type="tool_call",
+                    description=f"Ran shell command {index}",
+                ),
+            )
+        finally:
+            worker_repo.close()
 
     with ThreadPoolExecutor(max_workers=12) as executor:
         row_ids = tuple(executor.map(append_entry, range(36)))
@@ -233,6 +255,21 @@ def test_concurrent_append_entry_uses_sqlite_retry_coordination(tmp_path: Path) 
     assert all(row_id > 0 for row_id in row_ids)
     assert total == 36
     assert len(entries) == 36
+
+
+def test_enqueue_artifact_write_returns_before_persisting(
+    repo: TaskArtifactRepository,
+) -> None:
+    accepted = repo.enqueue_ensure_artifact(task_id="task-queued", spec_artifact_id="")
+    assert accepted is True
+    repo._queue.join()
+
+    artifact = repo.get_artifact("task-queued")
+    metrics = repo.write_metrics()
+
+    assert artifact is not None
+    assert metrics.enqueued >= 1
+    assert metrics.completed >= 1
 
 
 def test_get_artifact_with_entries(repo: TaskArtifactRepository):

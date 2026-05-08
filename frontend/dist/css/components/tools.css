@@ -1,10 +1,14 @@
 /* Tool Call Blocks - Claude Code style collapsible design */
 
 .tool-block {
-    margin: 0.35rem 0;
+    margin: 0.12rem 0;
     border: none;
     background: transparent;
     overflow: visible;
+}
+
+.tool-block + .tool-block {
+    margin-top: 0.12rem;
 }
 
 /* --- Summary / collapsed state --- */

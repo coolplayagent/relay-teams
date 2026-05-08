@@ -270,9 +270,7 @@ async def _set_runtime_phase_async(ctx: ToolContext, *, phase: RunRuntimePhase) 
         active_task_id=ctx.deps.task_id,
         active_role_id=ctx.deps.role_id,
         active_subagent_instance_id=(
-            None
-            if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
-            else ctx.deps.instance_id
+            None if _is_root_or_coordinator_context(ctx) else ctx.deps.instance_id
         ),
         last_error=None,
     )
@@ -301,16 +299,20 @@ def _set_runtime_phase(ctx: ToolContext, *, phase: RunRuntimePhase) -> None:
         active_task_id=ctx.deps.task_id,
         active_role_id=ctx.deps.role_id,
         active_subagent_instance_id=(
-            None
-            if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
-            else ctx.deps.instance_id
+            None if _is_root_or_coordinator_context(ctx) else ctx.deps.instance_id
         ),
         last_error=None,
     )
 
 
+def _is_root_or_coordinator_context(ctx: ToolContext) -> bool:
+    return bool(
+        getattr(ctx.deps, "is_root_task_context", False)
+    ) or ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id)
+
+
 def _running_phase(ctx: ToolContext) -> RunRuntimePhase:
-    if ctx.deps.role_registry.is_coordinator_role(ctx.deps.role_id):
+    if _is_root_or_coordinator_context(ctx):
         return RunRuntimePhase.COORDINATOR_RUNNING
     return RunRuntimePhase.SUBAGENT_RUNNING
 

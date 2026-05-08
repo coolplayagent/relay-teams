@@ -10,6 +10,7 @@ import { syncSessionDebugBadge } from '../components/sessionDebugBadge.js';
 import { markSidebarSessionTerminalViewed } from '../components/sessionSidebarStore.js';
 import { hideProjectView } from '../components/projectView.js';
 import { clearNewSessionDraft } from '../components/newSessionDraft.js';
+import * as roundsTimeline from '../components/rounds/timeline.js';
 import { markSubagentRailLoading } from '../components/subagentRail.js';
 import { setRoundsMode } from '../components/sidebar.js';
 import {
@@ -31,8 +32,10 @@ import {
     detachActiveStreamForSessionSwitch,
     detachNormalModeSubagentStreamsForSessionSwitch,
     prepareStreamsForForegroundNavigation,
+    restorePendingRunStartForSessionSwitch,
 } from '../core/stream.js';
 import { detachForegroundSubmission } from '../core/submission.js';
+import { recordUiDiagnostic } from '../core/uiDiagnostics.js';
 import { els } from '../utils/dom.js';
 import { formatMessage, t } from '../utils/i18n.js';
 import { sysLog } from '../utils/logger.js';
@@ -63,6 +66,7 @@ export async function selectSession(sessionId) {
         return;
     }
     const selectionToken = ++sessionSelectionToken;
+    const switchStartedAt = performance.now();
     const selectionController = resetSessionSelectionController();
     sessionSelectionTargetId = safeSessionId;
     const selectionSignal = selectionController.signal;
@@ -111,12 +115,17 @@ export async function selectSession(sessionId) {
     if (!isSameSession) {
         detachForegroundSubmission({ focusPrompt: false });
         detachActiveStreamForSessionSwitch({ focusPrompt: false });
+        roundsTimeline.clearPendingRunStartPlaceholder(previousSessionId);
     }
     if (!isSameSession && previousSessionId) {
         stopSessionContinuity(previousSessionId);
         detachNormalModeSubagentStreamsForSessionSwitch(previousSessionId);
     }
     state.currentSessionId = safeSessionId;
+    const restoredPendingRunStart = restorePendingRunStartForSessionSwitch(
+        safeSessionId,
+        { focusPrompt: false },
+    );
     if (!isSameSession) {
         prepareStreamsForForegroundNavigation(safeSessionId);
     }
@@ -157,21 +166,45 @@ export async function selectSession(sessionId) {
     clearSessionTokenUsage({ preserveDisplay: true });
     clearAllStreamState({ preserveOverlay: true });
     refreshSessionTopologyControls();
-    beginSessionSwitchLoading(selectionToken, safeSessionId);
+    if (restoredPendingRunStart) {
+        clearSessionSwitchLoading();
+    } else {
+        beginSessionSwitchLoading(selectionToken, safeSessionId);
+    }
 
     try {
-        const sessionRecord = await fetchSessionHistory(safeSessionId, {
+        const sessionRecordPromise = fetchSessionHistory(safeSessionId, {
             priority: 'high',
             signal: selectionSignal,
-        });
-        if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
-            return;
-        }
-        const sessionNeedsTerminalView = selectedSessionNeedsTerminalView
-            || sessionRecordNeedsTerminalView(sessionRecord);
-        applyCurrentSessionRecord(sessionRecord);
-        refreshSessionTopologyControls();
-        if (isSameSession) {
+        })
+            .then(sessionRecord => {
+                applySessionRecordForSelection({
+                    sessionRecord,
+                    selectionToken,
+                    sessionId: safeSessionId,
+                    signal: selectionSignal,
+                    markTerminalViewed: false,
+                });
+                return sessionRecord;
+            })
+            .catch(error => {
+                if (error?.name !== 'AbortError') {
+                    sysLog(`Failed to load session record: ${error.message || error}`, 'log-error');
+                }
+                return null;
+            });
+        if (restoredPendingRunStart) {
+            void hydrateSessionView(safeSessionId, {
+                includeRounds: false,
+                priority: '',
+                quiet: true,
+                signal: selectionSignal,
+            }).catch(error => {
+                if (error?.name !== 'AbortError') {
+                    sysLog(`Failed to complete pending run hydration: ${error.message || error}`, 'log-error');
+                }
+            });
+        } else if (isSameSession) {
             await hydrateSessionView(safeSessionId, {
                 includeRounds: true,
                 priority: 'high',
@@ -188,16 +221,31 @@ export async function selectSession(sessionId) {
         if (!isLatestSessionSelection(selectionToken, safeSessionId)) {
             return;
         }
-        if (sessionNeedsTerminalView) {
+        if (selectedSessionNeedsTerminalView) {
             void markSelectedSessionTerminalViewed(safeSessionId, selectionSignal);
         }
+        void sessionRecordPromise.then(sessionRecord => {
+            if (
+                sessionRecordNeedsTerminalView(sessionRecord)
+                && isLatestSessionSelection(selectionToken, safeSessionId)
+            ) {
+                void markSelectedSessionTerminalViewed(safeSessionId, selectionSignal);
+            }
+        });
     } catch (error) {
         if (error?.name === 'AbortError') {
             return;
         }
         throw error;
     } finally {
-        finishSessionSwitchLoading(selectionToken, safeSessionId);
+        if (!restoredPendingRunStart) {
+            finishSessionSwitchLoading(selectionToken, safeSessionId);
+        }
+        recordUiDiagnostic(
+            'switch_latency_ms',
+            Math.round(performance.now() - switchStartedAt),
+            { kind: 'root', sessionId: safeSessionId },
+        );
         clearSessionSelectionController(selectionController);
     }
     scheduleCoordinatorContextPreview({ immediate: true });
@@ -216,6 +264,46 @@ export async function selectSession(sessionId) {
     sysLog(formatMessage(isSameSession ? 'session.reloaded' : 'session.switched', {
         session_id: safeSessionId,
     }));
+}
+
+function applySessionRecordForSelection({
+    sessionRecord,
+    selectionToken,
+    sessionId,
+    signal = null,
+    markTerminalViewed = true,
+} = {}) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (
+        !safeSessionId
+        || signal?.aborted
+        || !isLatestSessionSelection(selectionToken, safeSessionId)
+        || !sessionRecord
+        || typeof sessionRecord !== 'object'
+    ) {
+        return false;
+    }
+    applyCurrentSessionRecord(sessionRecord);
+    emitSessionRecordUpdated(sessionRecord, safeSessionId);
+    if (markTerminalViewed && sessionRecordNeedsTerminalView(sessionRecord)) {
+        void markSelectedSessionTerminalViewed(safeSessionId, signal);
+    }
+    refreshSessionTopologyControls();
+    return true;
+}
+
+function emitSessionRecordUpdated(sessionRecord, sessionId) {
+    globalThis.document?.dispatchEvent?.(
+        new CustomEvent('agent-teams-session-record-updated', {
+            detail: {
+                sessionId,
+                workspaceId: String(
+                    sessionRecord?.workspace_id || sessionRecord?.workspaceId || state.currentWorkspaceId || '',
+                ).trim(),
+                session: sessionRecord && typeof sessionRecord === 'object' ? sessionRecord : {},
+            },
+        }),
+    );
 }
 
 function sessionRecordNeedsTerminalView(sessionRecord) {
@@ -292,6 +380,7 @@ function completeSessionSwitchLoading(selectionToken, sessionId, chatContainer) 
         return;
     }
     chatContainer.classList.remove('is-session-switch-pending', 'is-session-switching');
+    removeSessionSwitchLoadingNode(chatContainer);
     chatContainer.classList.add('is-session-switch-ready');
     sessionSwitchReadyTimer = globalThis.setTimeout(() => {
         if (!isLatestSessionSelection(selectionToken, sessionId)) {
@@ -379,6 +468,12 @@ function clearSessionSwitchLoading() {
         'is-session-switching',
         'is-session-switch-ready',
     );
+    removeSessionSwitchLoadingNode(chatContainer);
+}
+
+function removeSessionSwitchLoadingNode(chatContainer) {
+    const loadingNode = chatContainer?.querySelector?.('.session-switch-loading');
+    loadingNode?.remove?.();
 }
 
 async function markSelectedSessionTerminalViewed(sessionId, signal = null) {

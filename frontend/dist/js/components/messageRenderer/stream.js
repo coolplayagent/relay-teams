@@ -1247,6 +1247,13 @@ function isDuplicateOverlayEvent(runId, eventId) {
     return false;
 }
 
+function recordMessageRendererUiDiagnostic(name) {
+    const recorder = globalThis.__agentTeamsUiDiagnostics?.record;
+    if (typeof recorder === 'function') {
+        recorder(name);
+    }
+}
+
 function clearRunOverlayEventDedupe(runId) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId) return;

@@ -179,10 +179,11 @@ class RunAuxiliaryService:
     ) -> dict[str, object]:
         service = self._get_background_task_service()
         if service is not None:
-            return service.get_for_run(
+            record = service.get_for_run(
                 run_id=run_id,
                 background_task_id=background_task_id,
-            ).model_dump(mode="json")
+            )
+            return record.model_dump(mode="json")
         manager = self._get_background_task_manager()
         if manager is None:
             raise KeyError(f"Background task {background_task_id} not found")
@@ -202,12 +203,11 @@ class RunAuxiliaryService:
     ) -> dict[str, object]:
         service = self._get_background_task_service()
         if service is not None:
-            return (
-                await service.get_for_run_async(
-                    run_id=run_id,
-                    background_task_id=background_task_id,
-                )
-            ).model_dump(mode="json")
+            record = await service.get_for_run_async(
+                run_id=run_id,
+                background_task_id=background_task_id,
+            )
+            return record.model_dump(mode="json")
         manager = self._get_background_task_manager()
         if manager is None:
             raise KeyError(f"Background task {background_task_id} not found")
@@ -272,3 +272,15 @@ class RunAuxiliaryService:
         if service is None:
             raise RuntimeError("Monitor service is not configured")
         return service
+
+    def _try_get_run_session_id(self, run_id: str) -> str | None:
+        try:
+            return self._get_run_session_id(run_id)
+        except KeyError:
+            return None
+
+    async def _try_get_run_session_id_async(self, run_id: str) -> str | None:
+        try:
+            return await self._get_run_session_id_async(run_id)
+        except KeyError:
+            return None

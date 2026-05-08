@@ -29,7 +29,7 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def create_monitor(
+    async def create_monitor(  # pragma: no cover
         ctx: ToolContext,
         background_task_id: str,
         event_names: tuple[str, ...] = ("background_task.line",),
@@ -42,8 +42,8 @@ def register(agent: Agent[ToolDeps, str]) -> None:
     ) -> dict[str, JsonValue]:
         def _action():
             background_task_service = require_background_task_service(ctx)
-            _ = background_task_service.get_for_run(
-                run_id=ctx.deps.run_id,
+            _ = background_task_service.get_for_session(
+                session_id=ctx.deps.session_id,
                 background_task_id=background_task_id,
             )
             monitor_service = require_monitor_service(ctx)

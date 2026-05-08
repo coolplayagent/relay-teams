@@ -5,6 +5,22 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _mock_shared_ui_diagnostics(tmp_path: Path) -> None:
+    core_dir = tmp_path.parent / "core"
+    core_dir.mkdir(exist_ok=True)
+    (core_dir / "uiDiagnostics.js").write_text(
+        """
+export function recordUiDiagnostic() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
 
 def test_opening_subagent_session_hides_main_input_container(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[3]
@@ -221,7 +237,7 @@ await openSubagentSession("session-1", {
     sessionId: "session-1",
     instanceId: "inst-sub-1",
     roleId: "Explorer",
-    runId: "subagent_run_1",
+    runId: "delegated-run-1",
     title: "Explore history",
     status: "running",
 });
@@ -279,7 +295,7 @@ console.log(JSON.stringify({
         {
             "sessionId": "session-1",
             "instanceId": "inst-sub-1",
-            "runId": "subagent_run_1",
+            "runId": "delegated-run-1",
             "overlayMode": "separate",
             "status": "running",
             "runStatus": "running",
@@ -1797,7 +1813,7 @@ const remembered = rememberNormalModeSubagentFromBackgroundTask(
         kind: "subagent",
         subagent_instance_id: "Explorer-abc123",
         subagent_role_id: "Explorer",
-        subagent_run_id: "subagent_run_abc123",
+        subagent_run_id: "delegated-run-abc123",
         title: "Explore command implementation",
         status: "running",
         updated_at: "2026-04-28T11:00:00Z",
@@ -1810,7 +1826,7 @@ const failedRemembered = rememberNormalModeSubagentFromBackgroundTask(
         kind: "subagent",
         subagent_instance_id: "Explorer-abc123",
         subagent_role_id: "Explorer",
-        subagent_run_id: "subagent_run_abc123",
+        subagent_run_id: "delegated-run-abc123",
         title: "Explore command implementation",
         status: "failed",
         updated_at: "2026-04-28T11:01:00Z",
@@ -1856,7 +1872,7 @@ console.log(JSON.stringify({
             "sessionId": "session-1",
             "instanceId": "Explorer-abc123",
             "roleId": "Explorer",
-            "runId": "subagent_run_abc123",
+            "runId": "delegated-run-abc123",
             "title": "Explore command implementation",
             "status": "failed",
             "runStatus": "failed",
@@ -1871,7 +1887,7 @@ console.log(JSON.stringify({
     ]
     assert payload["events"]
     assert payload["events"][-1]["detail"]["sessionId"] == "session-1"
-    assert payload["syncCalls"][-1]["records"][0]["runId"] == "subagent_run_abc123"
+    assert payload["syncCalls"][-1]["records"][0]["runId"] == "delegated-run-abc123"
     assert payload["syncCalls"][-1]["records"][0]["status"] == "failed"
 
 

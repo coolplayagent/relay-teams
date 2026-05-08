@@ -638,6 +638,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
         published_tool_outcome_ids: set[str] | None = None,
+        safe_index: int | None = None,
+        safe_scan_ms: int = 0,
+        reload_history_after_commit: bool = False,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -661,6 +664,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             filter_model_messages=self._filter_model_messages,
             has_tool_side_effect_messages=self._has_tool_side_effect_messages,
             published_tool_outcome_ids=published_tool_outcome_ids,
+            safe_index=safe_index,
+            safe_scan_ms=safe_scan_ms,
+            reload_history_after_commit=reload_history_after_commit,
         )
 
     async def _commit_ready_messages_async(
@@ -670,6 +676,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
         published_tool_outcome_ids: set[str] | None = None,
+        safe_index: int | None = None,
+        safe_scan_ms: int = 0,
+        reload_history_after_commit: bool = False,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -693,6 +702,9 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             filter_model_messages=self._filter_model_messages,
             has_tool_side_effect_messages=self._has_tool_side_effect_messages,
             published_tool_outcome_ids=published_tool_outcome_ids,
+            safe_index=safe_index,
+            safe_scan_ms=safe_scan_ms,
+            reload_history_after_commit=reload_history_after_commit,
         )
 
     def _commit_all_safe_messages(

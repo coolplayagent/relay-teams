@@ -59,6 +59,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert 'type="text"' in recovery_script
     assert "compositionstart" in recovery_script
     assert "restoreFocusedUserQuestionSupplement(" in recovery_script
+    assert "restoreFocusedUserQuestionSupplementSoon(" in recovery_script
     assert (
         "handleUserQuestionSubmit(userQuestion.runId || runId, userQuestion);"
         in recovery_script
@@ -100,6 +101,12 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert "await ensureAutomaticRecoveryStream(snapshot," in recovery_script
     assert "resumeRunStream(activeRun.run_id, safeSessionId, null," in recovery_script
     assert "await reconcileMissingActiveRun(normalized, {" in recovery_script
+    assert "withLocalActiveRunForEmptySnapshot(snapshot)" in recovery_script
+    assert "function withLocalActiveRunForEmptySnapshot(snapshot)" in recovery_script
+    assert "if (!isLocallyStreaming(activeRunId)) return snapshot;" in recovery_script
+    assert "|| hasActiveRunId" in recovery_script
+    assert "'awaiting_manual_action'," in recovery_script
+    assert "'awaiting_user'," in recovery_script
     assert "const previousActiveRunId = String(" in recovery_script
     assert (
         "endStream({ preserveRunStreamState: true, focusPrompt: false });"
@@ -157,6 +164,13 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         "function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {"
         in stream_script
     )
+    assert "dispatchSessionRunTerminal(" in stream_script
+    background_event_block = stream_script.split(
+        "function applyBackgroundRunEvent(connection, evType, payload, eventMeta) {",
+        1,
+    )[1].split("\n}\n\nfunction isTerminalRunEvent", 1)[0]
+    assert "dispatchSessionRunTerminal(" in background_event_block
+    assert "terminalStatusFromEventType(evType)" in background_event_block
     assert "reason: 'background-reconnect'," in stream_script
     assert (
         "export function syncBackgroundStreamsForSessions(sessionRecords = []) {"
@@ -213,6 +227,10 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
         not in renderer_stream_script
     )
     assert "messageRenderer.clearRunStreamState(finishedRunId);" in stream_script
+    assert (
+        "primeRecoveryContinuityForCreatedRun(runId, safeSessionId);" in stream_script
+    )
+    assert "reason: 'run-created'," in stream_script
     assert "overlaySeenEventIdsByRun.delete(safeRunId);" in renderer_stream_script
     assert "clearTimelineRun(safeRunId);" in renderer_stream_script
     assert "st = createStreamState({" in renderer_stream_script

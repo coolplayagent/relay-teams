@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import sqlite3
 from collections.abc import Callable
 
@@ -16,13 +18,38 @@ from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
     RunRuntimeRepository,
+    RunRuntimeStatus,
 )
 from relay_teams.trace import bind_trace_context
 
 logger = get_logger(__name__)
 
+_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.getenv("RELAY_TEAMS_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS", "2.0")),
+)
+_RUN_NOTIFICATION_TIMEOUT_SECONDS = max(
+    0.1,
+    float(os.getenv("RELAY_TEAMS_RUN_NOTIFICATION_TIMEOUT_SECONDS", "2.0")),
+)
+_RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS = max(
+    0,
+    int(os.getenv("RELAY_TEAMS_RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS", "3")),
+)
+_RUN_RUNTIME_UPDATE_RETRY_DELAY_SECONDS = max(
+    0.0,
+    float(os.getenv("RELAY_TEAMS_RUN_RUNTIME_UPDATE_RETRY_DELAY_SECONDS", "0.2")),
+)
+_TERMINAL_RUNTIME_STATUSES = frozenset(
+    {
+        RunRuntimeStatus.STOPPED,
+        RunRuntimeStatus.COMPLETED,
+        RunRuntimeStatus.FAILED,
+    }
+)
 
-class RunEventPublisher:
+
+class RunEventPublisher:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -95,18 +122,38 @@ class RunEventPublisher:
         if notification_service is None:
             return
         try:
-            _ = await notification_service.emit_async(
-                notification_type=notification_type,
-                title=title,
-                body=body,
-                context=NotificationContext(
-                    session_id=session_id,
-                    run_id=run_id,
-                    trace_id=trace_id,
-                    session_mode=session_mode,
-                    run_kind=run_kind,
+            _ = await asyncio.wait_for(
+                notification_service.emit_async(
+                    notification_type=notification_type,
+                    title=title,
+                    body=body,
+                    context=NotificationContext(
+                        session_id=session_id,
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        session_mode=session_mode,
+                        run_kind=run_kind,
+                    ),
                 ),
+                timeout=_RUN_NOTIFICATION_TIMEOUT_SECONDS,
             )
+        except TimeoutError as exc:
+            with bind_trace_context(
+                trace_id=trace_id,
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.notification.timeout",
+                    message="Run notification timed out",
+                    payload={
+                        "notification_type": notification_type.value,
+                        "timeout_seconds": _RUN_NOTIFICATION_TIMEOUT_SECONDS,
+                    },
+                    exc_info=exc,
+                )
         except Exception as exc:
             with bind_trace_context(
                 trace_id=trace_id,
@@ -156,12 +203,36 @@ class RunEventPublisher:
         if run_runtime_repo is None:
             return
         try:
-            await run_runtime_repo.update_async(run_id, **changes)
-        except Exception as exc:
+            await asyncio.wait_for(
+                run_runtime_repo.update_async(run_id, **changes),
+                timeout=_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            session_id = self._runtime_session_id(run_id)
             with bind_trace_context(
                 trace_id=run_id,
                 run_id=run_id,
-                session_id="",
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.runtime.update_timeout",
+                    message="Run runtime update timed out",
+                    payload={
+                        "change_count": len(changes),
+                        "change_keys": ",".join(sorted(changes.keys())),
+                        "timeout_seconds": _RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS,
+                    },
+                    exc_info=exc,
+                )
+            self._schedule_runtime_update_retry(run_id, changes)
+        except Exception as exc:
+            session_id = self._runtime_session_id(run_id)
+            with bind_trace_context(
+                trace_id=run_id,
+                run_id=run_id,
+                session_id=session_id,
             ):
                 log_event(
                     logger,
@@ -174,6 +245,116 @@ class RunEventPublisher:
                     },
                     exc_info=exc,
                 )
+
+    def _runtime_session_id(self, run_id: str) -> str:
+        try:
+            runtime = self._get_runtime(run_id)
+        except (KeyError, sqlite3.Error):
+            return ""
+        return runtime.session_id if runtime is not None else ""
+
+    def _schedule_runtime_update_retry(
+        self,
+        run_id: str,
+        changes: dict[str, object],
+    ) -> None:
+        if _RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS <= 0:
+            return
+        try:
+            task = asyncio.create_task(
+                self._retry_runtime_update_async(run_id, dict(changes))
+            )
+        except RuntimeError:
+            return
+        task.add_done_callback(self._observe_runtime_update_retry_result)
+
+    @staticmethod
+    def _observe_runtime_update_retry_result(
+        task: asyncio.Task[None],
+    ) -> None:
+        try:
+            task.result()
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                event="run.runtime.update_retry_failed",
+                message="Run runtime update retry task failed",
+                exc_info=exc,
+            )
+
+    async def _retry_runtime_update_async(
+        self,
+        run_id: str,
+        changes: dict[str, object],
+    ) -> None:
+        session_id = self._runtime_session_id(run_id)
+        for attempt in range(1, _RUN_RUNTIME_UPDATE_RETRY_ATTEMPTS + 1):
+            if _RUN_RUNTIME_UPDATE_RETRY_DELAY_SECONDS > 0:
+                await asyncio.sleep(_RUN_RUNTIME_UPDATE_RETRY_DELAY_SECONDS)
+            run_runtime_repo = self._get_run_runtime_repo()
+            if run_runtime_repo is None:
+                return
+            if self._runtime_update_retry_is_stale(run_id, changes):
+                return
+            try:
+                await asyncio.wait_for(
+                    run_runtime_repo.update_async(run_id, **changes),
+                    timeout=_RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS,
+                )
+                return
+            except TimeoutError as exc:
+                with bind_trace_context(
+                    trace_id=run_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        event="run.runtime.update_retry_timeout",
+                        message="Run runtime update retry timed out",
+                        payload={
+                            "attempt": attempt,
+                            "change_count": len(changes),
+                            "change_keys": ",".join(sorted(changes.keys())),
+                            "timeout_seconds": _RUN_RUNTIME_UPDATE_TIMEOUT_SECONDS,
+                        },
+                        exc_info=exc,
+                    )
+            except Exception as exc:
+                with bind_trace_context(
+                    trace_id=run_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.ERROR,
+                        event="run.runtime.update_retry_failed",
+                        message="Run runtime update retry failed",
+                        payload={
+                            "attempt": attempt,
+                            "change_count": len(changes),
+                            "change_keys": ",".join(sorted(changes.keys())),
+                        },
+                        exc_info=exc,
+                    )
+                return
+
+    def _runtime_update_retry_is_stale(
+        self,
+        run_id: str,
+        changes: dict[str, object],
+    ) -> bool:
+        try:
+            runtime = self._get_runtime(run_id)
+        except (KeyError, sqlite3.Error):
+            return False
+        if runtime is None or runtime.status not in _TERMINAL_RUNTIME_STATUSES:
+            return False
+        requested_status = _coerce_runtime_status(changes.get("status"))
+        return requested_status != runtime.status
 
     def safe_publish_run_event(
         self,
@@ -220,3 +401,14 @@ class RunEventPublisher:
                     payload={"event_type": event.event_type.value},
                     exc_info=exc,
                 )
+
+
+def _coerce_runtime_status(value: object) -> RunRuntimeStatus | None:
+    if isinstance(value, RunRuntimeStatus):
+        return value
+    if isinstance(value, str):
+        try:
+            return RunRuntimeStatus(value)
+        except ValueError:
+            return None
+    return None

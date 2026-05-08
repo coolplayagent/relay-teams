@@ -92,6 +92,28 @@ async def test_disabled_server_is_not_enqueued(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_discovery_concurrency_zero_keeps_warmup_off_hot_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = McpRegistry((_spec("slow-docs"),))
+
+    async def fake_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        _ = name
+        raise AssertionError("Disabled warmup should not touch slow MCP servers")
+
+    monkeypatch.setenv("RELAY_TEAMS_MCP_DISCOVERY_CONCURRENCY", "0")
+    monkeypatch.setattr(registry, "list_tools_for_discovery", fake_list_tools)
+    service = McpDiscoveryService(registry)
+
+    service.start_warmup(registry)
+    await asyncio.sleep(0)
+
+    summary = service.get_tools_summary("slow-docs")
+    assert summary.status == McpDiscoveryStatus.PENDING
+    assert summary.tools == ()
+
+
+@pytest.mark.asyncio
 async def test_replaced_registry_ignores_old_task_result(monkeypatch) -> None:
     old_registry = McpRegistry((_spec("docs"),))
     new_registry = McpRegistry((_spec("docs", command="uvx"),))

@@ -8,7 +8,6 @@ import asyncio
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from tempfile import mkdtemp
 from types import SimpleNamespace
@@ -59,6 +58,8 @@ from relay_teams.tools.runtime.execution import (
     _apply_permission_denied_hooks,
     execute_tool,
     execute_tool_call,
+    flush_tool_result_batch_async,
+    tool_result_batch_scope,
 )
 from relay_teams.tools.runtime.models import (
     ToolExecutionError,
@@ -88,9 +89,13 @@ class _TaskDraftPayload(BaseModel):
 class _FakeRunEventHub:
     def __init__(self) -> None:
         self.events = []
+        self.next_event_id = 1
 
-    def publish(self, event) -> None:
+    def publish(self, event) -> int:
         self.events.append(event)
+        event_id = self.next_event_id
+        self.next_event_id += 1
+        return event_id
 
 
 class _FakeInjectionRecord:
@@ -173,17 +178,17 @@ class _FakeApprovalManager:
         _ = kwargs
 
 
-@dataclass(frozen=True)
 class _FakePolicy:
-    needs_approval: bool
-    timeout_seconds: float = 0.01
+    def __init__(self, *, needs_approval: bool, timeout_seconds: float = 0.01) -> None:
+        self.needs_approval = needs_approval
+        self.timeout_seconds = timeout_seconds
 
     def requires_approval(self, tool_name: str) -> bool:
         _ = tool_name
         return self.needs_approval
 
 
-def test_execute_tool_persists_terminal_state_before_publishing_result_event(
+def test_execute_tool_publishes_result_event_before_single_terminal_state_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     order: list[tuple[str, bool, int]] = []
@@ -239,27 +244,31 @@ def test_execute_tool_persists_terminal_state_before_publishing_result_event(
 
     assert cast(dict[str, JsonValue], result)["ok"] is True
     assert order == [
-        ("persist", False, 0),
         ("publish", True, 42),
         ("persist", True, 42),
     ]
 
 
-def test_execute_tool_ignores_post_publish_result_linkage_write_failure(
+def test_execute_tool_persists_recovery_state_when_result_event_publish_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    order: list[tuple[str, int]] = []
+    order: list[tuple[str, bool, int]] = []
 
     async def fake_persist_tool_record_async(**kwargs: object) -> None:
+        runtime_meta = cast(dict[str, JsonValue], kwargs["runtime_meta"])
         result_event_id = cast(int, kwargs.get("result_event_id", 0))
-        order.append(("persist", result_event_id))
-        if result_event_id == 42:
-            raise sqlite3.OperationalError("database is locked")
+        order.append(
+            (
+                "persist",
+                runtime_meta.get("tool_result_event_published") is True,
+                result_event_id,
+            )
+        )
 
     async def fake_publish_tool_result_event_async(**kwargs: object) -> int:
         _ = kwargs
-        order.append(("publish", 42))
-        return 42
+        order.append(("publish", True, 0))
+        raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(
         execution_module,
@@ -289,9 +298,8 @@ def test_execute_tool_ignores_post_publish_result_linkage_write_failure(
 
     assert cast(dict[str, JsonValue], result)["ok"] is True
     assert order == [
-        ("persist", 0),
-        ("publish", 42),
-        ("persist", 42),
+        ("publish", True, 0),
+        ("persist", False, 0),
     ]
 
 
@@ -340,17 +348,20 @@ class _FakeDeps:
         *,
         manager: _FakeApprovalManager,
         policy: _FakePolicy | ToolApprovalPolicy,
+        is_root_task_context: bool = False,
     ) -> None:
         db_path = Path(mkdtemp()) / "runtime.db"
         self.run_id = "run-1"
         self.trace_id = "trace-1"
         self.task_id = "task-1"
+        self.is_root_task_context = is_root_task_context
         self.session_id = "session-1"
         self.session_mode = "orchestration"
         self.run_kind = "generate_image"
         self.workspace_id = "workspace-1"
         self.instance_id = "inst-1"
         self.role_id = "spec_coder"
+        self.runtime_role_resolver: object | None = None
         self.role_registry = RoleRegistry()
         self.role_registry.register(
             RoleDefinition(
@@ -478,6 +489,348 @@ def test_execute_tool_returns_standard_envelope() -> None:
     assert tool_result_payloads[0]["result"] == result
 
 
+@pytest.mark.timeout(5)
+def test_tool_result_batch_scope_flushes_results_and_state_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    manage_states_calls = 0
+    original_manage_states_async = deps.shared_store.manage_states_async
+
+    async def counting_manage_states_async(
+        mutations: tuple[StateMutation, ...],
+        ttl_seconds: int | None = None,
+    ) -> None:
+        nonlocal manage_states_calls
+        manage_states_calls += 1
+        await original_manage_states_async(mutations, ttl_seconds=ttl_seconds)
+
+    monkeypatch.setattr(
+        deps.shared_store,
+        "manage_states_async",
+        counting_manage_states_async,
+    )
+
+    async def run_batch() -> None:
+        with tool_result_batch_scope() as buffer:
+            for index in range(3):
+                ctx = _FakeCtx(deps)
+                ctx.tool_call_id = f"call-read-{index}"
+                result = await execute_tool(
+                    cast(ToolContext, cast(object, ctx)),
+                    tool_name="custom_tool",
+                    args_summary={"path": f"file-{index}.txt"},
+                    action=lambda: "hello",
+                )
+                assert result["ok"] is True
+            assert _tool_result_payloads(deps) == []
+            flushed = await flush_tool_result_batch_async(
+                buffer,
+                published_tool_outcome_ids=set(),
+            )
+            assert flushed is True
+
+    asyncio.run(run_batch())
+
+    assert len(_tool_result_payloads(deps)) == 3
+    assert manage_states_calls == 1
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-read-0",
+    )
+    assert state is not None
+    assert state.execution_status == ToolExecutionStatus.COMPLETED
+    assert state.result_event_id > 0
+
+
+def test_lightweight_tool_result_batch_skips_state_persist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    manage_states_calls = 0
+
+    async def counting_manage_states_async(
+        mutations: tuple[StateMutation, ...],
+        ttl_seconds: int | None = None,
+    ) -> None:
+        _ = (mutations, ttl_seconds)
+        nonlocal manage_states_calls
+        manage_states_calls += 1
+
+    monkeypatch.setattr(
+        deps.shared_store,
+        "manage_states_async",
+        counting_manage_states_async,
+    )
+
+    async def run_batch() -> None:
+        with tool_result_batch_scope() as buffer:
+            for index in range(3):
+                ctx = _FakeCtx(deps)
+                ctx.tool_call_id = f"call-read-lightweight-{index}"
+                result = await execute_tool(
+                    cast(ToolContext, cast(object, ctx)),
+                    tool_name="read",
+                    args_summary={"path": f"file-{index}.txt"},
+                    action=lambda: "hello",
+                )
+                assert result["ok"] is True
+            flushed = await flush_tool_result_batch_async(
+                buffer,
+                published_tool_outcome_ids=set(),
+            )
+            assert flushed is True
+
+    asyncio.run(run_batch())
+
+    assert len(_tool_result_payloads(deps)) == 3
+    assert manage_states_calls == 0
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-read-lightweight-0",
+    )
+    assert state is None
+
+
+def test_spawn_subagent_tool_result_batch_skips_state_persist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    manage_states_calls = 0
+
+    async def counting_manage_states_async(
+        mutations: tuple[StateMutation, ...],
+        ttl_seconds: int | None = None,
+    ) -> None:
+        _ = (mutations, ttl_seconds)
+        nonlocal manage_states_calls
+        manage_states_calls += 1
+
+    monkeypatch.setattr(
+        deps.shared_store,
+        "manage_states_async",
+        counting_manage_states_async,
+    )
+
+    async def run_batch() -> None:
+        with tool_result_batch_scope() as buffer:
+            for index in range(2):
+                ctx = _FakeCtx(deps)
+                ctx.tool_call_id = f"call-spawn-{index}"
+                result = await execute_tool(
+                    cast(ToolContext, cast(object, ctx)),
+                    tool_name="spawn_subagent",
+                    args_summary={"role_id": "Crafter", "index": index},
+                    action=lambda: {"run_id": f"subagent-run-{index}"},
+                )
+                assert result["ok"] is True
+            flushed = await flush_tool_result_batch_async(
+                buffer,
+                published_tool_outcome_ids=set(),
+            )
+            assert flushed is True
+
+    asyncio.run(run_batch())
+
+    assert len(_tool_result_payloads(deps)) == 2
+    assert manage_states_calls == 0
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-spawn-0",
+    )
+    assert state is None
+
+
+@pytest.mark.timeout(5)
+def test_tool_result_batch_scope_singleflights_identical_read_actions() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    action_count = 0
+
+    async def run_batch() -> None:
+        nonlocal action_count
+        with tool_result_batch_scope() as buffer:
+            for index in range(3):
+                ctx = _FakeCtx(deps)
+                ctx.tool_call_id = f"call-read-shared-{index}"
+
+                async def action() -> str:
+                    nonlocal action_count
+                    action_count += 1
+                    return "shared"
+
+                result = await execute_tool(
+                    cast(ToolContext, cast(object, ctx)),
+                    tool_name="read",
+                    args_summary={"path": "same-file.txt"},
+                    action=action,
+                )
+                assert result["ok"] is True
+            flushed = await flush_tool_result_batch_async(
+                buffer,
+                published_tool_outcome_ids=set(),
+            )
+            assert flushed is True
+
+    asyncio.run(run_batch())
+
+    assert action_count == 1
+    assert len(_tool_result_payloads(deps)) == 3
+
+
+def test_tool_result_batch_flush_timeout_covers_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+
+    async def slow_publish(
+        items: tuple[execution_module.ToolResultCommitItem, ...],
+    ) -> tuple[int, ...]:
+        await asyncio.sleep(0.05)
+        return tuple(range(1, len(items) + 1))
+
+    monkeypatch.setattr(
+        execution_module,
+        "TOOL_RESULT_BATCH_FLUSH_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_publish_tool_result_events_batch_async",
+        slow_publish,
+    )
+
+    async def run_batch() -> None:
+        with tool_result_batch_scope() as buffer:
+            ctx = _FakeCtx(deps)
+            ctx.tool_call_id = "call-read-timeout"
+            result = await execute_tool(
+                cast(ToolContext, cast(object, ctx)),
+                tool_name="read",
+                args_summary={"path": "slow.txt"},
+                action=lambda: "hello",
+            )
+            assert result["ok"] is True
+            with pytest.raises(RuntimeError, match="tool_result_batch_flush timed out"):
+                await flush_tool_result_batch_async(
+                    buffer,
+                    published_tool_outcome_ids=set(),
+                )
+
+    asyncio.run(run_batch())
+
+
+def test_execute_tool_root_task_context_keeps_coordinator_runtime_phase() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+        is_root_task_context=True,
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-root-read-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: "hello",
+        )
+    )
+
+    runtime = deps.run_runtime_repo.get(deps.run_id)
+    assert result["ok"] is True
+    assert runtime is not None
+    assert runtime.phase == RunRuntimePhase.COORDINATOR_RUNNING
+    assert runtime.active_subagent_instance_id is None
+
+
+def test_execute_tool_delegated_task_context_keeps_subagent_runtime_phase() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+        is_root_task_context=False,
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-subagent-read-1"
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: "hello",
+        )
+    )
+
+    runtime = deps.run_runtime_repo.get(deps.run_id)
+    assert result["ok"] is True
+    assert runtime is not None
+    assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
+    assert runtime.active_subagent_instance_id == deps.instance_id
+
+
+def test_execute_tool_compacts_large_read_result_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        execution_module,
+        "READ_TOOL_STATE_COMPACT_THRESHOLD_BYTES",
+        32,
+    )
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+        is_root_task_context=True,
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-large-read-1"
+    large_content = "x" * 128
+
+    result = asyncio.run(
+        execute_tool(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=lambda: large_content,
+        )
+    )
+
+    state = load_tool_call_state(
+        shared_store=deps.shared_store,
+        task_id=deps.task_id,
+        tool_call_id="call-large-read-1",
+    )
+    assert result["data"] == large_content
+    assert state is not None
+    assert state.result_event_id > 0
+    assert state.result_envelope is not None
+    record = cast(dict[str, JsonValue], state.result_envelope)
+    visible_result = cast(dict[str, JsonValue], record["visible_result"])
+    compact_data = cast(dict[str, JsonValue], visible_result["data"])
+    assert compact_data["state_compacted"] is True
+    assert compact_data["result_event_id"] == state.result_event_id
+    tool_result_payloads = _tool_result_payloads(deps)
+    assert tool_result_payloads[0]["result"] == result
+
+
 def test_execute_tool_marks_reported_failed_result_event_as_error() -> None:
     deps = _FakeDeps(
         manager=_FakeApprovalManager(wait_result=("approve", "")),
@@ -546,6 +899,7 @@ def test_tool_action_limits_live_unpersisted_batch_per_run(
                     ctx=cast(ToolContext, cast(object, ctx)),
                     action=action,
                     tool_input={},
+                    runtime_meta={},
                 )
             )
             for _ in range(10)
@@ -600,6 +954,7 @@ def test_tool_action_run_gate_waiters_do_not_hold_global_capacity(
                 ctx=cast(ToolContext, cast(object, ctx_a)),
                 action=slow_run_a_action,
                 tool_input={},
+                runtime_meta={},
             )
         )
         await first_a_started.wait()
@@ -608,6 +963,7 @@ def test_tool_action_run_gate_waiters_do_not_hold_global_capacity(
                 ctx=cast(ToolContext, cast(object, ctx_a)),
                 action=queued_run_a_action,
                 tool_input={},
+                runtime_meta={},
             )
         )
         await asyncio.sleep(0.02)
@@ -616,6 +972,7 @@ def test_tool_action_run_gate_waiters_do_not_hold_global_capacity(
                 ctx=cast(ToolContext, cast(object, ctx_b)),
                 action=run_b_action,
                 tool_input={},
+                runtime_meta={},
             )
         )
 
@@ -632,6 +989,44 @@ def test_tool_action_run_gate_waiters_do_not_hold_global_capacity(
         assert run_b_started_before_first_a_released is True
         assert results == ["a1", "a2", "b1"]
         assert execution_module._RUN_TOOL_ACTION_GATES == {}
+
+    asyncio.run(_run())
+
+
+def test_tool_action_can_skip_global_capacity_for_sync_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _run() -> None:
+        monkeypatch.setattr(
+            execution_module,
+            "_GLOBAL_TOOL_ACTION_SEMAPHORE",
+            asyncio.Semaphore(0),
+        )
+        execution_module._RUN_TOOL_ACTION_GATES.clear()
+
+        ctx = SimpleNamespace(
+            deps=SimpleNamespace(run_id="run-sync", session_id="session-sync"),
+            tool_call_id="tool-sync",
+        )
+        runtime_meta: dict[str, JsonValue] = {}
+
+        async def action() -> str:
+            return "ok"
+
+        result = await asyncio.wait_for(
+            execution_module._invoke_tool_action_with_limits(
+                ctx=cast(ToolContext, cast(object, ctx)),
+                action=action,
+                tool_input={},
+                runtime_meta=runtime_meta,
+                hold_action_capacity=False,
+            ),
+            timeout=0.1,
+        )
+
+        assert result == "ok"
+        assert runtime_meta["tool_action_capacity_held"] is False
+        assert runtime_meta["action_queue_wait_ms"] == 0
 
     asyncio.run(_run())
 
@@ -1411,6 +1806,53 @@ def test_execute_tool_ignores_domain_failed_status_for_successful_tools() -> Non
     assert observation.error_message == ""
 
 
+@pytest.mark.asyncio
+async def test_tool_result_state_persist_deferred_retries_completed_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=_FakePolicy(needs_approval=False),
+    )
+    ctx = _FakeCtx(deps)
+    calls: list[str] = []
+
+    async def _fake_persist_tool_record_async(**kwargs: object) -> None:
+        calls.append(str(kwargs["tool_call_id"]))
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(
+        execution_module,
+        "_persist_tool_record_async",
+        _fake_persist_tool_record_async,
+    )
+    monkeypatch.setattr(
+        execution_module,
+        "_DEFERRED_TOOL_STATE_PERSIST_RETRY_DELAYS_SECONDS",
+        (0.001,),
+    )
+
+    persisted = await execution_module._persist_tool_record_best_effort_async(
+        ctx=cast(ToolContext, cast(object, ctx)),
+        tool_call_id="call-deferred",
+        tool_name="shell",
+        args_summary={"command": "echo ok"},
+        visible_envelope={"ok": True},
+        internal_data={"stdout": "ok\n"},
+        runtime_meta={},
+        execution_status=ToolExecutionStatus.COMPLETED,
+        result_event_id=7,
+    )
+    for _ in range(20):
+        if len(calls) >= 2:
+            break
+        await asyncio.sleep(0.01)
+
+    assert persisted is False
+    assert calls == ["call-deferred", "call-deferred"]
+
+
 def test_reported_failure_helper_scopes_to_shell_failure_projections() -> None:
     assert (
         execution_module._reported_failure_from_success_envelope(
@@ -2152,6 +2594,188 @@ def test_execute_tool_denies_pre_tool_use_when_hook_blocks_call() -> None:
     assert result["ok"] is False
     assert error["type"] == "hook_denied"
     assert "blocked" in str(error["message"]).lower()
+
+
+def test_batched_fast_path_does_not_bypass_pre_tool_hook_denial() -> None:
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            guardrails=RuntimeGuardrailPolicy(enabled=False),
+        ),
+    )
+    deps.hook_service = _FakeHookService(
+        HookDecisionType.DENY,
+        reason="Read calls are blocked by hook policy.",
+    )
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-batch-hook-deny"
+    action_calls: list[str] = []
+
+    def action(path: str) -> dict[str, JsonValue]:
+        action_calls.append(path)
+        return {"path": path}
+
+    with tool_result_batch_scope():
+        raw_result = asyncio.run(
+            execute_tool_call(
+                cast(ToolContext, cast(object, ctx)),
+                tool_name="read",
+                args_summary={"path": "README.md"},
+                action=action,
+                raw_args={"ctx": ctx, "path": "README.md"},
+                allow_tool_return=True,
+            )
+        )
+
+    result = cast(dict[str, JsonValue], raw_result)
+    error = cast(dict[str, JsonValue], result["error"])
+    meta = cast(dict[str, JsonValue], result["meta"])
+    assert action_calls == []
+    assert result["ok"] is False
+    assert error["type"] == "hook_denied"
+    assert meta.get("lightweight_batch_fast_path") is None
+
+
+def test_batched_fast_path_allows_noop_hook_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoopHookService:
+        def __init__(self) -> None:
+            self.config_reads = 0
+
+        def get_effective_config(self) -> SimpleNamespace:
+            self.config_reads += 1
+            return SimpleNamespace(hooks={})
+
+    monkeypatch.setattr(execution_module, "HookService", NoopHookService)
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            guardrails=RuntimeGuardrailPolicy(enabled=False),
+        ),
+    )
+    hook_service = NoopHookService()
+    deps.hook_service = hook_service
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-batch-noop-hook-service"
+    action_calls: list[str] = []
+
+    def action(path: str) -> dict[str, JsonValue]:
+        action_calls.append(path)
+        return {"path": path}
+
+    async def run_calls() -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+        first = await execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=action,
+            raw_args={"ctx": ctx, "path": "README.md"},
+            allow_tool_return=True,
+        )
+        ctx.tool_call_id = "call-batch-noop-hook-service-2"
+        second = await execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=action,
+            raw_args={"ctx": ctx, "path": "README.md"},
+            allow_tool_return=True,
+        )
+        return (
+            cast(dict[str, JsonValue], first),
+            cast(dict[str, JsonValue], second),
+        )
+
+    with tool_result_batch_scope():
+        first_result, second_result = asyncio.run(run_calls())
+
+    first_meta = cast(dict[str, JsonValue], first_result["meta"])
+    second_meta = cast(dict[str, JsonValue], second_result["meta"])
+    assert action_calls == ["README.md"]
+    assert first_result["ok"] is True
+    assert second_result["ok"] is True
+    assert first_meta.get("lightweight_batch_fast_path") is True
+    assert second_meta.get("lightweight_batch_fast_path") is True
+    assert hook_service.config_reads == 1
+
+
+def test_batched_fast_path_caches_role_contract_lookup() -> None:
+    class CountingRoleResolver:
+        def __init__(self) -> None:
+            self.reads = 0
+            self.role = RoleDefinition(
+                role_id="spec_coder",
+                name="Spec Coder",
+                description="Implements requested changes.",
+                version="1",
+                tools=("read",),
+                system_prompt="Implement tasks.",
+            )
+
+        def get_effective_role(
+            self,
+            *,
+            run_id: str | None,
+            role_id: str,
+        ) -> RoleDefinition:
+            _ = (run_id, role_id)
+            self.reads += 1
+            return self.role
+
+    deps = _FakeDeps(
+        manager=_FakeApprovalManager(wait_result=("approve", "")),
+        policy=ToolApprovalPolicy(
+            yolo=True,
+            guardrails=RuntimeGuardrailPolicy(enabled=False),
+        ),
+    )
+    role_resolver = CountingRoleResolver()
+    deps.runtime_role_resolver = role_resolver
+    ctx = _FakeCtx(deps)
+    ctx.tool_call_id = "call-batch-role-cache"
+    action_calls: list[str] = []
+
+    def action(path: str) -> dict[str, JsonValue]:
+        action_calls.append(path)
+        return {"path": path}
+
+    async def run_calls() -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+        first = await execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=action,
+            raw_args={"ctx": ctx, "path": "README.md"},
+            allow_tool_return=True,
+        )
+        ctx.tool_call_id = "call-batch-role-cache-2"
+        second = await execute_tool_call(
+            cast(ToolContext, cast(object, ctx)),
+            tool_name="read",
+            args_summary={"path": "README.md"},
+            action=action,
+            raw_args={"ctx": ctx, "path": "README.md"},
+            allow_tool_return=True,
+        )
+        return (
+            cast(dict[str, JsonValue], first),
+            cast(dict[str, JsonValue], second),
+        )
+
+    with tool_result_batch_scope():
+        first_result, second_result = asyncio.run(run_calls())
+
+    first_meta = cast(dict[str, JsonValue], first_result["meta"])
+    second_meta = cast(dict[str, JsonValue], second_result["meta"])
+    assert action_calls == ["README.md"]
+    assert first_result["ok"] is True
+    assert second_result["ok"] is True
+    assert first_meta.get("lightweight_batch_fast_path") is True
+    assert second_meta.get("lightweight_batch_fast_path") is True
+    assert role_resolver.reads == 1
 
 
 def test_execute_tool_runs_permission_denied_hook_when_user_denies() -> None:

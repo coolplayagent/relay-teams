@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from relay_teams.roles.role_contracts import (
     RoleContract,
     RoleContractInvariant,
     RoleContractInvariantType,
 )
 from relay_teams.roles.role_models import RoleDefinition
-from relay_teams.tools.runtime.execution import _apply_role_contract_check
+from relay_teams.tools.runtime.execution import _apply_role_contract_check_async
 
 
 def _make_role(
@@ -47,7 +49,9 @@ def _make_ctx(
 class TestRoleContractInterception:
     """Test cases for _apply_role_contract_check."""
 
-    def test_tool_not_denied_passes_through(self) -> None:
+    pytestmark = pytest.mark.asyncio
+
+    async def test_tool_not_denied_passes_through(self) -> None:
         """AC-4: Tool not in denied set passes through without error."""
         contract = RoleContract(
             invariants=(
@@ -59,10 +63,10 @@ class TestRoleContractInterception:
         )
         role = _make_role(contract=contract)
         ctx = _make_ctx(role)
-        result = _apply_role_contract_check(ctx=ctx, tool_name="read")
+        result = await _apply_role_contract_check_async(ctx=ctx, tool_name="read")
         assert result is None
 
-    def test_tool_in_must_not_have_tools_denied(self) -> None:
+    async def test_tool_in_must_not_have_tools_denied(self) -> None:
         """AC-1: Tool in must_not_have_tools gets tool_policy_denied error."""
         contract = RoleContract(
             invariants=(
@@ -74,21 +78,21 @@ class TestRoleContractInterception:
         )
         role = _make_role(contract=contract)
         ctx = _make_ctx(role)
-        result = _apply_role_contract_check(ctx=ctx, tool_name="shell")
+        result = await _apply_role_contract_check_async(ctx=ctx, tool_name="shell")
         assert result is not None
         assert result.type == "tool_policy_denied"
         assert result.retryable is False
         assert "shell" in result.message
         assert "test_role" in result.message
 
-    def test_role_with_empty_contract_no_interception(self) -> None:
+    async def test_role_with_empty_contract_no_interception(self) -> None:
         """No contract invariants means no interception."""
         role = _make_role(contract=RoleContract())
         ctx = _make_ctx(role)
-        result = _apply_role_contract_check(ctx=ctx, tool_name="shell")
+        result = await _apply_role_contract_check_async(ctx=ctx, tool_name="shell")
         assert result is None
 
-    def test_role_with_must_have_only_no_interception(self) -> None:
+    async def test_role_with_must_have_only_no_interception(self) -> None:
         """AC-4: MUST_HAVE_TOOLS invariant does not trigger denial."""
         contract = RoleContract(
             invariants=(
@@ -100,11 +104,11 @@ class TestRoleContractInterception:
         )
         role = _make_role(contract=contract)
         ctx = _make_ctx(role)
-        result = _apply_role_contract_check(ctx=ctx, tool_name="shell")
+        result = await _apply_role_contract_check_async(ctx=ctx, tool_name="shell")
         assert result is None
 
     @patch("relay_teams.tools.runtime.execution.log_event")
-    def test_error_envelope_meta_fields(self, mock_log: MagicMock) -> None:
+    async def test_error_envelope_meta_fields(self, mock_log: MagicMock) -> None:
         """AC-2/AC-5: Error includes proper type and message."""
         contract = RoleContract(
             invariants=(
@@ -116,7 +120,7 @@ class TestRoleContractInterception:
         )
         role = _make_role(contract=contract)
         ctx = _make_ctx(role)
-        result = _apply_role_contract_check(ctx=ctx, tool_name="shell")
+        result = await _apply_role_contract_check_async(ctx=ctx, tool_name="shell")
         assert result is not None
         assert result.type == "tool_policy_denied"
         assert result.retryable is False
@@ -128,7 +132,7 @@ class TestRoleContractInterception:
         )
 
     @patch("relay_teams.tools.runtime.execution.log_event")
-    def test_runtime_role_resolver_used(self, mock_log: MagicMock) -> None:
+    async def test_runtime_role_resolver_used(self, mock_log: MagicMock) -> None:
         """AC-5: runtime_role_resolver takes precedence."""
         contract = RoleContract(
             invariants=(
@@ -143,11 +147,11 @@ class TestRoleContractInterception:
         resolver.get_effective_role = MagicMock(return_value=dynamic_role)
         static_role = _make_role(role_id="dynamic_role", contract=RoleContract())
         ctx = _make_ctx(static_role, runtime_role_resolver=resolver)
-        result = _apply_role_contract_check(ctx=ctx, tool_name="shell")
+        result = await _apply_role_contract_check_async(ctx=ctx, tool_name="shell")
         assert result is not None
         assert result.type == "tool_policy_denied"
 
-    def test_multiple_must_not_have_invariants_union(self) -> None:
+    async def test_multiple_must_not_have_invariants_union(self) -> None:
         """Multiple MUST_NOT_HAVE_TOOLS invariants combine."""
         contract = RoleContract(
             invariants=(
@@ -163,6 +167,12 @@ class TestRoleContractInterception:
         )
         role = _make_role(contract=contract)
         ctx = _make_ctx(role)
-        assert _apply_role_contract_check(ctx=ctx, tool_name="shell") is not None
-        assert _apply_role_contract_check(ctx=ctx, tool_name="write") is not None
-        assert _apply_role_contract_check(ctx=ctx, tool_name="read") is None
+        assert (
+            await _apply_role_contract_check_async(ctx=ctx, tool_name="shell")
+            is not None
+        )
+        assert (
+            await _apply_role_contract_check_async(ctx=ctx, tool_name="write")
+            is not None
+        )
+        assert await _apply_role_contract_check_async(ctx=ctx, tool_name="read") is None

@@ -728,6 +728,9 @@ async def test_container_binds_background_completion_sink_during_start(
     def _fake_wechat_start() -> None:
         start_calls.append("wechat")
 
+    def _fake_xiaoluban_im_listener_start() -> None:
+        start_calls.append("xiaoluban-im-listener")
+
     def _fake_feishu_subscription_start() -> None:
         start_calls.append("feishu-subscription")
 
@@ -738,6 +741,11 @@ async def test_container_binds_background_completion_sink_during_start(
         container.wechat_gateway_service,
         "start",
         _fake_wechat_start,
+    )
+    monkeypatch.setattr(
+        container.xiaoluban_im_listener_service,
+        "start",
+        _fake_xiaoluban_im_listener_start,
     )
     monkeypatch.setattr(
         container.feishu_subscription_service,
@@ -792,6 +800,7 @@ async def test_container_binds_background_completion_sink_during_start(
     assert container.background_task_service._completion_sink is container.run_service
     assert start_calls == [
         "wechat",
+        "xiaoluban-im-listener",
         "feishu-subscription",
         "feishu-message-pool",
         "automation-delivery",

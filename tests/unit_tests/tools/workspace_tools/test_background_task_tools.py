@@ -187,6 +187,75 @@ class _CapturingBackgroundTaskService:
             True,
         )
 
+    def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        self.calls.append({"session_id": session_id})
+        return (
+            BackgroundTaskRecord(
+                background_task_id="subagent_123",
+                run_id="run-previous",
+                session_id=session_id,
+                kind=BackgroundTaskKind.SUBAGENT,
+                instance_id="inst-1",
+                role_id="writer",
+                title="Investigate test failures",
+                command="subagent:Crafter",
+                cwd="C:/workspace",
+                execution_mode="background",
+                status=BackgroundTaskStatus.COMPLETED,
+                output_excerpt="root cause found",
+                subagent_role_id="Crafter",
+                subagent_run_id="subagent-run-1",
+                subagent_task_id="task-1",
+                subagent_instance_id="subagent-inst-1",
+            ),
+        )
+
+    async def wait_for_session(self, **kwargs: object):
+        self.calls.append(dict(kwargs))
+        return (
+            BackgroundTaskRecord(
+                background_task_id="subagent_123",
+                run_id="run-previous",
+                session_id=str(kwargs["session_id"]),
+                kind=BackgroundTaskKind.SUBAGENT,
+                instance_id="inst-1",
+                role_id="writer",
+                tool_call_id=cast(str | None, kwargs.get("tool_call_id")),
+                title="Investigate test failures",
+                command="subagent:Crafter",
+                cwd="C:/workspace",
+                execution_mode="background",
+                status=BackgroundTaskStatus.COMPLETED,
+                output_excerpt="root cause found",
+                subagent_role_id="Crafter",
+                subagent_run_id="subagent-run-1",
+                subagent_task_id="task-1",
+                subagent_instance_id="subagent-inst-1",
+            ),
+            True,
+        )
+
+    async def stop_for_session(self, **kwargs: object):
+        self.calls.append(dict(kwargs))
+        return BackgroundTaskRecord(
+            background_task_id="subagent_123",
+            run_id="run-previous",
+            session_id=str(kwargs["session_id"]),
+            kind=BackgroundTaskKind.SUBAGENT,
+            instance_id="inst-1",
+            role_id="writer",
+            title="Investigate test failures",
+            command="subagent:Crafter",
+            cwd="C:/workspace",
+            execution_mode="background",
+            status=BackgroundTaskStatus.STOPPED,
+            output_excerpt="stopped",
+            subagent_role_id="Crafter",
+            subagent_run_id="subagent-run-1",
+            subagent_task_id="task-1",
+            subagent_instance_id="subagent-inst-1",
+        )
+
 
 class _RuntimeRoleResolverWithTemporaryRole:
     def __init__(self, role: RoleDefinition) -> None:
@@ -335,6 +404,12 @@ async def test_spawn_subagent_runs_synchronously_by_default(
     assert result == {
         "completed": True,
         "output": "root cause found",
+        "session_id": "session-1",
+        "subagent_run_id": "subagent-run-1",
+        "subagent_instance_id": "subagent-inst-1",
+        "subagent_role_id": "Crafter",
+        "subagent_task_id": "task-1",
+        "title": "Investigate test failures",
     }
     state = load_tool_call_state(
         shared_store=shared_store,
@@ -667,7 +742,7 @@ async def test_wait_background_task_waits_without_optional_timeout_argument(
     result = await tool(ctx, background_task_id="subagent_123")
 
     assert service.calls[0] == {
-        "run_id": "run-1",
+        "session_id": "session-1",
         "background_task_id": "subagent_123",
     }
     assert captured_args == {"background_task_id": "subagent_123"}

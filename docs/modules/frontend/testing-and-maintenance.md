@@ -73,6 +73,16 @@ uv run --extra dev pytest -q tests/integration_tests/browser/test_voice_input_au
 uv run --extra dev pytest -q tests/unit_tests/frontend/test_session_selection_ui.py
 ```
 
+涉及 root/subagent 切换、SSE 续接、前台发送或 timeline 渲染归属的变更必须补充：
+
+```powershell
+uv run --extra dev pytest -q tests/unit_tests/frontend/test_run_events_ui.py
+uv run --extra dev pytest -q tests/unit_tests/frontend/test_session_selection_ui.py
+uv run --extra dev pytest -q tests/unit_tests/frontend/test_subagent_streams_ui.py
+uv run --extra dev pytest -q tests/integration_tests/browser/test_session_send_switch_latency.py
+uv run --extra dev pytest -q tests/integration_tests/browser/test_session_subagent_navigation_matrix.py
+```
+
 完整仓库自检仍以根目录 `AGENTS.md` 的 pre-commit self-check 为准。
 
 ## 维护规则
@@ -111,6 +121,20 @@ uv run --extra dev pytest -q tests/unit_tests/frontend/test_session_selection_ui
 - stream block 更新要走 message renderer/timeline 的公共 API。
 - tool approval、user question、paused subagent 等会同时影响 message block、recovery banner 和 round overlay，需要一起验证。
 - terminal event 后要清理 run stream state，避免旧 overlay 残留。
+- root/subagent target 必须拥有独立的 active identity、`after_event_id` 和 rendered event id set；跨 target 切换不得共享水位。
+- 当前 DOM 只能渲染 active target 的事件。后台 root/subagent 事件只能更新 cache、sidebar 状态、未读/终态提示或 stream overlay。
+- timeline 的 `thinking`、text/output、tool call、tool result、terminal 块顺序是前端合同；replay + live 合并必须去重、不能缺失、不能跨 target 污染。
+- 发送消息后立即切到另一个已有 session 时，源 session 的 pending placeholder、live round、composer busy 和 loading state 不得渲染到目标 session。
+
+### 运行态矩阵
+
+浏览器运行态验证需要覆盖：
+
+- 至少 3 个 root session，每个 root 至少 3 个 foreground subagent。
+- queued、thinking streaming、text streaming、tool running、tool result arriving、completed、stopped、failed。
+- root↔root、root↔own subagent、root↔other session subagent、subagent↔root、subagent↔subagent 同父、subagent↔subagent 跨父。
+- 发送后立刻切换、工具运行中切换、thinking delta 中切换、terminal 到达时切换、展开/收起 subagent list 时切换。
+- 切换响应目标 p95 小于 200 ms，完整加载小于 5 s；简单 send-switch 到已有非空 session 的 stable time 小于 1 s。
 
 ### 页面表现
 

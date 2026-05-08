@@ -12,7 +12,10 @@ from relay_teams.tools.runtime.context import (
     ToolContext,
     ToolDeps,
 )
-from relay_teams.tools.runtime.execution import execute_tool_call
+from relay_teams.tools.runtime.execution import (
+    execute_tool_call,
+    suspended_tool_result_batching,
+)
 from relay_teams.tools.runtime.models import ToolResultProjection
 from relay_teams.tools.runtime.persisted_state import update_tool_call_call_state_async
 from relay_teams.tools.workspace_tools.background_task_tool_support import (
@@ -36,6 +39,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
         prompt: str,
         background: bool = False,
     ) -> dict[str, JsonValue]:
+        # noinspection PyShadowingNames
         async def _action(
             role_id: str,
             description: str,
@@ -108,6 +112,35 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             visible_payload: dict[str, JsonValue] = {
                 "completed": True,
                 "output": result.output,
+                "session_id": ctx.deps.session_id,
+                "subagent_run_id": result.run_id,
+                "subagent_instance_id": result.instance_id,
+                "subagent_role_id": result.role_id,
+                "subagent_task_id": result.task_id,
+                "title": result.title,
+            }
+            sync_metrics: dict[str, JsonValue] = {
+                "sync_subagent_queue_wait_ms": _sync_metric(
+                    result, "sync_subagent_queue_wait_ms", 0
+                ),
+                "sync_subagent_launch_prepare_ms": (
+                    _sync_metric(result, "sync_subagent_launch_prepare_ms", 0)
+                ),
+                "sync_subagent_start_hooks_ms": _sync_metric(
+                    result, "sync_subagent_start_hooks_ms", 0
+                ),
+                "sync_subagent_execute_ms": _sync_metric(
+                    result, "sync_subagent_execute_ms", 0
+                ),
+                "sync_subagent_finalize_ms": _sync_metric(
+                    result, "sync_subagent_finalize_ms", 0
+                ),
+                "sync_subagent_total_ms": _sync_metric(
+                    result, "sync_subagent_total_ms", 0
+                ),
+                "sync_subagent_wait_released_capacity": (
+                    _sync_metric(result, "sync_subagent_wait_released_capacity", False)
+                ),
             }
             return ToolResultProjection(
                 visible_data=visible_payload,
@@ -118,8 +151,24 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                     "role_id": result.role_id,
                     "task_id": result.task_id,
                     "title": result.title,
+                    "sync_subagent_metrics": sync_metrics,
                 },
             )
+
+        # noinspection PyShadowingNames
+        async def _isolated_action(
+            role_id: str,
+            description: str,
+            prompt: str,
+            background: bool = False,
+        ) -> ToolResultProjection:
+            with suspended_tool_result_batching():
+                return await _action(
+                    role_id=role_id,
+                    description=description,
+                    prompt=prompt,
+                    background=background,
+                )
 
         return await execute_tool_call(
             ctx,
@@ -130,8 +179,9 @@ def register(agent: Agent[ToolDeps, str]) -> None:
                 "description_len": len(description),
                 "prompt_len": len(prompt),
             },
-            action=_action,
+            action=_isolated_action,
             raw_args=locals(),
+            hold_action_capacity=background,
         )
 
 
@@ -272,3 +322,10 @@ def _format_names(names: tuple[str, ...]) -> str:
     if not names:
         return _NONE_LABEL
     return ", ".join(names)
+
+
+def _sync_metric(result: object, field_name: str, default: JsonValue) -> JsonValue:
+    value = getattr(result, field_name, default)
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    return default

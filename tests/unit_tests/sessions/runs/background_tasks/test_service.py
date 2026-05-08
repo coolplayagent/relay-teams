@@ -35,12 +35,18 @@ from relay_teams.sessions.runs.background_tasks.projection import (
 )
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason
 from relay_teams.sessions.runs.enums import ExecutionMode, RunEventType
+from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
     RunEvent,
     RunThinkingConfig,
 )
+from relay_teams.sessions.runs.run_state_models import (
+    RunStatePhase,
+    RunStateStatus,
+)
+from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
@@ -81,12 +87,28 @@ class _FakeBackgroundTaskManager:
     def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         return tuple(record for record in self.records if record.run_id == run_id)
 
+    def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        return tuple(
+            record for record in self.records if record.session_id == session_id
+        )
+
     def get_for_run(
         self, *, run_id: str, background_task_id: str
     ) -> BackgroundTaskRecord:
         for record in self.records:
             if (
                 record.run_id == run_id
+                and record.background_task_id == background_task_id
+            ):
+                return record
+        raise KeyError(background_task_id)
+
+    def get_for_session(
+        self, *, session_id: str, background_task_id: str
+    ) -> BackgroundTaskRecord:
+        for record in self.records:
+            if (
+                record.session_id == session_id
                 and record.background_task_id == background_task_id
             ):
                 return record
@@ -171,6 +193,29 @@ class _FakeBackgroundTaskManager:
         if self.wait_result is None:
             raise AssertionError("wait_result not configured")
         return self.wait_result
+
+    async def wait_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> tuple[BackgroundTaskRecord, bool]:
+        _ = (session_id, background_task_id)
+        if self.wait_result is None:
+            raise AssertionError("wait_result not configured")
+        return self.wait_result
+
+    async def stop_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        record = self.get_for_session(
+            session_id=session_id,
+            background_task_id=background_task_id,
+        )
+        return record.model_copy(update={"status": BackgroundTaskStatus.STOPPED})
 
 
 class _CapturingCompletionSink:
@@ -787,6 +832,53 @@ async def test_wait_for_run_marks_completed_background_task_as_consumed(
 
 
 @pytest.mark.asyncio
+async def test_wait_for_session_accepts_background_task_from_previous_run(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-task-session-wait.db")
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    completed = repo.upsert(
+        _build_record().model_copy(update={"run_id": "run-previous"})
+    )
+    manager.records = (completed,)
+
+    updated, done = await service.wait_for_session(
+        session_id="session-1",
+        background_task_id="exec-1",
+    )
+
+    assert done is True
+    assert updated.run_id == "run-previous"
+    assert updated.completion_notified_at is not None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_session_rejects_cross_session_background_task(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-session-cross-session.db"
+    )
+    manager = _FakeBackgroundTaskManager()
+    service = BackgroundTaskService(
+        background_task_manager=cast(BackgroundTaskManager, manager),
+        repository=repo,
+    )
+    record = repo.upsert(_build_record().model_copy(update={"run_id": "run-previous"}))
+    manager.records = (record,)
+
+    with pytest.raises(KeyError, match="Unknown background task"):
+        await service.wait_for_session(
+            session_id="session-2",
+            background_task_id="exec-1",
+        )
+
+
+@pytest.mark.asyncio
 async def test_background_task_service_skips_notification_when_wait_already_consumed_completion(
     tmp_path: Path,
 ) -> None:
@@ -1023,6 +1115,7 @@ async def test_background_task_service_start_subagent_publishes_start_event_asyn
     assert [event.event_type for event in run_event_hub.events] == [
         RunEventType.BACKGROUND_TASK_STARTED,
         RunEventType.SUBAGENT_SESSION_STATUS_CHANGED,
+        RunEventType.RUN_COMPLETED,
         RunEventType.BACKGROUND_TASK_COMPLETED,
         RunEventType.SUBAGENT_SESSION_STATUS_CHANGED,
     ]
@@ -1056,6 +1149,7 @@ async def test_background_task_service_start_subagent_publishes_start_event_asyn
         False,
         False,
     ]
+    assert run_event_hub.events[1].run_id == started.subagent_run_id
 
 
 @pytest.mark.asyncio
@@ -1596,6 +1690,8 @@ async def test_background_task_service_run_subagent_returns_synchronous_result(
     assert isinstance(result, SynchronousSubagentResult)
     assert result.output == "analysis complete"
     assert result.role_id == "Crafter"
+    assert result.sync_subagent_wait_released_capacity is True
+    assert result.sync_subagent_total_ms >= result.sync_subagent_execute_ms
     assert agent_repo.calls[0]["run_id"] == result.run_id
     assert executor.calls[0]["role_id"] == "Crafter"
     assert result.run_id in intent_repo._records
@@ -1605,6 +1701,116 @@ async def test_background_task_service_run_subagent_returns_synchronous_result(
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.COMPLETED
     assert runtime.phase == RunRuntimePhase.TERMINAL
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_run_subagent_publishes_terminal_run_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "background-task-service-subagent-sync-terminal.db"
+    repo = BackgroundTaskRepository(db_path)
+    runtime_repo = RunRuntimeRepository(db_path)
+    run_state_repo = RunStateRepository(db_path)
+    run_event_hub = RunEventHub(
+        event_log=EventLog(db_path),
+        run_state_repo=run_state_repo,
+    )
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        )
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        run_event_hub=run_event_hub,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+    )
+
+    result = await service.run_subagent(
+        run_id="run-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        subagent_role_id="Crafter",
+        title="Investigate failures",
+        prompt="Inspect the failing tests and summarize the cause.",
+    )
+
+    run_state = run_state_repo.get_run_state(result.run_id)
+    assert run_state is not None
+    assert run_state.status == RunStateStatus.COMPLETED
+    assert run_state.phase == RunStatePhase.TERMINAL
+    assert run_state.recoverable is False
+    assert run_state.last_event_id > 0
+    assert run_state.checkpoint_event_id == run_state.last_event_id
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_run_subagent_emits_wait_heartbeat(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-heartbeat.db"
+    )
+    gate = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        gate=gate,
+    )
+    run_event_hub = _LoopGuardRunEventHub()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        run_event_hub=cast(RunEventHub, run_event_hub),
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+    )
+    service._sync_subagent_wait_heartbeat_seconds = 0.01
+
+    run_task = asyncio.create_task(
+        service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+    )
+    try:
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if any(
+                event.event_type == RunEventType.BACKGROUND_TASK_UPDATED
+                for event in run_event_hub.events
+            ):
+                break
+        gate.set()
+        result = await asyncio.wait_for(run_task, timeout=1.0)
+    finally:
+        if not run_task.done():
+            run_task.cancel()
+            await asyncio.gather(run_task, return_exceptions=True)
+
+    heartbeat_events = [
+        event
+        for event in run_event_hub.events
+        if event.event_type == RunEventType.BACKGROUND_TASK_UPDATED
+    ]
+    assert heartbeat_events
+    assert result.output == "analysis complete"
 
 
 @pytest.mark.asyncio
@@ -1713,6 +1919,7 @@ async def test_background_task_service_run_subagent_persists_launch_before_execu
     assert persisted.instance_id == "inst-parent"
     assert persisted.role_id == "writer"
     assert persisted.subagent_run_id == result.run_id
+    assert agent_repo.calls[0]["parent_instance_id"] == "inst-parent"
 
 
 @pytest.mark.asyncio
@@ -2227,7 +2434,12 @@ async def test_background_task_service_wait_for_subagent_run_recovers_persisted_
         record for record in repo.list_all() if record.subagent_run_id == result.run_id
     ]
 
-    assert recovered == result
+    assert recovered.run_id == result.run_id
+    assert recovered.instance_id == result.instance_id
+    assert recovered.role_id == result.role_id
+    assert recovered.task_id == result.task_id
+    assert recovered.title == result.title
+    assert recovered.output == result.output
     assert len(persisted_records) == 1
     assert persisted_records[0].execution_mode == "foreground"
     assert persisted_records[0].status == BackgroundTaskStatus.COMPLETED
@@ -2290,13 +2502,23 @@ async def test_background_task_service_wait_for_subagent_run_recovers_active_syn
         subagent_run_id="subagent-run-recover",
     )
 
-    assert result == SynchronousSubagentResult(
+    assert result.model_copy(
+        update={
+            "sync_subagent_queue_wait_ms": 0,
+            "sync_subagent_launch_prepare_ms": 0,
+            "sync_subagent_start_hooks_ms": 0,
+            "sync_subagent_execute_ms": 0,
+            "sync_subagent_finalize_ms": 0,
+            "sync_subagent_total_ms": 0,
+        }
+    ) == SynchronousSubagentResult(
         run_id="subagent-run-recover",
         instance_id="inst-sub-recover",
         role_id="Crafter",
         task_id="task-sub-recover",
         title="Investigate failures",
         output="recovered analysis",
+        sync_subagent_wait_released_capacity=True,
     )
     assert executor.calls == [
         {
@@ -2900,6 +3122,108 @@ def test_append_subagent_start_context_handles_empty_prompt_and_context() -> Non
         )
         == "delegate\n\nAdditional context from SubagentStart hooks:\nreview scope"
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_subagent_gate_limits_active_runs_per_parent(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "sync-subagent-gate.db")
+    service = BackgroundTaskService(background_task_manager=None, repository=repo)
+    service._sync_subagent_active_limit = 2
+    gate = await service._sync_subagent_gate_for_parent("parent-run")
+    active = 0
+    max_active = 0
+
+    async def worker() -> None:
+        nonlocal active
+        nonlocal max_active
+        async with gate:
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+
+    await asyncio.gather(*(worker() for _ in range(6)))
+
+    assert max_active == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_subagent_global_gate_limits_active_runs(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "sync-subagent-global-gate.db"
+    release_executor = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        gate=release_executor,
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=BackgroundTaskRepository(db_path),
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=RunRuntimeRepository(db_path),
+    )
+    service._sync_subagent_active_limit = 3
+    service._sync_subagent_global_active_limit = 1
+    service._sync_subagent_global_gate = asyncio.Semaphore(1)
+
+    async def _launch(parent_run_id: str) -> SynchronousSubagentResult:
+        return await service.run_subagent(
+            run_id=parent_run_id,
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title=f"Investigate {parent_run_id}",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+
+    first = asyncio.create_task(_launch("parent-run-1"))
+    second = asyncio.create_task(_launch("parent-run-2"))
+    while not executor.calls:
+        await asyncio.sleep(0)
+
+    await asyncio.sleep(0.05)
+    assert len(executor.calls) == 1
+
+    release_executor.set()
+    results = await asyncio.gather(first, second)
+
+    assert len(executor.calls) == 2
+    assert all(result.sync_subagent_wait_released_capacity for result in results)
+    assert max(result.sync_subagent_queue_wait_ms for result in results) > 0
+
+
+def test_sync_subagent_global_gate_default_matches_pressure_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("RELAY_TEAMS_SYNC_SUBAGENT_GLOBAL_ACTIVE_LIMIT", raising=False)
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=BackgroundTaskRepository(tmp_path / "sync-subagent-default.db"),
+        task_execution_service=_FakeTaskExecutionService(
+            result=TaskExecutionResult(
+                output="analysis complete",
+                completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+            ),
+        ),
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=RunRuntimeRepository(tmp_path / "sync-subagent-default.db"),
+    )
+
+    assert service._sync_subagent_global_active_limit == 16
 
 
 def test_raise_for_subagent_stop_decision_raises_retry_reason() -> None:

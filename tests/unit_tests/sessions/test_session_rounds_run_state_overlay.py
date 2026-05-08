@@ -13,7 +13,7 @@ from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import IntentInput
-from relay_teams.sessions import session_service as session_service_module
+from relay_teams.sessions import session_read_models as session_read_models_module
 from relay_teams.sessions.runs.todo_models import TodoItem
 from relay_teams.sessions.runs.todo_models import TodoStatus
 from relay_teams.sessions.runs.todo_repository import TodoRepository
@@ -228,7 +228,7 @@ def test_session_rounds_timeline_bypasses_full_round_projection(
         raise AssertionError("timeline requests should not build full round payloads")
 
     monkeypatch.setattr(
-        session_service_module,
+        session_read_models_module,
         "build_session_rounds",
         fail_full_round_projection,
     )
@@ -270,7 +270,7 @@ def test_session_rounds_summary_pages_lightweight_timeline_without_full_projecti
         raise AssertionError("summary requests should not build full round payloads")
 
     monkeypatch.setattr(
-        session_service_module,
+        session_read_models_module,
         "build_session_rounds",
         fail_full_round_projection,
     )

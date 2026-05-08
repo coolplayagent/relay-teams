@@ -68,7 +68,7 @@ export function markSidebarSessionTerminalViewed(sessionId) {
     if (!safeSessionId) {
         return null;
     }
-    const current = findStoredSession(safeSessionId) || optimisticSessions.get(safeSessionId) || {
+    const current = optimisticSessions.get(safeSessionId) || findStoredSession(safeSessionId) || {
         session_id: safeSessionId,
         metadata: {},
     };
@@ -77,6 +77,77 @@ export function markSidebarSessionTerminalViewed(sessionId) {
         String(current.latest_terminal_run_id || current.latestTerminalRunId || '').trim(),
     );
     return upsertOptimisticSession(applyViewedTerminalState(current));
+}
+
+export function markSidebarSessionRunActive(sessionId, { runId = '', status = 'running' } = {}) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return null;
+    }
+    const current = optimisticSessions.get(safeSessionId) || findStoredSession(safeSessionId) || {
+        session_id: safeSessionId,
+        metadata: {},
+    };
+    const activeRunId = String(
+        runId
+        || current.active_run_id
+        || current.activeRunId
+        || '',
+    ).trim();
+    const activeStatus = String(status || 'running').trim() || 'running';
+    return upsertOptimisticSession({
+        ...current,
+        has_active_run: true,
+        hasActiveRun: true,
+        active_run_id: activeRunId,
+        activeRunId: activeRunId,
+        active_run_status: activeStatus,
+        activeRunStatus: activeStatus,
+        has_unread_terminal_run: false,
+        hasUnreadTerminalRun: false,
+    });
+}
+
+export function markSidebarSessionRunTerminal(
+    sessionId,
+    { runId = '', status = '', viewed = false } = {},
+) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return null;
+    }
+    const current = optimisticSessions.get(safeSessionId) || findStoredSession(safeSessionId) || {
+        session_id: safeSessionId,
+        metadata: {},
+    };
+    const terminalRunId = String(
+        runId
+        || current.active_run_id
+        || current.activeRunId
+        || current.latest_terminal_run_id
+        || current.latestTerminalRunId
+        || '',
+    ).trim();
+    const terminalStatus = String(status || current.active_run_status || current.activeRunStatus || '').trim();
+    const isViewed = viewed === true;
+    if (isViewed && terminalRunId) {
+        viewedTerminalRunsBySessionId.set(safeSessionId, terminalRunId);
+    }
+    return upsertOptimisticSession({
+        ...current,
+        has_active_run: false,
+        hasActiveRun: false,
+        has_unread_terminal_run: !isViewed,
+        hasUnreadTerminalRun: !isViewed,
+        active_run_id: '',
+        activeRunId: '',
+        active_run_status: '',
+        activeRunStatus: '',
+        latest_terminal_run_id: terminalRunId || current.latest_terminal_run_id || current.latestTerminalRunId || '',
+        latestTerminalRunId: terminalRunId || current.latestTerminalRunId || current.latest_terminal_run_id || '',
+        latest_terminal_run_status: terminalStatus || current.latest_terminal_run_status || current.latestTerminalRunStatus || '',
+        latestTerminalRunStatus: terminalStatus || current.latestTerminalRunStatus || current.latest_terminal_run_status || '',
+    });
 }
 
 export function mergeOptimisticSessions(sessions) {
@@ -111,6 +182,9 @@ function trimOptimisticSessions(sessions) {
         }
         const persistedTitle = String(persisted?.metadata?.title || '').trim();
         if (viewedTerminalRunsBySessionId.has(sessionId)) {
+            return;
+        }
+        if (shouldKeepTerminalOverride(optimistic, persisted)) {
             return;
         }
         if (persistedTitle) {
@@ -155,6 +229,8 @@ function mergeSessionRecords(preferred, current) {
     const preferredRecord = normalizeSession(preferred) || {};
     const currentRecord = normalizeSession(current) || {};
     const sessionId = String(currentRecord.session_id || preferredRecord.session_id || '').trim();
+    const activeOverride = activeOverrideForMerge(preferredRecord, currentRecord);
+    const terminalOverride = terminalOverrideForMerge(preferredRecord, currentRecord);
     const preferredMetadata = preferredRecord.metadata && typeof preferredRecord.metadata === 'object'
         ? preferredRecord.metadata
         : {};
@@ -165,22 +241,132 @@ function mergeSessionRecords(preferred, current) {
     const currentTitle = String(currentMetadata.title || '').trim();
     const preferredUpdatedAt = String(preferredRecord.updated_at || '').trim();
     const currentUpdatedAt = String(currentRecord.updated_at || '').trim();
+    const preferOptimisticTitle = !!(
+        preferredTitle
+        && (
+            !currentTitle
+            || timestampValue(preferredUpdatedAt) >= timestampValue(currentUpdatedAt)
+        )
+    );
     const updatedAt = timestampValue(preferredUpdatedAt) > timestampValue(currentUpdatedAt)
         ? preferredUpdatedAt
         : currentUpdatedAt || preferredUpdatedAt;
     return {
         ...preferredRecord,
         ...currentRecord,
+        ...activeOverride,
+        ...terminalOverride,
         session_id: sessionId,
         workspace_id: String(currentRecord.workspace_id || preferredRecord.workspace_id || '').trim(),
         metadata: {
             ...preferredMetadata,
             ...currentMetadata,
-            ...(preferredTitle && !currentTitle ? { title: preferredTitle } : {}),
+            ...(preferOptimisticTitle ? { title: preferredTitle } : {}),
         },
         updated_at: updatedAt || new Date().toISOString(),
         created_at: String(currentRecord.created_at || preferredRecord.created_at || '').trim(),
     };
+}
+
+function activeOverrideForMerge(preferredRecord, currentRecord) {
+    const preferredActiveRunId = String(
+        preferredRecord.active_run_id || preferredRecord.activeRunId || '',
+    ).trim();
+    const hasPreferredActiveRun = (
+        (preferredRecord.has_active_run || preferredRecord.hasActiveRun)
+        && preferredActiveRunId
+    );
+    if (!hasPreferredActiveRun) {
+        return {};
+    }
+    const currentTerminalRunId = String(
+        currentRecord.latest_terminal_run_id || currentRecord.latestTerminalRunId || '',
+    ).trim();
+    const currentTerminalStatus = String(
+        currentRecord.latest_terminal_run_status
+        || currentRecord.latestTerminalRunStatus
+        || '',
+    ).trim().toLowerCase();
+    if (
+        currentTerminalRunId === preferredActiveRunId
+        && ['completed', 'failed', 'stopped'].includes(currentTerminalStatus)
+    ) {
+        return {};
+    }
+    const activeStatus = String(
+        preferredRecord.active_run_status || preferredRecord.activeRunStatus || 'running',
+    ).trim() || 'running';
+    return {
+        has_active_run: true,
+        hasActiveRun: true,
+        active_run_id: preferredActiveRunId,
+        activeRunId: preferredActiveRunId,
+        active_run_status: activeStatus,
+        activeRunStatus: activeStatus,
+        has_unread_terminal_run: false,
+        hasUnreadTerminalRun: false,
+    };
+}
+
+function terminalOverrideForMerge(preferredRecord, currentRecord) {
+    const preferredTerminalRunId = String(
+        preferredRecord.latest_terminal_run_id || preferredRecord.latestTerminalRunId || '',
+    ).trim();
+    if (!preferredTerminalRunId) {
+        return {};
+    }
+    const currentTerminalRunId = String(
+        currentRecord.latest_terminal_run_id || currentRecord.latestTerminalRunId || '',
+    ).trim();
+    if (currentTerminalRunId && currentTerminalRunId !== preferredTerminalRunId) {
+        return {};
+    }
+    const preferredStatus = String(
+        preferredRecord.latest_terminal_run_status
+        || preferredRecord.latestTerminalRunStatus
+        || '',
+    ).trim();
+    const hasUnreadTerminalRun = preferredRecord.has_unread_terminal_run !== false
+        && preferredRecord.hasUnreadTerminalRun !== false;
+    return {
+        has_active_run: false,
+        hasActiveRun: false,
+        active_run_id: '',
+        activeRunId: '',
+        active_run_status: '',
+        activeRunStatus: '',
+        has_unread_terminal_run: hasUnreadTerminalRun,
+        hasUnreadTerminalRun: hasUnreadTerminalRun,
+        latest_terminal_run_id: preferredTerminalRunId,
+        latestTerminalRunId: preferredTerminalRunId,
+        latest_terminal_run_status: preferredStatus
+            || currentRecord.latest_terminal_run_status
+            || currentRecord.latestTerminalRunStatus
+            || '',
+        latestTerminalRunStatus: preferredStatus
+            || currentRecord.latestTerminalRunStatus
+            || currentRecord.latest_terminal_run_status
+            || '',
+    };
+}
+
+function shouldKeepTerminalOverride(optimistic, persisted) {
+    const terminalRunId = String(
+        optimistic?.latest_terminal_run_id || optimistic?.latestTerminalRunId || '',
+    ).trim();
+    if (!terminalRunId) {
+        return false;
+    }
+    const persistedTerminalRunId = String(
+        persisted?.latest_terminal_run_id || persisted?.latestTerminalRunId || '',
+    ).trim();
+    if (persistedTerminalRunId) {
+        return persistedTerminalRunId === terminalRunId;
+    }
+    const activeRunId = String(
+        persisted?.active_run_id || persisted?.activeRunId || '',
+    ).trim();
+    return !activeRunId || activeRunId === terminalRunId;
 }
 
 function applyViewedTerminalState(record) {

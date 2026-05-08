@@ -696,3 +696,5 @@ def test_layout_css_keeps_reflect_button_styles() -> None:
     assert "scrollbar-width: thin;" in css_text
     assert ".agent-panel-section-body[hidden]" in css_text
     assert "display: none !important;" in css_text
+    assert ".agent-panel-refresh-reflection[hidden]," in css_text
+    assert ".agent-panel-stop[hidden]" in css_text

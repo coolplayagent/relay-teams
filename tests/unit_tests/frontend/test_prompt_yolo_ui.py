@@ -2014,7 +2014,7 @@ console.log(JSON.stringify({
     )
 
 
-def test_handle_send_emits_title_preview_only_after_run_created(
+def test_handle_send_emits_title_preview_before_run_created_for_sidebar_responsiveness(
     tmp_path: Path,
 ) -> None:
     temp_dir = _write_multimodal_prompt_fixture(tmp_path, role_supports_image=True)
@@ -2076,9 +2076,16 @@ console.log(JSON.stringify({
             "type": "agent-teams-session-title-previewed",
             "detail": {
                 "sessionId": "session-1",
+                "title": "preview before run",
+            },
+        },
+        {
+            "type": "agent-teams-session-title-previewed",
+            "detail": {
+                "sessionId": "session-1",
                 "title": "preview after run",
             },
-        }
+        },
     ]
 
 
@@ -3227,12 +3234,368 @@ export function isForegroundSubmissionActive(submission) {
     return submission?.detached !== true;
 }
 
+export function isForegroundSubmissionActiveForSession(submission, sessionId) {
+    return submission?.detached !== true
+        && String(sessionId || "").trim() !== ""
+        && globalThis.__foregroundSessionActiveForSession !== false;
+}
+
 export function isForegroundSubmissionDetached(submission) {
     return submission?.detached === true;
 }
 """.strip(),
         encoding="utf-8",
     )
+
+
+def test_send_keeps_original_session_when_user_switches_during_voice_stop(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/app/prompt.js").read_text(encoding="utf-8")
+    temp_dir = tmp_path / "prompt_immediate_switch"
+    temp_dir.mkdir()
+    _write_new_session_draft_mock(tmp_path)
+
+    (temp_dir / "prompt.js").write_text(
+        source.replace("../components/rounds/timeline.js", "./mockRounds.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("./recovery.js", "./mockRecovery.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../core/stream.js", "./mockStream.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/feedback.js", "./mockFeedback.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs"),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRounds.mjs").write_text(
+        """
+export function appendRoundUserMessage() {
+    return undefined;
+}
+
+export function createLiveRound(runId, text, inputParts) {
+    globalThis.__liveRounds.push({ runId, text, inputParts });
+}
+
+export function showPendingRunStartPlaceholder(sessionId, text, inputParts) {
+    globalThis.__placeholders.push({ sessionId, text, inputParts });
+}
+
+export function clearPendingRunStartPlaceholder() {
+    globalThis.__placeholderClears += 1;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRuntimeInjectQueue.mjs").write_text(
+        """
+export function removeRuntimeInjectMessage() {
+    return undefined;
+}
+
+export function upsertRuntimeInjectMessage() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockContextIndicators.mjs").write_text(
+        """
+export function refreshVisibleContextIndicators() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearAllStreamState() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockApi.mjs").write_text(
+        """
+export async function fetchRoleConfigOptions() {
+    return {};
+}
+
+export async function fetchCommands() {
+    return [];
+}
+
+export async function fetchOrchestrationConfig() {
+    return { default_orchestration_preset_id: "", presets: [] };
+}
+
+export async function injectMessage() {
+    return {};
+}
+
+export async function forceQueuedInject() {
+    return {};
+}
+
+export async function resolveCommandPrompt() {
+    return { prompt: "" };
+}
+
+export async function searchWorkspacePaths() {
+    return [];
+}
+
+export async function updateSessionTopology() {
+    return {};
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockRecovery.mjs").write_text(
+        """
+export async function hydrateSessionView() {
+    return null;
+}
+
+export function startSessionContinuity(sessionId) {
+    globalThis.__continuityCalls.push(sessionId);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-a",
+    currentSessionMode: "normal",
+    currentSessionCanSwitchMode: true,
+    currentNormalRootRoleId: "MainAgent",
+    currentOrchestrationPresetId: null,
+    pausedSubagent: null,
+    isGenerating: false,
+    yolo: true,
+    thinking: { enabled: false, effort: "medium" },
+    instanceRoleMap: {},
+    roleInstanceMap: {},
+    taskInstanceMap: {},
+    activeAgentRoleId: null,
+    activeAgentInstanceId: null,
+    autoSwitchedSubagentInstances: {},
+    activeRunId: null,
+};
+
+export function applyCurrentSessionRecord() {
+    return undefined;
+}
+
+export function getCoordinatorRoleId() {
+    return "Coordinator";
+}
+
+export function getRoleInputModalitySupport() {
+    return false;
+}
+
+export function getRoleOption() {
+    return null;
+}
+
+export function getMainAgentRoleId() {
+    return "MainAgent";
+}
+
+export function getNormalModeRoles() {
+    return [];
+}
+
+export function getPrimaryRoleId() {
+    return "MainAgent";
+}
+
+export function getRoleDisplayName(roleId, { fallback = "Agent" } = {}) {
+    return roleId || fallback;
+}
+
+export function setCoordinatorRoleOption() {
+    return undefined;
+}
+
+export function setMainAgentRoleOption() {
+    return undefined;
+}
+
+export function setCoordinatorRoleId() {
+    return undefined;
+}
+
+export function setMainAgentRoleId() {
+    return undefined;
+}
+
+export function setNormalModeRoles() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockStream.mjs").write_text(
+        """
+export async function startIntentStream(promptText, sessionId, onCompleted, options = {}) {
+    globalThis.__streamCalls.push({ promptText, sessionId, options });
+    if (typeof options.onRunCreated === "function") {
+        options.onRunCreated({ run_id: "run-a" });
+    }
+    return onCompleted;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockDom.mjs").write_text(
+        """
+function createElement(initial = {}) {
+    return {
+        value: "",
+        checked: false,
+        disabled: false,
+        hidden: false,
+        textContent: "",
+        innerHTML: "",
+        title: "",
+        style: { display: "", height: "" },
+        classList: { toggle() { return undefined; } },
+        querySelectorAll() { return []; },
+        focus() { return undefined; },
+        ...initial,
+    };
+}
+
+export const els = {
+    promptInput: createElement({ value: "你好" }),
+    promptAttachments: createElement(),
+    sendBtn: createElement(),
+    stopBtn: createElement({ style: { display: "none" } }),
+    yoloToggle: createElement({ checked: true }),
+    thinkingModeToggle: createElement({ checked: false }),
+    thinkingEffortSelect: createElement({ value: "medium", disabled: true }),
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockFeedback.mjs").write_text(
+        """
+export function showToast() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockI18n.mjs").write_text(
+        """
+export function t(key) {
+    return key;
+}
+
+export function formatMessage(key, values = {}) {
+    return Object.entries(values).reduce(
+        (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
+        t(key),
+    );
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (temp_dir / "mockLogger.mjs").write_text(
+        """
+export function sysLog(message, tone = "log-info") {
+    globalThis.__logs.push({ message, tone });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner = """
+import { handleSend } from "./prompt.js";
+import { state } from "./mockState.mjs";
+import { els } from "./mockDom.mjs";
+
+globalThis.__streamCalls = [];
+globalThis.__liveRounds = [];
+globalThis.__placeholders = [];
+globalThis.__placeholderClears = 0;
+globalThis.__continuityCalls = [];
+globalThis.__logs = [];
+globalThis.document = {
+    dispatchEvent(event) {
+        globalThis.__dispatchedEvents.push({
+            type: event.type,
+            detail: event.detail,
+        });
+    },
+};
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, init = {}) {
+        this.type = type;
+        this.detail = init.detail || null;
+    }
+};
+globalThis.__dispatchedEvents = [];
+globalThis.__relayTeamsVoiceInputActive = true;
+globalThis.__relayTeamsStopVoiceInput = async () => {
+    state.currentSessionId = "session-b";
+    globalThis.__foregroundSessionActiveForSession = false;
+    els.promptInput.value = "";
+    await Promise.resolve();
+};
+
+await handleSend();
+
+console.log(JSON.stringify({
+    streamCalls: globalThis.__streamCalls.map(call => ({
+        promptText: call.promptText,
+        sessionId: call.sessionId,
+        targetRoleId: call.options.targetRoleId,
+        detached: call.options.detached === true,
+    })),
+    liveRounds: globalThis.__liveRounds,
+    placeholders: globalThis.__placeholders,
+    continuityCalls: globalThis.__continuityCalls,
+    dispatchedEvents: globalThis.__dispatchedEvents,
+    currentSessionId: state.currentSessionId,
+    logs: globalThis.__logs,
+}));
+""".strip()
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["currentSessionId"] == "session-b"
+    assert payload["streamCalls"] == [
+        {
+            "promptText": "你好",
+            "sessionId": "session-a",
+            "targetRoleId": None,
+            "detached": True,
+        }
+    ]
+    assert payload["continuityCalls"] == []
+    assert payload["liveRounds"] == []
+    assert payload["placeholders"] == []
+    assert payload["dispatchedEvents"] == [
+        {
+            "type": "agent-teams-session-title-previewed",
+            "detail": {"sessionId": "session-a", "title": "你好"},
+        }
+    ]
 
 
 def _write_multimodal_prompt_fixture(

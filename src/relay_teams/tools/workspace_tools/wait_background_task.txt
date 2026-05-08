@@ -1,4 +1,4 @@
-Wait for a managed background task from the current run until it reaches a terminal state.
+Wait for a managed background task from the current session until it reaches a terminal state.
 
 - Pass `background_task_id` from `shell(background=true)` or `list_background_tasks`.
 - Use `list_background_tasks` when you only need the current in-progress status.

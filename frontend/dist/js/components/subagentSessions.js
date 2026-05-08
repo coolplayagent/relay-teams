@@ -8,6 +8,7 @@ import {
     restoreMainSessionView,
 } from '../app/sessionView.js';
 import { syncNormalModeSubagentStreams } from '../core/stream.js';
+import { recordUiDiagnostic } from '../core/uiDiagnostics.js';
 import { clearAllPanels } from './agentPanel.js';
 import { renderInstanceHistoryInto } from './agentPanel/history.js';
 import { hideRoundNavigator } from './rounds/navigator.js';
@@ -133,9 +134,19 @@ export async function ensureSessionSubagents(
     if (loadingSessionIds.has(safeSessionId)) {
         const pending = loadingPromisesBySessionId.get(safeSessionId);
         if (pending) {
-            return pending;
+            if (!force) {
+                return pending;
+            }
+            try {
+                await pending;
+            } catch (_) {
+                // A force refresh must continue with a fresh request even if the
+                // earlier best-effort load failed or was aborted.
+            }
         }
-        return getSessionSubagentSessions(safeSessionId);
+        if (loadingSessionIds.has(safeSessionId)) {
+            return getSessionSubagentSessions(safeSessionId);
+        }
     }
     throwIfAborted(signal);
     loadingSessionIds.add(safeSessionId);
@@ -148,7 +159,7 @@ export async function ensureSessionSubagents(
     }
     const loadPromise = (async () => {
         const payload = await runQueuedSubagentSessionLoad(
-            () => fetchSessionSubagents(safeSessionId, { signal }),
+            () => fetchSessionSubagents(safeSessionId, { forceRefresh: force, signal }),
             signal,
         );
         throwIfAborted(signal);
@@ -260,7 +271,7 @@ export function toggleSubagentSessionList(
     }
     expandedParentSessionIds.add(safeSessionId);
     if (load) {
-        void ensureSessionSubagents(safeSessionId, { force: false });
+        void ensureSessionSubagents(safeSessionId, { force: true });
     }
     if (emitChange) {
         emitSubagentSessionsChanged({
@@ -569,6 +580,7 @@ function updateNormalModeSubagentSessionsMatching(sessionId, predicate, status) 
 }
 
 export async function openSubagentSession(sessionId, record) {
+    const switchStartedAt = performance.now();
     const safeSessionId = String(sessionId || '').trim();
     const normalized = coerceParentStoppedSubagentSession(
         normalizeSubagentSession(record, safeSessionId),
@@ -594,7 +606,20 @@ export async function openSubagentSession(sessionId, record) {
         els.promptInputHint.textContent = t('subagent_session.read_only');
     }
     cancelTerminalRefreshForInstance(normalized.instanceId);
-    await renderActiveSubagentSession({ showLoading: true });
+    try {
+        await renderActiveSubagentSession({ showLoading: true });
+    } finally {
+        recordUiDiagnostic(
+            'switch_latency_ms',
+            Math.round(performance.now() - switchStartedAt),
+            {
+                kind: 'subagent',
+                sessionId: safeSessionId,
+                runId: normalized.runId,
+                instanceId: normalized.instanceId,
+            },
+        );
+    }
 }
 
 export async function returnToMainSessionView() {
@@ -631,22 +656,38 @@ export async function renderActiveSubagentSession(options = {}) {
         }
         return { rendered: false, deferred: false };
     }
+    const loadingFallbackTimer = showLoading && typeof globalThis.setTimeout === 'function'
+        ? globalThis.setTimeout(() => {
+            if (isStillActiveSubagentRender(active, requestId)) {
+                setSubagentSessionLoading(active.instanceId, false);
+            }
+        }, 900)
+        : 0;
     try {
         if (!isStillActiveSubagentRender(active, requestId)) {
             return { rendered: false, deferred: false };
         }
+        const refreshedActive = await refreshActiveSubagentStatusIfNeeded(
+            active,
+            renderController.signal,
+        );
+        if (!isStillActiveSubagentRender(refreshedActive, requestId)) {
+            return { rendered: false, deferred: false };
+        }
+        syncSubagentSessionViewChrome(refreshedActive);
         const result = await renderInstanceHistoryInto(body, {
-            sessionId: active.sessionId,
-            instanceId: active.instanceId,
-            runId: active.runId,
-            roleId: active.roleId,
-            status: active.status,
-            runStatus: active.runStatus,
-            runPhase: active.runPhase,
+            sessionId: refreshedActive.sessionId,
+            instanceId: refreshedActive.instanceId,
+            runId: refreshedActive.runId,
+            roleId: refreshedActive.roleId,
+            status: refreshedActive.status,
+            runStatus: refreshedActive.runStatus,
+            runPhase: refreshedActive.runPhase,
             userRoleLabel: t('subagent.task_prompt'),
             emptyLabel: t('subagent_session.empty'),
             loadFailedLabel: t('subagent_session.load_failed'),
             overlayMode: 'separate',
+            priority: 'high',
             requireToolBoundary: options.requireToolBoundary === true,
             replaceWhenReady: true,
             signal: renderController.signal,
@@ -665,6 +706,9 @@ export async function renderActiveSubagentSession(options = {}) {
         sysLog(`Failed to load subagent session: ${error.message || error}`, 'log-error');
         return { rendered: false, deferred: false };
     } finally {
+        if (loadingFallbackTimer) {
+            globalThis.clearTimeout?.(loadingFallbackTimer);
+        }
         if (isStillActiveSubagentRender(active, requestId)) {
             setSubagentSessionLoading(active.instanceId, false);
         }
@@ -672,6 +716,31 @@ export async function renderActiveSubagentSession(options = {}) {
             activeSubagentRenderController = null;
         }
     }
+}
+
+async function refreshActiveSubagentStatusIfNeeded(active, signal = null) {
+    if (!shouldRefreshSubagentStatusOnOpen(active)) {
+        return active;
+    }
+    const rows = await ensureSessionSubagents(active.sessionId, {
+        force: true,
+        emitLoadingEvents: false,
+        signal,
+    });
+    const refreshed = rows.find(item => item.instanceId === active.instanceId) || null;
+    if (!refreshed) {
+        return active;
+    }
+    state.activeSubagentSession = refreshed;
+    return refreshed;
+}
+
+function shouldRefreshSubagentStatusOnOpen(active) {
+    const status = String(active?.status || active?.runStatus || '').trim().toLowerCase();
+    return status === 'idle'
+        || status === 'queued'
+        || status === 'running'
+        || status === 'stopping';
 }
 
 export function settleActiveSubagentSessionAfterTerminal(instanceId) {
@@ -880,20 +949,23 @@ function normalizeSubagentSession(record, sessionId) {
         || '',
     ).trim();
     const safeSessionId = String(sessionId || record.session_id || record.sessionId || '').trim();
-    if (!safeSessionId || !instanceId || !roleId || !runId || !runId.startsWith('subagent_run_')) {
+    if (!safeSessionId || !instanceId || !roleId || !runId) {
         return null;
     }
     const normalizedStatus = normalizeSubagentRunStatus(record.status);
     const normalizedRunStatus = normalizeSubagentRunStatus(
         record.run_status || record.runStatus || record.status,
     );
+    const effectiveStatus = isTerminalSubagentStatus(normalizedRunStatus)
+        ? normalizedRunStatus
+        : normalizedStatus;
     return {
         sessionId: safeSessionId,
         instanceId,
         roleId,
         runId,
         title: String(record.title || '').trim(),
-        status: normalizedStatus,
+        status: effectiveStatus,
         runStatus: normalizedRunStatus,
         runPhase: String(record.run_phase || record.runPhase || '').trim(),
         lastEventId: Number(record.last_event_id || record.lastEventId || 0),
@@ -913,7 +985,7 @@ function isSubagentBackgroundTask(payload) {
         && typeof payload === 'object'
         && (
             String(payload.kind || '').trim() === 'subagent'
-            || String(payload.subagent_run_id || payload.subagentRunId || '').trim().startsWith('subagent_run_')
+            || !!String(payload.subagent_run_id || payload.subagentRunId || '').trim()
         )
     );
 }
@@ -951,6 +1023,13 @@ function isStoppedSubagentSessionStatus(status) {
     return ['stopped', 'cancelled', 'canceled'].includes(
         normalizeSubagentRunStatus(status),
     );
+}
+
+function isTerminalSubagentStatus(status) {
+    const safeStatus = String(status || '').trim();
+    return safeStatus === 'completed'
+        || safeStatus === 'failed'
+        || safeStatus === 'stopped';
 }
 
 function upsertSubagentSessionRecord(current, nextRecord) {
@@ -1180,7 +1259,10 @@ function syncSubagentSessionViewChrome(active, wrapper = null) {
         titleEl.textContent = active?.title || buildSubagentSessionLabel(active);
     }
     if (badgeEl) {
-        const status = String(active?.status || 'idle');
+        const runStatus = normalizeSubagentRunStatus(active?.runStatus || '');
+        const status = isTerminalSubagentStatus(runStatus)
+            ? runStatus
+            : String(active?.status || runStatus || 'idle');
         badgeEl.className = `subagent-session-badge is-${escapeAttribute(status)}`;
         badgeEl.textContent = status;
     }

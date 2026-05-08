@@ -138,9 +138,12 @@ def test_voice_input_button_and_assets_are_linked() -> None:
     prompt = read_frontend("js/app/prompt.js")
     assert "stopActiveVoiceInputBeforeSend" in prompt
     assert "await globalThis.__relayTeamsStopVoiceInput({ keepText: true });" in prompt
-    assert prompt.index("await stopActiveVoiceInputBeforeSend();") < prompt.index(
-        "const rawText = els.promptInput.value.trim();"
+    assert prompt.index("const rawText = els.promptInput.value.trim();") < prompt.index(
+        "await stopActiveVoiceInputBeforeSend();"
     )
+    assert prompt.index(
+        'const initialSessionId = String(state.currentSessionId || "").trim();'
+    ) < prompt.index("await stopActiveVoiceInputBeforeSend();")
     voice_css = read_frontend("css/components/voice.css")
     interface_css = read_frontend("css/components/interface.css")
     new_session_css = read_frontend("css/components/new-session-draft-composer.css")

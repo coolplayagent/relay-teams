@@ -40,6 +40,10 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
     const { container, isCoordinator } = resolveToolEventTarget(instanceId, roleId, eventMeta);
     const isPrimary = !roleId || isRunPrimaryRoleId(roleId, runId);
     const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
+    const isCoordinatorSpawnSubagent = isCoordinatorSpawnSubagentTool(isCoordinator, payload);
+    if (isCoordinatorSpawnSubagent) {
+        dispatchSubagentCountDirty(eventMeta);
+    }
     if (!isPrimary && !getActiveInstanceId()) {
         if (!normalModeSubagent) {
             openAgentPanel(instanceId, roleId);
@@ -65,11 +69,7 @@ export function handleToolCall(payload, eventMeta, instanceId, roleId) {
         payload.tool_call_id || null,
         { runId, roleId: isPrimary ? primaryRoleId : roleId, label },
     );
-    if (
-        isCoordinator
-        && state.currentSessionMode === 'normal'
-        && String(payload?.tool_name || '').trim() === 'spawn_subagent'
-    ) {
+    if (isCoordinatorSpawnSubagent) {
         scheduleCurrentSessionSubagentDiscovery({ delayMs: 0 });
     }
     sysLog(`[Tool] ${payload.tool_name}`);
@@ -115,6 +115,10 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
     const isError = typeof resultEnvelope === 'object'
         ? resultEnvelope.ok === false
         : !!payload.error;
+    const isCoordinatorSpawnSubagent = isCoordinatorSpawnSubagentTool(isCoordinator, payload);
+    if (isCoordinatorSpawnSubagent) {
+        dispatchSubagentCountDirty(eventMeta);
+    }
     if (!container) {
         applyStreamOverlayEvent('tool_result', payload, {
             runId,
@@ -138,13 +142,27 @@ export function handleToolResult(payload, instanceId, eventMeta = null, roleId =
             container,
         },
     );
-    if (
+    if (isCoordinatorSpawnSubagent) {
+        scheduleCurrentSessionSubagentDiscovery({ delayMs: 0 });
+    }
+}
+
+function isCoordinatorSpawnSubagentTool(isCoordinator, payload) {
+    return !!(
         isCoordinator
         && state.currentSessionMode === 'normal'
         && String(payload?.tool_name || '').trim() === 'spawn_subagent'
-    ) {
-        scheduleCurrentSessionSubagentDiscovery({ delayMs: 0 });
+    );
+}
+
+function dispatchSubagentCountDirty(eventMeta = null) {
+    const sessionId = String(eventMeta?.session_id || state.currentSessionId || '').trim();
+    if (!sessionId || typeof document?.dispatchEvent !== 'function') {
+        return;
     }
+    document.dispatchEvent(new CustomEvent('agent-teams-session-subagent-count-dirty', {
+        detail: { sessionId },
+    }));
 }
 
 export function handleToolApprovalRequested(payload, eventMeta, instanceId) {

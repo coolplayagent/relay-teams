@@ -96,6 +96,46 @@ console.log(JSON.stringify({
     assert payload["activeAgentInstanceId"] == "writer-1"
 
 
+def test_run_started_marks_sidebar_session_running_immediately(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunStarted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+
+handleRunStarted({ run_id: 'run-1', session_id: 'session-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    activeCalls: globalThis.__markSidebarSessionRunActiveCalls,
+    dispatchedEvents: globalThis.__documentDispatches,
+}));
+""".strip(),
+    )
+
+    assert payload["activeCalls"] == [
+        {
+            "sessionId": "session-1",
+            "detail": {"runId": "run-1", "status": "running"},
+        }
+    ]
+    assert payload["dispatchedEvents"] == [
+        {
+            "type": "agent-teams-session-run-active",
+            "detail": {
+                "sessionId": "session-1",
+                "runId": "run-1",
+                "status": "running",
+            },
+        }
+    ]
+
+
 def test_terminal_run_event_marks_current_main_session_viewed(
     tmp_path: Path,
 ) -> None:
@@ -114,11 +154,22 @@ await Promise.resolve();
 
 console.log(JSON.stringify({
     viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+    terminalCalls: globalThis.__markSidebarSessionRunTerminalCalls,
 }));
 """.strip(),
     )
 
     assert payload["viewedCalls"] == ["session-1"]
+    assert payload["terminalCalls"] == [
+        {
+            "sessionId": "session-1",
+            "detail": {
+                "runId": "run-1",
+                "status": "completed",
+                "viewed": True,
+            },
+        }
+    ]
 
 
 def test_run_stopped_keeps_terminal_run_unviewed_for_resume_context(
@@ -300,11 +351,22 @@ await Promise.resolve();
 
 console.log(JSON.stringify({
     viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+    terminalCalls: globalThis.__markSidebarSessionRunTerminalCalls,
 }));
 """.strip(),
     )
 
     assert payload["viewedCalls"] == []
+    assert payload["terminalCalls"] == [
+        {
+            "sessionId": "session-2",
+            "detail": {
+                "runId": "run-2",
+                "status": "completed",
+                "viewed": False,
+            },
+        }
+    ]
 
 
 def test_terminal_run_event_does_not_mark_background_session_without_current_session(
@@ -394,6 +456,89 @@ console.log(JSON.stringify({
     assert payload["viewedCalls"] == ["session-1", "session-1"]
 
 
+def test_route_event_preserves_stream_block_order_without_missing_events(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+const events = [
+    ['thinking_started', { text: '' }, 1],
+    ['thinking_delta', { text: 'plan' }, 2],
+    ['thinking_finished', {}, 3],
+    ['tool_call', { tool_name: 'read', tool_call_id: 'call-1' }, 4],
+    ['tool_result', { tool_name: 'read', tool_call_id: 'call-1', result: 'ok' }, 5],
+    ['text_delta', { text: 'done' }, 6],
+];
+for (const [eventType, eventPayload, eventId] of events) {
+    routeEvent(eventType, eventPayload, {
+        event_id: eventId,
+        run_id: 'run-1',
+        trace_id: 'trace-1',
+        instance_id: 'instance-main',
+        role_id: 'MainAgent',
+    });
+}
+
+console.log(JSON.stringify({
+    runEventCalls: globalThis.__runEventCalls.map(call => call.name),
+    toolEventCalls: globalThis.__toolEventCalls.map(call => call.name),
+    combinedCalls: globalThis.__combinedEventCalls.map(call => call.name),
+}));
+""".strip(),
+    )
+
+    assert payload["runEventCalls"] == [
+        "handleThinkingStarted",
+        "handleThinkingDelta",
+        "handleThinkingFinished",
+        "handleTextDelta",
+    ]
+    assert payload["toolEventCalls"] == ["handleToolCall", "handleToolResult"]
+    assert payload["combinedCalls"] == [
+        "handleThinkingStarted",
+        "handleThinkingDelta",
+        "handleThinkingFinished",
+        "handleToolCall",
+        "handleToolResult",
+        "handleTextDelta",
+    ]
+
+
+def test_route_event_deduplicates_replayed_stream_event_ids(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+const eventMeta = {
+    event_id: 7,
+    run_id: 'run-1',
+    trace_id: 'trace-1',
+    instance_id: 'instance-main',
+    role_id: 'MainAgent',
+};
+routeEvent('text_delta', { text: 'once' }, eventMeta);
+routeEvent('text_delta', { text: 'once again' }, eventMeta);
+routeEvent('tool_result', { tool_name: 'read', tool_call_id: 'call-1' }, eventMeta);
+
+console.log(JSON.stringify({
+    runEventCalls: globalThis.__runEventCalls.map(call => call.name),
+    toolEventCalls: globalThis.__toolEventCalls.map(call => call.name),
+    combinedCalls: globalThis.__combinedEventCalls.map(call => call.name),
+}));
+""".strip(),
+    )
+
+    assert payload["runEventCalls"] == ["handleTextDelta"]
+    assert payload["toolEventCalls"] == []
+    assert payload["combinedCalls"] == ["handleTextDelta"]
+
+
 def test_route_event_routes_subagent_stream_events_without_overwriting_parent_run(
     tmp_path: Path,
 ) -> None:
@@ -407,6 +552,11 @@ state.activeRunId = 'run-parent';
 
 routeEvent('text_delta', {}, { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' });
 routeEvent('token_usage', {}, { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' });
+routeEvent('text_delta', { text: 'non-prefix' }, {
+    run_id: 'delegated-run-deadbeef',
+    trace_id: 'delegated-run-deadbeef',
+    normal_mode_subagent_event: true,
+});
 
 await Promise.resolve();
 
@@ -434,7 +584,20 @@ console.log(JSON.stringify({
                 None,
                 None,
             ],
-        }
+        },
+        {
+            "name": "handleTextDelta",
+            "args": [
+                {"text": "non-prefix"},
+                {
+                    "run_id": "delegated-run-deadbeef",
+                    "trace_id": "delegated-run-deadbeef",
+                    "normal_mode_subagent_event": True,
+                },
+                None,
+                None,
+            ],
+        },
     ]
 
 
@@ -555,6 +718,77 @@ console.log(JSON.stringify({
         }
     ]
     assert payload["tokenUsageCalls"] == []
+    assert payload["runEventCalls"] == []
+
+
+def test_route_event_applies_main_user_question_event_without_recovery_roundtrip(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.activeRunId = 'run-1';
+
+routeEvent(
+    'user_question_requested',
+    {
+        question_id: 'question-1',
+        questions: [{ question: 'Pick one', options: [{ label: 'Ship' }] }],
+    },
+    { run_id: 'run-1', trace_id: 'run-1', session_id: 'session-1' },
+);
+routeEvent(
+    'user_question_answered',
+    { question_id: 'question-1' },
+    { run_id: 'run-1', trace_id: 'run-1', session_id: 'session-1' },
+);
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    questionRequestedCalls: globalThis.__markUserQuestionRequestedCalls,
+    questionAnsweredCalls: globalThis.__markUserQuestionAnsweredCalls,
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    runEventCalls: globalThis.__runEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["questionRequestedCalls"] == [
+        {
+            "payload": {
+                "question_id": "question-1",
+                "questions": [{"question": "Pick one", "options": [{"label": "Ship"}]}],
+            },
+            "eventMeta": {
+                "run_id": "run-1",
+                "trace_id": "run-1",
+                "session_id": "session-1",
+            },
+        }
+    ]
+    assert payload["questionAnsweredCalls"] == ["question-1"]
+    assert payload["recoveryCalls"] == [
+        {
+            "sessionId": "session-1",
+            "delayMs": 350,
+            "forceRefresh": True,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "user_question_requested",
+        },
+        {
+            "sessionId": "session-1",
+            "delayMs": 350,
+            "forceRefresh": True,
+            "includeRounds": False,
+            "quiet": True,
+            "reason": "user_question_answered",
+        },
+    ]
     assert payload["runEventCalls"] == []
 
 
@@ -895,6 +1129,51 @@ console.log(JSON.stringify({
     ]
 
 
+def test_primary_text_event_for_background_session_uses_overlay_not_current_dom(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleTextDelta } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-active';
+state.currentSessionMode = 'normal';
+state.mainAgentRoleId = 'MainAgent';
+globalThis.__isCurrentRootEvent = false;
+
+handleTextDelta(
+    { text: 'background token' },
+    {
+        run_id: 'run-background',
+        trace_id: 'run-background',
+        session_id: 'session-background',
+        event_id: 'event-1',
+    },
+    '',
+    '',
+);
+
+console.log(JSON.stringify({
+    appendCalls: globalThis.__appendStreamChunkCalls,
+    overlayCalls: globalThis.__applyStreamOverlayEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["appendCalls"] == []
+    overlay_calls = payload["overlayCalls"]
+    assert isinstance(overlay_calls, list)
+    assert len(overlay_calls) == 1
+    first_overlay_call = overlay_calls[0]
+    assert isinstance(first_overlay_call, list)
+    assert first_overlay_call[0] == "text_delta"
+    overlay_meta = first_overlay_call[2]
+    assert isinstance(overlay_meta, dict)
+    assert overlay_meta["runId"] == "run-background"
+
+
 def test_handle_model_step_finished_keeps_normal_mode_subagent_status_open(
     tmp_path: Path,
 ) -> None:
@@ -988,6 +1267,7 @@ def _run_run_events_script(tmp_path: Path, runner_source: str) -> dict[str, obje
         "../../utils/logger.js": "./mockLogger.mjs",
         "../../components/messageRenderer.js": "./mockMessageRenderer.mjs",
         "../../components/agentPanel.js": "./mockAgentPanel.mjs",
+        "../../components/sessionSidebarStore.js": "./mockSessionSidebarStore.mjs",
         "./utils.js": "./mockUtils.mjs",
         "../api.js": "./mockApi.mjs",
     }
@@ -1187,12 +1467,12 @@ export function appendThinkingChunk() {
     return undefined;
 }
 
-export function applyStreamOverlayEvent() {
-    return undefined;
+export function applyStreamOverlayEvent(...args) {
+    globalThis.__applyStreamOverlayEventCalls.push(args);
 }
 
-export function appendStreamChunk() {
-    return undefined;
+export function appendStreamChunk(...args) {
+    globalThis.__appendStreamChunkCalls.push(args);
 }
 
 export function appendStreamOutputParts() {
@@ -1245,12 +1525,28 @@ export function openAgentPanel(instanceId, roleId) {
 """.strip(),
         encoding="utf-8",
     )
+    (tmp_path / "mockSessionSidebarStore.mjs").write_text(
+        """
+export function markSidebarSessionRunActive(sessionId, detail = {}) {
+    globalThis.__markSidebarSessionRunActiveCalls.push({ sessionId, detail });
+}
+
+export function markSidebarSessionRunTerminal(sessionId, detail = {}) {
+    globalThis.__markSidebarSessionRunTerminalCalls.push({ sessionId, detail });
+}
+""".strip(),
+        encoding="utf-8",
+    )
     (tmp_path / "mockUtils.mjs").write_text(
         """
 export function coordinatorContainerFor() {
-    return {};
+    return globalThis.__isCurrentRootEvent === false ? null : {};
 }
-""".strip(),
+
+export function isCurrentRootEvent() {
+    return globalThis.__isCurrentRootEvent !== false;
+}
+    """.strip(),
         encoding="utf-8",
     )
     (tmp_path / "mockApi.mjs").write_text(
@@ -1292,6 +1588,26 @@ globalThis.__activeSubagentSession = null;
 globalThis.__activeSubagentSessionStreamContainer = null;
 globalThis.__markSessionTerminalRunViewedCalls = [];
 globalThis.__markSessionTerminalRunViewedResponses = [];
+globalThis.__markSidebarSessionRunActiveCalls = [];
+globalThis.__markSidebarSessionRunTerminalCalls = [];
+globalThis.__appendStreamChunkCalls = [];
+globalThis.__applyStreamOverlayEventCalls = [];
+globalThis.__documentDispatches = [];
+globalThis.CustomEvent = class CustomEvent {{
+    constructor(type, options = {{}}) {{
+        this.type = type;
+        this.detail = options.detail || null;
+    }}
+}};
+globalThis.document = {{
+    dispatchEvent(event) {{
+        globalThis.__documentDispatches.push({{
+            type: event.type,
+            detail: event.detail,
+        }});
+        return true;
+    }},
+}};
 
 {runner_source}
 """.strip(),
@@ -1389,6 +1705,14 @@ export function isDisplayableBackgroundTaskPayload(payload) {
     const subagentRunId = String(payload?.subagent_run_id || payload?.subagentRunId || '').trim();
     return kind === 'subagent' || subagentRunId.startsWith('subagent_run_');
 }
+
+export function markUserQuestionRequested(payload, eventMeta) {
+    globalThis.__markUserQuestionRequestedCalls.push({ payload, eventMeta });
+}
+
+export function markUserQuestionAnswered(questionId) {
+    globalThis.__markUserQuestionAnsweredCalls.push(questionId);
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -1475,6 +1799,7 @@ export function sysLog() {
         """
 function pushCall(name, args) {
     globalThis.__runEventCalls.push({ name, args });
+    globalThis.__combinedEventCalls.push({ name, args });
 }
 
 export function handleLlmRetryExhausted(...args) { pushCall('handleLlmRetryExhausted', args); }
@@ -1500,11 +1825,16 @@ export function handleTextDelta(...args) { pushCall('handleTextDelta', args); }
     )
     (tmp_path / "mockToolEvents.mjs").write_text(
         """
-export function handleToolApprovalRequested() { return undefined; }
-export function handleToolApprovalResolved() { return undefined; }
-export function handleToolCall() { return undefined; }
-export function handleToolInputValidationFailed() { return undefined; }
-export function handleToolResult() { return undefined; }
+function pushCall(name, args) {
+    globalThis.__toolEventCalls.push({ name, args });
+    globalThis.__combinedEventCalls.push({ name, args });
+}
+
+export function handleToolApprovalRequested(...args) { pushCall('handleToolApprovalRequested', args); }
+export function handleToolApprovalResolved(...args) { pushCall('handleToolApprovalResolved', args); }
+export function handleToolCall(...args) { pushCall('handleToolCall', args); }
+export function handleToolInputValidationFailed(...args) { pushCall('handleToolInputValidationFailed', args); }
+export function handleToolResult(...args) { pushCall('handleToolResult', args); }
 """.strip(),
         encoding="utf-8",
     )
@@ -1539,9 +1869,13 @@ export function coordinatorContainerFor() {
 globalThis.__scheduleRecoveryContinuityRefreshCalls = [];
 globalThis.__scheduleSessionTokenUsageRefreshCalls = [];
 globalThis.__runEventCalls = [];
+globalThis.__toolEventCalls = [];
+globalThis.__combinedEventCalls = [];
 globalThis.__normalModeSubagentEvents = [];
 globalThis.__subagentSessionStatusEvents = [];
 globalThis.__applyBackgroundTaskEventCalls = [];
+globalThis.__markUserQuestionRequestedCalls = [];
+globalThis.__markUserQuestionAnsweredCalls = [];
 
 {runner_source}
 """.strip(),

@@ -277,6 +277,9 @@ def _raise_system_http_error(
 
 @router.get("/health")
 async def health_check(request: Request) -> ServerHealthPayload:
+    cached_payload = getattr(request.app.state, "health_payload", None)
+    if isinstance(cached_payload, ServerHealthPayload):
+        return cached_payload
     container = getattr(request.app.state, "container", None)
     if container is None:
         return await call_maybe_async_in_isolated_thread(build_server_health_payload)

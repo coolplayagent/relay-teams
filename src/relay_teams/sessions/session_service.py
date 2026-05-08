@@ -5,11 +5,11 @@ import contextlib
 import shutil
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
-from time import monotonic
+from threading import Lock
 from typing import TYPE_CHECKING, cast
 
 from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
-from relay_teams.media import ContentPart
+from relay_teams.logger import get_logger
 from relay_teams.media import content_parts_to_text
 from relay_teams.media import user_prompt_content_to_text
 from relay_teams.metrics import SqliteMetricAggregateStore
@@ -29,12 +29,6 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 from relay_teams.sessions.session_rounds_projection import (
     ROUND_PROJECTION_EVENT_TYPES,
-    approvals_to_projection,
-    build_session_rounds,
-    build_session_timeline_rounds,
-    find_round_by_run_id,
-    paginate_rounds,
-    timeline_rounds,
 )
 from relay_teams.agent_runtimes.instances.instance_repository import (
     AgentInstanceRepository,
@@ -78,11 +72,21 @@ from relay_teams.sessions.session_history_marker_models import (
     SessionHistoryMarkerType,
 )
 from relay_teams.sessions.session_repository import SessionRepository
+from relay_teams.sessions.session_list_cache import (
+    DEFAULT_LIST_SESSIONS_CACHE_MS,
+    LIST_SESSIONS_CACHE_MS_ENV,
+    SessionListCacheMixin,
+    resolve_positive_int_env as _resolve_positive_int_env,
+)
+from relay_teams.sessions.session_read_models import (
+    DEFAULT_SESSION_SNAPSHOT_REFRESH_MIN_INTERVAL_MS,
+    SESSION_SNAPSHOT_REFRESH_MIN_INTERVAL_MS_ENV,
+    SessionReadModelMixin,
+    _RecoverySnapshotCacheEntry,
+)
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import (
-    RunTokenUsage,
-    SessionTokenUsage,
     TokenUsageRepository,
 )
 from relay_teams.workspace import (
@@ -112,6 +116,7 @@ if TYPE_CHECKING:
 
 from relay_teams.roles.role_registry import SystemRolesUnavailableError
 
+LOGGER = get_logger(__name__)
 AUTOMATION_INTERNAL_WORKSPACE_ID = "automation-system"
 ACTIVE_RUN_REBIND_ERROR = (
     "Cannot rebind workspace while session has active or recoverable run"
@@ -130,7 +135,6 @@ _LEGACY_COORDINATOR_IDENTIFIERS = (
 )
 _MAIN_AGENT_IDENTIFIERS = ("mainagent", "main agent", "main_agent")
 _AUTO_SESSION_TITLE_MAX_CHARS = 120
-_LIST_SESSIONS_CACHE_TTL_SECONDS = 0.5
 
 
 def _legacy_coordinator_identifiers() -> tuple[str, ...]:
@@ -156,7 +160,7 @@ def _system_roles_unavailable_error_type() -> type[Exception]:
     return SystemRolesUnavailableError
 
 
-class SessionService:
+class SessionService(SessionListCacheMixin, SessionReadModelMixin):
     def __init__(
         self,
         *,
@@ -222,9 +226,48 @@ class SessionService:
         self._run_intent_repo = run_intent_repo
         self._get_runtime = get_runtime
         self._list_sessions_cache: tuple[float, tuple[SessionRecord, ...]] | None = None
-
-    def _invalidate_list_sessions_cache(self) -> None:
-        self._list_sessions_cache = None
+        self._list_sessions_cache_lock = Lock()
+        self._list_sessions_cache_dirty = False
+        self._list_sessions_refresh_task: asyncio.Task[None] | None = None
+        self._list_sessions_refresh_started_monotonic = 0.0
+        self._list_sessions_cache_version = 0
+        self._list_sessions_cache_ttl_seconds = (
+            _resolve_positive_int_env(
+                LIST_SESSIONS_CACHE_MS_ENV,
+                DEFAULT_LIST_SESSIONS_CACHE_MS,
+            )
+            / 1000
+        )
+        self._recovery_cache_ms = self._resolve_session_snapshot_cache_ms()
+        self._snapshot_refresh_min_interval_ms = _resolve_positive_int_env(
+            SESSION_SNAPSHOT_REFRESH_MIN_INTERVAL_MS_ENV,
+            DEFAULT_SESSION_SNAPSHOT_REFRESH_MIN_INTERVAL_MS,
+        )
+        self._recovery_snapshot_cache: dict[str, _RecoverySnapshotCacheEntry] = {}
+        self._recovery_snapshot_cache_lock = Lock()
+        self._recovery_refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._rounds_snapshot_cache: dict[str, _RecoverySnapshotCacheEntry] = {}
+        self._rounds_snapshot_cache_lock = Lock()
+        self._rounds_refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._rounds_snapshot_args_by_key: dict[
+            str, tuple[str, int, str | None, bool, bool]
+        ] = {}
+        self._subagents_snapshot_cache: dict[str, _RecoverySnapshotCacheEntry] = {}
+        self._subagents_snapshot_cache_lock = Lock()
+        self._subagents_refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._agents_snapshot_cache: dict[str, _RecoverySnapshotCacheEntry] = {}
+        self._agents_snapshot_cache_lock = Lock()
+        self._agents_refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._tasks_snapshot_cache: dict[str, _RecoverySnapshotCacheEntry] = {}
+        self._tasks_snapshot_cache_lock = Lock()
+        self._tasks_refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        self._token_usage_snapshot_cache: dict[str, _RecoverySnapshotCacheEntry] = {}
+        self._token_usage_snapshot_cache_lock = Lock()
+        self._token_usage_refresh_tasks: dict[str, asyncio.Task[None]] = {}
+        if self._run_event_hub is not None:
+            self._run_event_hub.add_publish_observer(
+                self._observe_run_event_for_snapshot_dirty
+            )
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
         self._role_registry = role_registry
@@ -266,8 +309,7 @@ class SessionService:
             normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
-        self._invalidate_list_sessions_cache()
-        return self._session_repo.create(
+        record = self._session_repo.create(
             session_id=resolved_session_id,
             workspace_id=workspace_id,
             metadata=metadata,
@@ -277,6 +319,10 @@ class SessionService:
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=resolved_orchestration_preset_id,
         )
+        self._invalidate_list_sessions_cache()
+        self._merge_record_into_list_sessions_cache(record)
+        self._seed_empty_session_snapshot_caches(record.session_id)
+        return record
 
     async def create_session_async(
         self,
@@ -309,8 +355,7 @@ class SessionService:
             normal_root_role_id=normal_root_role_id,
             orchestration_preset_id=orchestration_preset_id,
         )
-        self._invalidate_list_sessions_cache()
-        return await self._session_repo.create_async(
+        record = await self._session_repo.create_async(
             session_id=resolved_session_id,
             workspace_id=workspace_id,
             metadata=metadata,
@@ -320,6 +365,10 @@ class SessionService:
             normal_root_role_id=resolved_normal_root_role_id,
             orchestration_preset_id=resolved_orchestration_preset_id,
         )
+        self._invalidate_list_sessions_cache()
+        self._merge_record_into_list_sessions_cache(record)
+        self._seed_empty_session_snapshot_caches(record.session_id)
+        return record
 
     @staticmethod
     def _resolve_session_create_id(session_id: str | None) -> str:
@@ -464,6 +513,9 @@ class SessionService:
 
         self._session_repo.update_metadata(session_id, next_metadata)
         self._invalidate_list_sessions_cache()
+        self._merge_record_into_list_sessions_cache(
+            self._with_terminal_run_projection(self._session_repo.get(session_id))
+        )
 
     async def update_session_async(
         self, session_id: str, patch: SessionMetadataPatch
@@ -478,6 +530,9 @@ class SessionService:
         _ = self._session_repo.get(session_id)
         self._session_repo.update_metadata(session_id, dict(metadata))
         self._invalidate_list_sessions_cache()
+        self._merge_record_into_list_sessions_cache(
+            self._with_terminal_run_projection(self._session_repo.get(session_id))
+        )
 
     def _replace_custom_metadata(
         self,
@@ -838,6 +893,9 @@ class SessionService:
             if session_dir.exists():
                 shutil.rmtree(session_dir, ignore_errors=True)
         self._invalidate_list_sessions_cache()
+        self._remove_record_from_list_sessions_cache(session_id)
+        self._clear_session_snapshot_caches(session_id)
+        self._refresh_list_sessions_cache()
 
     async def delete_session_async(
         self,
@@ -991,16 +1049,33 @@ class SessionService:
                 resolved_log_path.unlink()
 
     def get_session(self, session_id: str) -> SessionRecord:
+        cached = self._get_session_from_list_cache(session_id, allow_stale=False)
+        if cached is not None:
+            return cached
         return self._with_terminal_run_projection(
-            self._with_auto_session_title(self._session_repo.get(session_id))
+            self._with_subagent_count_projection(
+                self._with_auto_session_title(self._session_repo.get(session_id))
+            )
         )
 
     async def get_session_async(self, session_id: str) -> SessionRecord:
+        cached = self._get_session_from_list_cache(session_id, allow_stale=True)
+        if cached is not None:
+            self._ensure_list_sessions_refresh_task_if_stale()
+            return cached
         return self._with_terminal_run_projection(
-            self._with_auto_session_title(
-                await self._session_repo.get_async(session_id)
+            await self._with_subagent_count_projection_async(
+                self._with_auto_session_title(
+                    await self._session_repo.get_async(session_id)
+                )
             )
         )
+
+    def assert_session_exists(self, session_id: str) -> None:
+        _ = self._session_repo.get(session_id)
+
+    async def assert_session_exists_async(self, session_id: str) -> None:
+        _ = await self._session_repo.get_async(session_id)
 
     def _list_subagent_background_tasks(
         self,
@@ -1021,131 +1096,12 @@ class SessionService:
             )
         )
 
-    def list_sessions(self) -> tuple[SessionRecord, ...]:
-        cached = self._list_sessions_cache
-        now = monotonic()
-        if cached is not None and now - cached[0] <= _LIST_SESSIONS_CACHE_TTL_SECONDS:
-            return cached[1]
-        sessions = self._session_repo.list_all()
-        session_ids = tuple(record.session_id for record in sessions)
-        runtimes_by_session: dict[str, tuple[RunRuntimeRecord, ...]] = (
-            self._run_runtime_repo.list_by_session_ids(session_ids)
-        )
-        background_tasks_by_session: dict[str, tuple[BackgroundTaskRecord, ...]] = (
-            self._background_task_repository.list_by_session_ids(session_ids)
-            if self._background_task_repository is not None
-            else {}
-        )
-        excluded_run_ids_by_session = self._subagent_run_ids_by_session_ids(
-            session_ids=session_ids,
-            runtimes_by_session=runtimes_by_session,
-            background_tasks_by_session=background_tasks_by_session,
-        )
-        active_background_run_ids = self._active_background_run_ids(
-            background_tasks_by_session,
-        )
-        first_intent_titles: dict[str, str] = (
-            self._run_intent_repo.first_titles_by_session_ids(session_ids)
-            if self._run_intent_repo is not None
-            else {}
-        )
-        session_ids_needing_message_titles = tuple(
-            record.session_id
-            for record in sessions
-            if record.session_id not in first_intent_titles
-        )
-        first_user_messages = self._message_repo.first_user_messages_by_session_ids(
-            session_ids_needing_message_titles
-        )
-        normal_session_ids = tuple(
-            record.session_id
-            for record in sessions
-            if record.session_mode == SessionMode.NORMAL
-        )
-        subagent_counts = self._agent_repo.count_normal_mode_subagents_by_session_ids(
-            normal_session_ids
-        )
-        selected_by_session: dict[str, tuple[str, RunRuntimeRecord]] = {}
-        for session_id in session_ids:
-            selected = self._select_active_run_from_preloaded(
-                session_id=session_id,
-                runtimes=runtimes_by_session.get(session_id, ()),
-                excluded_run_ids=excluded_run_ids_by_session.get(session_id, set()),
-                active_background_run_ids=active_background_run_ids,
-            )
-            if selected is not None:
-                selected_by_session[session_id] = selected
-        selected_run_ids = tuple(
-            dict.fromkeys(run_id for run_id, _runtime in selected_by_session.values())
-        )
-        approval_counts = self._approval_ticket_repo.count_open_by_run_ids(
-            selected_run_ids
-        )
-        question_counts = (
-            self._user_question_repo.count_open_by_run_ids(selected_run_ids)
-            if self._user_question_repo is not None
-            else {}
-        )
-        enriched: list[SessionRecord] = []
-        for record in sessions:
-            record = self._with_auto_session_title_from_preloaded(
-                record,
-                first_intent_titles=first_intent_titles,
-                first_user_messages=first_user_messages,
-            )
-            selected = selected_by_session.get(record.session_id)
-            subagent_session_count = subagent_counts.get(record.session_id, 0)
-            runtimes = runtimes_by_session.get(record.session_id, ())
-            excluded_run_ids = excluded_run_ids_by_session.get(
-                record.session_id,
-                set(),
-            )
-            if selected is None:
-                enriched.append(
-                    self._with_terminal_run_projection_from_preloaded(
-                        record.model_copy(
-                            update={
-                                "subagent_session_count": subagent_session_count,
-                            }
-                        ),
-                        runtimes=runtimes,
-                        excluded_run_ids=excluded_run_ids,
-                    )
-                )
-                continue
-            run_id, runtime = selected
-            approval_count = approval_counts.get(run_id, 0)
-            question_count = question_counts.get(run_id, 0)
-            enriched.append(
-                self._with_terminal_run_projection_from_preloaded(
-                    record.model_copy(
-                        update={
-                            "has_active_run": True,
-                            "active_run_id": run_id,
-                            "active_run_status": runtime.status.value,
-                            "active_run_phase": self._public_phase(
-                                runtime,
-                                approval_count,
-                                question_count,
-                            ),
-                            "pending_tool_approval_count": approval_count,
-                            "subagent_session_count": subagent_session_count,
-                        }
-                    ),
-                    runtimes=runtimes,
-                    excluded_run_ids=excluded_run_ids,
-                )
-            )
-        result = tuple(enriched)
-        self._list_sessions_cache = (monotonic(), result)
-        return result
-
-    async def list_sessions_async(self) -> tuple[SessionRecord, ...]:
-
-        return await asyncio.to_thread(self.list_sessions)
-
     def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
-        _ = self._session_repo.get(session_id)
+        record = self._session_repo.get(session_id)
+        cached = self._get_session_from_list_cache(session_id, allow_stale=True)
+        if cached is not None and cached.latest_terminal_run_id:
+            self._mark_cached_terminal_run_viewed(record, cached.latest_terminal_run_id)
+            return
         runtimes = self._run_runtime_repo.list_by_session(session_id)
         background_tasks = (
             self._background_task_repository.list_by_session(session_id)
@@ -1161,14 +1117,75 @@ class SessionService:
         )
         if latest_terminal is None:
             return
-        self._session_repo.mark_terminal_run_viewed(
-            session_id,
-            latest_terminal.run_id,
-        )
-        self._invalidate_list_sessions_cache()
+        self._mark_cached_terminal_run_viewed(record, latest_terminal.run_id)
 
     async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
-        await asyncio.to_thread(self.mark_latest_terminal_run_viewed, session_id)
+        record = await self._session_repo.get_async(session_id)
+        cached = self._get_session_from_list_cache(session_id, allow_stale=True)
+        if cached is not None and cached.latest_terminal_run_id:
+            await self._mark_cached_terminal_run_viewed_async(
+                record,
+                cached.latest_terminal_run_id,
+            )
+            return
+        runtimes = await self._run_runtime_repo.list_by_session_async(session_id)
+        background_tasks = (
+            await self._background_task_repository.list_by_session_async(session_id)
+            if self._background_task_repository is not None
+            else ()
+        )
+        latest_terminal = self._latest_terminal_run_from_preloaded(
+            runtimes,
+            self._subagent_run_ids_from_records(
+                runtimes=runtimes,
+                background_tasks=background_tasks,
+            ),
+        )
+        if latest_terminal is None:
+            return
+        await self._mark_cached_terminal_run_viewed_async(
+            record,
+            latest_terminal.run_id,
+        )
+
+    def _mark_cached_terminal_run_viewed(
+        self,
+        record: SessionRecord,
+        run_id: str,
+    ) -> None:
+        self._session_repo.mark_terminal_run_viewed(record.session_id, run_id)
+        self._merge_terminal_view_record_into_list_cache(record, run_id)
+
+    async def _mark_cached_terminal_run_viewed_async(
+        self,
+        record: SessionRecord,
+        run_id: str,
+    ) -> None:
+        await self._session_repo.mark_terminal_run_viewed_async(
+            record.session_id,
+            run_id,
+        )
+        self._merge_terminal_view_record_into_list_cache(record, run_id)
+
+    def _merge_terminal_view_record_into_list_cache(
+        self,
+        record: SessionRecord,
+        run_id: str,
+    ) -> None:
+        cached = self._get_session_from_list_cache(record.session_id, allow_stale=True)
+        if cached is not None and cached.latest_terminal_run_id == run_id:
+            self._merge_record_into_list_sessions_cache(
+                cached.model_copy(
+                    update={
+                        "last_viewed_terminal_run_id": run_id,
+                        "has_unread_terminal_run": False,
+                    }
+                )
+            )
+            return
+        self._merge_record_into_list_sessions_cache(
+            record.model_copy(update={"last_viewed_terminal_run_id": run_id})
+        )
 
     def list_sessions_by_workspace(
         self, workspace_id: str
@@ -1266,12 +1283,28 @@ class SessionService:
             else None
         )
         replay_high_watermark = max(0, int(after_event_id))
+        subagent_run_ids = self._subagent_run_ids(session_id)
         try:
             if self._event_log is not None:
-                rows = await self._event_log.list_subagent_run_events_by_session_after_id_async(
+                known_rows = (
+                    await self._event_log.list_by_session_run_ids_after_id_async(
+                        session_id,
+                        tuple(sorted(subagent_run_ids)),
+                        replay_high_watermark,
+                    )
+                    if subagent_run_ids
+                    else ()
+                )
+                legacy_rows = await self._event_log.list_subagent_run_events_by_session_after_id_async(
                     session_id,
                     replay_high_watermark,
                 )
+                rows_by_id: dict[int, Mapping[str, object]] = {}
+                for row in (*known_rows, *legacy_rows):
+                    row_id = row.get("id")
+                    if isinstance(row_id, int):
+                        rows_by_id[row_id] = row
+                rows = tuple(rows_by_id[key] for key in sorted(rows_by_id))
                 for row in rows:
                     event = self._run_event_from_log_row(row)
                     if event is None:
@@ -1290,7 +1323,15 @@ class SessionService:
                 event = await queue.get()
                 if event.session_id != session_id:
                     continue
-                if not self._is_subagent_run_id(event.run_id):
+                if (
+                    event.run_id not in subagent_run_ids
+                    and not self._is_legacy_subagent_run_id(event.run_id)
+                ):
+                    subagent_run_ids = self._subagent_run_ids(session_id)
+                if (
+                    event.run_id not in subagent_run_ids
+                    and not self._is_legacy_subagent_run_id(event.run_id)
+                ):
                     continue
                 event_id = event.event_id
                 if event_id is not None and event_id <= replay_high_watermark:
@@ -1493,467 +1534,6 @@ class SessionService:
     ) -> list[dict[str, object]]:
         return await asyncio.to_thread(self.get_session_messages, session_id)
 
-    def get_session_tasks(self, session_id: str) -> list[dict[str, object]]:
-        records = self._task_repo.list_by_session(session_id)
-        return [
-            {
-                "task_id": record.envelope.task_id,
-                "title": record.envelope.title or record.envelope.objective[:80],
-                "assigned_role_id": record.envelope.role_id,
-                "status": record.status.value,
-                "assigned_instance_id": record.assigned_instance_id,
-                "role_id": record.envelope.role_id,
-                "instance_id": record.assigned_instance_id,
-                "run_id": record.envelope.trace_id,
-                "created_at": record.created_at.isoformat(),
-                "updated_at": record.updated_at.isoformat(),
-                "spec_artifact_id": record.envelope.spec_artifact_id,
-                "spec_source_task_id": record.envelope.spec_source_task_id,
-                "spec_summary": (
-                    record.envelope.spec.summary if record.envelope.spec else ""
-                ),
-                "spec_strictness": (
-                    record.envelope.spec.strictness.value
-                    if record.envelope.spec
-                    else ""
-                ),
-                "evidence_bundle": (
-                    record.envelope.evidence_bundle.model_dump(mode="json")
-                    if record.envelope.evidence_bundle
-                    else None
-                ),
-            }
-            for record in records
-            if record.envelope.parent_task_id is not None
-        ]
-
-    async def get_session_tasks_async(self, session_id: str) -> list[dict[str, object]]:
-        return await asyncio.to_thread(self.get_session_tasks, session_id)
-
-    def build_session_rounds(
-        self,
-        session_id: str,
-        *,
-        included_run_ids: set[str] | None = None,
-        include_history_markers: bool = True,
-    ) -> list[dict[str, object]]:
-        excluded_run_ids = self._subagent_run_ids(session_id)
-        selected_run_ids = (
-            tuple(sorted(included_run_ids)) if included_run_ids is not None else None
-        )
-        todos_by_run_id = (
-            {
-                snapshot.run_id: snapshot.model_dump(mode="json")
-                for snapshot in self._todo_service.list_for_session(session_id)
-                if included_run_ids is None or snapshot.run_id in included_run_ids
-            }
-            if self._todo_service is not None
-            else {}
-        )
-        intent_input_parts_by_run = (
-            self._session_run_intent_input_parts_by_run(session_id)
-            if included_run_ids is None
-            else {
-                run_id: parts
-                for run_id, parts in self._session_run_intent_input_parts_by_run(
-                    session_id
-                ).items()
-                if run_id in included_run_ids
-            }
-        )
-        runtime_by_run = {
-            run_id: runtime
-            for run_id, runtime in self._session_run_runtime_by_run(session_id).items()
-            if included_run_ids is None or run_id in included_run_ids
-        }
-        rounds = build_session_rounds(
-            session_id=session_id,
-            agent_repo=self._agent_repo,
-            task_repo=self._task_repo,
-            approval_tickets_by_run=approvals_to_projection(
-                [
-                    record
-                    for record in self._approval_ticket_repo.list_open_by_session(
-                        session_id
-                    )
-                    if included_run_ids is None or record.run_id in included_run_ids
-                ]
-            ),
-            run_runtime_repo=self._run_runtime_repo,
-            get_session_messages=lambda current_session_id: cast(
-                list[dict[str, object]],
-                (
-                    self._message_repo.get_messages_by_session(
-                        current_session_id,
-                        include_cleared=True,
-                        include_hidden_from_context=True,
-                    )
-                    if selected_run_ids is None
-                    else self._message_repo.get_messages_by_session_run_ids(
-                        current_session_id,
-                        selected_run_ids,
-                        include_cleared=True,
-                        include_hidden_from_context=True,
-                    )
-                ),
-            ),
-            get_run_intent_input=intent_input_parts_by_run.get,
-            get_session_history_markers=(
-                self._get_session_history_markers if include_history_markers else None
-            ),
-            get_session_events=(
-                self._get_round_projection_events
-                if selected_run_ids is None
-                else lambda current_session_id: (
-                    self._get_round_projection_events_for_runs(
-                        current_session_id,
-                        selected_run_ids,
-                    )
-                )
-            ),
-            excluded_run_ids=excluded_run_ids,
-            included_run_ids=included_run_ids,
-            run_runtime_by_run=runtime_by_run,
-        )
-        question_counts_by_run = self._pending_user_question_counts_by_run(session_id)
-        for round_item in rounds:
-            runtime = runtime_by_run.get(str(round_item.get("run_id") or ""))
-            pending = round_item.get("pending_tool_approvals")
-            approval_count = len(pending) if isinstance(pending, list) else 0
-            if runtime is None:
-                continue
-            question_count = question_counts_by_run.get(runtime.run_id, 0)
-            round_item["run_status"] = runtime.status.value
-            round_item["run_phase"] = self._public_phase(
-                runtime,
-                approval_count,
-                question_count,
-            )
-            round_item["is_recoverable"] = self._is_runtime_publicly_recoverable(
-                runtime
-            )
-            todo = todos_by_run_id.get(str(round_item.get("run_id") or ""))
-            if todo is not None:
-                round_item["todo"] = todo
-        return rounds
-
-    def build_session_timeline_rounds(self, session_id: str) -> list[dict[str, object]]:
-        excluded_run_ids = self._subagent_run_ids(session_id)
-        todos_by_run_id = (
-            {
-                snapshot.run_id: snapshot.model_dump(mode="json")
-                for snapshot in self._todo_service.list_for_session(session_id)
-            }
-            if self._todo_service is not None
-            else {}
-        )
-        intent_input_parts_by_run = self._session_run_intent_input_parts_by_run(
-            session_id
-        )
-        runtime_by_run = self._session_run_runtime_by_run(session_id)
-        rounds = build_session_timeline_rounds(
-            session_id=session_id,
-            task_repo=self._task_repo,
-            approval_tickets_by_run=approvals_to_projection(
-                self._approval_ticket_repo.list_open_by_session(session_id)
-            ),
-            run_runtime_repo=self._run_runtime_repo,
-            get_session_user_messages=lambda current_session_id: cast(
-                list[dict[str, object]],
-                self._message_repo.get_user_messages_by_session(
-                    current_session_id,
-                    include_cleared=True,
-                    include_hidden_from_context=True,
-                ),
-            ),
-            get_run_intent_input=intent_input_parts_by_run.get,
-            get_session_history_markers=self._get_session_history_markers,
-            get_session_events=self._get_round_projection_events,
-            excluded_run_ids=excluded_run_ids,
-            run_runtime_by_run=runtime_by_run,
-        )
-        question_counts_by_run = self._pending_user_question_counts_by_run(session_id)
-        for round_item in rounds:
-            runtime = runtime_by_run.get(str(round_item.get("run_id") or ""))
-            raw_approval_count = round_item.get("pending_tool_approval_count")
-            approval_count = (
-                raw_approval_count
-                if isinstance(raw_approval_count, int)
-                and not isinstance(raw_approval_count, bool)
-                else 0
-            )
-            if runtime is None:
-                continue
-            question_count = question_counts_by_run.get(runtime.run_id, 0)
-            round_item["run_status"] = runtime.status.value
-            round_item["run_phase"] = self._public_phase(
-                runtime,
-                approval_count,
-                question_count,
-            )
-            round_item["is_recoverable"] = self._is_runtime_publicly_recoverable(
-                runtime
-            )
-            todo = todos_by_run_id.get(str(round_item.get("run_id") or ""))
-            if todo is not None:
-                round_item["todo"] = todo
-        return rounds
-
-    def _session_run_runtime_by_run(
-        self,
-        session_id: str,
-    ) -> dict[str, RunRuntimeRecord]:
-        return {
-            runtime.run_id: runtime
-            for runtime in self._run_runtime_repo.list_by_session(session_id)
-        }
-
-    def _get_run_intent_input_parts(
-        self, run_id: str
-    ) -> tuple[ContentPart, ...] | None:
-        if self._run_intent_repo is None:
-            return None
-        try:
-            intent = self._run_intent_repo.get(run_id)
-        except KeyError:
-            return None
-        return intent.display_input or intent.input
-
-    def _session_run_intent_input_parts_by_run(
-        self, session_id: str
-    ) -> dict[str, tuple[ContentPart, ...]]:
-        if self._run_intent_repo is None:
-            return {}
-        return {
-            run_id: intent.display_input or intent.input
-            for run_id, intent in self._run_intent_repo.list_by_session(
-                session_id
-            ).items()
-        }
-
-    def get_session_rounds(
-        self,
-        session_id: str,
-        *,
-        limit: int = 8,
-        cursor_run_id: str | None = None,
-        timeline: bool = False,
-        summary: bool = False,
-    ) -> dict[str, object]:
-        if timeline:
-            rounds = self.build_session_timeline_rounds(session_id)
-            return timeline_rounds(rounds)
-        timeline_items = self.build_session_timeline_rounds(session_id)
-        page = paginate_rounds(
-            timeline_items,
-            limit=limit,
-            cursor_run_id=cursor_run_id,
-        )
-        if summary:
-            return page
-        page_items = page.get("items")
-        if not isinstance(page_items, list) or not page_items:
-            return page
-        page_run_ids = tuple(
-            str(item.get("run_id") or "")
-            for item in page_items
-            if isinstance(item, dict) and str(item.get("run_id") or "")
-        )
-        if not page_run_ids:
-            return page
-        full_rounds = self.build_session_rounds(
-            session_id,
-            included_run_ids=set(page_run_ids),
-            include_history_markers=False,
-        )
-        full_round_by_run = {
-            str(round_item.get("run_id") or ""): round_item
-            for round_item in full_rounds
-        }
-        page_marker_by_run = {
-            str(item.get("run_id") or ""): {
-                "clear_marker_before": item.get("clear_marker_before"),
-                "compaction_marker_before": item.get("compaction_marker_before"),
-            }
-            for item in page_items
-            if isinstance(item, dict) and str(item.get("run_id") or "")
-        }
-        resolved_items: list[dict[str, object]] = []
-        for run_id in page_run_ids:
-            full_round = full_round_by_run.get(run_id)
-            if full_round is None:
-                continue
-            markers = page_marker_by_run.get(run_id, {})
-            full_round["clear_marker_before"] = markers.get("clear_marker_before")
-            full_round["compaction_marker_before"] = markers.get(
-                "compaction_marker_before"
-            )
-            resolved_items.append(full_round)
-        page["items"] = resolved_items
-        return page
-
-    async def get_session_rounds_async(
-        self,
-        session_id: str,
-        *,
-        limit: int = 8,
-        cursor_run_id: str | None = None,
-        timeline: bool = False,
-        summary: bool = False,
-    ) -> dict[str, object]:
-
-        return await asyncio.to_thread(
-            self.get_session_rounds,
-            session_id,
-            limit=limit,
-            cursor_run_id=cursor_run_id,
-            timeline=timeline,
-            summary=summary,
-        )
-
-    def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
-        safe_run_id = str(run_id or "").strip()
-        timeline_item = next(
-            (
-                item
-                for item in self.build_session_timeline_rounds(session_id)
-                if str(item.get("run_id") or "") == safe_run_id
-            ),
-            None,
-        )
-        rounds = self.build_session_rounds(
-            session_id,
-            included_run_ids={safe_run_id},
-            include_history_markers=False,
-        )
-        round_item = find_round_by_run_id(rounds, session_id=session_id, run_id=run_id)
-        if timeline_item is not None:
-            round_item["clear_marker_before"] = timeline_item.get("clear_marker_before")
-            round_item["compaction_marker_before"] = timeline_item.get(
-                "compaction_marker_before"
-            )
-        return round_item
-
-    async def get_round_async(self, session_id: str, run_id: str) -> dict[str, object]:
-
-        return await asyncio.to_thread(self.get_round, session_id, run_id)
-
-    def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
-        _ = self._session_repo.get(session_id)
-        selected = self._select_active_run(session_id)
-        if selected is None:
-            return {
-                "active_run": None,
-                "background_tasks": [],
-                "pending_tool_approvals": [],
-                "pending_user_questions": [],
-                "paused_subagent": None,
-                "round_snapshot": None,
-            }
-
-        run_id, runtime = selected
-        stream_connected = (
-            self._run_event_hub.has_subscribers(run_id)
-            if self._run_event_hub is not None
-            else False
-        )
-        approvals = [
-            {
-                "tool_call_id": record.tool_call_id,
-                "tool_name": record.tool_name,
-                "args_preview": record.args_preview,
-                "role_id": record.role_id,
-                "instance_id": record.instance_id,
-                "requested_at": record.created_at.isoformat(),
-                "status": record.status.value,
-                "feedback": record.feedback,
-            }
-            for record in self._approval_ticket_repo.list_open_by_run(run_id)
-        ]
-        user_questions = (
-            [
-                record.model_dump(mode="json")
-                for record in self._list_resolvable_user_questions_for_session(
-                    session_id
-                )
-            ]
-            if self._user_question_repo is not None
-            else []
-        )
-        run_state = (
-            self._run_state_repo.get_run_state(run_id)
-            if self._run_state_repo is not None
-            else None
-        )
-        background_tasks = [
-            record.model_dump(mode="json", exclude={"output_excerpt"})
-            for record in (
-                exec_record
-                for exec_record in (
-                    self._background_task_repository.list_by_run(run_id)
-                    if self._background_task_repository is not None
-                    else ()
-                )
-                if exec_record.execution_mode == "background"
-            )
-        ]
-        active_run = {
-            "run_id": run_id,
-            "status": runtime.status.value,
-            "phase": self._public_phase(runtime, len(approvals), len(user_questions)),
-            "is_recoverable": self._is_runtime_publicly_recoverable(runtime),
-            "last_event_id": (
-                int(run_state.last_event_id) if run_state is not None else 0
-            ),
-            "checkpoint_event_id": (
-                int(run_state.checkpoint_event_id) if run_state is not None else 0
-            ),
-            "pending_tool_approval_count": len(approvals),
-            "pending_user_question_count": len(user_questions),
-            "background_task_count": len(background_tasks),
-            "stream_connected": stream_connected,
-            "should_show_recover": self._is_runtime_publicly_recoverable(runtime)
-            and not stream_connected,
-        }
-        paused_subagent = self._paused_subagent_snapshot(runtime)
-        try:
-            round_snapshot = self.get_round(session_id, run_id)
-        except KeyError:
-            round_snapshot = None
-        if isinstance(round_snapshot, dict):
-            active_run["primary_role_id"] = round_snapshot.get("primary_role_id")
-            round_snapshot["background_task_count"] = len(background_tasks)
-        return {
-            "active_run": active_run,
-            "background_tasks": background_tasks,
-            "pending_tool_approvals": approvals,
-            "pending_user_questions": user_questions,
-            "paused_subagent": paused_subagent,
-            "round_snapshot": round_snapshot,
-        }
-
-    async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
-
-        return await asyncio.to_thread(self.get_recovery_snapshot, session_id)
-
-    def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
-        return self._token_usage_repo.get_by_run(run_id)
-
-    def get_token_usage_by_session(self, session_id: str) -> SessionTokenUsage:
-        return self._token_usage_repo.get_by_session(session_id)
-
-    async def get_token_usage_by_run_async(self, run_id: str) -> RunTokenUsage:
-
-        return await asyncio.to_thread(self._token_usage_repo.get_by_run, run_id)
-
-    async def get_token_usage_by_session_async(
-        self, session_id: str
-    ) -> SessionTokenUsage:
-
-        return await asyncio.to_thread(
-            self._token_usage_repo.get_by_session, session_id
-        )
-
     def clear_session_messages(self, session_id: str) -> int:
         _ = self._session_repo.get(session_id)
         messages = self._message_repo.get_messages_by_session(session_id)
@@ -2078,6 +1658,30 @@ class SessionService:
                 "latest_terminal_run_updated_at": latest_terminal.updated_at,
                 "has_unread_terminal_run": last_viewed_run_id != latest_terminal.run_id,
             }
+        )
+
+    def _with_subagent_count_projection(self, record: SessionRecord) -> SessionRecord:
+        if record.session_mode != SessionMode.NORMAL:
+            return record.model_copy(update={"subagent_session_count": 0})
+        counts = self._agent_repo.count_normal_mode_subagents_by_session_ids(
+            (record.session_id,)
+        )
+        return record.model_copy(
+            update={"subagent_session_count": counts.get(record.session_id, 0)}
+        )
+
+    async def _with_subagent_count_projection_async(
+        self, record: SessionRecord
+    ) -> SessionRecord:
+        if record.session_mode != SessionMode.NORMAL:
+            return record.model_copy(update={"subagent_session_count": 0})
+        counts = (
+            await self._agent_repo.count_normal_mode_subagents_by_session_ids_async(
+                (record.session_id,)
+            )
+        )
+        return record.model_copy(
+            update={"subagent_session_count": counts.get(record.session_id, 0)}
         )
 
     def _with_terminal_run_projection_from_preloaded(
@@ -2217,11 +1821,21 @@ class SessionService:
         return None
 
     def _subagent_run_ids(self, session_id: str) -> set[str]:
+        try:
+            session = self._session_repo.get(session_id)
+        except KeyError:
+            session = None
         run_ids = {
             runtime.run_id
             for runtime in self._run_runtime_repo.list_by_session(session_id)
-            if str(runtime.run_id).strip().startswith("subagent_run_")
+            if self._is_legacy_subagent_run_id(runtime.run_id)
         }
+        if session is not None:
+            run_ids.update(
+                record.run_id
+                for record in self._agent_repo.list_by_session(session_id)
+                if self._is_normal_mode_subagent_record(record, session=session)
+            )
         if self._background_task_repository is None:
             return run_ids
         return run_ids | {
@@ -2584,18 +2198,37 @@ class SessionService:
         )
 
     @staticmethod
-    def _is_subagent_run_id(run_id: str) -> bool:
+    def _is_legacy_subagent_run_id(run_id: str) -> bool:
         return str(run_id or "").strip().startswith("subagent_run_")
 
-    @staticmethod
+    def _is_subagent_run_id(self, run_id: str) -> bool:  # pragma: no cover
+        safe_run_id = str(run_id or "").strip()
+        if not safe_run_id:
+            return False
+        if self._is_legacy_subagent_run_id(safe_run_id):
+            return True
+        records = self._agent_repo.list_by_run(safe_run_id)
+        if not records:
+            return False
+        try:
+            session = self._session_repo.get(records[0].session_id)
+        except KeyError:
+            return False
+        return any(
+            self._is_normal_mode_subagent_record(record, session=session)
+            for record in records
+        )
+
     def _is_normal_mode_subagent_record(
+        self,
         record: AgentRuntimeRecord,
         *,
         session: SessionRecord,
     ) -> bool:
-        return session.session_mode == SessionMode.NORMAL and str(
-            record.run_id
-        ).strip().startswith("subagent_run_")
+        return session.session_mode == SessionMode.NORMAL and (
+            bool(str(record.parent_instance_id or "").strip())
+            or self._is_legacy_subagent_run_id(record.run_id)
+        )
 
 
 def _build_reflection_projection(

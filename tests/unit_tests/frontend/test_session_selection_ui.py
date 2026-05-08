@@ -478,15 +478,19 @@ globalThis.CustomEvent = class CustomEvent {
 const selection = selectSession("session-a");
 await Promise.resolve();
 const beforeHydrationClassName = els.chatContainer.className;
+const loadingDuringSwitch = els.chatContainer.children
+    .some(child => child.className === "session-switch-loading");
 globalThis.__hydrateResolvers[0].resolve();
 await selection;
 const afterSelectionClassName = els.chatContainer.className;
 await new Promise(resolve => setTimeout(resolve, 25));
 const afterFrameClassName = els.chatContainer.className;
+const loadingAfterFrame = els.chatContainer.children
+    .some(child => child.className === "session-switch-loading");
 
 console.log(JSON.stringify({
-    loadingCreated: els.chatContainer.children
-        .some(child => child.className === "session-switch-loading"),
+    loadingDuringSwitch,
+    loadingAfterFrame,
     beforeHydrationClassName,
     afterSelectionClassName,
     afterFrameClassName,
@@ -494,7 +498,8 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["loadingCreated"] is True
+    assert payload["loadingDuringSwitch"] is True
+    assert payload["loadingAfterFrame"] is False
     before_hydration_class_name = str(payload["beforeHydrationClassName"])
     after_selection_class_name = str(payload["afterSelectionClassName"])
     after_frame_class_name = str(payload["afterFrameClassName"])
@@ -503,6 +508,64 @@ console.log(JSON.stringify({
     assert "is-session-switching" in after_selection_class_name
     assert "is-session-switch-ready" in after_frame_class_name
     assert "is-session-switching" not in after_frame_class_name
+
+
+def test_switching_back_to_pending_run_restores_without_blocking_loading(
+    tmp_path: Path,
+) -> None:
+    payload = _run_session_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { selectSession } from "./session.mjs";
+import { els } from "./mockDom.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+
+globalThis.__pendingRunStartSessionId = "session-a";
+state.currentSessionId = "session-b";
+
+await selectSession("session-a");
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    currentSessionId: state.currentSessionId,
+    restoreCalls: globalThis.__restorePendingRunStartCalls,
+    loadingPresent: els.chatContainer.children
+        .some(child => child.className === "session-switch-loading"),
+    className: els.chatContainer.className,
+    hydrateCalls: globalThis.__hydrateCalls.map(call => ({
+        sessionId: call.sessionId,
+        includeRounds: call.includeRounds,
+    })),
+    selectedEvents: globalThis.__documentDispatches
+        .filter(event => event.type === "agent-teams-session-selected")
+        .map(event => event.detail.sessionId),
+}));
+""".strip(),
+    )
+
+    assert payload["currentSessionId"] == "session-a"
+    assert payload["restoreCalls"] == [
+        {
+            "sessionId": "session-a",
+            "focusPrompt": False,
+            "currentSessionId": "session-a",
+        }
+    ]
+    assert payload["loadingPresent"] is False
+    class_name = str(payload["className"])
+    assert "is-session-switch-pending" not in class_name
+    assert "is-session-switching" not in class_name
+    assert payload["hydrateCalls"] == [
+        {"sessionId": "session-a", "includeRounds": False}
+    ]
+    assert payload["selectedEvents"] == ["session-a"]
 
 
 def test_select_session_prepares_foreground_streams_after_state_switch(
@@ -570,6 +633,74 @@ console.log(JSON.stringify({
     assert payload["selectedEvents"] == ["session-b"]
 
 
+def test_select_session_does_not_wait_for_slow_session_record_before_hydrating(
+    tmp_path: Path,
+) -> None:
+    payload = _run_session_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { selectSession } from "./session.mjs";
+import { state } from "./mockState.mjs";
+
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+globalThis.__deferSessionHistory = true;
+
+state.currentSessionId = "session-a";
+const selection = selectSession("session-b");
+await Promise.resolve();
+const beforeRecord = {
+    fetchCalls: globalThis.__fetchCalls,
+    hydrateCalls: globalThis.__hydrateCalls.map(call => call.sessionId),
+    appliedRecords: globalThis.__appliedRecords.map(record => record.session_id),
+};
+globalThis.__hydrateResolvers[0].resolve();
+await selection;
+const afterSelection = {
+    selectedEvents: globalThis.__documentDispatches
+        .filter(event => event.type === "agent-teams-session-selected")
+        .map(event => event.detail.sessionId),
+    appliedRecords: globalThis.__appliedRecords.map(record => record.session_id),
+};
+globalThis.__fetchResolvers[0].resolve({
+    session_id: "session-b",
+    workspace_id: "workspace-b",
+});
+await Promise.resolve();
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    beforeRecord,
+    afterSelection,
+    afterRecord: {
+        appliedRecords: globalThis.__appliedRecords.map(record => record.session_id),
+        recordUpdatedEvents: globalThis.__documentDispatches
+            .filter(event => event.type === "agent-teams-session-record-updated")
+            .map(event => event.detail.sessionId),
+    },
+}));
+""".strip(),
+    )
+
+    assert payload["beforeRecord"] == {
+        "fetchCalls": ["session-b"],
+        "hydrateCalls": ["session-b"],
+        "appliedRecords": [],
+    }
+    assert payload["afterSelection"] == {
+        "selectedEvents": ["session-b"],
+        "appliedRecords": [],
+    }
+    assert payload["afterRecord"] == {
+        "appliedRecords": ["session-b"],
+        "recordUpdatedEvents": ["session-b"],
+    }
+
+
 def _run_session_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = repo_root / "frontend" / "dist" / "js" / "app" / "session.js"
@@ -584,6 +715,7 @@ def _run_session_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     mock_session_sidebar_store_path = tmp_path / "mockSessionSidebarStore.mjs"
     mock_project_view_path = tmp_path / "mockProjectView.mjs"
     mock_new_session_draft_path = tmp_path / "mockNewSessionDraft.mjs"
+    mock_rounds_timeline_path = tmp_path / "mockRoundsTimeline.mjs"
     mock_sidebar_path = tmp_path / "mockSidebar.mjs"
     mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
     mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
@@ -593,6 +725,7 @@ def _run_session_script(tmp_path: Path, runner_source: str) -> dict[str, object]
     mock_state_path = tmp_path / "mockState.mjs"
     mock_stream_path = tmp_path / "mockStream.mjs"
     mock_submission_path = tmp_path / "mockSubmission.mjs"
+    mock_ui_diagnostics_path = tmp_path / "mockUiDiagnostics.mjs"
     mock_dom_path = tmp_path / "mockDom.mjs"
     mock_i18n_path = tmp_path / "mockI18n.mjs"
     mock_logger_path = tmp_path / "mockLogger.mjs"
@@ -672,6 +805,14 @@ export function clearNewSessionDraft() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_rounds_timeline_path.write_text(
+        """
+export function clearPendingRunStartPlaceholder(sessionId = '') {
+    globalThis.__clearPendingRunStartPlaceholderCalls.push(String(sessionId || ''));
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_sidebar_path.write_text(
         """
 export function setRoundsMode() {
@@ -721,6 +862,11 @@ export async function openSubagentSession() {
         """
 export async function fetchSessionHistory(sessionId) {
     globalThis.__fetchCalls.push(sessionId);
+    if (globalThis.__deferSessionHistory === true) {
+        return new Promise(resolve => {
+            globalThis.__fetchResolvers.push({ sessionId, resolve });
+        });
+    }
     return globalThis.__sessionRecords?.get?.(sessionId) || { session_id: sessionId };
 }
 
@@ -843,6 +989,15 @@ export function prepareStreamsForForegroundNavigation(sessionId) {
         currentSessionId: state.currentSessionId,
     });
 }
+
+export function restorePendingRunStartForSessionSwitch(sessionId, options = {}) {
+    globalThis.__restorePendingRunStartCalls.push({
+        sessionId,
+        focusPrompt: options.focusPrompt === true,
+        currentSessionId: state.currentSessionId,
+    });
+    return globalThis.__pendingRunStartSessionId === sessionId;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -851,6 +1006,14 @@ export function prepareStreamsForForegroundNavigation(sessionId) {
 export function detachForegroundSubmission() {
     globalThis.__detachForegroundSubmissionCalls += 1;
     return false;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_ui_diagnostics_path.write_text(
+        """
+export function recordUiDiagnostic(name, value = 1, metadata = null) {
+    globalThis.__uiDiagnostics.push({ name, value, metadata });
 }
 """.strip(),
         encoding="utf-8",
@@ -918,6 +1081,12 @@ export const els = {
                 : null;
         },
         appendChild(node) {
+            node.remove = () => {
+                const index = this.children.indexOf(node);
+                if (index >= 0) {
+                    this.children.splice(index, 1);
+                }
+            };
             this.children.push(node);
             return node;
         },
@@ -1009,6 +1178,7 @@ export function refreshSessionTopologyControls() {
         )
         .replace("../components/projectView.js", "./mockProjectView.mjs")
         .replace("../components/newSessionDraft.js", "./mockNewSessionDraft.mjs")
+        .replace("../components/rounds/timeline.js", "./mockRoundsTimeline.mjs")
         .replace("../components/sidebar.js", "./mockSidebar.mjs")
         .replace("../components/subagentRail.js", "./mockSubagentRail.mjs")
         .replace("../components/subagentSessions.js", "./mockSubagentSessions.mjs")
@@ -1018,6 +1188,7 @@ export function refreshSessionTopologyControls() {
         .replace("../core/state.js", "./mockState.mjs")
         .replace("../core/stream.js", "./mockStream.mjs")
         .replace("../core/submission.js", "./mockSubmission.mjs")
+        .replace("../core/uiDiagnostics.js", "./mockUiDiagnostics.mjs")
         .replace("../utils/dom.js", "./mockDom.mjs")
         .replace("../utils/i18n.js", "./mockI18n.mjs")
         .replace("../utils/logger.js", "./mockLogger.mjs")
@@ -1043,6 +1214,7 @@ globalThis.__sessionDebugBadgeCalls = [];
 globalThis.__sidebarViewedTerminalRuns = [];
 globalThis.__hideProjectViewCalls = 0;
 globalThis.__clearNewSessionDraftCalls = 0;
+globalThis.__clearPendingRunStartPlaceholderCalls = [];
 globalThis.__setRoundsModeCalls = 0;
 globalThis.__markSubagentRailLoadingCalls = [];
 globalThis.__clearActiveSubagentSessionCalls = 0;
@@ -1050,6 +1222,8 @@ globalThis.__ensureSubagentCalls = [];
 globalThis.__expandedSubagentSessionIds = new Set();
 globalThis.__openSubagentSessionCalls = 0;
 globalThis.__fetchCalls = [];
+globalThis.__fetchResolvers = [];
+globalThis.__deferSessionHistory = false;
 globalThis.__viewedTerminalRuns = [];
 globalThis.__hydrateCalls = [];
 globalThis.__hydrateResolvers = [];
@@ -1060,10 +1234,13 @@ globalThis.__detachActiveStreamCalls = 0;
 globalThis.__detachForegroundSubmissionCalls = 0;
 globalThis.__detachSubagentStreamCalls = [];
 globalThis.__prepareStreamsForForegroundNavigationCalls = [];
+globalThis.__restorePendingRunStartCalls = [];
+globalThis.__pendingRunStartSessionId = "";
 globalThis.__streamOperationCalls = [];
 globalThis.__documentDispatches = [];
 globalThis.__refreshSessionTopologyControlsCalls = 0;
 globalThis.__logs = [];
+globalThis.__uiDiagnostics = [];
 
 {runner_source}
 """.strip(),

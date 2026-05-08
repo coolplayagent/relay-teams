@@ -41,6 +41,40 @@ async def test_event_log_async_methods_share_persisted_state(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_event_log_batch_emit_assigns_contiguous_event_ids(
+    tmp_path: Path,
+) -> None:
+    event_log = EventLog(tmp_path / "event_log_batch_emit.db")
+    events = tuple(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id=f"task-{index}",
+            instance_id=f"instance-{index}",
+            event_type=RunEventType.TOOL_RESULT,
+            payload_json=f'{{"index": {index}}}',
+        )
+        for index in range(5)
+    )
+
+    try:
+        event_ids = await event_log.emit_run_events_async(events)
+        legacy_ids = await event_log.emit_run_events_legacy_async(events[:2])
+        rows = await event_log.list_by_trace_with_ids_async("run-1")
+        empty_batch = await event_log.emit_run_events_async(())
+        empty_legacy_batch = await event_log.emit_run_events_legacy_async(())
+    finally:
+        await event_log.close_async()
+
+    assert event_ids == (1, 2, 3, 4, 5)
+    assert legacy_ids == (6, 7)
+    assert tuple(row["id"] for row in rows) == (1, 2, 3, 4, 5, 6, 7)
+    assert empty_batch == ()
+    assert empty_legacy_batch == ()
+
+
+@pytest.mark.asyncio
 async def test_event_log_async_hot_paths_do_not_reinitialize_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -174,6 +208,11 @@ async def test_event_log_lists_session_events_after_id_and_filters_subagent_runs
         "session-1",
         0,
     )
+    run_id_rows = event_log.list_by_session_run_ids_after_id(
+        "session-1",
+        ("subagent_run_1", "delegated-run-1"),
+        0,
+    )
     async_session_rows = await event_log.list_by_session_after_id_async(
         "session-1",
         first_id,
@@ -184,12 +223,19 @@ async def test_event_log_lists_session_events_after_id_and_filters_subagent_runs
             0,
         )
     )
+    async_run_id_rows = await event_log.list_by_session_run_ids_after_id_async(
+        "session-1",
+        ("subagent_run_1", "delegated-run-1"),
+        0,
+    )
     await event_log.close_async()
 
     assert tuple(row["id"] for row in session_rows) == (subagent_id,)
     assert tuple(row["id"] for row in async_session_rows) == (subagent_id,)
     assert tuple(row["id"] for row in subagent_rows) == (subagent_id,)
     assert tuple(row["id"] for row in async_subagent_rows) == (subagent_id,)
+    assert tuple(row["id"] for row in run_id_rows) == (subagent_id,)
+    assert tuple(row["id"] for row in async_run_id_rows) == (subagent_id,)
 
 
 @pytest.mark.asyncio

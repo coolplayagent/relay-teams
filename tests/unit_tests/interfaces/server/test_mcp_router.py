@@ -18,6 +18,7 @@ from relay_teams.mcp.mcp_models import (
     McpServerUpdateRequest,
     McpToolInfo,
 )
+from relay_teams.mcp.mcp_service import McpToolLoadBusyError
 
 
 class _FakeMcpService:
@@ -405,6 +406,53 @@ def test_refresh_mcp_server_tools() -> None:
     assert response.status_code == 200
     assert response.json()["server"] == "filesystem"
     assert response.json()["status"] == "loading"
+
+
+def test_list_mcp_server_tools_returns_retry_after_when_busy() -> None:
+    class _BusyMcpService(_FakeMcpService):
+        async def list_server_tools(self, name: str) -> McpServerToolsSummary:
+            _ = name
+            raise McpToolLoadBusyError("MCP tool loading is busy")
+
+    client = _create_test_client(_BusyMcpService())
+
+    response = client.get("/api/mcp/servers/filesystem/tools")
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "1"
+    assert response.json() == {"detail": "MCP tool loading is busy"}
+
+
+def test_list_mcp_server_tools_route_limit_returns_retry_after(monkeypatch) -> None:
+    monkeypatch.setenv(mcp.MCP_TOOLS_ROUTE_CONCURRENCY_ENV, "1")
+    mcp._mcp_tools_route_state.active_count = 1
+    try:
+        client = _create_test_client(_FakeMcpService())
+
+        response = client.get("/api/mcp/servers/filesystem/tools")
+    finally:
+        mcp._mcp_tools_route_state.active_count = 0
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "1"
+    assert response.json() == {"detail": "MCP tool listing is busy"}
+
+
+def test_list_mcp_server_tools_route_min_interval_returns_retry_after(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(mcp.MCP_TOOLS_ROUTE_MIN_INTERVAL_MS_ENV, "1000")
+    mcp._mcp_tools_route_state.last_started_monotonic = 999999999.0
+    try:
+        client = _create_test_client(_FakeMcpService())
+
+        response = client.get("/api/mcp/servers/filesystem/tools")
+    finally:
+        mcp._mcp_tools_route_state.last_started_monotonic = 0.0
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "1"
+    assert response.json() == {"detail": "MCP tool listing is busy"}
 
 
 def test_test_mcp_server_connection() -> None:

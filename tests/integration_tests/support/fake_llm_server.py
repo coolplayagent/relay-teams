@@ -15,6 +15,7 @@ app = FastAPI(title="Fake OpenAI-Compatible LLM")
 
 _chat_completions_calls = 0
 _scenario_attempts: dict[str, int] = {}
+_scenario_progress: dict[str, dict[str, int | str]] = {}
 _active_chat_completions = 0
 _max_active_chat_completions = 0
 _metrics_lock = Lock()
@@ -33,6 +34,9 @@ def metrics() -> dict[str, object]:
             "active_chat_completions": _active_chat_completions,
             "max_active_chat_completions": _max_active_chat_completions,
             "scenario_attempts": dict(_scenario_attempts),
+            "scenario_progress": {
+                key: dict(value) for key, value in _scenario_progress.items()
+            },
         }
 
 
@@ -45,6 +49,7 @@ def reset() -> dict[str, str]:
         _active_chat_completions = 0
         _max_active_chat_completions = 0
         _scenario_attempts.clear()
+        _scenario_progress.clear()
     return {"status": "ok"}
 
 
@@ -68,7 +73,7 @@ async def chat_completions(request: Request):
     payload = await request.json()
     _begin_chat_completion()
     model = str(payload.get("model") or "fake-chat-model")
-    response_spec = plan_fake_response(payload)
+    response_spec = await asyncio.to_thread(plan_fake_response, payload)
     stream = bool(payload.get("stream"))
     if str(response_spec.get("kind") or "") == "error_status":
         try:
@@ -112,6 +117,33 @@ def _end_chat_completion() -> None:
     global _active_chat_completions
     with _metrics_lock:
         _active_chat_completions = max(0, _active_chat_completions - 1)
+
+
+def _set_scenario_progress(
+    *,
+    key: str,
+    phase: str,
+    completed_main_reads: int | None = None,
+    total_main_reads: int | None = None,
+    completed_spawns: int | None = None,
+    total_spawns: int | None = None,
+    completed_reads: int | None = None,
+    total_reads: int | None = None,
+) -> None:
+    update: dict[str, int | str] = {"phase": phase}
+    optional_values = {
+        "completed_main_reads": completed_main_reads,
+        "total_main_reads": total_main_reads,
+        "completed_spawns": completed_spawns,
+        "total_spawns": total_spawns,
+        "completed_reads": completed_reads,
+        "total_reads": total_reads,
+    }
+    for metric_name, metric_value in optional_values.items():
+        if metric_value is not None:
+            update[metric_name] = metric_value
+    with _metrics_lock:
+        _scenario_progress[key] = update
 
 
 async def stream_chat_completions(
@@ -300,6 +332,10 @@ def plan_fake_response(payload: object) -> dict[str, object]:
     messages = payload.get("messages")
     if not isinstance(messages, list):
         return {"kind": "text", "content": "fake-response"}
+    if _session_extreme_subagent_pressure_mode(messages):
+        return _plan_session_extreme_subagent_pressure_response(payload, messages)
+    if _session_extreme_pressure_mode(messages):
+        return _plan_session_extreme_pressure_response(payload, messages)
     if _normal_tool_pressure_mode(messages):
         return _plan_normal_tool_pressure_response(payload, messages)
     if _orch_clone_worker_mode(messages):
@@ -497,6 +533,332 @@ def _plan_orch_clone_worker_response(messages: list[object]) -> dict[str, object
 
 def _normal_tool_pressure_mode(messages: list[object]) -> bool:
     return _messages_contain_user_text(messages, "[normal-tool-pressure")
+
+
+def _session_extreme_pressure_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(messages, "[session-extreme-pressure")
+
+
+def _session_extreme_subagent_pressure_mode(messages: list[object]) -> bool:
+    return _messages_contain_user_text(
+        messages,
+        "[session-extreme-subagent-pressure",
+    )
+
+
+def _plan_session_extreme_pressure_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "read" not in available_tools or "spawn_subagent" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] extreme pressure tools are not available.",
+        }
+    config = _extract_session_extreme_pressure_config(messages)
+    completed_read_ids = _extract_tool_call_ids(
+        messages,
+        prefix=config.read_call_prefix,
+    )
+    completed_spawn_ids = _extract_tool_call_ids(
+        messages,
+        prefix=config.spawn_call_prefix,
+    )
+    _set_scenario_progress(
+        key=f"session:{config.tag}",
+        phase=(
+            "main_tools"
+            if len(completed_read_ids) < config.main_tool_calls
+            else "spawn_subagents"
+            if len(completed_spawn_ids) < config.subagent_count
+            else "finalize"
+        ),
+        completed_main_reads=len(completed_read_ids),
+        total_main_reads=config.main_tool_calls,
+        completed_spawns=len(completed_spawn_ids),
+        total_spawns=config.subagent_count,
+    )
+    if len(completed_read_ids) < config.main_tool_calls:
+        return _build_read_pressure_batch(
+            completed_count=len(completed_read_ids),
+            total_count=config.main_tool_calls,
+            batch_size=config.main_batch_size,
+            prefix=config.read_call_prefix,
+            path=config.path,
+            available_tools=available_tools,
+        )
+
+    if len(completed_spawn_ids) < config.subagent_count:
+        next_index = len(completed_spawn_ids)
+        end_index = min(
+            config.subagent_count,
+            next_index + config.subagent_spawn_batch_size,
+        )
+        return {
+            "kind": "tool_calls",
+            "tool_calls": [
+                {
+                    "tool_name": "spawn_subagent",
+                    "tool_call_id": f"{config.spawn_call_prefix}{index + 1}",
+                    "arguments": {
+                        "role_id": "Crafter",
+                        "description": (f"extreme pressure subagent {index + 1}"),
+                        "prompt": (
+                            "[session-extreme-subagent-pressure "
+                            f"calls={config.subagent_tool_calls} "
+                            f"batch={config.subagent_batch_size} "
+                            f"path={config.path} "
+                            f"tag={config.tag}-sub{index + 1}] "
+                            f"run subagent pressure {index + 1}."
+                        ),
+                        "background": False,
+                    },
+                }
+                for index in range(next_index, end_index)
+            ],
+        }
+
+    return {
+        "kind": "text",
+        "content": (
+            "[fake-llm] session extreme pressure completed "
+            f"{config.main_tool_calls} primary tool calls and "
+            f"{config.subagent_count} subagents."
+        ),
+    }
+
+
+def _plan_session_extreme_subagent_pressure_response(
+    payload: dict[str, object],
+    messages: list[object],
+) -> dict[str, object]:
+    available_tools = _extract_available_tools(payload)
+    if "read" not in available_tools:
+        return {
+            "kind": "text",
+            "content": "[fake-llm] read is not available for subagent pressure.",
+        }
+    config = _extract_session_extreme_subagent_pressure_config(messages)
+    completed_read_ids = _extract_tool_call_ids(
+        messages,
+        prefix=config.read_call_prefix,
+    )
+    _set_scenario_progress(
+        key=f"subagent:{config.tag}",
+        phase=(
+            "subagent_tools"
+            if len(completed_read_ids) < config.tool_calls
+            else "finalize"
+        ),
+        completed_reads=len(completed_read_ids),
+        total_reads=config.tool_calls,
+    )
+    if len(completed_read_ids) < config.tool_calls:
+        return _build_read_pressure_batch(
+            completed_count=len(completed_read_ids),
+            total_count=config.tool_calls,
+            batch_size=config.batch_size,
+            prefix=config.read_call_prefix,
+            path=config.path,
+            available_tools=available_tools,
+        )
+    return {
+        "kind": "text",
+        "content": (
+            "[fake-llm] session extreme subagent pressure completed "
+            f"{config.tool_calls} tool calls."
+        ),
+    }
+
+
+def _build_read_pressure_batch(
+    *,
+    completed_count: int,
+    total_count: int,
+    batch_size: int,
+    prefix: str,
+    path: str,
+    available_tools: set[str],
+) -> dict[str, object]:
+    start_index = completed_count
+    end_index = min(total_count, start_index + batch_size)
+    return {
+        "kind": "tool_calls",
+        "tool_calls": [
+            _build_mixed_pressure_tool_call(
+                index=index,
+                tool_call_id=f"{prefix}{index + 1}",
+                path=path,
+                available_tools=available_tools,
+            )
+            for index in range(start_index, end_index)
+        ],
+    }
+
+
+def _build_mixed_pressure_tool_call(
+    *,
+    index: int,
+    tool_call_id: str,
+    path: str,
+    available_tools: set[str],
+) -> dict[str, object]:
+    ordinal = index + 1
+    is_subagent_call = "subagent" in tool_call_id
+    if not is_subagent_call and ordinal == 20 and "grep" in available_tools:
+        return {
+            "tool_name": "grep",
+            "tool_call_id": tool_call_id,
+            "arguments": {
+                "pattern": "Project Layout",
+                "path": "AGENTS.md",
+                "case_sensitive": True,
+            },
+        }
+    if not is_subagent_call and ordinal == 10 and "glob" in available_tools:
+        return {
+            "tool_name": "glob",
+            "tool_call_id": tool_call_id,
+            "arguments": {"pattern": "src/relay_teams/tools/runtime/*.py"},
+        }
+    if ordinal % 15 == 0 and "list_run_tasks" in available_tools:
+        return {
+            "tool_name": "list_run_tasks",
+            "tool_call_id": tool_call_id,
+            "arguments": {"include_root": True},
+        }
+    if ordinal % 12 == 0 and "todo_read" in available_tools:
+        return {
+            "tool_name": "todo_read",
+            "tool_call_id": tool_call_id,
+            "arguments": {},
+        }
+    return {
+        "tool_name": "read",
+        "tool_call_id": tool_call_id,
+        "arguments": {
+            "path": path,
+            "offset": 1,
+            "limit": 1,
+        },
+    }
+
+
+class _SessionExtremePressureConfig:
+    def __init__(
+        self,
+        *,
+        main_tool_calls: int,
+        main_batch_size: int,
+        subagent_count: int,
+        subagent_tool_calls: int,
+        subagent_batch_size: int,
+        subagent_spawn_batch_size: int,
+        path: str,
+        tag: str,
+    ) -> None:
+        self.main_tool_calls = main_tool_calls
+        self.main_batch_size = main_batch_size
+        self.subagent_count = subagent_count
+        self.subagent_tool_calls = subagent_tool_calls
+        self.subagent_batch_size = subagent_batch_size
+        self.subagent_spawn_batch_size = subagent_spawn_batch_size
+        self.path = path
+        self.tag = tag
+        self.read_call_prefix = f"call-session-extreme-read-{tag}-"
+        self.spawn_call_prefix = f"call-session-extreme-spawn-{tag}-"
+
+
+class _SessionExtremeSubagentPressureConfig:
+    def __init__(
+        self,
+        *,
+        tool_calls: int,
+        batch_size: int,
+        path: str,
+        tag: str,
+    ) -> None:
+        self.tool_calls = tool_calls
+        self.batch_size = batch_size
+        self.path = path
+        self.tag = tag
+        self.read_call_prefix = f"call-session-extreme-subagent-read-{tag}-"
+
+
+def _extract_session_extreme_pressure_config(
+    messages: list[object],
+) -> _SessionExtremePressureConfig:
+    user_text = _extract_last_user_text(messages)
+    values = _extract_bracket_key_values(user_text, "session-extreme-pressure")
+    tag = values.get("tag") or "default"
+    return _SessionExtremePressureConfig(
+        main_tool_calls=_bounded_int(values.get("main_calls"), 500, 1, 2_000),
+        main_batch_size=_bounded_int(values.get("main_batch"), 100, 1, 500),
+        subagent_count=_bounded_int(values.get("subagents"), 10, 0, 50),
+        subagent_tool_calls=_bounded_int(
+            values.get("subagent_calls"),
+            100,
+            1,
+            1_000,
+        ),
+        subagent_batch_size=_bounded_int(
+            values.get("subagent_batch"),
+            25,
+            1,
+            100,
+        ),
+        subagent_spawn_batch_size=_bounded_int(
+            values.get("subagent_spawn_batch"),
+            10,
+            1,
+            50,
+        ),
+        path=values.get("path") or "AGENTS.md",
+        tag=tag,
+    )
+
+
+def _extract_session_extreme_subagent_pressure_config(
+    messages: list[object],
+) -> _SessionExtremeSubagentPressureConfig:
+    user_text = _extract_last_user_text(messages)
+    values = _extract_bracket_key_values(
+        user_text,
+        "session-extreme-subagent-pressure",
+    )
+    tag = values.get("tag") or "default"
+    return _SessionExtremeSubagentPressureConfig(
+        tool_calls=_bounded_int(values.get("calls"), 100, 1, 1_000),
+        batch_size=_bounded_int(values.get("batch"), 25, 1, 100),
+        path=values.get("path") or "AGENTS.md",
+        tag=tag,
+    )
+
+
+def _extract_bracket_key_values(text: str, marker: str) -> dict[str, str]:
+    match = re.search(rf"\[{re.escape(marker)}\s+([^\]]*)\]", text)
+    if match is None:
+        return {}
+    values: dict[str, str] = {}
+    for key, value in re.findall(r"([A-Za-z0-9_-]+)=([^\s\]]+)", match.group(1)):
+        values[key] = value
+    return values
+
+
+def _bounded_int(
+    raw_value: str | None,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, value))
 
 
 def _plan_normal_tool_pressure_response(

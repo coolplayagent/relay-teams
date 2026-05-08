@@ -402,32 +402,23 @@ class TaskExecutionService(BaseModel):
 
         # OP-3: Create artifact container (spec phase).
         if self.artifact_repo is not None:
-            try:
-                await self.artifact_repo.ensure_artifact_async(
-                    task_id=task.task_id,
-                    spec_artifact_id=task.spec_artifact_id or "",
-                )
-                await self.artifact_repo.append_entry_async(
-                    task_id=task.task_id,
-                    entry=TaskArtifactEntry(
-                        entry_id=f"start-{task.task_id}",
-                        phase=TaskArtifactPhase.SPEC,
-                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
-                        role_id=role_id,
-                        instance_id=instance_id,
-                        event_type="task_started",
-                        description="Task execution started",
-                        payload_json=task.model_dump_json(),
-                    ),
-                )
-            except Exception as exc:
-                log_event(
-                    LOGGER,
-                    logging.WARNING,
-                    event="artifact.create_failed",
-                    message="Failed to create task artifact",
-                    payload={"task_id": task.task_id, "error": str(exc)},
-                )
+            _ = self.artifact_repo.enqueue_ensure_artifact(
+                task_id=task.task_id,
+                spec_artifact_id=task.spec_artifact_id or "",
+            )
+            _ = self.artifact_repo.enqueue_append_entry(
+                task_id=task.task_id,
+                entry=TaskArtifactEntry(
+                    entry_id=f"start-{task.task_id}",
+                    phase=TaskArtifactPhase.SPEC,
+                    timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                    role_id=role_id,
+                    instance_id=instance_id,
+                    event_type="task_started",
+                    description="Task execution started",
+                    payload_json=task.model_dump_json(),
+                ),
+            )
 
         # Compute: resolve workspace before try for error-path access
         harness = self._execution_harness()
@@ -443,28 +434,19 @@ class TaskExecutionService(BaseModel):
         try:
             # OP-3: Append implementation phase entry.
             if self.artifact_repo is not None:
-                try:
-                    await self.artifact_repo.append_entry_async(
-                        task_id=task.task_id,
-                        entry=TaskArtifactEntry(
-                            entry_id=f"impl-{task.task_id}",
-                            phase=TaskArtifactPhase.EXECUTION,
-                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
-                            role_id=role_id,
-                            instance_id=instance_id,
-                            event_type="llm_execution_start",
-                            description="LLM execution started",
-                            payload_json="{}",
-                        ),
-                    )
-                except Exception as exc:
-                    log_event(
-                        LOGGER,
-                        logging.WARNING,
-                        event="artifact.append_failed",
-                        message="Failed to append implementation entry",
-                        payload={"task_id": task.task_id, "error": str(exc)},
-                    )
+                _ = self.artifact_repo.enqueue_append_entry(
+                    task_id=task.task_id,
+                    entry=TaskArtifactEntry(
+                        entry_id=f"impl-{task.task_id}",
+                        phase=TaskArtifactPhase.EXECUTION,
+                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                        role_id=role_id,
+                        instance_id=instance_id,
+                        event_type="llm_execution_start",
+                        description="LLM execution started",
+                        payload_json="{}",
+                    ),
+                )
 
             # Compute: full execution config (role, runner, prompts, snapshot)
             config = await harness.prepare_execution_config(
@@ -547,57 +529,38 @@ class TaskExecutionService(BaseModel):
 
             # OP-3: Append verification phase entry.
             if self.artifact_repo is not None:
-                try:
-                    await self.artifact_repo.append_entry_async(
-                        task_id=task.task_id,
-                        entry=TaskArtifactEntry(
-                            entry_id=f"verify-{task.task_id}",
-                            phase=TaskArtifactPhase.VERIFICATION,
-                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
-                            role_id=role_id,
-                            instance_id=instance_id,
-                            event_type="guardrail_report_completed",
-                            description="Guardrail report and runtime checks completed",
-                            payload_json="{}",
-                        ),
-                    )
-                except Exception as exc:
-                    log_event(
-                        LOGGER,
-                        logging.WARNING,
-                        event="artifact.verify_failed",
-                        message="Failed to append verification entry",
-                        payload={"task_id": task.task_id, "error": str(exc)},
-                    )
+                _ = self.artifact_repo.enqueue_append_entry(
+                    task_id=task.task_id,
+                    entry=TaskArtifactEntry(
+                        entry_id=f"verify-{task.task_id}",
+                        phase=TaskArtifactPhase.VERIFICATION,
+                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                        role_id=role_id,
+                        instance_id=instance_id,
+                        event_type="guardrail_report_completed",
+                        description="Guardrail report and runtime checks completed",
+                        payload_json="{}",
+                    ),
+                )
 
             # OP-3: Append delivery phase entry and update summary.
             if self.artifact_repo is not None:
-                try:
-                    await self.artifact_repo.append_entry_async(
-                        task_id=task.task_id,
-                        entry=TaskArtifactEntry(
-                            entry_id=f"delivery-{task.task_id}",
-                            phase=TaskArtifactPhase.DELIVERY,
-                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
-                            role_id=role_id,
-                            instance_id=instance_id,
-                            event_type="task_completed",
-                            description="Task execution completed",
-                            payload_json="{}",
-                        ),
-                    )
-                    await self.artifact_repo.update_summary_async(
-                        task_id=task.task_id,
-                        summary=result,
-                    )
-                except Exception as exc:
-                    log_event(
-                        LOGGER,
-                        logging.WARNING,
-                        event="artifact.delivery_failed",
-                        message="Failed to append delivery entry",
-                        payload={"task_id": task.task_id, "error": str(exc)},
-                    )
+                _ = self.artifact_repo.enqueue_append_entry(
+                    task_id=task.task_id,
+                    entry=TaskArtifactEntry(
+                        entry_id=f"delivery-{task.task_id}",
+                        phase=TaskArtifactPhase.DELIVERY,
+                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                        role_id=role_id,
+                        instance_id=instance_id,
+                        event_type="task_completed",
+                        description="Task execution completed",
+                        payload_json="{}",
+                    ),
+                )
+                _ = self.artifact_repo.enqueue_update_summary(
+                    task_id=task.task_id, summary=result
+                )
             return TaskExecutionResult(output=result)
         except asyncio.CancelledError:
             if timeout_cancellation.is_set():

@@ -652,7 +652,9 @@ export function showPendingRunStartPlaceholder(sessionId, intentText, intentPart
     ) {
         return;
     }
-    renderRunStartPlaceholder(container, intentText, intentParts);
+    renderRunStartPlaceholder(container, intentText, intentParts, {
+        sessionId: safeSessionId,
+    });
 }
 
 export function showDraftRunStartPlaceholder(intentText, intentParts = null) {
@@ -660,13 +662,16 @@ export function showDraftRunStartPlaceholder(intentText, intentParts = null) {
     if (!container) {
         return;
     }
-    renderRunStartPlaceholder(container, intentText, intentParts);
+    renderRunStartPlaceholder(container, intentText, intentParts, {
+        sessionId: String(state.currentSessionId || '').trim(),
+    });
 }
 
-function renderRunStartPlaceholder(container, intentText, intentParts = null) {
+function renderRunStartPlaceholder(container, intentText, intentParts = null, options = {}) {
     const normalizedIntent = normalizeRoundIntentText(intentText)
         || buildRoundIntentPreviewText(intentParts)
         || '';
+    const safeSessionId = String(options.sessionId || '').trim();
     let placeholder = container.querySelector?.('.session-run-start-placeholder') || null;
     if (!placeholder) {
         placeholder = document.createElement('section');
@@ -681,6 +686,11 @@ function renderRunStartPlaceholder(container, intentText, intentParts = null) {
         `;
         container.appendChild(placeholder);
     }
+    if (safeSessionId) {
+        placeholder.setAttribute('data-session-id', safeSessionId);
+    } else {
+        placeholder.removeAttribute('data-session-id');
+    }
     const intentEl = placeholder.querySelector?.('.session-run-start-intent') || null;
     if (intentEl) {
         intentEl.textContent = normalizedIntent;
@@ -689,8 +699,15 @@ function renderRunStartPlaceholder(container, intentText, intentParts = null) {
     container.scrollTop = container.scrollHeight;
 }
 
-export function clearPendingRunStartPlaceholder() {
-    els.chatMessages?.querySelector?.('.session-run-start-placeholder')?.remove?.();
+export function clearPendingRunStartPlaceholder(sessionId = '') {
+    const safeSessionId = String(sessionId || '').trim();
+    const placeholders = els.chatMessages?.querySelectorAll?.('.session-run-start-placeholder') || [];
+    Array.from(placeholders).forEach(placeholder => {
+        const placeholderSessionId = String(placeholder?.getAttribute?.('data-session-id') || '').trim();
+        if (!safeSessionId || !placeholderSessionId || placeholderSessionId === safeSessionId) {
+            placeholder.remove?.();
+        }
+    });
 }
 
 function shouldPreserveSubagentView(sessionId) {

@@ -146,6 +146,32 @@ class _FakeMcpDiscoveryService:
         )
 
 
+class _ManyUnreadyMcpRegistry(_FakeMcpRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.toolset_calls: list[tuple[str, ...]] = []
+
+    def resolve_server_names(
+        self,
+        server_names: tuple[str, ...],
+        *,
+        strict: bool = True,
+        consumer: str | None = None,
+    ) -> tuple[str, ...]:
+        self.calls.append((server_names, strict, consumer))
+        if server_names == ("*",):
+            return tuple(f"slow-{index}" for index in range(8))
+        return super().resolve_server_names(
+            server_names,
+            strict=strict,
+            consumer=consumer,
+        )
+
+    def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
+        self.toolset_calls.append(server_names)
+        raise AssertionError("unready wildcard MCP toolsets should be skipped")
+
+
 def _patch_runtime_chat_model_builder(
     monkeypatch: pytest.MonkeyPatch,
     captured: dict[str, object],
@@ -475,6 +501,43 @@ def test_build_coordination_agent_attaches_ready_mcp_toolsets(
     built_agent = cast(_FakeAgent, captured["agent"])
     assert built_agent.kwargs["toolsets"] == ["toolset:docs"]
     assert fake_mcp_registry.toolset_calls == [("docs",)]
+
+
+def test_build_coordination_agent_skips_unready_wildcard_mcp_toolsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    fake_tool_registry = _FakeToolRegistry()
+    fake_mcp_registry = _ManyUnreadyMcpRegistry()
+
+    monkeypatch.setattr(
+        coordination_agent,
+        "build_llm_http_client",
+        lambda **_: object(),
+    )
+    _patch_runtime_chat_model_builder(monkeypatch, captured)
+
+    def _fake_agent(**kwargs: object) -> _FakeAgent:
+        agent = _FakeAgent(**kwargs)
+        captured["agent"] = agent
+        return agent
+
+    monkeypatch.setattr(coordination_agent, "Agent", _fake_agent)
+
+    coordination_agent.build_coordination_agent(
+        model_name="gpt-test",
+        base_url="https://example.test/v1",
+        api_key="secret",
+        system_prompt="system",
+        allowed_tools=(),
+        allowed_mcp_servers=("*",),
+        tool_registry=cast(ToolRegistry, fake_tool_registry),
+        mcp_registry=cast(McpRegistry, fake_mcp_registry),
+    )
+
+    built_agent = cast(_FakeAgent, captured["agent"])
+    assert built_agent.kwargs["toolsets"] == []
+    assert fake_mcp_registry.toolset_calls == []
 
 
 def test_build_coordination_agent_injects_subagent_capabilities_into_spawn_subagent_description(

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
+import time
 
-from pydantic import JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_config_manager import McpConfigManager
@@ -25,6 +27,29 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.trace import trace_span
 
 LOGGER = get_logger(__name__)
+MCP_TOOL_LOAD_CONCURRENCY_ENV = "RELAY_TEAMS_MCP_TOOL_LOAD_CONCURRENCY"
+MCP_TOOL_LOAD_FAILED_TTL_MS_ENV = "RELAY_TEAMS_MCP_TOOL_LOAD_FAILED_TTL_MS"
+MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS_ENV = (
+    "RELAY_TEAMS_MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS"
+)
+DEFAULT_MCP_TOOL_LOAD_CONCURRENCY = 2
+DEFAULT_MCP_TOOL_LOAD_FAILED_TTL_MS = 60_000
+DEFAULT_MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS = 1_000
+
+
+class McpToolLoadBusyError(RuntimeError):
+    pass
+
+
+class McpToolLoadUnavailableError(RuntimeError):
+    pass
+
+
+class _McpServerToolsCacheEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    summary: McpServerToolsSummary | None = None
+    failed_until: float = 0.0
 
 
 class McpService:
@@ -44,14 +69,19 @@ class McpService:
         )
         self._extra_specs: tuple[McpServerSpec, ...] = extra_specs
         self._discovery_service: McpDiscoveryService | None = discovery_service
+        self._active_tool_load_count = 0
+        self._tool_load_cache: dict[str, _McpServerToolsCacheEntry] = {}
+        self._global_tool_load_failed_until = 0.0
 
     def replace_registry(self, registry: McpRegistry) -> None:
         self._registry = registry
         if self._discovery_service is not None:
             self._discovery_service.replace_registry(registry)
+        self._clear_tool_load_cache()
 
     def replace_extra_specs(self, extra_specs: tuple[McpServerSpec, ...]) -> None:
         self._extra_specs = extra_specs
+        self._clear_tool_load_cache()
 
     def _load_registry(self) -> McpRegistry:
         if self._config_manager is None:
@@ -122,25 +152,44 @@ class McpService:
             )
 
     async def list_server_tools(self, name: str) -> McpServerToolsSummary:
+        normalized_name = name.strip()
+        spec = self._registry.get_spec(normalized_name)
+        if self._discovery_service is not None:
+            return self._discovery_service.get_tools_summary(normalized_name)
+        if not spec.enabled:
+            return McpServerToolsSummary(
+                server=spec.name,
+                source=spec.source,
+                transport=_detect_transport(spec.server_config),
+                enabled=spec.enabled,
+                status=McpDiscoveryStatus.DISABLED,
+            )
+        cached = self._cached_server_tools(normalized_name)
+        if cached is not None:
+            return cached
+        self._raise_if_recent_tool_load_failure(normalized_name)
+        self._enter_tool_load_slot(normalized_name)
+        try:
+            return await self._list_server_tools_uncached(normalized_name, spec)
+        except Exception as exc:
+            self._remember_tool_load_failure(normalized_name)
+            raise McpToolLoadUnavailableError(str(exc)) from exc
+        finally:
+            self._active_tool_load_count = max(0, self._active_tool_load_count - 1)
+
+    async def _list_server_tools_uncached(
+        self,
+        name: str,
+        spec: McpServerSpec,
+    ) -> McpServerToolsSummary:
         with trace_span(
             LOGGER,
             component="mcp.service",
             operation="list_server_tools",
             attributes={"server_name": name},
         ):
-            spec = self._registry.get_spec(name)
-            if self._discovery_service is not None:
-                return self._discovery_service.get_tools_summary(name)
-            if not spec.enabled:
-                return McpServerToolsSummary(
-                    server=spec.name,
-                    source=spec.source,
-                    transport=_detect_transport(spec.server_config),
-                    enabled=spec.enabled,
-                    status=McpDiscoveryStatus.DISABLED,
-                )
             tools = await self._registry.list_tools(name)
-            return McpServerToolsSummary(
+            summary = McpServerToolsSummary(
                 server=spec.name,
                 source=spec.source,
                 transport=_detect_transport(spec.server_config),
@@ -148,6 +197,9 @@ class McpService:
                 tools=tools,
                 status=McpDiscoveryStatus.READY,
             )
+            self._registry.mark_server_runtime_available(name)
+            self._tool_load_cache[name] = _McpServerToolsCacheEntry(summary=summary)
+            return summary
 
     def refresh_server_tools(self, name: str) -> McpServerToolsSummary:
         with trace_span(
@@ -156,10 +208,14 @@ class McpService:
             operation="refresh_server_tools",
             attributes={"server_name": name},
         ):
-            self._registry.get_spec(name)
+            normalized_name = name.strip()
+            self._registry.get_spec(normalized_name)
             if self._discovery_service is not None:
-                return self._discovery_service.refresh_server(name)
-            spec = self._registry.get_spec(name)
+                return self._discovery_service.refresh_server(normalized_name)
+            self._tool_load_cache.pop(normalized_name, None)
+            self._registry.mark_server_runtime_available(normalized_name)
+            self._global_tool_load_failed_until = 0.0
+            spec = self._registry.get_spec(normalized_name)
             return McpServerToolsSummary(
                 server=spec.name,
                 source=spec.source,
@@ -171,6 +227,65 @@ class McpService:
                     else McpDiscoveryStatus.DISABLED
                 ),
             )
+
+    def _cached_server_tools(self, name: str) -> McpServerToolsSummary | None:
+        cached = self._tool_load_cache.get(name)
+        if cached is None:
+            return None
+        return cached.summary
+
+    def _raise_if_recent_tool_load_failure(self, name: str) -> None:
+        cached = self._tool_load_cache.get(name)
+        now = time.monotonic()
+        if cached is not None and cached.failed_until > now:
+            raise McpToolLoadBusyError(f"MCP server '{name}' failed recently")
+        if self._global_tool_load_failed_until > now:
+            raise McpToolLoadBusyError(
+                f"MCP tool loading is cooling down; retry loading '{name}' later"
+            )
+        if self._registry.is_server_runtime_failed(name):
+            self._registry.mark_server_runtime_available(name)
+
+    def _enter_tool_load_slot(self, name: str) -> None:
+        limit = _non_negative_int_env(
+            MCP_TOOL_LOAD_CONCURRENCY_ENV,
+            DEFAULT_MCP_TOOL_LOAD_CONCURRENCY,
+        )
+        if limit < 1 or self._active_tool_load_count >= limit:
+            raise McpToolLoadBusyError(
+                f"MCP tool loading is busy; retry loading '{name}' later"
+            )
+        self._active_tool_load_count += 1
+
+    def _remember_tool_load_failure(self, name: str) -> None:
+        ttl_seconds = (
+            _positive_int_env(
+                MCP_TOOL_LOAD_FAILED_TTL_MS_ENV,
+                DEFAULT_MCP_TOOL_LOAD_FAILED_TTL_MS,
+            )
+            / 1000.0
+        )
+        self._registry.mark_server_runtime_failed(name)
+        self._tool_load_cache[name] = _McpServerToolsCacheEntry(
+            failed_until=time.monotonic() + ttl_seconds,
+        )
+        global_ttl_seconds = (
+            _non_negative_int_env(
+                MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS_ENV,
+                DEFAULT_MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS,
+            )
+            / 1000.0
+        )
+        if global_ttl_seconds > 0:
+            self._global_tool_load_failed_until = max(
+                self._global_tool_load_failed_until,
+                time.monotonic() + global_ttl_seconds,
+            )
+
+    def _clear_tool_load_cache(self) -> None:
+        self._tool_load_cache.clear()
+        self._active_tool_load_count = 0
+        self._global_tool_load_failed_until = 0.0
 
     def add_server(
         self,
@@ -357,3 +472,25 @@ def _detect_transport(server_config: dict[str, JsonValue]) -> str:
         return "sse" if "/sse" in raw_url else "http"
 
     return "unknown"
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(raw_value.strip())
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _non_negative_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        parsed = int(raw_value.strip())
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default

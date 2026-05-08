@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import time
 
 import httpx
 
@@ -34,6 +35,39 @@ _PHASE_CHECKSUMS = {
     4: "CHK-P4-DQ7",
     5: "CHK-P5-ER8",
 }
+
+
+def _wait_for_rounds_items(
+    api_client: httpx.Client,
+    *,
+    session_id: str,
+    required_run_id: str,
+    require_microcompact: bool = False,
+    timeout_seconds: float = 5.0,
+) -> list[object]:
+    deadline = time.monotonic() + timeout_seconds
+    latest_items: list[object] = []
+    while time.monotonic() < deadline:
+        rounds_response = api_client.get(f"/api/sessions/{session_id}/rounds")
+        rounds_response.raise_for_status()
+        rounds_payload = rounds_response.json()
+        rounds_items = rounds_payload.get("items")
+        if isinstance(rounds_items, list):
+            latest_items = rounds_items
+            for item in latest_items:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("run_id") or "") != required_run_id:
+                    continue
+                if require_microcompact and not isinstance(
+                    item.get("microcompact"), dict
+                ):
+                    continue
+                return latest_items
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Timed out waiting for run {required_run_id} in session rounds"
+    )
 
 
 def test_short_history_microcompact_preserves_exact_recall_without_marker(
@@ -86,10 +120,12 @@ def test_short_history_microcompact_preserves_exact_recall_without_marker(
     )
     recall_usage_response.raise_for_status()
     recall_usage = recall_usage_response.json()
-    rounds_response = api_client.get(f"/api/sessions/{session_id}/rounds")
-    rounds_response.raise_for_status()
-    rounds_payload = rounds_response.json()
-    rounds_items = rounds_payload.get("items")
+    rounds_items = _wait_for_rounds_items(
+        api_client,
+        session_id=session_id,
+        required_run_id=recall_run_id,
+        require_microcompact=True,
+    )
 
     assert markers == []
     for label, value in _GLOBAL_FACTS.items():
@@ -98,7 +134,6 @@ def test_short_history_microcompact_preserves_exact_recall_without_marker(
         assert f"phase-{phase} anchor: {_PHASE_ANCHORS[phase]}" in recall_text
         assert f"phase-{phase} checksum: {_PHASE_CHECKSUMS[phase]}" in recall_text
     assert int(recall_usage["total_tool_calls"]) == 0
-    assert isinstance(rounds_items, list)
     recall_round = next(
         item
         for item in rounds_items
@@ -181,11 +216,12 @@ def test_multiple_rolling_summary_rewrites_preserve_rounds_and_exact_recall(
     )
     assert str(recall_events[-1].get("event_type") or "") == "run_completed"
 
-    rounds_response = api_client.get(f"/api/sessions/{session_id}/rounds")
-    rounds_response.raise_for_status()
-    rounds_payload = rounds_response.json()
-    rounds_items = rounds_payload.get("items")
-    assert isinstance(rounds_items, list)
+    rounds_items = _wait_for_rounds_items(
+        api_client,
+        session_id=session_id,
+        required_run_id=recall_run_id,
+        require_microcompact=True,
+    )
     assert any(
         isinstance(item, dict)
         and isinstance(item.get("compaction_marker_before"), dict)

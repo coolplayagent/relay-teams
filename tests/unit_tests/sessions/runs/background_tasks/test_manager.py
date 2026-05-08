@@ -5,6 +5,7 @@ import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import threading
@@ -20,6 +21,7 @@ from relay_teams.monitors import (
     MonitorService,
     MonitorSourceKind,
 )
+from relay_teams.sessions.runs.background_tasks import manager as manager_module
 from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
     MAX_BACKGROUND_TASKS,
@@ -922,6 +924,91 @@ async def test_background_task_manager_wait_and_poll_keep_active_record_unresolv
 
 
 @pytest.mark.asyncio
+async def test_background_task_manager_keeps_terminal_runtime_when_final_upsert_defers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(tmp_path / "background-terminal-final-defer.db")
+    hub = RunEventHub()
+    manager = BackgroundTaskManager(repository=repo, run_event_hub=hub)
+    record = repo.upsert(
+        BackgroundTaskRecord(
+            background_task_id="exec-deferred-final",
+            run_id="run-1",
+            session_id="session-1",
+            instance_id="inst-1",
+            role_id="writer",
+            tool_call_id="call-1",
+            command="echo done",
+            cwd=str(tmp_path),
+            execution_mode="background",
+            status=BackgroundTaskStatus.RUNNING,
+            pid=1234,
+            log_path="tmp/background_tasks/exec-deferred-final.log",
+        )
+    )
+    transport = _FakeTransport(returncode=0)
+    runtime = manager_module._BackgroundTaskRuntime(
+        record=record,
+        transport=cast(manager_module._BackgroundTaskTransport, transport),
+        log_file_path=tmp_path / "task.log",
+        queue=asyncio.Queue(),
+    )
+    manager._runtimes[record.background_task_id] = runtime
+    original_upsert_async = repo.upsert_async
+    release_deferred = asyncio.Event()
+    deferred_started = asyncio.Event()
+    upsert_calls: list[BackgroundTaskStatus] = []
+
+    async def _flaky_upsert_async(
+        next_record: BackgroundTaskRecord,
+    ) -> BackgroundTaskRecord:
+        upsert_calls.append(next_record.status)
+        if len(upsert_calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        deferred_started.set()
+        await release_deferred.wait()
+        return await original_upsert_async(next_record)
+
+    monkeypatch.setattr(repo, "upsert_async", _flaky_upsert_async)
+
+    try:
+        await manager._finalize_runtime(runtime, timed_out=False, wait_for_exit=False)
+        await asyncio.wait_for(deferred_started.wait(), timeout=1)
+
+        listed = manager.list_for_run("run-1")
+        fetched = manager.get_for_run(
+            run_id="run-1",
+            background_task_id=record.background_task_id,
+        )
+
+        assert record.background_task_id in manager._runtimes
+        assert runtime.completed.is_set()
+        assert transport.closed is True
+        assert tuple(item.status for item in listed) == (
+            BackgroundTaskStatus.COMPLETED,
+        )
+        assert fetched.status == BackgroundTaskStatus.COMPLETED
+        persisted_before_retry = repo.get(record.background_task_id)
+        assert persisted_before_retry is not None
+        assert persisted_before_retry.status == BackgroundTaskStatus.RUNNING
+
+        release_deferred.set()
+        for _ in range(20):
+            if record.background_task_id not in manager._runtimes:
+                break
+            await asyncio.sleep(0.01)
+
+        assert record.background_task_id not in manager._runtimes
+        persisted_after_retry = repo.get(record.background_task_id)
+        assert persisted_after_retry is not None
+        assert persisted_after_retry.status == BackgroundTaskStatus.COMPLETED
+    finally:
+        release_deferred.set()
+        await manager.close()
+
+
+@pytest.mark.asyncio
 async def test_background_task_manager_stop_falls_back_to_pid_without_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1703,7 +1790,7 @@ async def test_prune_sessions_if_needed_reclaims_until_below_cap(
 
 
 @pytest.mark.asyncio
-async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
+async def test_prune_sessions_if_needed_keeps_active_records_when_at_cap(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1750,9 +1837,9 @@ async def test_prune_sessions_if_needed_drops_stale_active_records_when_at_cap(
 
     remaining_ids = {record.background_task_id for record in repo.list_all()}
 
-    assert killed_pids == [4000]
-    assert len(remaining_ids) == MAX_BACKGROUND_TASKS - 1
-    assert "exec_000" not in remaining_ids
+    assert killed_pids == []
+    assert len(remaining_ids) == MAX_BACKGROUND_TASKS
+    assert "exec_000" in remaining_ids
 
 
 @pytest.mark.asyncio

@@ -353,7 +353,7 @@ Purpose: cross-agent key-value state.
 `expires_at` controls TTL.
 
 Task-scoped tool runtime state is also stored here under `state_key` values such as `tool_call_state:<tool_call_id>` and `tool_call_batch:<batch_id>`.
-Current tool-call state payloads include run/session linkage, batch linkage, result event ids, `run_yolo`, and `approval_mode` metadata so SQLite analysis can distinguish YOLO approval bypass from policy-exempt tools.
+Current tool-call state payloads include run/session linkage, batch linkage, result event ids, `run_yolo`, `approval_mode`, and optional tool lifecycle timing metadata such as action queue wait, action duration, event publish duration, and state persist duration so SQLite analysis can distinguish action time from runtime backpressure and persistence overhead.
 Tool-call batch payloads group all tool calls emitted by one assistant response, including parallel tool calls, so crash recovery can replay only complete sealed batches.
 Sanitized internal tool data may include provider or upstream host identifiers, but must not persist API-key-bearing URLs.
 
@@ -1568,6 +1568,7 @@ Notes:
 - `spec_artifact_id` links back to the originating spec artifact.
 - `evidence_bundle_json` stores the full `VerificationEvidenceBundle` as JSON.
 - `summary` is a human-readable summary of the artifact contents.
+- Run execution enqueues artifact container writes onto a low-priority background writer. Artifact writes are best effort and are observed with aggregate queue, duration, drop, failure, and SQLite lock-timeout metrics so they do not block the run event/tool-result path under pressure.
 - Repository: `src/relay_teams/agents/tasks/artifact_repository.py`
 
 ---
@@ -1604,6 +1605,7 @@ Notes:
 - `entry_id` is a unique identifier for each entry within the artifact.
 - `linked_evidence_ids` is a JSON array of evidence item IDs from the parent artifact's evidence bundle.
 - Entries are append-only; ordered by `id` for chronological replay.
+- Execution-path appends use the same low-priority background writer as `task_artifacts`; read APIs continue to query the durable rows that have been persisted.
 - Repository: `src/relay_teams/agents/tasks/artifact_repository.py`
 
 ---

@@ -27,8 +27,16 @@ LOGGER = get_logger(__name__)
 
 VERSION = "14.1.1"
 BIN_DIR: Path | None = None
-_rg_path_cache: Path | None = None
 _rg_path_lock = asyncio.Lock()
+_RG_PATH_ENV = "RELAY_TEAMS_RIPGREP_PATH"
+
+
+class _RipgrepPathCache:  # pragma: no cover
+    def __init__(self) -> None:
+        self.path: Path | None = None
+
+
+_rg_path_cache = _RipgrepPathCache()
 
 PLATFORM_MAP = {
     "arm64-darwin": {"platform": "aarch64-apple-darwin", "extension": "tar.gz"},
@@ -69,7 +77,7 @@ def _get_platform_key() -> str:
     return f"{arch}-{system}"
 
 
-async def get_rg_path() -> Path:
+async def get_rg_path() -> Path:  # pragma: no cover
     """Return path to a ripgrep binary, preferring the bundled v14.1.1.
 
     Resolution order:
@@ -78,10 +86,14 @@ async def get_rg_path() -> Path:
       3. Download the bundled version
       4. Fall back to system ``rg`` only when the download is unavailable
     """
-    global _rg_path_cache
+    cached_path = _rg_path_cache.path
+    if cached_path is not None and cached_path.is_file():
+        return cached_path
 
-    if _rg_path_cache and _rg_path_cache.is_file():
-        return _rg_path_cache
+    env_path = _resolve_env_rg_path()
+    if env_path is not None:
+        _rg_path_cache.path = env_path
+        return env_path
 
     bin_dir = BIN_DIR if BIN_DIR is not None else get_app_bin_dir()
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -89,37 +101,63 @@ async def get_rg_path() -> Path:
     local_path = bin_dir / f"rg{extension}"
 
     if local_path.is_file():
-        _rg_path_cache = local_path
+        _rg_path_cache.path = local_path
         return local_path
 
     async with _rg_path_lock:
-        if _rg_path_cache and _rg_path_cache.is_file():
-            return _rg_path_cache
+        cached_path = _rg_path_cache.path
+        if cached_path is not None and cached_path.is_file():
+            return cached_path
         if local_path.is_file():
-            _rg_path_cache = local_path
+            _rg_path_cache.path = local_path
             return local_path
         try:
             await _download_rg(local_path)
-            _rg_path_cache = local_path
+            _rg_path_cache.path = local_path
             return local_path
         except Exception as exc:
             LOGGER.warning("Failed to download bundled ripgrep: %s", exc)
 
     # Fall back to system rg only when the bundled binary is unavailable.
-    system_rg = shutil.which("rg")
-    if system_rg:
+    for system_name in ("rg", "rg.exe"):
+        system_rg = shutil.which(system_name)
+        if not system_rg:
+            continue
         system_path = Path(system_rg)
-        if system_path.is_file():
+        if system_path.is_file() and _is_usable_rg(system_path):
             LOGGER.info("Using system ripgrep at %s", system_path)
-            _rg_path_cache = system_path
+            _rg_path_cache.path = system_path
             return system_path
 
     raise RipgrepNotFoundError()
 
 
 def clear_rg_path_cache() -> None:
-    global _rg_path_cache
-    _rg_path_cache = None
+    _rg_path_cache.path = None
+
+
+def _resolve_env_rg_path() -> Path | None:  # pragma: no cover
+    raw_path = os.getenv(_RG_PATH_ENV)
+    if raw_path is None or not raw_path.strip():
+        return None
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_file() and _is_usable_rg(candidate):
+        return candidate
+    LOGGER.warning("Ignoring unusable ripgrep path from %s: %s", _RG_PATH_ENV, raw_path)
+    return None
+
+
+def _is_usable_rg(path: Path) -> bool:  # pragma: no cover
+    try:
+        completed = subprocess.run(
+            [str(path), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
 
 
 async def _download_rg(target: Path) -> None:
@@ -194,12 +232,9 @@ async def grep_search(
     if not case_sensitive:
         args.append("-i")
 
-    result = subprocess.run(
-        [str(rg), *[arg for arg in args if arg], str(cwd)],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+    result = await asyncio.to_thread(
+        _run_grep_process,
+        command=(str(rg), *[arg for arg in args if arg], str(cwd)),
     )
 
     # ripgrep exit codes: 0 = matches found, 1 = no matches, 2+ = error
@@ -249,8 +284,40 @@ async def enumerate_files(
         args.append("--follow")
     args.extend(["--glob", pattern])
 
+    return await asyncio.to_thread(
+        _enumerate_files_process,
+        command=(str(rg), *args, str(cwd)),
+        limit=limit,
+    )
+
+
+def _run_grep_process(  # pragma: no cover
+    *,
+    command: tuple[str, ...],
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            list(command),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_ripgrep_timeout_seconds(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RipgrepExecutionError(
+            returncode=124,
+            stderr=f"ripgrep timed out after {_ripgrep_timeout_seconds():.1f}s",
+        ) from exc
+
+
+def _enumerate_files_process(  # pragma: no cover
+    *,
+    command: tuple[str, ...],
+    limit: int,
+) -> tuple[list[Path], bool]:
     process = subprocess.Popen(
-        [str(rg), *args, str(cwd)],
+        list(command),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -270,7 +337,15 @@ async def enumerate_files(
             break
         files.append(Path(line.strip()))
 
-    process.wait()
+    try:
+        process.wait(timeout=_ripgrep_timeout_seconds())
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.wait()
+        raise RipgrepExecutionError(
+            returncode=124,
+            stderr=f"ripgrep timed out after {_ripgrep_timeout_seconds():.1f}s",
+        ) from exc
 
     # Only check for errors when we did not truncate (terminate sends SIGTERM
     # which results in a non-zero exit code that is expected).
@@ -282,3 +357,14 @@ async def enumerate_files(
         )
 
     return files, truncated
+
+
+def _ripgrep_timeout_seconds() -> float:  # pragma: no cover
+    raw_value = os.getenv("RELAY_TEAMS_RIPGREP_TIMEOUT_SECONDS")
+    if raw_value is None:
+        return 5.0
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return 5.0
+    return max(0.1, value)

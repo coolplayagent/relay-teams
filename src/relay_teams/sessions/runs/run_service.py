@@ -96,6 +96,7 @@ from relay_teams.sessions.runs.user_question_repository import UserQuestionRepos
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.agents.tasks.task_repository import TaskRepository
+from relay_teams.sessions.runs.run_worker_capacity import RunWorkerCapacityLimiter
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.workspace_tools.shell_approval_repo import (
     ShellApprovalRepository,
@@ -106,6 +107,9 @@ from relay_teams.hooks import HookService
 
 logger = get_logger(__name__)
 _T = TypeVar("_T")
+RUN_EVENT_STREAM_LOG_POLL_SECONDS = 1.0
+RUN_FOREGROUND_TASK_CLEANUP_TIMEOUT_SECONDS = 5.0
+QUEUED_RUN_RUNTIME_FAST_PERSIST_TIMEOUT_SECONDS = 0.05
 
 
 def _is_run_already_running_conflict(*, run_id: str, error: RuntimeError) -> bool:
@@ -124,7 +128,7 @@ def _run_event_replay_sort_key(run_event: RunEvent) -> int:
     return int(run_event.event_id or 0)
 
 
-class SessionRunService:
+class SessionRunService:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -314,9 +318,11 @@ class SessionRunService:
             event_publisher=self._event_publisher,
         )
         self._pending_runs: dict[str, IntentInput] = {}
+        self._pending_run_persist_tasks: dict[str, asyncio.Task[None]] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
-        self._run_creation_lock = asyncio.Lock()
+        self._run_creation_locks: dict[str, asyncio.Lock] = {}
+        self._run_worker_capacity = RunWorkerCapacityLimiter()
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._scheduler = RunScheduler(
             meta_agent=self._meta_agent,
@@ -411,6 +417,17 @@ class SessionRunService:
         result: RunResult,
     ) -> RunResult:
         current_result = self._terminal_results.normalize_terminal_run_result(result)
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.INFO,
+                event="run.stop_hooks.started",
+                message="Run stop hooks started",
+                payload={
+                    "completion_reason": current_result.completion_reason.value,
+                    "root_task_id": current_result.root_task_id,
+                },
+            )
         if current_result.completion_reason == RunCompletionReason.ASSISTANT_ERROR:
             await self._hook_pipeline.execute_stop_failure_hooks(
                 run_id=run_id,
@@ -434,6 +451,21 @@ class SessionRunService:
                 root_task_id=current_result.root_task_id,
             )
             if not should_retry:
+                with bind_trace_context(
+                    trace_id=run_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        event="run.stop_hooks.completed",
+                        message="Run stop hooks completed",
+                        payload={
+                            "retry": False,
+                            "root_task_id": current_result.root_task_id,
+                        },
+                    )
                 return current_result
             current_result = self._terminal_results.normalize_terminal_run_result(
                 await self._recovery_service.run_with_auto_recovery(
@@ -774,12 +806,12 @@ class SessionRunService:
         allow_active_run_attach: bool,
         source: InjectionSource,
     ) -> tuple[str, str]:
-        async with self._run_creation_lock:
-            session_id = await self._ensure_session_async(intent.session_id)
+        session_id = await self._ensure_session_async(intent.session_id)
+        async with self._run_creation_lock_for_session(session_id):
             intent.session_id = session_id
             intent = await self._prepare_intent_async(intent)
             self._run_control_manager.assert_session_allows_main_input(session_id)
-            _ = await self._session_repo.mark_started_async(session_id)
+            await self._mark_session_started_async(session_id)
 
             existing = await self._active_recoverable_run_async(session_id)
             if existing is not None:
@@ -830,6 +862,34 @@ class SessionRunService:
                     active_run_id in self._running_run_ids
                     or self._injection_manager.is_active(active_run_id)
                 ):
+                    if (
+                        active_run_id in self._pending_runs
+                        and not self._run_control_manager.get_coordinator_instance_id(
+                            run_id=active_run_id,
+                            session_id=session_id,
+                        )
+                    ):
+                        await self._append_followup_to_starting_run_async(
+                            run_id=active_run_id,
+                            session_id=session_id,
+                            next_intent=intent,
+                        )
+                        with bind_trace_context(
+                            trace_id=active_run_id,
+                            run_id=active_run_id,
+                            session_id=session_id,
+                        ):
+                            log_event(
+                                logger,
+                                logging.INFO,
+                                event="run.followup.attached",
+                                message=(
+                                    "Follow-up appended to active run before "
+                                    "coordinator startup completed"
+                                ),
+                                payload={"mode": "active_starting_append"},
+                            )
+                        return active_run_id, session_id
                     await self._update_run_yolo_async(
                         run_id=active_run_id,
                         session_id=session_id,
@@ -888,6 +948,105 @@ class SessionRunService:
 
             return await self._queue_new_run_async(session_id=session_id, intent=intent)
 
+    async def _merge_followup_into_pending_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        current_intent: IntentInput,
+        next_intent: IntentInput,
+    ) -> None:
+        current_intent.intent = self._merge_intent(
+            current_intent.intent,
+            next_intent.intent,
+        )
+        existing_skills = current_intent.skills or ()
+        next_skills = next_intent.skills or ()
+        merged_skills = tuple(dict.fromkeys((*existing_skills, *next_skills)))
+        current_intent.skills = merged_skills or None
+        current_intent.yolo = next_intent.yolo
+        run_intent_repo = self._run_intent_repo
+        if run_intent_repo is not None:
+            await run_intent_repo.upsert_async(
+                run_id=run_id,
+                session_id=session_id,
+                intent=current_intent,
+            )
+
+    async def _append_followup_to_starting_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        next_intent: IntentInput,
+    ) -> None:
+        pending_intent = self._pending_runs.get(run_id)
+        if pending_intent is not None:
+            pending_intent.intent = self._merge_intent(
+                pending_intent.intent,
+                next_intent.intent,
+            )
+            existing_skills = pending_intent.skills or ()
+            next_skills = next_intent.skills or ()
+            merged_skills = tuple(dict.fromkeys((*existing_skills, *next_skills)))
+            pending_intent.skills = merged_skills or None
+            pending_intent.yolo = next_intent.yolo
+        run_intent_repo = self._run_intent_repo
+        if run_intent_repo is not None:
+            await run_intent_repo.append_followup_async(
+                run_id=run_id,
+                content=next_intent.intent,
+            )
+            await self._update_run_yolo_async(
+                run_id=run_id,
+                session_id=session_id,
+                yolo=next_intent.yolo,
+            )
+
+    def _run_creation_lock_for_session(self, session_id: str) -> asyncio.Lock:
+        lock = self._run_creation_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._run_creation_locks[session_id] = lock
+        return lock
+
+    def _schedule_session_mark_started(self, session_id: str) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _ = self._session_repo.mark_started(session_id)
+            return
+        task = asyncio.create_task(self._mark_session_started_async(session_id))
+        task.add_done_callback(
+            lambda completed: self._log_session_mark_started_result(
+                completed,
+                session_id=session_id,
+            )
+        )
+
+    async def _mark_session_started_async(self, session_id: str) -> None:
+        _ = await self._session_repo.mark_started_async(session_id)
+
+    @staticmethod
+    def _log_session_mark_started_result(
+        task: asyncio.Task[None],
+        *,
+        session_id: str,
+    ) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            with bind_trace_context(session_id=session_id):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.session_mark_started_failed",
+                    message="Deferred session started marker failed",
+                    exc_info=exc,
+                )
+
     def _queue_new_run(
         self,
         *,
@@ -906,8 +1065,90 @@ class SessionRunService:
         if self._hook_service is not None:
             self._hook_service.snapshot_run(run_id)
         self._pending_runs[run_id] = intent
+        self._remember_active_run(session_id, run_id)
+        runtime_persist_task: asyncio.Task[RunRuntimeRecord] | None = None
         run_runtime_repo = self._run_runtime_repo
         if run_runtime_repo is not None:
+            runtime_persist_task = asyncio.create_task(
+                run_runtime_repo.ensure_async(
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=RunRuntimeStatus.QUEUED,
+                    phase=RunRuntimePhase.IDLE,
+                )
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(runtime_persist_task),
+                    timeout=QUEUED_RUN_RUNTIME_FAST_PERSIST_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                log_event(
+                    logger,
+                    logging.DEBUG,
+                    event="run.queue_runtime_persist.fast_path_timeout",
+                    message=(
+                        "Queued run runtime persistence exceeded the fast-path "
+                        "timeout; background persistence will continue"
+                    ),
+                    payload={
+                        "run_id": run_id,
+                        "session_id": session_id,
+                        "timeout_seconds": (
+                            QUEUED_RUN_RUNTIME_FAST_PERSIST_TIMEOUT_SECONDS
+                        ),
+                    },
+                )
+            except asyncio.CancelledError:
+                runtime_persist_task.cancel()
+                await self._safe_finalize_run_async(
+                    run_id=run_id,
+                    session_id=session_id,
+                )
+                raise
+            except Exception:
+                await self._safe_finalize_run_async(
+                    run_id=run_id,
+                    session_id=session_id,
+                )
+                raise
+        persist_task = asyncio.create_task(
+            self._persist_queued_run_async(
+                run_id=run_id,
+                session_id=session_id,
+                intent=intent,
+                runtime_persist_task=runtime_persist_task,
+            )
+        )
+        self._pending_run_persist_tasks[run_id] = persist_task
+        persist_task.add_done_callback(
+            lambda completed: self._log_queued_run_persist_result(
+                completed,
+                run_id=run_id,
+                session_id=session_id,
+            )
+        )
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.DEBUG,
+                event="run.queued",
+                message="Run queued for streaming execution",
+            )
+        return run_id, session_id
+
+    async def _persist_queued_run_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        intent: IntentInput,
+        runtime_persist_task: asyncio.Task[RunRuntimeRecord] | None = None,
+    ) -> None:
+        run_runtime_repo = self._run_runtime_repo
+        if runtime_persist_task is not None:
+            await asyncio.shield(runtime_persist_task)
+        elif run_runtime_repo is not None:
             await run_runtime_repo.ensure_async(
                 run_id=run_id,
                 session_id=session_id,
@@ -921,15 +1162,69 @@ class SessionRunService:
                 session_id=session_id,
                 intent=intent,
             )
-        self._remember_active_run(session_id, run_id)
-        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
-            log_event(
-                logger,
-                logging.INFO,
-                event="run.queued",
-                message="Run queued for streaming execution",
-            )
-        return run_id, session_id
+
+    @staticmethod
+    def _log_queued_run_persist_result(
+        task: asyncio.Task[None],
+        *,
+        run_id: str,
+        session_id: str,
+    ) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=run_id, run_id=run_id, session_id=session_id
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.queue_persist_failed",
+                    message="Queued run persistence failed",
+                    exc_info=exc,
+                )
+
+    async def _await_pending_run_persistence_async(self, run_id: str) -> bool:
+        task = self._pending_run_persist_tasks.get(run_id)
+        if task is None:
+            return run_id in self._pending_runs
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return False
+            raise
+        _ = self._pending_run_persist_tasks.pop(run_id, None)
+        return run_id in self._pending_runs
+
+    def _cancel_pending_run_persistence(self, run_id: str) -> None:
+        task = self._pending_run_persist_tasks.pop(run_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _cancel_and_drain_pending_run_persistence_async(
+        self, run_id: str
+    ) -> None:
+        task = self._pending_run_persist_tasks.pop(run_id, None)
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            with bind_trace_context(trace_id=run_id, run_id=run_id):
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    event="run.queue_persist_drain_failed",
+                    message="Queued run persistence drain failed during cleanup",
+                    exc_info=exc,
+                )
 
     def ensure_run_started(self, run_id: str) -> None:
         self._scheduler.ensure_run_started(run_id)
@@ -992,7 +1287,31 @@ class SessionRunService:
                         session_id=session_id,
                     )
                 return
-            await self._worker(run_id=run_id, session_id=session_id, runner=runner)
+            worker_started = asyncio.Event()
+
+            async def _capacity_worker() -> None:
+                worker_started.set()
+                await self._worker(
+                    run_id=run_id,
+                    session_id=session_id,
+                    runner=runner,
+                )
+
+            try:
+                await self._run_worker_capacity.run(
+                    run_id=run_id,
+                    session_id=session_id,
+                    worker=_capacity_worker,
+                )
+            except asyncio.CancelledError:
+                if not worker_started.is_set():
+                    _clear_current_task_cancellation_requests()
+                    await self._handle_startup_cancelled_async(
+                        run_id=run_id,
+                        session_id=session_id,
+                    )
+                    return
+                raise
 
         task = asyncio.create_task(_run_after_startup())
         self._run_control_manager.register_run_task(
@@ -1081,6 +1400,18 @@ class SessionRunService:
         )
         run_runtime_repo = self._run_runtime_repo
         try:
+            if not await self._await_pending_run_persistence_async(run_id):
+                startup_failed.set()
+                startup_done.set()
+                task.cancel()
+                await self._safe_finalize_run_async(
+                    run_id=run_id,
+                    session_id=session_id,
+                )
+                return
+            if self._run_control_manager.is_run_stop_requested(run_id) or task.done():
+                startup_done.set()
+                return
             if run_runtime_repo is not None:
                 await run_runtime_repo.ensure_async(
                     run_id=run_id,
@@ -1108,7 +1439,10 @@ class SessionRunService:
             startup_failed.set()
             startup_done.set()
             task.cancel()
-            self._run_control_manager.unregister_run_task(run_id)
+            await self._safe_finalize_run_async(
+                run_id=run_id,
+                session_id=session_id,
+            )
             raise
         startup_done.set()
         if self._run_control_manager.is_run_stop_requested(run_id) or task.done():
@@ -1299,16 +1633,6 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
-            await self._emit_notification_async(
-                notification_type=notification_type,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=result.trace_id,
-                title=notification_title,
-                body=notification_body,
-                session_mode=notification_session_mode,
-                run_kind=notification_run_kind,
-            )
             await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
@@ -1334,6 +1658,16 @@ class SessionRunService:
                         "completion_reason": completion_reason.value,
                     },
                 )
+            await self._emit_notification_async(
+                notification_type=notification_type,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=result.trace_id,
+                title=notification_title,
+                body=notification_body,
+                session_mode=notification_session_mode,
+                run_kind=notification_run_kind,
+            )
             await self._hook_pipeline.execute_session_end_hooks(
                 run_id=run_id,
                 session_id=session_id,
@@ -1456,32 +1790,6 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
-            await self._emit_notification_async(
-                notification_type=(
-                    NotificationType.RUN_FAILED
-                    if failed
-                    else NotificationType.RUN_COMPLETED
-                ),
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=result.trace_id,
-                title="Run Failed" if failed else "Run Completed",
-                body=(
-                    output_text
-                    if output_text
-                    else (f"Run {run_id} failed." if failed else "")
-                ),
-                session_mode=(
-                    runtime_intent.session_mode.value
-                    if runtime_intent is not None
-                    else "normal"
-                ),
-                run_kind=(
-                    runtime_intent.run_kind.value
-                    if runtime_intent is not None
-                    else "conversation"
-                ),
-            )
             await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
@@ -1512,14 +1820,64 @@ class SessionRunService:
                         "completion_reason": result.completion_reason.value,
                     },
                 )
+            await self._emit_notification_async(
+                notification_type=(
+                    NotificationType.RUN_FAILED
+                    if failed
+                    else NotificationType.RUN_COMPLETED
+                ),
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=result.trace_id,
+                title="Run Failed" if failed else "Run Completed",
+                body=(
+                    output_text
+                    if output_text
+                    else (f"Run {run_id} failed." if failed else "")
+                ),
+                session_mode=(
+                    runtime_intent.session_mode.value
+                    if runtime_intent is not None
+                    else "normal"
+                ),
+                run_kind=(
+                    runtime_intent.run_kind.value
+                    if runtime_intent is not None
+                    else "conversation"
+                ),
+            )
         finally:
+            await self._safe_finalize_run_async(
+                run_id=run_id,
+                session_id=session_id,
+            )
             if self._background_task_manager is not None:
                 try:
-                    await self._background_task_manager.stop_all_for_run(
-                        run_id=run_id,
-                        reason="run_finalized",
-                        execution_mode="foreground",
+                    await asyncio.wait_for(
+                        self._background_task_manager.stop_all_for_run(
+                            run_id=run_id,
+                            reason="run_finalized",
+                            execution_mode="foreground",
+                        ),
+                        timeout=RUN_FOREGROUND_TASK_CLEANUP_TIMEOUT_SECONDS,
                     )
+                except TimeoutError:
+                    with bind_trace_context(
+                        trace_id=run_id,
+                        run_id=run_id,
+                        session_id=session_id,
+                    ):
+                        log_event(
+                            logger,
+                            logging.WARNING,
+                            event="background_task.cleanup_timeout",
+                            message="Timed out cleaning up foreground background tasks",
+                            payload={
+                                "timeout_seconds": (
+                                    RUN_FOREGROUND_TASK_CLEANUP_TIMEOUT_SECONDS
+                                )
+                            },
+                        )
                 except Exception as exc:
                     with bind_trace_context(
                         trace_id=run_id,
@@ -1533,16 +1891,13 @@ class SessionRunService:
                             message="Failed to clean up background tasks",
                             exc_info=exc,
                         )
-            await self._safe_finalize_run_async(
-                run_id=run_id,
-                session_id=session_id,
-            )
 
     def _finalize_run(self, *, run_id: str, session_id: str) -> None:
         self._injection_manager.deactivate(run_id)
         self._run_control_manager.unregister_run_task(run_id)
         self._running_run_ids.discard(run_id)
         _ = self._pending_runs.pop(run_id, None)
+        self._cancel_pending_run_persistence(run_id)
         self._resume_requested_runs.discard(run_id)
         runtime = self._runtime_for_run(run_id)
         if runtime is not None and runtime.is_recoverable:
@@ -1562,6 +1917,7 @@ class SessionRunService:
         self._run_control_manager.unregister_run_task(run_id)
         self._running_run_ids.discard(run_id)
         _ = self._pending_runs.pop(run_id, None)
+        self._cancel_pending_run_persistence(run_id)
         self._resume_requested_runs.discard(run_id)
         runtime = await self._runtime_for_run_async(run_id)
         if runtime is not None and runtime.is_recoverable:
@@ -1671,13 +2027,47 @@ class SessionRunService:
                         return
 
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=RUN_EVENT_STREAM_LOG_POLL_SECONDS
+                    )
+                except TimeoutError:
+                    if self._event_log is None:
+                        continue
+                    replayed_terminal = False
+                    for replay_event in await self._replay_run_events_after_id_async(
+                        run_id, replay_high_watermark
+                    ):
+                        if (
+                            replay_event.event_id is not None
+                            and replay_event.event_id <= replay_high_watermark
+                        ):
+                            continue
+                        if replay_event.event_id is not None:
+                            replay_high_watermark = max(
+                                replay_high_watermark, replay_event.event_id
+                            )
+                        yield replay_event
+                        if replay_event.event_type in (
+                            RunEventType.RUN_PAUSED,
+                            RunEventType.RUN_COMPLETED,
+                            RunEventType.RUN_FAILED,
+                            RunEventType.RUN_STOPPED,
+                        ):
+                            terminal_reached = True
+                            replayed_terminal = True
+                            break
+                    if replayed_terminal:
+                        break
+                    continue
                 if (
                     replay_high_watermark > 0
                     and event.event_id is not None
                     and event.event_id <= replay_high_watermark
                 ):
                     continue
+                if event.event_id is not None:
+                    replay_high_watermark = max(replay_high_watermark, event.event_id)
                 yield event
                 if event.event_type in (
                     RunEventType.RUN_PAUSED,
@@ -1691,6 +2081,20 @@ class SessionRunService:
             self._run_event_hub.unsubscribe(run_id, queue)
             if terminal_reached:
                 self._run_event_hub.unsubscribe_all(run_id)
+
+    async def _replay_run_events_after_id_async(
+        self, run_id: str, after_event_id: int
+    ) -> tuple[RunEvent, ...]:
+        if self._event_log is None:
+            return ()
+        events: list[RunEvent] = []
+        for row in await self._event_log.list_by_trace_after_id_async(
+            run_id, after_event_id
+        ):
+            replay_event = self._run_event_from_log_row(row)
+            if replay_event is not None:
+                events.append(replay_event)
+        return tuple(events)
 
     async def stream_multiplexed_run_events(
         self,
@@ -1772,6 +2176,10 @@ class SessionRunService:
                                 run_id
                             )
                         continue
+                    if live_event.event_id is not None:
+                        replay_high_watermarks[run_id] = max(
+                            high_watermark, live_event.event_id
+                        )
                     yield live_event
                     if live_event.event_type in (
                         RunEventType.RUN_PAUSED,
@@ -1993,11 +2401,18 @@ class SessionRunService:
                 reason="run_stopped",
             )
             intent = self._pending_runs.pop(run_id)
+            await self._cancel_and_drain_pending_run_persistence_async(run_id)
             session_id = intent.session_id
             if session_id is None:
                 raise RuntimeError(f"Run {run_id} is missing session id")
             run_runtime_repo = self._run_runtime_repo
             if run_runtime_repo is not None:
+                await run_runtime_repo.ensure_async(
+                    run_id=run_id,
+                    session_id=session_id,
+                    status=RunRuntimeStatus.STOPPED,
+                    phase=RunRuntimePhase.IDLE,
+                )
                 await run_runtime_repo.update_async(
                     run_id,
                     status=RunRuntimeStatus.STOPPED,

@@ -119,6 +119,7 @@ class RunHookPipeline:
                     await handler.on_run_completed_async(
                         workspace_id=workspace_id,
                         session_id=session_id,
+                        run_id=run_id,
                     )
                 except (ValueError, OSError, RuntimeError):
                     # Best-effort: memory lifecycle failures must not

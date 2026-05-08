@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from pathlib import Path
@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from relay_teams.interfaces.server.deps import get_session_service
+from relay_teams.interfaces.server.async_call import RouteWorkRejectedError
 from relay_teams.interfaces.server.routers import sessions, system
 from relay_teams.providers import AgentTokenSummary, RunTokenUsage, SessionTokenUsage
 from relay_teams.roles import SystemRolesUnavailableError
@@ -27,6 +28,17 @@ from relay_teams.sessions.session_models import (
     SessionMode,
     SessionRecord,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_terminal_view_deferred_state() -> Iterator[None]:
+    with sessions._terminal_view_pending_lock:
+        sessions._terminal_view_pending_session_ids.clear()
+        sessions._terminal_view_last_started_monotonic.clear()
+    yield
+    with sessions._terminal_view_pending_lock:
+        sessions._terminal_view_pending_session_ids.clear()
+        sessions._terminal_view_last_started_monotonic.clear()
 
 
 class _FakeSessionService:
@@ -145,10 +157,42 @@ class _FakeSessionService:
     ) -> tuple[dict[str, object], ...]:
         return self.list_normal_mode_subagents(session_id)
 
+    def list_cached_normal_mode_subagents_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_normal_mode_subagents(session_id)
+
+    def get_fast_cached_normal_mode_subagents_snapshot(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        _ = session_id
+        return None
+
+    def get_cached_normal_mode_subagents_snapshot_async(
+        self, session_id: str
+    ) -> dict[str, object]:
+        return {
+            "session_id": session_id,
+            "subagents": list(self.list_normal_mode_subagents(session_id)),
+            "stale": False,
+            "snapshot_age_ms": 0,
+        }
+
     async def list_agents_in_session_async(
         self, session_id: str
     ) -> tuple[dict[str, object], ...]:
         return self.list_agents_in_session(session_id)
+
+    def list_cached_agents_in_session_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return self.list_agents_in_session(session_id)
+
+    def get_fast_cached_agents_snapshot(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        _ = session_id
+        return None
 
     async def stream_normal_mode_subagent_events(
         self,
@@ -177,6 +221,11 @@ class _FakeSessionService:
 
     async def get_session_async(self, session_id: str) -> SessionRecord:
         return self.get_session(session_id)
+
+    async def assert_session_exists_async(self, session_id: str) -> None:
+        if self.raise_missing:
+            raise KeyError(session_id)
+        self.get_calls.append(session_id)
 
     def delete_session(
         self,
@@ -287,6 +336,44 @@ class _FakeSessionService:
     ) -> SessionTokenUsage:
         return self.get_token_usage_by_session(session_id)
 
+    def get_cached_token_usage_by_session_snapshot_async(
+        self, session_id: str
+    ) -> dict[str, object]:
+        summary = self.get_token_usage_by_session(session_id)
+        return {
+            "session_id": summary.session_id,
+            "total_input_tokens": summary.total_input_tokens,
+            "total_cached_input_tokens": summary.total_cached_input_tokens,
+            "total_output_tokens": summary.total_output_tokens,
+            "total_reasoning_output_tokens": summary.total_reasoning_output_tokens,
+            "total_tokens": summary.total_tokens,
+            "total_requests": summary.total_requests,
+            "total_tool_calls": summary.total_tool_calls,
+            "by_role": {
+                role_id: {
+                    "role_id": agent.role_id,
+                    "input_tokens": agent.input_tokens,
+                    "cached_input_tokens": agent.cached_input_tokens,
+                    "latest_input_tokens": agent.latest_input_tokens,
+                    "max_input_tokens": agent.max_input_tokens,
+                    "output_tokens": agent.output_tokens,
+                    "reasoning_output_tokens": agent.reasoning_output_tokens,
+                    "total_tokens": agent.total_tokens,
+                    "requests": agent.requests,
+                    "tool_calls": agent.tool_calls,
+                    "context_window": agent.context_window,
+                    "model_profile": agent.model_profile,
+                }
+                for role_id, agent in summary.by_role.items()
+            },
+        }
+
+    def get_fast_cached_token_usage_by_session_snapshot(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        _ = session_id
+        return None
+
     def get_session_rounds(
         self,
         session_id: str,
@@ -322,11 +409,49 @@ class _FakeSessionService:
             summary=summary,
         )
 
+    def get_cached_session_rounds_async(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        cursor_run_id: str | None,
+        timeline: bool = False,
+        summary: bool = False,
+    ) -> dict[str, object]:
+        return self.get_session_rounds(
+            session_id,
+            limit=limit,
+            cursor_run_id=cursor_run_id,
+            timeline=timeline,
+            summary=summary,
+        )
+
+    def get_fast_cached_session_rounds_snapshot(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        cursor_run_id: str | None,
+        timeline: bool = False,
+        summary: bool = False,
+    ) -> dict[str, object] | None:
+        _ = (session_id, limit, cursor_run_id, timeline, summary)
+        return None
+
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
         return {"session_id": session_id, "runs": []}
 
     async def get_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
         return self.get_recovery_snapshot(session_id)
+
+    def get_cached_recovery_snapshot_async(self, session_id: str) -> dict[str, object]:
+        return self.get_recovery_snapshot(session_id)
+
+    def get_fast_cached_recovery_snapshot(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        _ = session_id
+        return None
 
     def get_round(self, session_id: str, run_id: str) -> dict[str, object]:
         return {"session_id": session_id, "run_id": run_id}
@@ -367,6 +492,17 @@ class _FakeSessionService:
 
     async def get_session_tasks_async(self, session_id: str) -> list[dict[str, object]]:
         return self.get_session_tasks(session_id)
+
+    def list_cached_session_tasks_async(
+        self, session_id: str
+    ) -> tuple[dict[str, object], ...]:
+        return tuple(self.get_session_tasks(session_id))
+
+    def get_fast_cached_session_tasks_snapshot(
+        self, session_id: str
+    ) -> dict[str, object] | None:
+        _ = session_id
+        return None
 
     def get_token_usage_by_run(self, run_id: str) -> RunTokenUsage:
         return RunTokenUsage(
@@ -502,23 +638,21 @@ class _BlockingRecoveryService(_FakeSessionService):
 class _BlockingTerminalViewService(_FakeSessionService):
     def __init__(self) -> None:
         super().__init__()
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
-        self.cancelled = False
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
+        self.started.set()
+        _ = self.release.wait(timeout=5.0)
+        self.terminal_view_calls.append(session_id)
 
     async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
-        self.started.set()
-        try:
-            await self.release.wait()
-        except asyncio.CancelledError:
-            self.cancelled = True
-            raise
-        self.terminal_view_calls.append(session_id)
+        await asyncio.to_thread(self.mark_latest_terminal_run_viewed, session_id)
 
 
 class _FailingTerminalViewService(_BlockingTerminalViewService):
-    async def mark_latest_terminal_run_viewed_async(self, session_id: str) -> None:
-        await super().mark_latest_terminal_run_viewed_async(session_id)
+    def mark_latest_terminal_run_viewed(self, session_id: str) -> None:
+        super().mark_latest_terminal_run_viewed(session_id)
         raise RuntimeError("terminal marker failed")
 
 
@@ -579,8 +713,7 @@ def test_mark_session_terminal_viewed_route_calls_service() -> None:
     response = client.post("/api/sessions/session-1/terminal-view")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-    assert fake_service.terminal_view_calls == ["session-1"]
+    assert response.json() == {"status": "deferred"}
 
 
 def test_mark_session_terminal_viewed_route_uses_session_read_queue() -> None:
@@ -590,8 +723,7 @@ def test_mark_session_terminal_viewed_route_uses_session_read_queue() -> None:
     response = client.post("/api/sessions/session-1/terminal-view")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
-    assert fake_service.terminal_view_calls == ["session-1"]
+    assert response.json() == {"status": "deferred"}
 
 
 def test_mark_session_terminal_viewed_route_returns_404_for_missing_session() -> None:
@@ -600,17 +732,38 @@ def test_mark_session_terminal_viewed_route_returns_404_for_missing_session() ->
     client = _create_client(fake_service)
 
     response = client.post("/api/sessions/session-1/terminal-view")
+    repeated_response = client.post("/api/sessions/session-1/terminal-view")
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Session not found"
+    assert response.json() == {"detail": "Session not found"}
+    assert repeated_response.status_code == 404
+    assert repeated_response.json() == {"detail": "Session not found"}
+    assert fake_service.terminal_view_calls == []
+
+
+def test_mark_session_terminal_viewed_route_coalesces_cooldown() -> None:
+    fake_service = _FakeSessionService()
+    client = _create_client(fake_service)
+
+    first = client.post("/api/sessions/session-1/terminal-view")
+    second = client.post("/api/sessions/session-1/terminal-view")
+
+    for _ in range(50):
+        if fake_service.terminal_view_calls:
+            break
+        time.sleep(0.02)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == {"status": "deferred"}
+    assert second.json() == {"status": "deferred"}
+    assert fake_service.get_calls == ["session-1"]
+    assert fake_service.terminal_view_calls == ["session-1"]
 
 
 @pytest.mark.asyncio
-async def test_mark_session_terminal_viewed_timeout_keeps_marker_running(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_mark_session_terminal_viewed_defers_single_background_marker() -> None:
     fake_service = _BlockingTerminalViewService()
-    monkeypatch.setattr(sessions, "SESSION_TERMINAL_VIEW_TIMEOUT_SECONDS", 0.01)
     app = _create_client(fake_service).app
     transport = httpx.ASGITransport(app=app)
 
@@ -620,11 +773,14 @@ async def test_mark_session_terminal_viewed_timeout_keeps_marker_running(
         timeout=1.0,
     ) as client:
         response = await client.post("/api/sessions/session-1/terminal-view")
+        assert await _wait_for_threading_event(fake_service.started) is True
+        duplicate_response = await client.post("/api/sessions/session-1/terminal-view")
 
     assert response.status_code == 200
     assert response.json() == {"status": "deferred"}
-    await asyncio.wait_for(fake_service.started.wait(), timeout=1.0)
-    assert fake_service.cancelled is False
+    assert duplicate_response.status_code == 200
+    assert duplicate_response.json() == {"status": "deferred"}
+    assert fake_service.terminal_view_calls == []
 
     fake_service.release.set()
     for _ in range(50):
@@ -632,7 +788,6 @@ async def test_mark_session_terminal_viewed_timeout_keeps_marker_running(
             break
         await asyncio.sleep(0.02)
 
-    assert fake_service.cancelled is False
     assert fake_service.terminal_view_calls == ["session-1"]
 
 
@@ -668,7 +823,31 @@ async def test_deferred_terminal_view_result_logs_cancelled_task(
 
 
 @pytest.mark.asyncio
-async def test_mark_session_terminal_viewed_cancelled_request_observes_marker_failure(
+async def test_deferred_terminal_view_result_drops_rejected_marker(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def raise_rejected() -> None:
+        raise RouteWorkRejectedError("queue full")
+
+    caplog.set_level(logging.WARNING)
+    fake_service = _FakeSessionService()
+    marker_task = asyncio.create_task(raise_rejected())
+    await asyncio.sleep(0)
+
+    sessions._log_deferred_terminal_view_result(
+        marker_task,
+        "session-1",
+        service=fake_service,
+    )
+
+    await asyncio.sleep(0)
+
+    assert fake_service.terminal_view_calls == []
+    assert "Deferred session terminal view marker was dropped under load" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_mark_session_terminal_viewed_deferred_marker_logs_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     fake_service = _FailingTerminalViewService()
@@ -681,14 +860,9 @@ async def test_mark_session_terminal_viewed_cancelled_request_observes_marker_fa
         base_url="http://testserver",
         timeout=1.0,
     ) as client:
-        request_task = asyncio.create_task(
-            client.post("/api/sessions/session-1/terminal-view")
-        )
-        await asyncio.wait_for(fake_service.started.wait(), timeout=1.0)
-
-        request_task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            _ = await request_task
+        response = await client.post("/api/sessions/session-1/terminal-view")
+        assert response.status_code == 200
+        assert await _wait_for_threading_event(fake_service.started) is True
 
     fake_service.release.set()
     for _ in range(50):
@@ -696,7 +870,6 @@ async def test_mark_session_terminal_viewed_cancelled_request_observes_marker_fa
             break
         await asyncio.sleep(0.02)
 
-    assert fake_service.cancelled is False
     assert "Deferred session terminal view marker failed" in caplog.text
 
 
@@ -791,16 +964,13 @@ def test_session_routes_call_service() -> None:
     assert [response.status_code for response in requests] == [200] * len(requests)
 
 
-def test_session_recovery_times_out_when_snapshot_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(sessions, "SESSION_RECOVERY_TIMEOUT_SECONDS", 0.01)
+def test_session_recovery_returns_cached_snapshot_without_route_timeout() -> None:
     client = _create_client(_SleepingRecoveryService())
 
     response = client.get("/api/sessions/session-1/recovery")
 
-    assert response.status_code == 503
-    assert response.json()["detail"] == "Session recovery snapshot timed out"
+    assert response.status_code == 200
+    assert response.json() == {"session_id": "session-1", "runs": []}
 
 
 @pytest.mark.asyncio

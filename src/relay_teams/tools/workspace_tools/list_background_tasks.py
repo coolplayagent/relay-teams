@@ -28,7 +28,7 @@ def register(agent: Agent[ToolDeps, str]) -> None:
             service = require_background_task_service(ctx)
             items: list[JsonValue] = [
                 build_background_task_payload(record)
-                for record in service.list_for_run(ctx.deps.run_id)
+                for record in service.list_for_session(ctx.deps.session_id)
             ]
             payload: dict[str, JsonValue] = {"items": items}
             return ToolResultProjection(visible_data=payload, internal_data=payload)

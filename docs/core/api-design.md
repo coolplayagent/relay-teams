@@ -1120,6 +1120,8 @@ Notes:
 
 Lists sessions.
 
+This list is served through a short-lived stale-first cache during high-frequency session switching. Session create, update, delete, topology changes, terminal-run viewed updates, and run events mark the cache dirty. If a cached list exists, stale reads return the previous `list[SessionRecord]` response immediately while a single background refresh rebuilds the projection; the wire shape is unchanged.
+
 ### `GET /sessions/{session_id}`
 
 Gets one session.
@@ -1197,6 +1199,8 @@ Query parameters:
 - optional `timeline=true`: returns the full lightweight round index for timeline navigation; this mode ignores `limit` and `cursor_run_id`, sets `has_more = false`, and omits heavy message/task mapping fields such as `coordinator_messages`, `tasks`, `instance_role_map`, `role_instance_map`, `task_instance_map`, and `task_status_map`
 - optional `summary=true`: returns the paged lightweight round index for fast session switching; this mode honors `limit` and `cursor_run_id`, keeps pagination fields, and omits the same heavy fields as `timeline=true`
 
+The endpoint is served from a per-session materialized snapshot cache during high-frequency session switching. Fresh responses include `stale=false`; stale-first responses include `stale=true` and `snapshot_age_ms` while a background projection refresh is in flight. Existing round fields keep the same meaning.
+
 Response shape:
 
 ```json
@@ -1264,7 +1268,11 @@ Response shape:
     }
   ],
   "has_more": false,
-  "next_cursor": null
+  "next_cursor": null,
+  "stale": false,
+  "snapshot_age_ms": 0,
+  "snapshot_cache_hit": true,
+  "snapshot_refresh_ms": 4
 }
 ```
 
@@ -1295,6 +1303,7 @@ Gets one round projection.
 ### `GET /sessions/{session_id}/recovery`
 
 Returns active run recovery state, pending tool approvals, pending user questions, managed background task state, paused subagent state, and round snapshot.
+The endpoint may return a cached snapshot during high-frequency session switching. In that case the response includes `stale=true` and `snapshot_age_ms`; fresh responses include `stale=false`. Existing recovery fields keep the same meaning.
 
 `active_run` also includes:
 - `last_event_id`
@@ -1378,6 +1387,7 @@ Notes:
 - This endpoint continues to back the orchestration/legacy right-rail agent list.
 - Ephemeral same-role clones are excluded from this projection.
 - Normal-mode `spawn_subagent` child sessions are excluded from this projection.
+- Served from a stale-first materialized per-session snapshot cache. The legacy response shape stays as the item array; stale metadata is internal to the cache path for this endpoint.
 
 Response fields include:
 - `instance_id`
@@ -1398,6 +1408,8 @@ Notes:
 - Returns only subagent instances whose `run_id` is a normal-mode synthetic `subagent_run_*`.
 - Results are instance-scoped and are not collapsed by `role_id`, so multiple subagent runs under the same role are all returned.
 - Intended for the left sidebar child-session navigation, not the orchestration right rail.
+- Served from the same stale-first materialized snapshot cache as `GET /sessions/{session_id}/subagents:snapshot`; this legacy list response keeps returning only the item array.
+- The cached projection includes queued, running, and terminal subagent state and is refreshed in the background after dirty run events.
 
 Response fields include:
 - `instance_id`
@@ -1417,6 +1429,15 @@ Response fields include:
 - `reflection_updated_at`
 - `runtime_system_prompt`
 - `runtime_tools_json`
+
+### `GET /sessions/{session_id}/subagents:snapshot`
+
+Returns the cached normal-mode subagent projection with metadata:
+- `items`: same item array as `GET /sessions/{session_id}/subagents`
+- `stale`: `true` when the returned snapshot is older than the freshness window or marked dirty while refresh is in flight
+- `snapshot_age_ms`: age of the returned snapshot
+- `snapshot_cache_hit`: `true` when the response was served from cache
+- `snapshot_refresh_ms`: duration of the projection build that produced the cached snapshot
 
 ### `DELETE /sessions/{session_id}/subagents/{instance_id}`
 
@@ -1486,6 +1507,8 @@ Deletes the stored reflection summary for that subagent role in the current work
 
 Lists delegated tasks in the session.
 
+This endpoint uses the same stale-first per-session snapshot cache as the session switch projections. The legacy response shape stays as the item array.
+
 Task summaries include the persisted lifecycle view plus spec/evidence metadata used by the subagent panel:
 - `spec_artifact_id`
 - `spec_source_task_id`
@@ -1496,6 +1519,8 @@ Task summaries include the persisted lifecycle view plus spec/evidence metadata 
 ### `GET /sessions/{session_id}/token-usage`
 
 Returns aggregated token usage for the active session segment, grouped by `role_id`. The totals include the coordinator agent and every subagent run recorded under the same `session_id` after the latest logical `clear` marker. Response totals expose `total_cached_input_tokens` and `total_reasoning_output_tokens` alongside the existing input/output/request counters. Legacy local rows with missing or `NULL` counters are normalized to `0` before aggregation.
+
+The response is served from a stale-first per-session snapshot cache and may include optional metadata fields: `stale`, `snapshot_age_ms`, `snapshot_cache_hit`, and `snapshot_refresh_ms`. Existing token usage totals keep the same meaning.
 
 ### `GET /sessions/{session_id}/runs/{run_id}/token-usage`
 
@@ -1624,6 +1649,11 @@ Streams run events via SSE.
 Multimodal events:
 - `output_delta`: payload includes `output`, an array of typed content parts. Text streaming may still emit `text_delta`; media outputs are emitted through `output_delta`.
 - `generation_progress`: payload includes `run_kind`, `phase`, `progress`, and optional `preview_asset_id` for provider-native image/audio/video generation runs.
+
+Tool result events:
+- `tool_result`: payload includes `tool_name`, `tool_call_id`, `result`, `error`, `role_id`, `instance_id`, and optional `metrics`.
+- `metrics` may include `action_queue_wait_ms`, `action_duration_ms`, `tool_framework_wait_ms`, `tool_result_publish_ms`, `tool_result_persist_ms`, `tool_batch_wall_ms`, and `total_tool_runtime_ms`. Batched tool result commits may also include `tool_result_batch_size`, `tool_result_batch_publish_ms`, `tool_result_batch_state_persist_ms`, `tool_result_batch_metrics_ms`, and `tool_result_batch_total_ms`. High-pressure read/query and synchronous `spawn_subagent` tool steps may also report internal relay executor diagnostics such as `relay_tool_step_executor_used`, `relay_tool_step_batch_size`, `relay_tool_step_execute_ms`, `relay_tool_step_trace_bypass_count`, and `relay_tool_step_fallback_reason`. `action_duration_ms` measures only the tool action; framework wait, event publish, state persist, and whole-batch wall time are reported separately when available.
+- Synchronous `spawn_subagent` admission is bounded per root run and globally. The global foreground subagent default is `RELAY_TEAMS_SYNC_SUBAGENT_GLOBAL_ACTIVE_LIMIT=16`, while each root run defaults to `RELAY_TEAMS_SYNC_SUBAGENT_ACTIVE_LIMIT=3`; synchronous waiting does not consume global tool action capacity.
 
 Thinking events:
 - `thinking_started`: payload includes `part_index`, `role_id`, `instance_id`.

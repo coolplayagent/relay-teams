@@ -58,7 +58,11 @@ def _make_orphan_task_record(
 def wakeup_repo() -> Generator[AgentWakeupRepository, None, None]:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        yield AgentWakeupRepository(db_path)
+        repo = AgentWakeupRepository(db_path)
+        try:
+            yield repo
+        finally:
+            repo.close()
 
 
 class TestOrphanRecovery:

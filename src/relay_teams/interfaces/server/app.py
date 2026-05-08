@@ -91,6 +91,7 @@ _SUPPRESSED_SUCCESS_PATHS = (
 )
 _SUPPRESSED_NOISY_PATHS = (
     re.compile(r"^/\.well-known/appspecific/com\.chrome\.devtools\.json$"),
+    re.compile(r"^/api/mcp/servers/[^/]+/tools$"),
 )
 
 
@@ -123,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         skill_registry=app.state.container.skill_registry,
         tool_registry=app.state.container.tool_registry,
     )
+    app.state.health_payload = health_payload
     startup_payload = health_payload.model_dump(mode="json")
     log_event(
         logger,

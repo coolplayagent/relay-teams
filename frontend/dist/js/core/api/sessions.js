@@ -181,9 +181,15 @@ export async function fetchSessionAgents(sessionId, options = {}) {
 }
 
 export async function fetchSessionSubagents(sessionId, options = {}) {
+    const url = options.forceRefresh === true
+        ? `/api/sessions/${sessionId}/subagents?force_refresh=1`
+        : `/api/sessions/${sessionId}/subagents`;
+    if (options.forceRefresh === true) {
+        invalidateManagedRequests(`sessions:${sessionId}:subagents`);
+    }
     return requestJsonManaged(
         `sessions:${sessionId}:subagents`,
-        `/api/sessions/${sessionId}/subagents`,
+        url,
         { signal: options.signal },
         'Failed to fetch session subagents',
         {
@@ -218,7 +224,11 @@ export async function fetchAgentMessages(sessionId, instanceId, options = {}) {
         `/api/sessions/${sessionId}/agents/${instanceId}/messages`,
         { signal: options.signal },
         'Failed to fetch agent messages',
-        { ttlMs: 300, lane: 'heavy' },
+        {
+            lane: requestLaneForPriority(options.priority) || 'heavy',
+            priority: options.priority,
+            ttlMs: 300,
+        },
     );
 }
 

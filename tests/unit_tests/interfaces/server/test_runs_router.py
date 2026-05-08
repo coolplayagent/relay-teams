@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import AsyncGenerator
 from typing import cast
 
 import pytest
@@ -71,6 +73,7 @@ class _FakeRunService:
         self.answered_user_questions: list[
             tuple[str, str, tuple[UserQuestionAnswer, ...]]
         ] = []
+        self.ensure_start_delay_seconds = 0.0
 
     def create_run(self, intent_input) -> tuple[str, str]:
         self.created_run_inputs.append(intent_input)
@@ -118,6 +121,8 @@ class _FakeRunService:
         self.started_run_ids.append(run_id)
 
     async def ensure_run_started_async(self, run_id: str) -> None:
+        if self.ensure_start_delay_seconds > 0:
+            await asyncio.sleep(self.ensure_start_delay_seconds)
         self.ensure_run_started(run_id)
 
     def inject_message(
@@ -547,6 +552,33 @@ async def test_create_and_start_run_finishes_startup_after_cancellation() -> Non
     assert fake_service.started_run_ids == ["run-1"]
 
 
+@pytest.mark.asyncio
+async def test_sse_event_lines_closes_wrapped_iterator_after_yield_disconnect() -> None:
+    closed = asyncio.Event()
+
+    async def _events():
+        try:
+            yield RunEvent(
+                session_id="session-1",
+                run_id="run-1",
+                trace_id="run-1",
+                event_type=RunEventType.RUN_COMPLETED,
+                payload_json='{"status":"completed"}',
+                event_id=1,
+            )
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    stream = runs._sse_event_lines_with_heartbeat(_events())
+
+    line = await anext(stream)
+    await cast(AsyncGenerator[str, None], stream).aclose()
+
+    assert '"event_id":1' in line
+    await asyncio.wait_for(closed.wait(), timeout=1)
+
+
 def test_multiplex_run_events_route_streams_multiple_runs() -> None:
     fake_service = _FakeRunService()
     client = _create_client(fake_service)
@@ -639,6 +671,30 @@ def test_create_run_route_accepts_yolo() -> None:
     assert created.intent == "hello"
     assert created.yolo is True
     assert fake_service.started_run_ids == ["run-1"]
+
+
+def test_create_run_route_does_not_wait_for_slow_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_service = _FakeRunService()
+    fake_service.ensure_start_delay_seconds = 0.25
+    client = _create_client(fake_service)
+    monkeypatch.setenv(runs.RUN_CREATE_STARTUP_WAIT_MS_ENV, "10")
+
+    started = time.perf_counter()
+    response = client.post(
+        "/api/runs",
+        json={
+            "session_id": "session-1",
+            "input": [{"kind": "text", "text": "hello"}],
+            "execution_mode": "ai",
+        },
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": "run-1", "session_id": "session-1"}
+    assert elapsed_ms < 200
 
 
 def test_create_run_route_accepts_orchestration_policy_override() -> None:

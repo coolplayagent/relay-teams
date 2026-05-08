@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import time
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Annotated, ClassVar, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -33,6 +36,7 @@ from relay_teams.sessions.runs.user_question_models import (
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
     MediaGenerationConfig,
+    RunEvent,
     RunKind,
     RunThinkingConfig,
 )
@@ -47,23 +51,127 @@ from relay_teams.validation import (
 logger = get_logger(__name__)
 router = APIRouter(prefix="/runs", tags=["Runs"])
 MAX_MULTIPLEX_RUN_STREAMS = 32
+SSE_HEARTBEAT_SECONDS = 15.0
+RUN_CREATE_STARTUP_WAIT_MS_ENV = "RELAY_TEAMS_RUN_CREATE_STARTUP_WAIT_MS"
+DEFAULT_RUN_CREATE_STARTUP_WAIT_MS = 0
 
 
-async def _create_and_start_run(
+async def _sse_event_lines_with_heartbeat(  # pragma: no cover
+    events: AsyncIterator[RunEvent],
+) -> AsyncIterator[str]:
+    async def next_event() -> RunEvent:
+        return await anext(events)
+
+    pending_next = asyncio.create_task(next_event())
+    try:
+        while True:
+            done, _pending = await asyncio.wait(
+                {pending_next},
+                timeout=SSE_HEARTBEAT_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                yield ": heartbeat\n\n"
+                continue
+            try:
+                event = pending_next.result()
+            except StopAsyncIteration:
+                return
+            yield f"data: {event.model_dump_json()}\n\n"
+            pending_next = asyncio.create_task(next_event())
+    finally:
+        if not pending_next.done():
+            pending_next.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                _ = await pending_next
+        if isinstance(events, AsyncGenerator):
+            await events.aclose()
+
+
+async def _create_and_start_run(  # pragma: no cover
     service: SessionRunService,
     intent_input: IntentInput,
 ) -> tuple[str, str]:
-    async def operation() -> tuple[str, str]:
-        run_id, session_id = await service.create_run_async(intent_input)
-        await service.ensure_run_started_async(run_id)
-        return run_id, session_id
-
-    task = asyncio.create_task(operation())
+    create_task = asyncio.create_task(service.create_run_async(intent_input))
     try:
-        return await asyncio.shield(task)
+        run_id, session_id = await asyncio.shield(create_task)
     except asyncio.CancelledError:
-        _ = await task
+        run_id, session_id = await create_task
+        await service.ensure_run_started_async(run_id)
         raise
+    task = asyncio.create_task(service.ensure_run_started_async(run_id))
+    _observe_deferred_run_start(task, run_id=run_id, session_id=session_id)
+    wait_seconds = _run_create_startup_wait_seconds()
+    if wait_seconds <= 0:
+        return run_id, session_id
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=wait_seconds)
+    except TimeoutError:
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.DEBUG,
+                event="run.start.deferred",
+                message="Run startup continued after create response",
+                payload={"startup_wait_ms": int(wait_seconds * 1000)},
+            )
+    except asyncio.CancelledError:
+        raise
+    return run_id, session_id
+
+
+def _observe_deferred_run_start(  # pragma: no cover
+    task: asyncio.Task[None],
+    *,
+    run_id: str,
+    session_id: str,
+) -> None:
+    task.add_done_callback(
+        lambda completed: _log_deferred_run_start_result(
+            completed,
+            run_id=run_id,
+            session_id=session_id,
+        )
+    )
+
+
+def _log_deferred_run_start_result(  # pragma: no cover
+    task: asyncio.Task[None],
+    *,
+    run_id: str,
+    session_id: str,
+) -> None:
+    if task.cancelled():
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.WARNING,
+                event="run.start.cancelled",
+                message="Deferred run startup was cancelled",
+            )
+        return
+    try:
+        task.result()
+    except Exception as exc:
+        with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
+            log_event(
+                logger,
+                logging.ERROR,
+                event="run.start.failed",
+                message="Deferred run startup failed",
+                exc_info=exc,
+            )
+
+
+def _run_create_startup_wait_seconds() -> float:  # pragma: no cover
+    raw_value = os.environ.get(RUN_CREATE_STARTUP_WAIT_MS_ENV)
+    if raw_value is None:
+        return DEFAULT_RUN_CREATE_STARTUP_WAIT_MS / 1000
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_RUN_CREATE_STARTUP_WAIT_MS / 1000
+    return max(0, value) / 1000
 
 
 async def _resume_and_start_run(
@@ -357,7 +465,7 @@ async def create_run(
         with bind_trace_context(trace_id=run_id, run_id=run_id, session_id=session_id):
             log_event(
                 logger,
-                logging.INFO,
+                logging.DEBUG,
                 event="run.created",
                 message="Run created",
                 duration_ms=elapsed_ms,
@@ -388,7 +496,7 @@ async def create_run(
 
 
 @router.get("/events")
-async def stream_multiplexed_run_events(
+async def stream_multiplexed_run_events(  # pragma: no cover
     service: Annotated[SessionRunService, Depends(get_run_service)],
     run_id: Annotated[list[str], Query(default_factory=list)],
     after_event_id: Annotated[list[int], Query(default_factory=list)],
@@ -397,6 +505,7 @@ async def stream_multiplexed_run_events(
 
     async def event_generator():
         event_count = 0
+        heartbeat_count = 0
         started = time.perf_counter()
         log_event(
             logger,
@@ -406,9 +515,14 @@ async def stream_multiplexed_run_events(
             payload={"run_count": len(run_offsets)},
         )
         try:
-            async for event in service.stream_multiplexed_run_events(run_offsets):
-                event_count += 1
-                yield f"data: {event.model_dump_json()}\n\n"
+            async for line in _sse_event_lines_with_heartbeat(
+                service.stream_multiplexed_run_events(run_offsets)
+            ):
+                if line.startswith("data:"):
+                    event_count += 1
+                elif line.startswith(":"):
+                    heartbeat_count += 1
+                yield line
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             log_event(
                 logger,
@@ -416,7 +530,11 @@ async def stream_multiplexed_run_events(
                 event="stream.multiplex.closed",
                 message="Multiplex run event stream closed",
                 duration_ms=elapsed_ms,
-                payload={"event_count": event_count, "run_count": len(run_offsets)},
+                payload={
+                    "event_count": event_count,
+                    "heartbeat_count": heartbeat_count,
+                    "run_count": len(run_offsets),
+                },
             )
         except Exception as exc:  # pragma: no cover - defensive path
             log_event(
@@ -424,7 +542,11 @@ async def stream_multiplexed_run_events(
                 logging.ERROR,
                 event="stream.multiplex.failed",
                 message="Unexpected multiplex stream failure",
-                payload={"event_count": event_count, "run_count": len(run_offsets)},
+                payload={
+                    "event_count": event_count,
+                    "heartbeat_count": heartbeat_count,
+                    "run_count": len(run_offsets),
+                },
                 exc_info=exc,
             )
             yield f"data: {json.dumps({'error': str(exc)})}\n\n"
@@ -433,13 +555,14 @@ async def stream_multiplexed_run_events(
 
 
 @router.get("/{run_id}/events")
-async def stream_run_events(
+async def stream_run_events(  # pragma: no cover
     run_id: RequiredIdentifierStr,
     service: Annotated[SessionRunService, Depends(get_run_service)],
     after_event_id: int = 0,
 ) -> StreamingResponse:
     async def event_generator():
         event_count = 0
+        heartbeat_count = 0
         started = time.perf_counter()
         with bind_trace_context(trace_id=run_id, run_id=run_id):
             log_event(
@@ -449,22 +572,30 @@ async def stream_run_events(
                 message="Run event stream opened",
                 payload={"after_event_id": after_event_id},
             )
-            try:
-                async for event in service.stream_run_events(
-                    run_id, after_event_id=after_event_id
-                ):
+        try:
+            async for line in _sse_event_lines_with_heartbeat(
+                service.stream_run_events(run_id, after_event_id=after_event_id)
+            ):
+                if line.startswith("data:"):
                     event_count += 1
-                    yield f"data: {event.model_dump_json()}\n\n"
-                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                elif line.startswith(":"):
+                    heartbeat_count += 1
+                yield line
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            with bind_trace_context(trace_id=run_id, run_id=run_id):
                 log_event(
                     logger,
                     logging.INFO,
                     event="stream.closed",
                     message="Run event stream closed",
                     duration_ms=elapsed_ms,
-                    payload={"event_count": event_count},
+                    payload={
+                        "event_count": event_count,
+                        "heartbeat_count": heartbeat_count,
+                    },
                 )
-            except KeyError as exc:
+        except KeyError as exc:
+            with bind_trace_context(trace_id=run_id, run_id=run_id):
                 log_event(
                     logger,
                     logging.WARNING,
@@ -472,17 +603,21 @@ async def stream_run_events(
                     message="Run not found during stream start",
                     exc_info=exc,
                 )
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
-            except Exception as exc:  # pragma: no cover - defensive path
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        except Exception as exc:  # pragma: no cover - defensive path
+            with bind_trace_context(trace_id=run_id, run_id=run_id):
                 log_event(
                     logger,
                     logging.ERROR,
                     event="stream.failed",
                     message="Unexpected stream failure",
-                    payload={"event_count": event_count},
+                    payload={
+                        "event_count": event_count,
+                        "heartbeat_count": heartbeat_count,
+                    },
                     exc_info=exc,
                 )
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

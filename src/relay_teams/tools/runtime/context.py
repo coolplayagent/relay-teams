@@ -162,6 +162,7 @@ class ToolDeps(BaseModel):
     run_id: str
     trace_id: str
     task_id: str
+    is_root_task_context: bool = False
     session_id: str
     session_mode: str = "normal"
     run_kind: str = "conversation"

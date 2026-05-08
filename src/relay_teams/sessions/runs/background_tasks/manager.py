@@ -17,6 +17,7 @@ import logging
 import os
 import posixpath
 from pathlib import Path
+import sqlite3
 import struct
 import shutil
 from typing import Literal, ParamSpec, Protocol, TypeVar, cast
@@ -78,6 +79,7 @@ MAX_BACKGROUND_POLL_MS = 300000
 MAX_BACKGROUND_TASKS = 64
 PROTECTED_RECENT_BACKGROUND_TASKS = 8
 MAX_RECENT_OUTPUT_LINES = 3
+BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS = 2.0
 MAX_OUTPUT_BUFFER_BYTES = 1024 * 1024
 MAX_DELTA_BYTES = 8192
 COMMAND_BLOCKING_WORKER_COUNT = 8
@@ -475,7 +477,7 @@ class _BackgroundTaskRuntime:
         self.stop_requested = False
 
 
-class BackgroundTaskManager:
+class BackgroundTaskManager:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -581,26 +583,33 @@ class BackgroundTaskManager:
             self._runtimes[background_task_id] = runtime
             record = record.model_copy(update={"pid": runtime.transport.pid})
             runtime.record = record
-            persisted = False
-            try:
-                runtime.record = await self._repository.upsert_async(record)
-                persisted = True
-                await self._publish_background_task_event_async(
-                    event_type=RunEventType.BACKGROUND_TASK_STARTED,
-                    record=runtime.record,
-                )
-                await self._emit_monitor_state_event_async(
-                    record=runtime.record,
-                    event_name="background_task.started",
-                )
-            except Exception:
-                self._runtimes.pop(background_task_id, None)
-                if persisted:
-                    await self._repository.delete_async(background_task_id)
-                await self._rollback_runtime(runtime)
-                raise
+
+        if _is_foreground_runtime(runtime):
             runtime.supervisor_task = asyncio.create_task(self._supervise(runtime))
             return runtime.record
+
+        try:
+            runtime.record = await asyncio.wait_for(
+                self._repository.upsert_async(record),
+                timeout=BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS,
+            )
+            await asyncio.wait_for(
+                self._publish_background_task_event_async(
+                    event_type=RunEventType.BACKGROUND_TASK_STARTED,
+                    record=runtime.record,
+                ),
+                timeout=BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS,
+            )
+            await self._emit_monitor_state_event_async(
+                record=runtime.record,
+                event_name="background_task.started",
+            )
+        except Exception:
+            self._runtimes.pop(background_task_id, None)
+            await self._rollback_runtime(runtime)
+            raise
+        runtime.supervisor_task = asyncio.create_task(self._supervise(runtime))
+        return runtime.record
 
     async def run_command(
         self,
@@ -648,10 +657,34 @@ class BackgroundTaskManager:
         return updated, True
 
     def list_for_run(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
-        return self._repository.list_by_run(run_id)
+        records = self._repository.list_by_run(run_id)
+        return self._overlay_runtime_records(
+            records,
+            lambda record: record.run_id == run_id,
+        )
 
     async def list_for_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
-        return await self._repository.list_by_run_async(run_id)
+        records = await self._repository.list_by_run_async(run_id)
+        return self._overlay_runtime_records(
+            records,
+            lambda record: record.run_id == run_id,
+        )
+
+    def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        records = self._repository.list_by_session(session_id)
+        return self._overlay_runtime_records(
+            records,
+            lambda record: record.session_id == session_id,
+        )
+
+    async def list_for_session_async(
+        self, session_id: str
+    ) -> tuple[BackgroundTaskRecord, ...]:
+        records = await self._repository.list_by_session_async(session_id)
+        return self._overlay_runtime_records(
+            records,
+            lambda record: record.session_id == session_id,
+        )
 
     def get_for_run(
         self,
@@ -664,6 +697,17 @@ class BackgroundTaskManager:
             raise KeyError(
                 f"Background task {background_task_id} does not belong to run {run_id}"
             )
+        return record
+
+    def get_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        record = self._get_record(background_task_id)
+        if record.session_id != session_id:
+            raise KeyError(f"Unknown background task: {background_task_id}")
         return record
 
     async def get_for_run_async(
@@ -679,20 +723,53 @@ class BackgroundTaskManager:
             )
         return record
 
+    async def get_for_session_async(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        record = await self._get_record_async(background_task_id)
+        if record.session_id != session_id:
+            raise KeyError(f"Unknown background task: {background_task_id}")
+        return record
+
     async def wait_for_run(
         self,
         *,
         run_id: str,
         background_task_id: str,
     ) -> tuple[BackgroundTaskRecord, bool]:
+        runtime = self._runtimes.get(background_task_id)
+        if runtime is not None:
+            if runtime.record.run_id != run_id:
+                raise KeyError(f"Unknown background task: {background_task_id}")
+            await runtime.completed.wait()
+            return runtime.record, True
         record = await self.get_for_run_async(
             run_id=run_id,
             background_task_id=background_task_id,
         )
+        if not record.is_active:
+            return record, True
+        return record, False
+
+    async def wait_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> tuple[BackgroundTaskRecord, bool]:
         runtime = self._runtimes.get(background_task_id)
         if runtime is not None:
+            if runtime.record.session_id != session_id:
+                raise KeyError(f"Unknown background task: {background_task_id}")
             await runtime.completed.wait()
-            return await self._get_record_async(background_task_id), True
+            return runtime.record, True
+        record = await self.get_for_session_async(
+            session_id=session_id,
+            background_task_id=background_task_id,
+        )
         if not record.is_active:
             return record, True
         return record, False
@@ -801,6 +878,23 @@ class BackgroundTaskManager:
                 wait_for_exit=False,
             )
         return await self._get_record_async(background_task_id)
+
+    async def stop_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+        reason: str = "stopped_by_user",
+    ) -> BackgroundTaskRecord:
+        record = await self.get_for_session_async(
+            session_id=session_id,
+            background_task_id=background_task_id,
+        )
+        return await self.stop_for_run(
+            run_id=record.run_id,
+            background_task_id=background_task_id,
+            reason=reason,
+        )
 
     async def _stop_persisted_record_without_runtime(
         self,
@@ -1344,30 +1438,64 @@ class BackgroundTaskManager:
         )
         runtime.recent_output.feed(chunk)
         runtime.output_buffer.append(chunk)
-        runtime.record = await self._repository.upsert_async(
-            runtime.record.model_copy(
-                update={
-                    "recent_output": runtime.recent_output.snapshot(),
-                    "output_excerpt": runtime.output_buffer.render(),
-                    "updated_at": datetime.now(tz=timezone.utc),
-                }
-            )
+        next_record = runtime.record.model_copy(
+            update={
+                "recent_output": runtime.recent_output.snapshot(),
+                "output_excerpt": runtime.output_buffer.render(),
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
         )
+        runtime.record = next_record
+        if _is_foreground_runtime(runtime):
+            return
+        try:
+            runtime.record = await asyncio.wait_for(
+                self._repository.upsert_async(next_record),
+                timeout=BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, RuntimeError, sqlite3.Error) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="background_task.state_update_deferred",
+                message="Background task state update skipped on hot path",
+                payload={
+                    "background_task_id": runtime.record.background_task_id,
+                    "run_id": runtime.record.run_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
         await self._emit_monitor_lines_async(
             runtime,
             stream_name=stream_name,
             chunk=chunk,
         )
         await self._mark_runtime_changed(runtime)
-        await self._publish_background_task_event_async(
-            event_type=RunEventType.BACKGROUND_TASK_UPDATED,
-            record=runtime.record,
-            payload=self._build_background_task_update_payload(
-                record=runtime.record,
-                stream_name=stream_name,
-                chunk=chunk,
-            ),
-        )
+        try:
+            await asyncio.wait_for(
+                self._publish_background_task_event_async(
+                    event_type=RunEventType.BACKGROUND_TASK_UPDATED,
+                    record=runtime.record,
+                    payload=self._build_background_task_update_payload(
+                        record=runtime.record,
+                        stream_name=stream_name,
+                        chunk=chunk,
+                    ),
+                ),
+                timeout=BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, RuntimeError, sqlite3.Error) as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="background_task.update_event_deferred",
+                message="Background task update event skipped on hot path",
+                payload={
+                    "background_task_id": runtime.record.background_task_id,
+                    "run_id": runtime.record.run_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     async def _finalize_runtime(
         self,
@@ -1392,39 +1520,74 @@ class BackgroundTaskManager:
                 timed_out=timed_out,
             )
             completed_at = datetime.now(tz=timezone.utc)
-            runtime.record = await self._repository.upsert_async(
-                runtime.record.model_copy(
-                    update={
-                        "status": status,
-                        "exit_code": exit_code,
-                        "pid": None,
-                        "recent_output": runtime.recent_output.snapshot(),
-                        "output_excerpt": runtime.output_buffer.render(),
-                        "updated_at": completed_at,
-                        "completed_at": completed_at,
-                    }
-                )
+            runtime.record = runtime.record.model_copy(
+                update={
+                    "status": status,
+                    "exit_code": exit_code,
+                    "pid": None,
+                    "recent_output": runtime.recent_output.snapshot(),
+                    "output_excerpt": runtime.output_buffer.render(),
+                    "updated_at": completed_at,
+                    "completed_at": completed_at,
+                }
             )
             runtime_id = runtime.record.background_task_id
-            self._runtimes.pop(runtime_id, None)
-            runtime.completed.set()
             completion_error: Exception | None = None
+            final_state_persisted = False
             try:
+                try:
+                    runtime.record = await asyncio.wait_for(
+                        self._repository.upsert_async(runtime.record),
+                        timeout=BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS,
+                    )
+                    final_state_persisted = True
+                except (asyncio.TimeoutError, RuntimeError, sqlite3.Error) as exc:
+                    self._schedule_deferred_final_state_persist(runtime)
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="background_task.final_state_deferred",
+                        message="Background task final state update deferred",
+                        payload={
+                            "background_task_id": runtime.record.background_task_id,
+                            "run_id": runtime.record.run_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                 await self._mark_runtime_changed(runtime)
-                await self._publish_background_task_event_async(
-                    event_type=(
-                        RunEventType.BACKGROUND_TASK_STOPPED
-                        if status == BackgroundTaskStatus.STOPPED
-                        else RunEventType.BACKGROUND_TASK_COMPLETED
-                    ),
-                    record=runtime.record,
-                )
-                await self._emit_monitor_state_event_async(
-                    record=runtime.record,
-                    event_name=_background_task_state_event_name(status),
-                )
+                try:
+                    await asyncio.wait_for(
+                        self._publish_background_task_event_async(
+                            event_type=(
+                                RunEventType.BACKGROUND_TASK_STOPPED
+                                if status == BackgroundTaskStatus.STOPPED
+                                else RunEventType.BACKGROUND_TASK_COMPLETED
+                            ),
+                            record=runtime.record,
+                        ),
+                        timeout=BACKGROUND_TASK_STATE_WRITE_TIMEOUT_SECONDS,
+                    )
+                    await self._emit_monitor_state_event_async(
+                        record=runtime.record,
+                        event_name=_background_task_state_event_name(status),
+                    )
+                except (asyncio.TimeoutError, RuntimeError, sqlite3.Error) as exc:
+                    log_event(
+                        LOGGER,
+                        logging.WARNING,
+                        event="background_task.final_event_deferred",
+                        message="Background task final event skipped on hot path",
+                        payload={
+                            "background_task_id": runtime.record.background_task_id,
+                            "run_id": runtime.record.run_id,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
             except Exception as exc:
                 completion_error = exc
+            if final_state_persisted:
+                self._runtimes.pop(runtime_id, None)
+            runtime.completed.set()
             try:
                 await runtime.transport.close()
             except Exception:
@@ -1527,22 +1690,22 @@ class BackgroundTaskManager:
         required_slots -= min(required_slots, len(reclaimable))
         if required_slots <= 0:
             return
-        active_candidates = [
-            record
-            for record in sorted(records, key=lambda item: item.updated_at)
-            if record.background_task_id not in protected and record.is_active
-        ]
-        for record in active_candidates[:required_slots]:
-            stopped_record: BackgroundTaskRecord | None = None
-            with contextlib.suppress(KeyError):
-                stopped_record = await self.stop_for_run(
-                    run_id=record.run_id,
-                    background_task_id=record.background_task_id,
-                    reason="lru_pruned",
-                )
-            if stopped_record is None or stopped_record.is_active:
-                continue
-            await self._repository.delete_async(record.background_task_id)
+        active_count = sum(1 for record in records if record.is_active)
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="background_task.prune_active_skipped",
+            message=(
+                "Background task history exceeded cap, but active tasks are never "
+                "stopped by LRU pruning"
+            ),
+            payload={
+                "record_count": len(records),
+                "active_count": active_count,
+                "max_background_tasks": MAX_BACKGROUND_TASKS,
+                "required_slots": required_slots,
+            },
+        )
 
     async def _publish_background_task_event_async(
         self,
@@ -1708,13 +1871,72 @@ class BackgroundTaskManager:
             )
         )
 
+    def _overlay_runtime_records(
+        self,
+        records: tuple[BackgroundTaskRecord, ...],
+        predicate: Callable[[BackgroundTaskRecord], bool],
+    ) -> tuple[BackgroundTaskRecord, ...]:
+        by_id = {record.background_task_id: record for record in records}
+        for runtime in self._runtimes.values():
+            if predicate(runtime.record):
+                by_id[runtime.record.background_task_id] = runtime.record
+        return tuple(by_id.values())
+
+    def _schedule_deferred_final_state_persist(
+        self,
+        runtime: _BackgroundTaskRuntime,
+    ) -> None:
+        runtime.supervisor_task = asyncio.create_task(
+            self._persist_final_state_deferred(runtime)
+        )
+
+    async def _persist_final_state_deferred(
+        self,
+        runtime: _BackgroundTaskRuntime,
+    ) -> None:
+        runtime_id = runtime.record.background_task_id
+        try:
+            runtime.record = await self._repository.upsert_async(runtime.record)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.ERROR,
+                event="background_task.final_state_deferred_failed",
+                message="Deferred background task final state update failed",
+                exc_info=exc,
+                payload={
+                    "background_task_id": runtime_id,
+                    "run_id": runtime.record.run_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return
+        self._runtimes.pop(runtime_id, None)
+        await self._mark_runtime_changed(runtime)
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="background_task.final_state_deferred_completed",
+            message="Deferred background task final state update completed",
+            payload={
+                "background_task_id": runtime_id,
+                "run_id": runtime.record.run_id,
+            },
+        )
+
     def _get_record(self, background_task_id: str) -> BackgroundTaskRecord:
+        runtime = self._runtimes.get(background_task_id)
+        if runtime is not None:
+            return runtime.record
         record = self._repository.get(background_task_id)
         if record is None:
             raise KeyError(f"Unknown background task: {background_task_id}")
         return record
 
     async def _get_record_async(self, background_task_id: str) -> BackgroundTaskRecord:
+        runtime = self._runtimes.get(background_task_id)
+        if runtime is not None:
+            return runtime.record
         record = await self._repository.get_async(background_task_id)
         if record is None:
             raise KeyError(f"Unknown background task: {background_task_id}")
@@ -1758,6 +1980,10 @@ def _background_task_state_event_name(status: BackgroundTaskStatus) -> str:
     if status == BackgroundTaskStatus.FAILED:
         return "background_task.failed"
     return "background_task.updated"
+
+
+def _is_foreground_runtime(runtime: _BackgroundTaskRuntime) -> bool:
+    return runtime.record.execution_mode == "foreground"
 
 
 def _set_terminal_size(fd: int, *, columns: int, rows: int) -> None:

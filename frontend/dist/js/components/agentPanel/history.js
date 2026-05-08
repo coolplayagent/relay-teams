@@ -314,6 +314,7 @@ export async function renderInstanceHistoryInto(container, options = {}) {
     }
     try {
         const messages = await fetchAgentMessages(sessionId, instanceId, {
+            priority: options.priority,
             signal: options.signal || null,
         });
         const overlayEntry = getInstanceStreamOverlay(runId, instanceId);
@@ -474,10 +475,22 @@ function hasPendingToolResults(messages) {
                 if (key) {
                     pending.delete(key);
                 }
+                return;
+            }
+            if (pending.size > 0 && isFinalTextPart(part)) {
+                pending.clear();
             }
         });
     });
     return pending.size > 0;
+}
+
+function isFinalTextPart(part) {
+    const kind = String(part?.part_kind || part?.kind || '').trim().toLowerCase();
+    if (kind !== 'text') {
+        return false;
+    }
+    return String(part?.content || part?.text || '').trim().length > 0;
 }
 
 function isLegacyToolCallPart(part) {

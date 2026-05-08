@@ -65,6 +65,9 @@ import {
     getSidebarDataSnapshot,
     hasSidebarDataSnapshot,
     mergeOptimisticSessions,
+    markSidebarSessionRunActive,
+    markSidebarSessionRunTerminal,
+    markSidebarSessionTerminalViewed,
     rememberSidebarDataSnapshot,
     updateOptimisticSessionTitle,
     upsertOptimisticSession,
@@ -94,6 +97,7 @@ let projectSortMode = 'recent';
 let openProjectMenuId = null;
 let projectMenuDismissBound = false;
 let languageRefreshBound = false;
+let sidebarScrollRefreshBound = false;
 let sessionSearchConfigured = false;
 let pendingSessionAnimation = null;
 let pendingSessionVisibilityAnimation = null;
@@ -103,12 +107,18 @@ let sessionsRefreshPromise = null;
 let lastProjectsRenderSignature = '';
 let sidebarSelectionToken = 0;
 let sessionAnimationTokenSeed = 0;
+let initialSessionStateCatchupStarted = false;
+let initialSessionStateCatchupTimer = 0;
+let initialSessionStateCatchupRemaining = 0;
 const sessionAnimationTokens = new WeakMap();
 const projectBodyAnimationTokens = new WeakMap();
 const subagentListAnimationTokens = new WeakMap();
 let sidebarCollapsibleAnimationTokenSeed = 0;
 let subagentListVisualSyncToken = 0;
 const SIDEBAR_INTERACTION_REFRESH_DELAY_MS = 240;
+const SIDEBAR_POST_EVENT_REFRESH_DELAY_MS = 5000;
+const INITIAL_SESSION_STATE_CATCHUP_INTERVAL_MS = 500;
+const INITIAL_SESSION_STATE_CATCHUP_ATTEMPTS = 12;
 
 const SESSION_ANIMATION_ENTER_MS = 220;
 const SESSION_ANIMATION_REMOVE_MS = 180;
@@ -427,15 +437,15 @@ function renderSubagentToggle(session) {
     const children = getSessionSubagentSessions(sessionId);
     const loading = isSubagentSessionListLoading(sessionId);
     const loaded = hasLoadedSessionSubagents(sessionId);
-    const summaryCount = normalizeSubagentSessionCount(
-        session?.subagent_session_count,
-    );
+    const summaryCount = normalizeSubagentSessionCount(getSubagentSessionCountValue(session));
+    const summaryKnown = hasSubagentSessionCount(session);
     const cachedCount = normalSubagentCountBySessionId.get(sessionId) || 0;
     const childCount = resolveStableSubagentCount({
         loaded,
         loading,
         children,
         summaryCount,
+        summaryKnown,
         cachedCount,
     });
     if (childCount > 0) {
@@ -691,8 +701,11 @@ function findMainSessionItem(sessionId) {
     )) || null;
 }
 
-function resolveStableSubagentCount({ loaded, loading, children, summaryCount, cachedCount }) {
+function resolveStableSubagentCount({ loaded, loading, children, summaryCount, summaryKnown = false, cachedCount }) {
     const loadedCount = Array.isArray(children) ? children.length : 0;
+    if (summaryKnown) {
+        return summaryCount;
+    }
     if (loaded) {
         return loadedCount;
     }
@@ -1114,13 +1127,15 @@ function resolveSignatureSubagentCount(session) {
     const children = getSessionSubagentSessions(sessionId);
     const loaded = hasLoadedSessionSubagents(sessionId);
     const loading = isSubagentSessionListLoading(sessionId);
-    const summaryCount = normalizeSubagentSessionCount(session?.subagent_session_count);
+    const summaryCount = normalizeSubagentSessionCount(getSubagentSessionCountValue(session));
+    const summaryKnown = hasSubagentSessionCount(session);
     const cachedCount = normalSubagentCountBySessionId.get(sessionId) || 0;
     return resolveStableSubagentCount({
         loaded,
         loading,
         children,
         summaryCount,
+        summaryKnown,
         cachedCount,
     });
 }
@@ -1416,9 +1431,74 @@ function setElementClassFlag(element, className, enabled) {
     element.classList?.toggle?.(className, enabled);
 }
 
+function hasSubagentSessionCount(session) {
+    return !!(
+        session
+        && typeof session === 'object'
+        && (
+            Object.prototype.hasOwnProperty.call(session, 'subagent_session_count')
+            || Object.prototype.hasOwnProperty.call(session, 'subagentSessionCount')
+        )
+    );
+}
+
+function getSubagentSessionCountValue(session) {
+    return session?.subagent_session_count ?? session?.subagentSessionCount ?? 0;
+}
+
+function findSidebarSessionSnapshotRecord(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || !hasSidebarDataSnapshot()) {
+        return null;
+    }
+    return mergeOptimisticSessions(getSidebarDataSnapshot().sessions).find(
+        session => String(session?.session_id || '').trim() === safeSessionId,
+    ) || null;
+}
+
+function patchVisibleSessionItem(sessionId) {
+    const session = findSidebarSessionSnapshotRecord(sessionId);
+    const item = findMainSessionItem(sessionId);
+    if (!session || !item) {
+        return false;
+    }
+    const label = formatSessionLabel(session);
+    const labelEl = item.querySelector?.('.session-label-text') || null;
+    if (labelEl) {
+        labelEl.textContent = label;
+        labelEl.setAttribute?.('title', label);
+    }
+    const timeEl = item.querySelector?.('.session-time') || null;
+    if (timeEl) {
+        timeEl.textContent = formatRelativeTime(session.updated_at);
+    }
+    for (const className of [
+        'has-run-indicator',
+        'has-run-indicator-running',
+        'has-run-indicator-unread',
+        'has-run-indicator-failed',
+        'has-run-indicator-stopped',
+    ]) {
+        setElementClassFlag(item, className, false);
+    }
+    const indicatorType = getSessionRunIndicatorType(session);
+    if (indicatorType) {
+        setElementClassFlag(item, 'has-run-indicator', true);
+        setElementClassFlag(item, `has-run-indicator-${indicatorType}`, true);
+    }
+    item.querySelector?.('.session-run-indicator')?.remove?.();
+    const indicatorHtml = renderSessionRunIndicator(session).trim();
+    const metaEl = item.querySelector?.('.session-meta') || null;
+    if (indicatorHtml && metaEl?.insertAdjacentHTML) {
+        metaEl.insertAdjacentHTML('afterbegin', indicatorHtml);
+    }
+    return true;
+}
+
 function clearSessionUnreadIndicator(sessionId, preferredItem = null) {
     const safeSessionId = String(sessionId || '').trim();
     if (!safeSessionId) return;
+    markSidebarSessionTerminalViewed(safeSessionId);
     const items = preferredItem
         ? [preferredItem, ...findSessionItems(safeSessionId).filter(item => item !== preferredItem)]
         : findSessionItems(safeSessionId);
@@ -1832,10 +1912,10 @@ function bindProjectCard(card, group) {
             const willExpand = !isSubagentSessionListExpanded(sessionId);
             let subagentsLoadPromise = null;
             toggleSubagentSessionList(sessionId, { emitChange: false, load: false });
-            if (willExpand && !hasLoadedSessionSubagents(sessionId)) {
+            if (willExpand) {
                 subagentsLoadPromise = ensureSessionSubagents(sessionId, {
                     emitLoadingEvents: false,
-                    force: false,
+                    force: true,
                 });
             }
             syncSubagentSessionListVisualState({
@@ -2366,6 +2446,70 @@ function handleSessionUpserted(event) {
     handleNewSessionDraftCreated(event);
 }
 
+function handleSessionRecordUpdated(event) {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+    const session = detail.session && typeof detail.session === 'object'
+        ? detail.session
+        : {};
+    const sessionId = String(detail.sessionId || session.session_id || '').trim();
+    if (!sessionId) {
+        return;
+    }
+    upsertOptimisticSession({
+        ...session,
+        session_id: sessionId,
+        workspace_id: String(
+            detail.workspaceId || session.workspace_id || state.currentWorkspaceId || '',
+        ).trim(),
+    });
+    if (patchVisibleSessionItem(sessionId)) {
+        scheduleSessionsRefresh(SIDEBAR_POST_EVENT_REFRESH_DELAY_MS, { forceRefresh: false });
+        return;
+    }
+    if (!renderProjectsFromSnapshot({ syncStreams: false })) {
+        scheduleSessionsRefresh(90, { forceRefresh: false });
+    }
+}
+
+function handleSessionRunActive(event) {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+    const sessionId = String(detail.sessionId || '').trim();
+    if (!sessionId) {
+        return;
+    }
+    markSidebarSessionRunActive(sessionId, {
+        runId: String(detail.runId || '').trim(),
+        status: String(detail.status || 'running').trim() || 'running',
+    });
+    if (patchVisibleSessionItem(sessionId)) {
+        scheduleSessionsRefresh(SIDEBAR_POST_EVENT_REFRESH_DELAY_MS, { forceRefresh: false });
+        return;
+    }
+    if (!renderProjectsFromSnapshot({ syncStreams: false })) {
+        scheduleSessionsRefresh(90, { forceRefresh: false });
+    }
+}
+
+function handleSessionRunTerminal(event) {
+    const detail = event?.detail && typeof event.detail === 'object' ? event.detail : {};
+    const sessionId = String(detail.sessionId || '').trim();
+    if (!sessionId) {
+        return;
+    }
+    markSidebarSessionRunTerminal(sessionId, {
+        runId: String(detail.runId || '').trim(),
+        status: String(detail.status || '').trim(),
+        viewed: detail.viewed === true,
+    });
+    if (patchVisibleSessionItem(sessionId)) {
+        scheduleSessionsRefresh(SIDEBAR_POST_EVENT_REFRESH_DELAY_MS, { forceRefresh: false });
+        return;
+    }
+    if (!renderProjectsFromSnapshot({ syncStreams: false })) {
+        scheduleSessionsRefresh(90, { forceRefresh: false });
+    }
+}
+
 function handleSessionTitlePreviewed(event) {
     const sessionId = String(event?.detail?.sessionId || '').trim();
     const title = String(event?.detail?.title || '').trim();
@@ -2373,12 +2517,17 @@ function handleSessionTitlePreviewed(event) {
         return;
     }
     updateOptimisticSessionTitle(sessionId, title);
+    if (patchVisibleSessionItem(sessionId)) {
+        scheduleSessionsRefresh(SIDEBAR_POST_EVENT_REFRESH_DELAY_MS, { forceRefresh: false });
+        return;
+    }
     renderProjectsFromSnapshot({ syncStreams: false });
 }
 
 export async function loadProjects({ forceRefresh = false } = {}) {
     if (!els.projectsList) return;
     ensureSessionSearchConfigured();
+    ensureSidebarScrollRefreshBound();
     if (!languageRefreshBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => void loadProjects());
         document.addEventListener('agent-teams-projects-changed', () => void loadProjects());
@@ -2420,6 +2569,12 @@ export async function loadProjects({ forceRefresh = false } = {}) {
                 refreshSessionId: sessionId,
             });
         });
+        document.addEventListener('agent-teams-session-subagent-count-dirty', event => {
+            const sessionId = String(event?.detail?.sessionId || '').trim();
+            if (sessionId) {
+                scheduleSessionsRefresh(120, { forceRefresh: true });
+            }
+        });
         document.addEventListener('agent-teams-session-activated', syncActivatedSessionFromEvent);
         document.addEventListener('agent-teams-session-selected', syncActivatedSessionFromEvent);
         document.addEventListener('agent-teams-subagent-session-selected', syncSubagentSessionFromEvent);
@@ -2428,6 +2583,15 @@ export async function loadProjects({ forceRefresh = false } = {}) {
         });
         document.addEventListener('agent-teams-session-upserted', event => {
             handleSessionUpserted(event);
+        });
+        document.addEventListener('agent-teams-session-record-updated', event => {
+            handleSessionRecordUpdated(event);
+        });
+        document.addEventListener('agent-teams-session-run-active', event => {
+            handleSessionRunActive(event);
+        });
+        document.addEventListener('agent-teams-session-run-terminal', event => {
+            handleSessionRunTerminal(event);
         });
         document.addEventListener('agent-teams-session-title-previewed', event => {
             handleSessionTitlePreviewed(event);
@@ -2463,6 +2627,7 @@ export async function loadProjects({ forceRefresh = false } = {}) {
             snapshotData.sessions,
             snapshotData.automationProjects,
         );
+        scheduleInitialSessionStateCatchup(snapshotData.sessions);
     } catch (error) {
         if (requestId !== loadProjectsRequestId) {
             return;
@@ -2483,6 +2648,88 @@ export async function loadProjects({ forceRefresh = false } = {}) {
     }
 }
 
+function scheduleInitialSessionStateCatchup(sessions) {
+    if (
+        initialSessionStateCatchupStarted
+        || !shouldRunInitialSessionStateCatchup(sessions)
+        || typeof globalThis.setTimeout !== 'function'
+    ) {
+        return;
+    }
+    initialSessionStateCatchupStarted = true;
+    initialSessionStateCatchupRemaining = INITIAL_SESSION_STATE_CATCHUP_ATTEMPTS;
+    scheduleNextInitialSessionStateCatchup();
+}
+
+function shouldRunInitialSessionStateCatchup(sessions) {
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+        return false;
+    }
+    const visibleCandidates = sessions.slice(0, DEFAULT_VISIBLE_SESSION_COUNT);
+    return visibleCandidates.some(session => {
+        if (!session || typeof session !== 'object') {
+            return false;
+        }
+        const hasSubagentCount = (
+            Object.prototype.hasOwnProperty.call(session, 'subagent_session_count')
+            || Object.prototype.hasOwnProperty.call(session, 'subagentSessionCount')
+        );
+        if (!hasSubagentCount) {
+            return true;
+        }
+        const subagentCount = Number(session.subagent_session_count ?? session.subagentSessionCount ?? 0);
+        return (
+            (session.has_active_run === true || session.hasActiveRun === true)
+            && (!Number.isFinite(subagentCount) || subagentCount <= 0)
+        );
+    });
+}
+
+function ensureSidebarScrollRefreshBound() {
+    if (
+        sidebarScrollRefreshBound
+        || !els.projectsList
+        || typeof els.projectsList.addEventListener !== 'function'
+    ) {
+        return;
+    }
+    els.projectsList.addEventListener(
+        'scroll',
+        () => {
+            scheduleSessionsRefresh(120, { forceRefresh: true });
+        },
+        { passive: true },
+    );
+    sidebarScrollRefreshBound = true;
+}
+
+function runInitialSessionStateCatchup() {
+    const snapshotData = getSidebarDataSnapshot();
+    if (
+        initialSessionStateCatchupRemaining <= 0
+        || !shouldRunInitialSessionStateCatchup(snapshotData.sessions)
+    ) {
+        initialSessionStateCatchupTimer = 0;
+        initialSessionStateCatchupRemaining = 0;
+        return;
+    }
+    initialSessionStateCatchupRemaining -= 1;
+    scheduleSessionsRefresh(0, { forceRefresh: true });
+    scheduleNextInitialSessionStateCatchup();
+}
+
+function scheduleNextInitialSessionStateCatchup() {
+    if (initialSessionStateCatchupRemaining <= 0) {
+        initialSessionStateCatchupTimer = 0;
+        return;
+    }
+    initialSessionStateCatchupTimer = globalThis.setTimeout(() => {
+        initialSessionStateCatchupTimer = 0;
+        runInitialSessionStateCatchup();
+    }, INITIAL_SESSION_STATE_CATCHUP_INTERVAL_MS) || 0;
+    initialSessionStateCatchupTimer?.unref?.();
+}
+
 export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } = {}) {
     pendingSessionsRefreshForce = pendingSessionsRefreshForce || forceRefresh === true;
     if (refreshTimer) clearTimeout(refreshTimer);
@@ -2490,13 +2737,14 @@ export function scheduleSessionsRefresh(delayMs = 120, { forceRefresh = false } 
     refreshTimer = setTimeout(() => {
         refreshTimer = null;
         const forceNow = pendingSessionsRefreshForce === true;
-        if (!forceNow && isProjectsListInteracting()) {
+        if (isProjectsListInteracting()) {
             scheduleSessionsRefresh(Math.max(safeDelayMs, SIDEBAR_INTERACTION_REFRESH_DELAY_MS));
             return;
         }
         pendingSessionsRefreshForce = false;
         void refreshSessionsSnapshot({ forceRefresh: forceNow });
     }, safeDelayMs);
+    refreshTimer?.unref?.();
 }
 
 async function refreshSessionsSnapshot({ forceRefresh = false } = {}) {

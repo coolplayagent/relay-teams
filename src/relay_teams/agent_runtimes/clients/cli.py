@@ -5,7 +5,10 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import IO
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -198,23 +201,49 @@ def _cli_command_exists(
     runtime_cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> bool:
+    return _resolve_command_path(command, runtime_cwd=runtime_cwd, env=env) is not None
+
+
+def _resolve_command_path(
+    command: str,
+    *,
+    runtime_cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> Path | None:
     if "/" in command or "\\" in command:
         candidate = Path(command)
         if not candidate.is_absolute() and runtime_cwd is not None:
             candidate = runtime_cwd / candidate
-        return _executable_path_exists(candidate)
+        return candidate if _executable_path_exists(candidate) else None
     lookup_env = env or os.environ
     for directory in os.get_exec_path(lookup_env):
         candidate = Path(directory) / command
         if _executable_path_exists(candidate):
-            return True
+            return candidate
         if os.name == "nt":
             for suffix in lookup_env.get("PATHEXT", "").split(";"):
                 if suffix and _executable_path_exists(
                     Path(directory) / f"{command}{suffix}"
                 ):
-                    return True
-    return False
+                    return Path(directory) / f"{command}{suffix}"
+    return None
+
+
+def _resolve_command_invocation(
+    command: str,
+    args: tuple[str, ...],
+    *,
+    runtime_cwd: Path | None,
+    env: dict[str, str],
+) -> tuple[str, tuple[str, ...]]:
+    resolved_path = _resolve_command_path(command, runtime_cwd=runtime_cwd, env=env)
+    if resolved_path is None:
+        return command, args
+    if os.name != "nt":
+        return str(resolved_path), args
+    if resolved_path.suffix.lower() in {".exe", ".com", ".bat", ".cmd"}:
+        return str(resolved_path), args
+    return sys.executable, (str(resolved_path), *args)
 
 
 def _executable_path_exists(path: Path) -> bool:
@@ -528,7 +557,7 @@ def _remaining_cli_timeout(*, deadline: float, timeout_seconds: float) -> float:
     return remaining
 
 
-class _StdioCliJsonRpcClient:
+class _StdioCliJsonRpcClient:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -542,6 +571,7 @@ class _StdioCliJsonRpcClient:
         self._runtime_cwd = runtime_cwd
         self._transport = transport
         self._process: asyncio.subprocess.Process | None = None
+        self._sync_process: subprocess.Popen[bytes] | None = None
         self._read_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._write_lock = asyncio.Lock()
@@ -553,16 +583,35 @@ class _StdioCliJsonRpcClient:
     async def start(self) -> None:
         if self._process is not None and self._process.returncode is None:
             return
+        if self._sync_process is not None and self._sync_process.poll() is None:
+            return
         env = _runtime_env(self._transport)
-        self._process = await asyncio.create_subprocess_exec(
+        command, args = _resolve_command_invocation(
             self._command,
-            *self._args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._runtime_cwd,
+            self._args,
+            runtime_cwd=self._runtime_cwd,
             env=env,
         )
+        try:
+            self._process = await asyncio.create_subprocess_exec(
+                command,
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self._runtime_cwd,
+                env=env,
+            )
+        except NotImplementedError:
+            self._sync_process = await asyncio.to_thread(
+                subprocess.Popen,
+                [command, *args],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=self._runtime_cwd,
+                env=env,
+            )
         self._runtime_closed_notified = False
         self._read_task = asyncio.create_task(self._read_stdout_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr_loop())
@@ -634,19 +683,58 @@ class _StdioCliJsonRpcClient:
                         ),
                         payload={"error": str(exc) or exc.__class__.__name__},
                     )
+        sync_process = self._sync_process
+        if sync_process is not None and sync_process.poll() is None:
+            sync_process.terminate()
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(sync_process.wait), timeout=2.0
+                )
+            except (asyncio.TimeoutError, ProcessLookupError):
+                sync_process.kill()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(sync_process.wait), timeout=2.0
+                    )
+                except (asyncio.TimeoutError, ProcessLookupError) as exc:
+                    log_event(
+                        LOGGER,
+                        logging.DEBUG,
+                        event="external_agent.cli_jsonrpc.kill_wait_failed",
+                        message=(
+                            "Timed out waiting for killed CLI JSON-RPC runtime to exit"
+                        ),
+                        payload={"error": str(exc) or exc.__class__.__name__},
+                    )
         self._process = None
+        self._sync_process = None
         self._read_task = None
         self._stderr_task = None
 
     async def _send_raw(self, message: dict[str, JsonValue]) -> None:
-        if self._process is None or self._process.stdin is None:
+        if (self._process is None or self._process.stdin is None) and (
+            self._sync_process is None or self._sync_process.stdin is None
+        ):
             raise CliAgentError("CLI JSON-RPC runtime is not started")
         payload = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         async with self._write_lock:
-            self._process.stdin.write(payload.encode("utf-8") + b"\n")
-            await self._process.stdin.drain()
+            raw_payload = payload.encode("utf-8") + b"\n"
+            if self._process is not None and self._process.stdin is not None:
+                self._process.stdin.write(raw_payload)
+                await self._process.stdin.drain()
+                return
+            if self._sync_process is not None and self._sync_process.stdin is not None:
+                await asyncio.to_thread(
+                    _write_sync_stdio,
+                    self._sync_process.stdin,
+                    raw_payload,
+                )
+                return
 
     async def _read_stdout_loop(self) -> None:
+        if self._sync_process is not None and self._sync_process.stdout is not None:
+            await self._read_sync_stdout_loop(self._sync_process.stdout)
+            return
         if self._process is None or self._process.stdout is None:
             return
         try:
@@ -672,11 +760,57 @@ class _StdioCliJsonRpcClient:
             CliAgentError("CLI JSON-RPC runtime closed stdout before responding"),
         )
 
+    async def _read_sync_stdout_loop(self, stream: IO[bytes]) -> None:
+        try:
+            while True:
+                raw_message = await asyncio.to_thread(
+                    _read_next_stdio_message_sync, stream
+                )
+                if raw_message is None:
+                    break
+                if not raw_message:
+                    continue
+                try:
+                    payload = json.loads(raw_message.decode("utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                await self._handle_payload(
+                    {str(key): value for key, value in payload.items()}
+                )
+        except Exception as exc:
+            self._fail_runtime(exc)
+            return
+        self._fail_runtime(
+            CliAgentError("CLI JSON-RPC runtime closed stdout before responding"),
+        )
+
     async def _drain_stderr_loop(self) -> None:
+        if self._sync_process is not None and self._sync_process.stderr is not None:
+            await self._drain_sync_stderr_loop(self._sync_process.stderr)
+            return
         if self._process is None or self._process.stderr is None:
             return
         while True:
             raw_line = await self._process.stderr.readline()
+            if not raw_line:
+                break
+            text = raw_line.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="external_agent.cli_jsonrpc.stderr",
+                message="External CLI JSON-RPC runtime wrote to stderr",
+                payload={"line": text[:500]},
+            )
+
+    @staticmethod
+    async def _drain_sync_stderr_loop(stream: IO[bytes]) -> None:
+        while True:
+            raw_line = await asyncio.to_thread(stream.readline)
             if not raw_line:
                 break
             text = raw_line.decode("utf-8", errors="replace").strip()
@@ -769,6 +903,30 @@ async def _read_next_stdio_message(stream: asyncio.StreamReader) -> bytes | None
                 break
         return await stream.readexactly(content_length)
     return first_line.rstrip(b"\r\n")
+
+
+def _read_next_stdio_message_sync(stream: IO[bytes]) -> bytes | None:
+    first_line = stream.readline()
+    if not first_line:
+        return None
+    if first_line.startswith(b"Content-Length:"):
+        try:
+            content_length = int(first_line.partition(b":")[2].strip())
+        except ValueError as exc:
+            raise CliAgentError(
+                "Invalid Content-Length header from CLI runtime"
+            ) from exc
+        while True:
+            header_line = stream.readline()
+            if not header_line or header_line in (b"\n", b"\r\n"):
+                break
+        return stream.read(content_length)
+    return first_line.rstrip(b"\r\n")
+
+
+def _write_sync_stdio(stream: IO[bytes], payload: bytes) -> None:
+    stream.write(payload)
+    stream.flush()
 
 
 def _optional_id(payload: dict[str, JsonValue]) -> JsonRpcId | None:

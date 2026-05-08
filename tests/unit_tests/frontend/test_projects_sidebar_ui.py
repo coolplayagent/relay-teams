@@ -154,7 +154,8 @@ document.dispatchEvent(new CustomEvent("agent-teams-session-title-previewed", {
 await flushTasks();
 
 const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
-const labels = firstProject.querySelectorAll(".session-id").map(node => node.textContent);
+const labels = firstProject.querySelectorAll(".session-item")
+    .map(node => node.querySelector(".session-label-text").textContent);
 
 console.log(JSON.stringify({
     fetchCountAfterInitialLoad,
@@ -383,6 +384,7 @@ import { loadProjects } from "./sidebar.mjs";
 
 installGlobals(createDomEnvironment());
 await loadProjects();
+await new Promise(resolve => setTimeout(resolve, 30));
 
 const projectsList = document.getElementById("projects-list");
 const firstProject = projectsList.children.filter(child => child.className === "project-card")[0];
@@ -643,6 +645,212 @@ console.log(JSON.stringify({
     assert payload["terminalViewCalls"] == []
 
 
+def test_projects_sidebar_session_status_machine_updates_within_one_event_tick(
+    tmp_path: Path,
+) -> None:
+    payload = _run_sidebar_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const workspaces = [
+    {
+        workspace_id: "alpha-project",
+        root_path: "/work/Alpha Project",
+        updated_at: "2026-03-14T10:00:00Z",
+        profile: { file_scope: { backend: "project" } },
+    },
+];
+
+const sessions = [
+    {
+        session_id: "session-target",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:03:00Z",
+        metadata: { title: "Before send" },
+    },
+    {
+        session_id: "session-other",
+        workspace_id: "alpha-project",
+        updated_at: "2026-03-14T10:02:00Z",
+        metadata: { title: "Other session" },
+    },
+];
+
+export async function fetchWorkspaces() {
+    return workspaces;
+}
+
+export async function fetchSessions() {
+    return sessions;
+}
+
+export async function fetchAutomationProjects() {
+    return [];
+}
+
+export async function fetchAutomationFeishuBindings() {
+    return [];
+}
+
+export async function startNewSession() {
+    throw new Error("not used");
+}
+
+export async function updateSession() {
+    return { status: "ok" };
+}
+
+export async function deleteSession() {
+    return { status: "ok" };
+}
+
+export async function deleteWorkspace() {
+    return { status: "ok" };
+}
+
+export async function forkWorkspace() {
+    return {};
+}
+
+export async function pickWorkspace() {
+    return { workspace_id: "alpha-project" };
+}
+
+export async function createAutomationProject() {
+    return {};
+}
+
+export async function deleteAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function disableAutomationProject() {
+    return { status: "ok" };
+}
+
+export async function enableAutomationProject() {
+    return { status: "ok" };
+}
+""".strip(),
+        runner_source="""
+import {
+    loadProjects,
+    setSelectSessionHandler,
+} from "./sidebar.mjs";
+
+globalThis.CustomEvent = class CustomEvent {
+    constructor(type, options = {}) {
+        this.type = type;
+        this.detail = options.detail || {};
+    }
+};
+
+installGlobals(createDomEnvironment());
+setSelectSessionHandler(async (sessionId) => {
+    globalThis.__selectedSessionIds.push(sessionId);
+});
+
+function targetItem() {
+    const projectsList = document.getElementById("projects-list");
+    const project = projectsList.children.filter(child => child.className === "project-card")[0];
+    return project.querySelectorAll(".session-item")
+        .find(item => item.getAttribute("data-session-id") === "session-target");
+}
+
+function otherItem() {
+    const projectsList = document.getElementById("projects-list");
+    const project = projectsList.children.filter(child => child.className === "project-card")[0];
+    return project.querySelectorAll(".session-item")
+        .find(item => item.getAttribute("data-session-id") === "session-other");
+}
+
+function targetLabel() {
+    return targetItem().querySelector(".session-label-text").textContent;
+}
+
+await loadProjects();
+const targetItemBefore = targetItem();
+const otherItemBefore = otherItem();
+const initialClassName = targetItem().className;
+
+document.dispatchEvent(new CustomEvent("agent-teams-session-run-active", {
+    detail: {
+        sessionId: "session-target",
+        runId: "run-1",
+        status: "running",
+    },
+}));
+await flushTasks();
+const runningClassName = targetItem().className;
+
+document.dispatchEvent(new CustomEvent("agent-teams-session-title-previewed", {
+    detail: {
+        sessionId: "session-target",
+        title: "你好",
+    },
+}));
+await flushTasks();
+const previewTitle = targetLabel();
+
+document.dispatchEvent(new CustomEvent("agent-teams-session-run-terminal", {
+    detail: {
+        sessionId: "session-target",
+        runId: "run-1",
+        status: "completed",
+        viewed: false,
+    },
+}));
+await flushTasks();
+const unreadClassName = targetItem().className;
+
+targetItem().onclick();
+const clickedClassName = targetItem().className;
+await flushTasks();
+
+document.dispatchEvent(new CustomEvent("agent-teams-session-record-updated", {
+    detail: {
+        sessionId: "session-target",
+        workspaceId: "alpha-project",
+        session: {
+            session_id: "session-target",
+            workspace_id: "alpha-project",
+            updated_at: "2026-03-14T10:04:00Z",
+            metadata: { title: "你好" },
+            latest_terminal_run_id: "run-1",
+            latest_terminal_run_status: "completed",
+            has_unread_terminal_run: true,
+        },
+    },
+}));
+await flushTasks();
+const afterStaleRecordClassName = targetItem().className;
+
+console.log(JSON.stringify({
+    initialClassName,
+    runningClassName,
+    previewTitle,
+    unreadClassName,
+    clickedClassName,
+    afterStaleRecordClassName,
+    targetNodeStable: targetItem() === targetItemBefore,
+    otherNodeStable: otherItem() === otherItemBefore,
+    selectedSessionIds: globalThis.__selectedSessionIds,
+}));
+""".strip(),
+    )
+
+    assert "has-run-indicator" not in str(payload["initialClassName"])
+    assert "has-run-indicator-running" in str(payload["runningClassName"])
+    assert payload["previewTitle"] == "你好"
+    assert "has-run-indicator-unread" in str(payload["unreadClassName"])
+    assert "has-run-indicator-running" not in str(payload["unreadClassName"])
+    assert "has-run-indicator-unread" not in str(payload["clickedClassName"])
+    assert "session-run-indicator-viewed" in str(payload["clickedClassName"])
+    assert "has-run-indicator-unread" not in str(payload["afterStaleRecordClassName"])
+    assert payload["targetNodeStable"] is True
+    assert payload["otherNodeStable"] is True
+    assert payload["selectedSessionIds"] == ["session-target"]
+
+
 def test_projects_sidebar_keeps_latest_rapid_session_click_active(
     tmp_path: Path,
 ) -> None:
@@ -888,7 +1096,7 @@ console.log(JSON.stringify({
     ).read_text(encoding="utf-8")
     assert "selectedSessionNeedsTerminalView" in session_script
     assert "sessionRecordNeedsTerminalView(sessionRecord)" in session_script
-    assert "if (sessionNeedsTerminalView)" in session_script
+    assert "if (selectedSessionNeedsTerminalView)" in session_script
     assert (
         "void markSelectedSessionTerminalViewed(safeSessionId, selectionSignal);"
         in session_script
@@ -1650,7 +1858,7 @@ export async function runAutomationProject() {
     ) in sidebar_script
 
 
-def test_projects_sidebar_hides_stale_summary_toggle_after_empty_subagent_list_load(
+def test_projects_sidebar_keeps_summary_toggle_as_session_state_after_empty_detail_load(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -1763,7 +1971,7 @@ export async function runAutomationProject() {
 """.strip(),
     )
 
-    assert payload["toggleCount"] == 0
+    assert payload["toggleCount"] == 1
 
 
 def test_projects_sidebar_deletes_subagent_child_session_and_returns_to_parent(
@@ -3524,7 +3732,7 @@ console.log(JSON.stringify({
     }
 
 
-def test_projects_sidebar_force_refreshes_subagent_events_even_when_hovering(
+def test_projects_sidebar_defers_forced_subagent_refresh_while_hovering(
     tmp_path: Path,
 ) -> None:
     payload = _run_sidebar_script(
@@ -3541,12 +3749,16 @@ document.dispatchEvent({
     detail: { forceRefresh: true },
 });
 await new Promise(resolve => setTimeout(resolve, 160));
+const hoveredCounts = { ...globalThis.__fetchCounts };
+globalThis.__projectsListHover = false;
+await new Promise(resolve => setTimeout(resolve, 320));
 
-const refreshedCounts = { ...globalThis.__fetchCounts };
+const settledCounts = { ...globalThis.__fetchCounts };
 
 console.log(JSON.stringify({
     initialCounts,
-    refreshedCounts,
+    hoveredCounts,
+    settledCounts,
     sessionForceRefreshes: globalThis.__sessionForceRefreshes,
 }));
 """.strip(),
@@ -3653,7 +3865,8 @@ export async function runAutomationProject() {
         "sessions": 1,
         "automationProjects": 1,
     }
-    assert payload["refreshedCounts"] == {
+    assert payload["hoveredCounts"] == payload["initialCounts"]
+    assert payload["settledCounts"] == {
         "workspaces": 1,
         "sessions": 2,
         "automationProjects": 1,
@@ -4297,7 +4510,7 @@ function parseElements(source, selector) {
         ".session-subagent-empty": /class="session-subagent-empty"[^>]*>([\s\S]*?)<\/div>/g,
         ".session-rename-btn": /class="session-rename-btn"[^>]*data-session-id="([^"]+)"[^>]*data-session-metadata="([^"]*)"[^>]*>/g,
         ".session-delete-btn": /class="session-delete-btn"[^>]*data-session-id="([^"]+)"[^>]*>/g,
-        ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>/g,
+        ".session-item": /class="([^"]*session-item[^"]*)"[^>]*data-session-id="([^"]+)"[^>]*data-workspace-id="([^"]+)"[^>]*>[\s\S]*?<span class="session-label-text"[^>]*>([\s\S]*?)<\/span>/g,
         ".session-source-icon": /class="[^"]*session-source-icon[^"]*"[^>]*>/g,
         ".project-title": /class="project-title"[^>]*>([\s\S]*?)<\/span>/g,
         ".session-id": /class="session-id"[^>]*>([\s\S]*?)<\/span>\s*<\/span>\s*<span class="session-meta"/g,
@@ -4389,6 +4602,7 @@ function parseElements(source, selector) {
         } else if (selector === ".session-item") {
             results.push(createNode({
                 className: match[1],
+                labelText: match[4].replace(/<[^>]+>/g, "").trim(),
                 attributes: {
                     "data-session-id": match[2],
                     "data-workspace-id": match[3],
@@ -4406,8 +4620,17 @@ function parseElements(source, selector) {
     return results;
 }
 
-function createNode({ className = "", textContent = "", attributes = {} } = {}) {
+function createNode({ className = "", textContent = "", labelText = "", attributes = {} } = {}) {
     const attributeStore = new Map(Object.entries(attributes));
+    const labelNode = {
+        textContent: labelText,
+        title: labelText,
+        setAttribute(name, value) {
+            if (name === "title") {
+                this.title = String(value);
+            }
+        },
+    };
     return {
         className,
         classList: {
@@ -4445,6 +4668,9 @@ function createNode({ className = "", textContent = "", attributes = {} } = {}) 
         },
         getAttribute(name) {
             return attributeStore.get(name) || null;
+        },
+        querySelector(selector) {
+            return selector === ".session-label-text" ? labelNode : null;
         },
     };
 }

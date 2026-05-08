@@ -237,6 +237,50 @@ def test_ai_run_continues_after_invalid_tool_args_validation_failure(
     )
 
 
+def test_ai_run_user_question_is_projected_in_recovery_snapshot(
+    api_client: httpx.Client,
+) -> None:
+    session_id = create_session(
+        api_client,
+        session_id=new_session_id("session-question-recovery"),
+    )
+    run_id = create_run(
+        api_client,
+        session_id=session_id,
+        intent="[ask-question-validation] 用 ask_question 收集标签和备注。",
+        execution_mode="ai",
+    )
+
+    questions = _wait_for_user_questions(api_client, run_id=run_id, expected_count=1)
+    assert questions[0]["question_id"] == "call-question-1"
+
+    recovery_snapshot = _wait_for_recovery_user_questions(
+        api_client,
+        session_id=session_id,
+        expected_count=1,
+    )
+    active_run = recovery_snapshot.get("active_run")
+    assert isinstance(active_run, dict)
+    assert active_run.get("run_id") == run_id
+    assert active_run.get("phase") == "awaiting_manual_action"
+    pending_questions = recovery_snapshot.get("pending_user_questions")
+    assert isinstance(pending_questions, list)
+    assert pending_questions[0]["question_id"] == "call-question-1"
+
+    answer_response = api_client.post(
+        f"/api/runs/{run_id}/questions/call-question-1:answer",
+        json={
+            "answers": [
+                {"selections": [{"label": "Ship"}, {"label": "Docs"}]},
+                {"selections": [{"label": "__none_of_the_above__"}]},
+            ]
+        },
+    )
+    answer_response.raise_for_status()
+    events = stream_run_until_terminal(api_client, run_id=run_id, timeout_seconds=60.0)
+    assert str(events[-1].get("event_type") or "") == "run_completed"
+
+
 def test_ai_run_retries_after_provider_rate_limit_once(
     api_client: httpx.Client,
     integration_env: IntegrationEnvironment,
@@ -820,6 +864,56 @@ def _wait_for_session_run_events(
         "Run events did not reach expected persisted counts within "
         f"{timeout_seconds}s for run {run_id}: expected {expected_event_counts}, "
         f"observed {observed_counts}"
+    )
+
+
+def _wait_for_user_questions(
+    api_client: httpx.Client,
+    *,
+    run_id: str,
+    expected_count: int,
+    timeout_seconds: float = 15.0,
+) -> list[dict[str, object]]:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = api_client.get(f"/api/runs/{run_id}/questions")
+        if response.status_code == 404:
+            time.sleep(0.1)
+            continue
+        response.raise_for_status()
+        payload = response.json()
+        assert isinstance(payload, list)
+        questions = [item for item in payload if isinstance(item, dict)]
+        if len(questions) == expected_count:
+            return questions
+        time.sleep(0.1)
+    raise AssertionError(
+        f"Timed out waiting for {expected_count} user questions for run {run_id}"
+    )
+
+
+def _wait_for_recovery_user_questions(
+    api_client: httpx.Client,
+    *,
+    session_id: str,
+    expected_count: int,
+    timeout_seconds: float = 15.0,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout_seconds
+    latest: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        response = api_client.get(f"/api/sessions/{session_id}/recovery")
+        response.raise_for_status()
+        payload = response.json()
+        assert isinstance(payload, dict)
+        latest = payload
+        pending = payload.get("pending_user_questions")
+        if isinstance(pending, list) and len(pending) == expected_count:
+            return payload
+        time.sleep(0.1)
+    raise AssertionError(
+        "Timed out waiting for recovery pending_user_questions "
+        f"for session {session_id}: latest={latest}"
     )
 
 

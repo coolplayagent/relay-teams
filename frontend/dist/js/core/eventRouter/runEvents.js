@@ -27,6 +27,10 @@ import {
     rememberLiveSubagent,
 } from '../../components/subagentRail.js';
 import {
+    markSidebarSessionRunActive,
+    markSidebarSessionRunTerminal,
+} from '../../components/sessionSidebarStore.js';
+import {
     clearNormalModeSubagentParentStopState,
     getActiveSubagentSession,
     getActiveSubagentSessionStreamContainer,
@@ -61,6 +65,7 @@ import {
 } from '../../components/agentPanel.js';
 import {
     coordinatorContainerFor,
+    isCurrentRootEvent,
 } from './utils.js';
 import { markSessionTerminalRunViewed } from '../api.js';
 
@@ -77,6 +82,10 @@ export function handleRunStarted(eventMeta, { resumeSubagents = false } = {}) {
     }
     if (runId) {
         markRunStreamConnected(runId, { phase: 'running' });
+    }
+    markCurrentSessionRunActive(eventMeta, 'running', runId);
+    if (!isCurrentRootEvent(eventMeta)) {
+        return;
     }
     state.activeAgentRoleId = getRunPrimaryRoleId(runId) || getPrimaryRoleId() || null;
     state.activeAgentInstanceId = null;
@@ -157,6 +166,16 @@ export function handleTextDelta(payload, eventMeta, instanceId, roleId) {
             return;
         }
         const container = coordinatorContainerFor(eventMeta);
+        if (!container) {
+            applyStreamOverlayEvent('text_delta', payload, {
+                runId,
+                instanceId: 'primary',
+                roleId: primaryRoleId,
+                label,
+                eventId: eventMeta?.event_id || '',
+            });
+            return;
+        }
         getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         appendStreamChunk(streamKey, payload.text || '', runId, primaryRoleId, label);
     } else {
@@ -204,6 +223,16 @@ export function handleOutputDelta(payload, eventMeta, instanceId, roleId) {
             return;
         }
         const container = coordinatorContainerFor(eventMeta);
+        if (!container) {
+            applyStreamOverlayEvent('output_delta', payload, {
+                runId,
+                instanceId: 'primary',
+                roleId: primaryRoleId,
+                label,
+                eventId: eventMeta?.event_id || '',
+            });
+            return;
+        }
         getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         appendStreamOutputParts(streamKey, output, {
             container,
@@ -276,6 +305,16 @@ export function handleThinkingStarted(payload, eventMeta, instanceId, roleId) {
             return;
         }
         const container = coordinatorContainerFor(eventMeta);
+        if (!container) {
+            applyStreamOverlayEvent('thinking_started', payload, {
+                runId,
+                instanceId: 'primary',
+                roleId: primaryRoleId,
+                label,
+                eventId: eventMeta?.event_id || '',
+            });
+            return;
+        }
         const streamKey = 'primary';
         getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         startThinkingBlock(streamKey, partIndex, {
@@ -333,6 +372,16 @@ export function handleThinkingDelta(payload, eventMeta, instanceId, roleId) {
             return;
         }
         const container = coordinatorContainerFor(eventMeta);
+        if (!container) {
+            applyStreamOverlayEvent('thinking_delta', payload, {
+                runId,
+                instanceId: 'primary',
+                roleId: primaryRoleId,
+                label,
+                eventId: eventMeta?.event_id || '',
+            });
+            return;
+        }
         const streamKey = 'primary';
         getOrCreateStreamBlock(container, streamKey, primaryRoleId, label, runId);
         appendThinkingChunk(streamKey, partIndex, text, {
@@ -376,7 +425,7 @@ export function handleThinkingFinished(payload, eventMeta, instanceId, roleId) {
     const partIndex = payload?.part_index ?? 0;
     const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
 
-    if (isPrimary && state.activeSubagentSession) {
+    if (isPrimary && (state.activeSubagentSession || !isCurrentRootEvent(eventMeta))) {
         applyStreamOverlayEvent('thinking_finished', payload, {
             runId,
             instanceId: 'primary',
@@ -407,7 +456,7 @@ export function handleModelStepFinished(eventMeta, instanceId, roleIdOverride = 
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     const isPrimary = !instanceId || (!roleId && instanceId === 'primary') || isRunPrimaryRoleId(roleId, runId);
     const normalModeSubagent = isNormalModeSubagentRun(runId, roleId);
-    if (isPrimary && state.activeSubagentSession) {
+    if (isPrimary && (state.activeSubagentSession || !isCurrentRootEvent(eventMeta))) {
         applyStreamOverlayEvent('model_step_finished', {}, {
             runId,
             instanceId: 'primary',
@@ -494,6 +543,11 @@ export function handleRunCompleted(eventMeta, payload = null) {
             recoverable: false,
         });
     }
+    markCurrentSessionRunTerminal(eventMeta, 'completed', runId);
+    if (!isCurrentRootEvent(eventMeta)) {
+        clearRunPrimaryRole(runId);
+        return;
+    }
     state.isGenerating = false;
     state.activeAgentRoleId = null;
     state.activeAgentInstanceId = null;
@@ -535,6 +589,11 @@ export function handleRunStopped(eventMeta, payload) {
             recoverable: true,
         });
     }
+    markCurrentSessionRunTerminal(eventMeta, 'stopped', runId);
+    if (!isCurrentRootEvent(eventMeta)) {
+        clearRunPrimaryRole(runId);
+        return;
+    }
     state.isGenerating = false;
     state.activeAgentRoleId = null;
     state.activeAgentInstanceId = null;
@@ -569,6 +628,11 @@ export function handleRunFailed(eventMeta, payload) {
             recoverable: false,
         });
     }
+    markCurrentSessionRunTerminal(eventMeta, 'failed', runId);
+    if (!isCurrentRootEvent(eventMeta)) {
+        clearRunPrimaryRole(runId);
+        return;
+    }
     state.isGenerating = false;
     state.activeAgentRoleId = null;
     state.activeAgentInstanceId = null;
@@ -590,6 +654,37 @@ export function handleRunFailed(eventMeta, payload) {
     markCurrentSessionTerminalViewed(eventMeta);
 }
 
+function markCurrentSessionRunActive(eventMeta = null, status = 'running', runId = '') {
+    const sessionId = eventSessionId(eventMeta) || state.currentSessionId;
+    if (!sessionId) {
+        return;
+    }
+    markSidebarSessionRunActive(sessionId, { runId, status });
+    globalThis.document?.dispatchEvent?.(
+        new CustomEvent('agent-teams-session-run-active', {
+            detail: { sessionId, runId, status },
+        }),
+    );
+}
+
+function markCurrentSessionRunTerminal(eventMeta = null, status = '', runId = '') {
+    const sessionId = eventSessionId(eventMeta) || state.currentSessionId;
+    if (!sessionId) {
+        return;
+    }
+    const viewed = isCurrentSessionEvent(eventMeta, sessionId);
+    markSidebarSessionRunTerminal(sessionId, { runId, status, viewed });
+    globalThis.document?.dispatchEvent?.(
+        new CustomEvent('agent-teams-session-run-terminal', {
+            detail: { sessionId, runId, status, viewed },
+        }),
+    );
+}
+
+function eventSessionId(eventMeta = null) {
+    return String(eventMeta?.session_id || eventMeta?.sessionId || '').trim();
+}
+
 function markCurrentSessionTerminalViewed(eventMeta = null) {
     const currentSessionId = String(state.currentSessionId || '').trim();
     const eventSessionId = String(eventMeta?.session_id || eventMeta?.sessionId || '').trim();
@@ -605,6 +700,13 @@ function markCurrentSessionTerminalViewed(eventMeta = null) {
             'log-error',
         );
     });
+}
+
+function isCurrentSessionEvent(eventMeta = null, fallbackSessionId = '') {
+    const currentSessionId = String(state.currentSessionId || '').trim();
+    const eventMetaSessionId = String(eventMeta?.session_id || eventMeta?.sessionId || '').trim();
+    const sessionId = eventMetaSessionId || String(fallbackSessionId || '').trim();
+    return !!currentSessionId && (!sessionId || sessionId === currentSessionId);
 }
 
 function appendMissingTerminalOutput(
@@ -635,6 +737,16 @@ function appendMissingTerminalOutput(
         return;
     }
     const container = coordinatorContainerFor(eventMeta);
+    if (!container) {
+        applyStreamOverlayEvent('output_delta', { output: outputParts }, {
+            runId: safeRunId,
+            instanceId: 'primary',
+            roleId: String(roleId || getRunPrimaryRoleId(safeRunId) || '').trim(),
+            label: String(label || getRunPrimaryRoleLabel(safeRunId) || 'Main Agent'),
+            eventId: eventMeta?.event_id || '',
+        });
+        return;
+    }
     const primaryRoleId = String(roleId || getRunPrimaryRoleId(safeRunId) || '').trim();
     const primaryLabel = String(label || getRunPrimaryRoleLabel(safeRunId) || 'Main Agent');
     getOrCreateStreamBlock(container, 'primary', primaryRoleId, primaryLabel, safeRunId);

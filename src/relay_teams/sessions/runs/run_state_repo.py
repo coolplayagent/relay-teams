@@ -234,6 +234,90 @@ class RunStateRepository(SharedSqliteRepository):
         )
         return next_state
 
+    async def apply_events_async(
+        self,
+        *,
+        event_ids: tuple[int, ...],
+        events: tuple[RunEvent, ...],
+    ) -> RunStateRecord | None:
+        if not events:
+            return None
+        previous = await self.get_run_state_async(events[0].run_id)
+        next_state: RunStateRecord | None = previous
+        snapshot_records: list[tuple[RunEventType, RunSnapshotRecord]] = []
+        for event_id, event in zip(event_ids, events, strict=True):
+            next_state = apply_run_event_to_state(
+                next_state,
+                event=event,
+                event_id=event_id,
+            )
+            if event.event_type in _SNAPSHOT_EVENT_TYPES:
+                snapshot_records.append(
+                    (
+                        event.event_type,
+                        RunSnapshotRecord(
+                            run_id=next_state.run_id,
+                            session_id=next_state.session_id,
+                            checkpoint_event_id=next_state.checkpoint_event_id,
+                            state=next_state,
+                            created_at=next_state.updated_at,
+                        ),
+                    )
+                )
+        if next_state is None:
+            return None
+
+        snapshot_parameters = tuple(
+            (
+                snapshot.run_id,
+                snapshot.session_id,
+                snapshot.checkpoint_event_id,
+                json.dumps(snapshot.state.model_dump(mode="json")),
+                snapshot.created_at.isoformat(),
+            )
+            for snapshot in _coalesce_batch_snapshots(tuple(snapshot_records))
+        )
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                """
+                INSERT INTO run_states(run_id, session_id, state_json, updated_at)
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(run_id)
+                DO UPDATE SET
+                    session_id=excluded.session_id,
+                    state_json=excluded.state_json,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    next_state.run_id,
+                    next_state.session_id,
+                    next_state.model_dump_json(),
+                    next_state.updated_at.isoformat(),
+                ),
+            )
+            await cursor.close()
+            if snapshot_parameters:
+                cursor = await conn.executemany(
+                    """
+                    INSERT INTO run_snapshots(run_id, session_id, checkpoint_event_id, state_json, created_at)
+                    VALUES(?, ?, ?, ?, ?)
+                    ON CONFLICT(run_id, checkpoint_event_id)
+                    DO UPDATE SET
+                        state_json=excluded.state_json,
+                        created_at=excluded.created_at
+                    """,
+                    snapshot_parameters,
+                )
+                await cursor.close()
+
+        await self._run_async_write(
+            operation_name="apply_events_async",
+            operation=lambda _conn: operation(),
+        )
+        return next_state
+
     def upsert(self, state: RunStateRecord) -> None:
         self._run_write(
             operation_name="upsert",
@@ -490,3 +574,21 @@ def _recoverable_states_from_rows(
             result.append(state)
     result.sort(key=lambda item: item.updated_at, reverse=True)
     return tuple(result)
+
+
+def _coalesce_batch_snapshots(
+    records: tuple[tuple[RunEventType, RunSnapshotRecord], ...],
+) -> tuple[RunSnapshotRecord, ...]:
+    snapshots: list[RunSnapshotRecord] = []
+    pending_tool_result: RunSnapshotRecord | None = None
+    for event_type, snapshot in records:
+        if event_type is RunEventType.TOOL_RESULT:
+            pending_tool_result = snapshot
+            continue
+        if pending_tool_result is not None:
+            snapshots.append(pending_tool_result)
+            pending_tool_result = None
+        snapshots.append(snapshot)
+    if pending_tool_result is not None:
+        snapshots.append(pending_tool_result)
+    return tuple(snapshots)

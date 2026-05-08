@@ -23,7 +23,13 @@ from relay_teams.mcp.mcp_models import (
 )
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
-from relay_teams.mcp.mcp_service import McpService
+from relay_teams.mcp.mcp_service import (
+    MCP_TOOL_LOAD_CONCURRENCY_ENV,
+    MCP_TOOL_LOAD_FAILED_TTL_MS_ENV,
+    MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS_ENV,
+    McpToolLoadBusyError,
+    McpService,
+)
 from relay_teams.trace import get_trace_context
 
 
@@ -294,6 +300,219 @@ def test_refresh_server_tools_without_discovery_service_returns_pending() -> Non
     assert summary.server == "filesystem"
     assert summary.status == McpDiscoveryStatus.PENDING
     assert summary.tools == ()
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_fast_fails_when_loader_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_TOOL_LOAD_CONCURRENCY_ENV, "1")
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        assert name == "filesystem"
+        entered.set()
+        await release.wait()
+        return (McpToolInfo(name="filesystem_read_file", description="Read"),)
+
+    monkeypatch.setattr(registry, "list_tools", slow_list_tools)
+    service = McpService(registry=registry)
+
+    first = asyncio.create_task(service.list_server_tools("filesystem"))
+    await entered.wait()
+    with pytest.raises(RuntimeError, match="busy"):
+        await service.list_server_tools("filesystem")
+    release.set()
+
+    summary = await first
+    assert [tool.name for tool in summary.tools] == ["filesystem_read_file"]
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_can_disable_uncached_loads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_TOOL_LOAD_CONCURRENCY_ENV, "0")
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    async def fake_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        calls.append(name)
+        return (McpToolInfo(name="filesystem_read_file", description="Read"),)
+
+    monkeypatch.setattr(registry, "list_tools", fake_list_tools)
+    service = McpService(registry=registry)
+
+    with pytest.raises(McpToolLoadBusyError, match="busy"):
+        await service.list_server_tools("filesystem")
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_caches_recent_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_TOOL_LOAD_FAILED_TTL_MS_ENV, "60000")
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    async def failing_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        calls.append(name)
+        raise RuntimeError("connection failed")
+
+    monkeypatch.setattr(registry, "list_tools", failing_list_tools)
+    service = McpService(registry=registry)
+
+    with pytest.raises(RuntimeError, match="connection failed"):
+        await service.list_server_tools("filesystem")
+    with pytest.raises(RuntimeError, match="failed recently"):
+        await service.list_server_tools("filesystem")
+
+    assert calls == ["filesystem"]
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_retries_after_failure_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_TOOL_LOAD_FAILED_TTL_MS_ENV, "1")
+    monkeypatch.setenv(MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS_ENV, "0")
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    async def transient_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        calls.append(name)
+        if len(calls) == 1:
+            raise RuntimeError("connection failed")
+        return (McpToolInfo(name="filesystem_read_file", description="Read"),)
+
+    monkeypatch.setattr(registry, "list_tools", transient_list_tools)
+    service = McpService(registry=registry)
+
+    with pytest.raises(RuntimeError, match="connection failed"):
+        await service.list_server_tools("filesystem")
+    await asyncio.sleep(0.05)
+
+    summary = await service.list_server_tools("filesystem")
+
+    assert calls == ["filesystem", "filesystem"]
+    assert summary.status == McpDiscoveryStatus.READY
+    assert registry.is_server_runtime_failed("filesystem") is False
+
+
+@pytest.mark.asyncio
+async def test_refresh_server_tools_clears_cached_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_TOOL_LOAD_FAILED_TTL_MS_ENV, "60000")
+    monkeypatch.setenv(MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS_ENV, "60000")
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    async def transient_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        calls.append(name)
+        if len(calls) == 1:
+            raise RuntimeError("connection failed")
+        return (McpToolInfo(name="filesystem_read_file", description="Read"),)
+
+    monkeypatch.setattr(registry, "list_tools", transient_list_tools)
+    service = McpService(registry=registry)
+
+    with pytest.raises(RuntimeError, match="connection failed"):
+        await service.list_server_tools("filesystem")
+    refresh = service.refresh_server_tools("filesystem")
+    loaded = await service.list_server_tools("filesystem")
+
+    assert refresh.status == McpDiscoveryStatus.PENDING
+    assert loaded.status == McpDiscoveryStatus.READY
+    assert calls == ["filesystem", "filesystem"]
+    assert registry.is_server_runtime_failed("filesystem") is False
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_global_failure_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(MCP_TOOL_LOAD_GLOBAL_FAILURE_TTL_MS_ENV, "60000")
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="broken",
+                config={"mcpServers": {"broken": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+            McpServerSpec(
+                name="other",
+                config={"mcpServers": {"other": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    async def failing_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+        calls.append(name)
+        raise RuntimeError("connection failed")
+
+    monkeypatch.setattr(registry, "list_tools", failing_list_tools)
+    service = McpService(registry=registry)
+
+    with pytest.raises(RuntimeError, match="connection failed"):
+        await service.list_server_tools("broken")
+    with pytest.raises(McpToolLoadBusyError, match="cooling down"):
+        await service.list_server_tools("other")
+
+    assert calls == ["broken"]
 
 
 @pytest.mark.asyncio

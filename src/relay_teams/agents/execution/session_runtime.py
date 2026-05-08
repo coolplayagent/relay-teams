@@ -15,7 +15,6 @@ from pydantic import JsonValue
 from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
     FunctionToolResultEvent,
-    ModelMessage,
     ModelRequest,
     ModelRequestPart,
     ModelResponse,
@@ -73,11 +72,28 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import InjectionMessage, RunEvent
 from relay_teams.tools.registry import ToolRegistry, ToolResolutionContext
 from relay_teams.tools.runtime.context import ToolDeps
+from relay_teams.tools.runtime.execution import (
+    flush_tool_result_batch_async,
+    tool_result_batching_active,
+)
+from relay_teams.tools.runtime.tool_result_batching import tool_result_batch_scope
 from relay_teams.agents.execution.context_editing import (
     build_diff_injection,
     build_injection_message,
 )
 from relay_teams.agents.execution.recovery_flow import FallbackAttemptState
+from relay_teams.agents.execution.relay_tool_step_executor import (
+    AgentNodeStream,
+    AgentNodeStreamContext,
+    AgentRun,
+    AgentRunResult,
+    AutoHarnessRuntimeService,
+    CoordinationAgent,
+    StreamableModelRequestNode,
+    StreamableToolCallNode,
+    _InjectionRestartApplied,
+    _try_execute_relay_tool_step_async,
+)
 from relay_teams.agents.execution.spec_drift_evaluator import evaluate_spec_drift
 from relay_teams.workspace import build_conversation_id
 
@@ -88,105 +104,6 @@ _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS: set[asyncio.Task[None]] = set()
 _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_MIN_TIMEOUT_SECONDS = 1.0
 _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_MAX_TIMEOUT_SECONDS = 30.0
 StreamItemT = TypeVar("StreamItemT")
-
-
-class _InjectionRestartApplied(Exception):
-    pass
-
-
-class AgentRunResult(Protocol):
-    @property
-    def response(self) -> object: ...
-
-    def new_messages(self) -> Sequence[ModelMessage]: ...
-
-    def usage(self) -> object: ...
-
-
-class AgentNodeStream(Protocol):
-    def __aiter__(self) -> AsyncIterator[object]: ...
-
-    def stream_text(self, *, delta: bool) -> AsyncIterator[str]: ...
-
-    def usage(self) -> object: ...
-
-
-class AgentNodeStreamContext(Protocol):
-    async def __aenter__(self) -> AgentNodeStream: ...
-
-    async def __aexit__(
-        self,
-        exc_type: object,
-        exc: object,
-        tb: object,
-    ) -> bool | None: ...
-
-
-class StreamableModelRequestNode(Protocol):
-    def stream(self, ctx: object) -> AgentNodeStreamContext: ...
-
-
-class AgentToolEventStream(Protocol):
-    def __aiter__(self) -> AsyncIterator[object]:
-        raise NotImplementedError  # pragma: no cover
-
-
-class AgentToolEventStreamContext(Protocol):
-    async def __aenter__(self) -> AgentToolEventStream:
-        raise NotImplementedError  # pragma: no cover
-
-    async def __aexit__(
-        self,
-        exc_type: object,
-        exc: object,
-        tb: object,
-    ) -> bool | None:
-        raise NotImplementedError  # pragma: no cover
-
-
-class StreamableToolCallNode(Protocol):
-    @staticmethod
-    def stream(ctx: object) -> AgentToolEventStreamContext:
-        raise NotImplementedError  # pragma: no cover
-
-
-class AgentRun(Protocol):
-    ctx: object
-    result: AgentRunResult | None
-
-    async def __aenter__(self) -> "AgentRun": ...
-
-    async def __aexit__(
-        self,
-        exc_type: object,
-        exc: object,
-        tb: object,
-    ) -> bool | None: ...
-
-    def __aiter__(self) -> "AgentRun": ...
-
-    async def __anext__(self) -> object: ...
-
-    def new_messages(self) -> Sequence[ModelMessage]: ...
-
-    def usage(self) -> object: ...
-
-
-class CoordinationAgent(Protocol):
-    def iter(
-        self,
-        prompt: str | None,
-        *,
-        deps: ToolDeps,
-        message_history: Sequence[ModelRequest | ModelResponse],
-        usage_limits: UsageLimits,
-    ) -> AgentRun: ...
-
-
-class AutoHarnessRuntimeService(Protocol):
-    @staticmethod
-    def consume_tools_dirty(*, run_id: str, instance_id: str) -> tuple[str, ...]:
-        raise NotImplementedError
 
 
 def resolve_allowed_tools(
@@ -242,6 +159,18 @@ def consume_auto_harness_dirty_tools(
         run_id=run_id,
         instance_id=instance_id,
     )
+
+
+async def resolve_is_root_task_context(
+    task_repo: _TaskRepo,
+    *,
+    task_id: str,
+) -> bool:
+    try:
+        task_record = await task_repo.get_async(task_id)
+    except (AttributeError, KeyError):
+        return False
+    return task_record.envelope.parent_task_id is None
 
 
 def model_step_payload(
@@ -344,6 +273,8 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             return False
         result = stream_event.result
         if not isinstance(result, (ToolReturnPart, RetryPromptPart)):
+            return False
+        if isinstance(result, ToolReturnPart) and tool_result_batching_active():
             return False
         if isinstance(result, RetryPromptPart):
             if not result.tool_name:
@@ -448,6 +379,10 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 workspace_id=resolved_workspace_id,
                 conversation_id=resolved_conversation_id,
             )
+            is_root_task_context = await resolve_is_root_task_context(
+                self._task_repo,
+                task_id=request.task_id,
+            )
             deps = ToolDeps(
                 task_repo=self._task_repo,
                 shared_store=self._shared_store,
@@ -469,6 +404,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 run_id=request.run_id,
                 trace_id=request.trace_id,
                 task_id=request.task_id,
+                is_root_task_context=is_root_task_context,
                 session_id=request.session_id,
                 session_mode=request.session_mode,
                 run_kind=request.run_kind.value,
@@ -1111,6 +1047,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     active_tool_call_batch_id = (
                                         f"toolbatch_{uuid4().hex[:16]}"
                                     )
+                                    streamed_tool_call_parts: list[
+                                        tuple[int, ToolCallPart]
+                                    ] = []
                                     streamed_text_start = len(emitted_text_chunks)
                                     usage_before = deepcopy(agent_run.usage())
                                     stream_context = streamable_node.stream(
@@ -1153,16 +1092,12 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                                             parts=[stream_event.part]
                                                         )
                                                     )
-                                                    tool_call_event_emitted = await self._event_publishing_service().publish_observed_tool_call_event_async(
-                                                        request=request,
-                                                        part=stream_event.part,
-                                                        batch_id=active_tool_call_batch_id,
-                                                        batch_index=stream_event.index,
-                                                        batch_size=0,
-                                                        published_tool_call_ids=published_tool_call_ids,
+                                                    streamed_tool_call_parts.append(
+                                                        (
+                                                            stream_event.index,
+                                                            stream_event.part,
+                                                        )
                                                     )
-                                                    if tool_call_event_emitted:
-                                                        attempt_tool_call_event_emitted = True
                                                 if text_emitted:
                                                     printed_any = True
                                                     attempt_text_emitted = True
@@ -1195,6 +1130,22 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     _raise_if_stream_finished_without_reason(stream)
                                     if await apply_interrupt_injections():
                                         raise _InjectionRestartApplied
+                                    if streamed_tool_call_parts:
+                                        tool_call_event_emitted = await self._event_publishing_service().publish_observed_tool_call_events_batch_async(
+                                            request=request,
+                                            tool_calls=tuple(streamed_tool_call_parts),
+                                            batch_id=active_tool_call_batch_id,
+                                            published_tool_call_ids=published_tool_call_ids,
+                                        )
+                                        if tool_call_event_emitted:
+                                            attempt_tool_call_event_emitted = True
+                                            await self._event_publishing_service().seal_tool_call_batch_async(
+                                                request=request,
+                                                batch_id=active_tool_call_batch_id,
+                                                tool_calls=tuple(
+                                                    streamed_tool_call_parts
+                                                ),
+                                            )
                                     usage_after = stream.usage()
                                     input_tokens_delta = self._usage_delta_int(
                                         after=usage_after,
@@ -1243,34 +1194,54 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     tool_node = cast(
                                         StreamableToolCallNode, cast(object, node)
                                     )
-                                    async with tool_node.stream(
-                                        agent_run.ctx
-                                    ) as tool_stream:
-                                        async for tool_stream_event in tool_stream:
-                                            control_ctx.raise_if_cancelled()
-                                            if await apply_interrupt_injections():
-                                                raise _InjectionRestartApplied
-                                            observed_result = (
-                                                _observed_tool_result_message(
-                                                    tool_stream_event
-                                                )
+                                    with tool_result_batch_scope() as result_buffer:
+                                        try:
+                                            relay_tool_step_result = await _try_execute_relay_tool_step_async(
+                                                node=node,
+                                                agent_run_ctx=agent_run.ctx,
                                             )
-                                            if observed_result is not None:
-                                                observed_result_ids = _tool_result_ids(
-                                                    [observed_result]
+                                            if relay_tool_step_result is not None:
+                                                observed_stream_messages.extend(
+                                                    relay_tool_step_result.observed_messages
                                                 )
-                                                if not observed_result_ids.intersection(
-                                                    published_tool_outcome_ids
-                                                ):
-                                                    observed_stream_messages.append(
-                                                        observed_result
-                                                    )
-                                            tool_outcome_emitted = await self._publish_tool_outcome_event_from_stream_async(
-                                                request=request,
-                                                stream_event=tool_stream_event,
+                                            else:
+                                                async with tool_node.stream(
+                                                    agent_run.ctx
+                                                ) as tool_stream:
+                                                    async for (
+                                                        tool_stream_event
+                                                    ) in tool_stream:
+                                                        control_ctx.raise_if_cancelled()
+                                                        if await apply_interrupt_injections():
+                                                            raise _InjectionRestartApplied
+                                                        observed_result = _observed_tool_result_message(
+                                                            tool_stream_event
+                                                        )
+                                                        if observed_result is not None:
+                                                            observed_result_ids = (
+                                                                _tool_result_ids(
+                                                                    [observed_result]
+                                                                )
+                                                            )
+                                                            if not observed_result_ids.intersection(
+                                                                published_tool_outcome_ids
+                                                            ):
+                                                                observed_stream_messages.append(
+                                                                    observed_result
+                                                                )
+                                                        tool_outcome_emitted = await self._publish_tool_outcome_event_from_stream_async(
+                                                            request=request,
+                                                            stream_event=tool_stream_event,
+                                                            published_tool_outcome_ids=published_tool_outcome_ids,
+                                                        )
+                                                        if tool_outcome_emitted:
+                                                            attempt_tool_outcome_event_emitted = True
+                                        finally:
+                                            batch_outcome_emitted = await flush_tool_result_batch_async(
+                                                result_buffer,
                                                 published_tool_outcome_ids=published_tool_outcome_ids,
                                             )
-                                            if tool_outcome_emitted:
+                                            if batch_outcome_emitted:
                                                 attempt_tool_outcome_event_emitted = (
                                                     True
                                                 )

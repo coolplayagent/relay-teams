@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
-from typing import cast
-from uuid import uuid4
+from datetime import datetime, timezone
+from hashlib import sha256
+from time import perf_counter
+from typing import Protocol, cast, runtime_checkable
 
 from pydantic import JsonValue
 from pydantic_ai.messages import (
@@ -30,22 +33,28 @@ from relay_teams.sessions.runs.event_stream import (
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.logger import get_logger, log_event
 from relay_teams.tools.runtime.persisted_state import (
-    PersistedToolCallState,
     PersistedToolCallBatchItem,
+    PersistedToolCallBatchState,
+    PersistedToolCallState,
     ToolCallBatchStatus,
     ToolExecutionStatus,
     load_tool_call_batch_state,
     load_tool_call_batch_state_async,
     load_tool_call_state,
     load_tool_call_state_async,
-    merge_tool_call_batch_state,
-    merge_tool_call_batch_state_async,
-    merge_tool_call_state,
-    merge_tool_call_state_async,
+    load_tool_call_states_async,
 )
+from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 
 LOGGER = get_logger(__name__)
+TOOL_CALL_BATCH_STATE_WRITE_TIMEOUT_SECONDS = 0.2
+
+
+@runtime_checkable
+class AsyncRunEventBatchPublisher(Protocol):
+    async def publish_many_async(self, events: tuple[RunEvent, ...]) -> tuple[int, ...]:
+        raise NotImplementedError
 
 
 class EventPublishingService:
@@ -220,10 +229,7 @@ class EventPublishingService:
                 ):
                     emitted = True
                     batch_emitted = True
-            if batch_emitted or self._tool_call_batch_has_observed_items(
-                request=request,
-                batch_id=batch_id,
-            ):
+            if batch_emitted:
                 self.seal_tool_call_batch(
                     request=request,
                     batch_id=batch_id,
@@ -419,11 +425,30 @@ class EventPublishingService:
                 "instance_id": request.instance_id,
             },
         )
-        try:
-            await self._persist_tool_call_batch_seal_async(
+        persist_task = asyncio.create_task(
+            self._persist_tool_call_batch_seal_async(
                 request=request,
                 batch_id=batch_id,
                 items=items,
+            )
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(persist_task),
+                timeout=TOOL_CALL_BATCH_STATE_WRITE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            persist_task.add_done_callback(
+                lambda completed: self._observe_tool_call_batch_seal_persistence_result(
+                    request=request,
+                    batch_id=batch_id,
+                    task=completed,
+                )
+            )
+            self._log_tool_call_batch_seal_persistence_deferred(
+                request=request,
+                batch_id=batch_id,
+                error=exc,
             )
         except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
             self._log_tool_call_batch_seal_persistence_skipped(
@@ -431,6 +456,66 @@ class EventPublishingService:
                 batch_id=batch_id,
                 error=exc,
             )
+
+    def _observe_tool_call_batch_seal_persistence_result(
+        self,
+        *,
+        request: LLMRequest,
+        batch_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        try:
+            task.result()
+        except Exception as exc:
+            self._log_tool_call_batch_seal_persistence_skipped(
+                request=request,
+                batch_id=batch_id,
+                error=exc,
+            )
+
+    async def publish_observed_tool_call_events_batch_async(
+        self,
+        *,
+        request: LLMRequest,
+        tool_calls: Sequence[tuple[int, ToolCallPart]],
+        batch_id: str,
+        published_tool_call_ids: set[str] | None = None,
+    ) -> bool:
+        event_inputs: list[tuple[int, ToolCallPart, str, str]] = []
+        for batch_index, part in tool_calls:
+            tool_call_id = str(part.tool_call_id or "").strip()
+            tool_name = str(part.tool_name or "").strip()
+            if not tool_call_id or not tool_name:
+                continue
+            if published_tool_call_ids is not None:
+                if tool_call_id in published_tool_call_ids:
+                    continue
+                published_tool_call_ids.add(tool_call_id)
+            event_inputs.append((batch_index, part, tool_call_id, tool_name))
+        if not event_inputs:
+            return False
+        batch_size = len(tool_calls)
+        events = tuple(
+            self._run_event(
+                request=request,
+                event_type=RunEventType.TOOL_CALL,
+                payload={
+                    "run_id": request.run_id,
+                    "session_id": request.session_id,
+                    "tool_name": tool_name,
+                    "tool_call_id": tool_call_id,
+                    "args": part.args,
+                    "batch_id": batch_id,
+                    "batch_index": batch_index,
+                    "batch_size": batch_size,
+                    "role_id": request.role_id,
+                    "instance_id": request.instance_id,
+                },
+            )
+            for batch_index, part, tool_call_id, tool_name in event_inputs
+        )
+        await self._publish_run_events_async(events)
+        return True
 
     def _persist_tool_call_batch_seal(
         self,
@@ -441,42 +526,33 @@ class EventPublishingService:
     ) -> None:
         if self._shared_store is None:
             return
-        merge_tool_call_batch_state(
+        current_batch = load_tool_call_batch_state(
             shared_store=self._shared_store,
             task_id=request.task_id,
             batch_id=batch_id,
-            run_id=request.run_id,
-            session_id=request.session_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            status=ToolCallBatchStatus.SEALED,
-            items=items,
         )
-        for item in items:
-            current = load_tool_call_state(
-                shared_store=self._shared_store,
-                task_id=request.task_id,
-                tool_call_id=item.tool_call_id,
-            )
-            merge_tool_call_state(
-                shared_store=self._shared_store,
-                task_id=request.task_id,
-                tool_call_id=item.tool_call_id,
-                tool_name=item.tool_name,
-                run_id=request.run_id,
-                session_id=request.session_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
-                args_preview=item.args_preview,
-                execution_status=(
-                    ToolExecutionStatus.READY
-                    if current is None
-                    else current.execution_status
-                ),
+        current_calls = _load_tool_call_states_from_snapshot(
+            shared_store=self._shared_store,
+            task_id=request.task_id,
+            tool_call_ids=tuple(item.tool_call_id for item in items),
+        )
+        started = perf_counter()
+        self._shared_store.manage_states(
+            _tool_call_batch_mutations(
+                request=request,
                 batch_id=batch_id,
-                batch_index=item.index,
-                batch_size=len(items),
+                items=items,
+                current_batch=current_batch,
+                current_calls=current_calls,
+                status=ToolCallBatchStatus.SEALED,
             )
+        )
+        self._log_tool_call_batch_state_metrics(
+            request=request,
+            batch_id=batch_id,
+            item_count=len(items),
+            duration_ms=int((perf_counter() - started) * 1000),
+        )
 
     async def _persist_tool_call_batch_seal_async(
         self,
@@ -487,42 +563,33 @@ class EventPublishingService:
     ) -> None:
         if self._shared_store is None:
             return
-        await merge_tool_call_batch_state_async(
+        current_batch = await load_tool_call_batch_state_async(
             shared_store=self._shared_store,
             task_id=request.task_id,
             batch_id=batch_id,
-            run_id=request.run_id,
-            session_id=request.session_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            status=ToolCallBatchStatus.SEALED,
-            items=items,
         )
-        for item in items:
-            current = await load_tool_call_state_async(
-                shared_store=self._shared_store,
-                task_id=request.task_id,
-                tool_call_id=item.tool_call_id,
-            )
-            await merge_tool_call_state_async(
-                shared_store=self._shared_store,
-                task_id=request.task_id,
-                tool_call_id=item.tool_call_id,
-                tool_name=item.tool_name,
-                run_id=request.run_id,
-                session_id=request.session_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
-                args_preview=item.args_preview,
-                execution_status=(
-                    ToolExecutionStatus.READY
-                    if current is None
-                    else current.execution_status
-                ),
+        current_calls = await load_tool_call_states_async(
+            shared_store=self._shared_store,
+            task_id=request.task_id,
+            tool_call_ids=tuple(item.tool_call_id for item in items),
+        )
+        started = perf_counter()
+        await self._shared_store.manage_states_async(
+            _tool_call_batch_mutations(
+                request=request,
                 batch_id=batch_id,
-                batch_index=item.index,
-                batch_size=len(items),
+                items=items,
+                current_batch=current_batch,
+                current_calls=current_calls,
+                status=ToolCallBatchStatus.SEALED,
             )
+        )
+        self._log_tool_call_batch_state_metrics(
+            request=request,
+            batch_id=batch_id,
+            item_count=len(items),
+            duration_ms=int((perf_counter() - started) * 1000),
+        )
 
     def _batch_id_for_tool_calls(
         self,
@@ -530,19 +597,16 @@ class EventPublishingService:
         request: LLMRequest,
         tool_calls: Sequence[tuple[int, ToolCallPart]],
     ) -> str:
-        if self._shared_store is not None:
+        first_tool_call_id = _first_tool_call_id(tool_calls)
+        if self._shared_store is not None and first_tool_call_id:
             try:
-                for _index, part in tool_calls:
-                    tool_call_id = str(part.tool_call_id or "").strip()
-                    if not tool_call_id:
-                        continue
-                    state = load_tool_call_state(
-                        shared_store=self._shared_store,
-                        task_id=request.task_id,
-                        tool_call_id=tool_call_id,
-                    )
-                    if state is not None and state.batch_id:
-                        return state.batch_id
+                state = load_tool_call_state(
+                    shared_store=self._shared_store,
+                    task_id=request.task_id,
+                    tool_call_id=first_tool_call_id,
+                )
+                if state is not None and state.batch_id:
+                    return state.batch_id
             except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
                 self._log_tool_call_batch_state_lookup_skipped(
                     request=request,
@@ -550,7 +614,10 @@ class EventPublishingService:
                     operation="batch_id_lookup",
                     error=exc,
                 )
-        return f"toolbatch_{uuid4().hex[:16]}"
+        return _deterministic_batch_id(
+            request=request,
+            first_tool_call_id=first_tool_call_id,
+        )
 
     def _tool_call_batch_is_sealed(
         self,
@@ -606,19 +673,16 @@ class EventPublishingService:
         request: LLMRequest,
         tool_calls: Sequence[tuple[int, ToolCallPart]],
     ) -> str:
-        if self._shared_store is not None:
+        first_tool_call_id = _first_tool_call_id(tool_calls)
+        if self._shared_store is not None and first_tool_call_id:
             try:
-                for _index, part in tool_calls:
-                    tool_call_id = str(part.tool_call_id or "").strip()
-                    if not tool_call_id:
-                        continue
-                    state = await load_tool_call_state_async(
-                        shared_store=self._shared_store,
-                        task_id=request.task_id,
-                        tool_call_id=tool_call_id,
-                    )
-                    if state is not None and state.batch_id:
-                        return state.batch_id
+                state = await load_tool_call_state_async(
+                    shared_store=self._shared_store,
+                    task_id=request.task_id,
+                    tool_call_id=first_tool_call_id,
+                )
+                if state is not None and state.batch_id:
+                    return state.batch_id
             except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
                 self._log_tool_call_batch_state_lookup_skipped(
                     request=request,
@@ -626,7 +690,10 @@ class EventPublishingService:
                     operation="batch_id_lookup",
                     error=exc,
                 )
-        return f"toolbatch_{uuid4().hex[:16]}"
+        return _deterministic_batch_id(
+            request=request,
+            first_tool_call_id=first_tool_call_id,
+        )
 
     async def _tool_call_batch_is_sealed_async(
         self,
@@ -676,8 +743,8 @@ class EventPublishingService:
             return False
         return current is not None and bool(current.items)
 
+    @staticmethod
     def _persist_observed_tool_call(
-        self,
         *,
         request: LLMRequest,
         part: ToolCallPart,
@@ -685,58 +752,10 @@ class EventPublishingService:
         batch_index: int,
         batch_size: int,
     ) -> None:
-        if self._shared_store is None:
-            return
-        current_batch = load_tool_call_batch_state(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            batch_id=batch_id,
-        )
-        item = _batch_item(batch_index, part)
-        items = (
-            (item,)
-            if current_batch is None
-            else _merge_items(
-                current_batch.items,
-                (item,),
-            )
-        )
-        merge_tool_call_batch_state(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            batch_id=batch_id,
-            run_id=request.run_id,
-            session_id=request.session_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            status=ToolCallBatchStatus.OPEN
-            if current_batch is None
-            else current_batch.status,
-            items=items,
-        )
-        current_call = load_tool_call_state(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            tool_call_id=item.tool_call_id,
-        )
-        merge_tool_call_state(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            tool_call_id=item.tool_call_id,
-            tool_name=item.tool_name,
-            run_id=request.run_id,
-            session_id=request.session_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            args_preview=item.args_preview,
-            execution_status=_observed_tool_execution_status(current_call),
-            batch_id=batch_id,
-            batch_index=batch_index,
-            batch_size=batch_size,
-        )
+        _ = (request, part, batch_id, batch_index, batch_size)
 
+    @staticmethod
     async def _persist_observed_tool_call_async(
-        self,
         *,
         request: LLMRequest,
         part: ToolCallPart,
@@ -744,55 +763,7 @@ class EventPublishingService:
         batch_index: int,
         batch_size: int,
     ) -> None:
-        if self._shared_store is None:
-            return
-        current_batch = await load_tool_call_batch_state_async(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            batch_id=batch_id,
-        )
-        item = _batch_item(batch_index, part)
-        items = (
-            (item,)
-            if current_batch is None
-            else _merge_items(
-                current_batch.items,
-                (item,),
-            )
-        )
-        await merge_tool_call_batch_state_async(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            batch_id=batch_id,
-            run_id=request.run_id,
-            session_id=request.session_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            status=ToolCallBatchStatus.OPEN
-            if current_batch is None
-            else current_batch.status,
-            items=items,
-        )
-        current_call = await load_tool_call_state_async(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            tool_call_id=item.tool_call_id,
-        )
-        await merge_tool_call_state_async(
-            shared_store=self._shared_store,
-            task_id=request.task_id,
-            tool_call_id=item.tool_call_id,
-            tool_name=item.tool_name,
-            run_id=request.run_id,
-            session_id=request.session_id,
-            instance_id=request.instance_id,
-            role_id=request.role_id,
-            args_preview=item.args_preview,
-            execution_status=_observed_tool_execution_status(current_call),
-            batch_id=batch_id,
-            batch_index=batch_index,
-            batch_size=batch_size,
-        )
+        _ = (request, part, batch_id, batch_index, batch_size)
 
     @staticmethod
     def _log_observed_tool_call_persistence_skipped(
@@ -851,6 +822,52 @@ class EventPublishingService:
         )
 
     @staticmethod
+    def _log_tool_call_batch_seal_persistence_deferred(
+        *,
+        request: LLMRequest,
+        batch_id: str,
+        error: Exception,
+    ) -> None:
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="llm.request.deferred_tool_call_batch_seal_persistence",
+            message="Deferred best-effort tool-call batch seal persistence",
+            payload={
+                "run_id": request.run_id,
+                "task_id": request.task_id,
+                "trace_id": request.trace_id,
+                "batch_id": batch_id,
+                "error_type": error.__class__.__name__,
+            },
+        )
+
+    @staticmethod
+    def _log_tool_call_batch_state_metrics(
+        *,
+        request: LLMRequest,
+        batch_id: str,
+        item_count: int,
+        duration_ms: int,
+    ) -> None:
+        payload: dict[str, JsonValue] = {
+            "run_id": request.run_id,
+            "task_id": request.task_id,
+            "trace_id": request.trace_id,
+            "batch_id": batch_id,
+            "tool_call_batch_size": item_count,
+            "tool_call_batch_state_write_ms": duration_ms,
+        }
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="llm.tool_call_batch_state.metrics",
+            message="Persisted tool-call batch shared state",
+            duration_ms=duration_ms,
+            payload=payload,
+        )
+
+    @staticmethod
     def _log_tool_call_batch_state_lookup_skipped(
         *,
         request: LLMRequest,
@@ -897,22 +914,14 @@ class EventPublishingService:
                 request=request,
                 tool_calls=tool_calls,
             )
-            batch_emitted = False
-            for batch_index, part in tool_calls:
-                if await self.publish_observed_tool_call_event_async(
-                    request=request,
-                    part=part,
-                    batch_id=batch_id,
-                    batch_index=batch_index,
-                    batch_size=len(tool_calls),
-                    published_tool_call_ids=published_tool_call_ids,
-                ):
-                    emitted = True
-                    batch_emitted = True
-            if batch_emitted or await self._tool_call_batch_has_observed_items_async(
+            batch_emitted = await self.publish_observed_tool_call_events_batch_async(
                 request=request,
+                tool_calls=tool_calls,
                 batch_id=batch_id,
-            ):
+                published_tool_call_ids=published_tool_call_ids,
+            )
+            if batch_emitted:
+                emitted = True
                 await self.seal_tool_call_batch_async(
                     request=request,
                     batch_id=batch_id,
@@ -1095,15 +1104,10 @@ class EventPublishingService:
         if not isinstance(self._run_event_hub, SyncRunEventPublisher):
             return
         self._run_event_hub.publish(
-            RunEvent(
-                session_id=request.session_id,
-                run_id=request.run_id,
-                trace_id=request.trace_id,
-                task_id=request.task_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
+            self._run_event(
+                request=request,
                 event_type=event_type,
-                payload_json=self._to_json(payload),
+                payload=payload,
             )
         )
 
@@ -1118,16 +1122,38 @@ class EventPublishingService:
             return
         await publish_run_event_async(
             self._run_event_hub,
-            RunEvent(
-                session_id=request.session_id,
-                run_id=request.run_id,
-                trace_id=request.trace_id,
-                task_id=request.task_id,
-                instance_id=request.instance_id,
-                role_id=request.role_id,
+            self._run_event(
+                request=request,
                 event_type=event_type,
-                payload_json=self._to_json(payload),
+                payload=payload,
             ),
+        )
+
+    async def _publish_run_events_async(self, events: tuple[RunEvent, ...]) -> None:
+        if self._run_event_hub is None or not events:
+            return
+        if isinstance(self._run_event_hub, AsyncRunEventBatchPublisher):
+            _ = await self._run_event_hub.publish_many_async(events)
+            return
+        for event in events:
+            await publish_run_event_async(self._run_event_hub, event)
+
+    def _run_event(
+        self,
+        *,
+        request: LLMRequest,
+        event_type: RunEventType,
+        payload: dict[str, object],
+    ) -> RunEvent:
+        return RunEvent(
+            session_id=request.session_id,
+            run_id=request.run_id,
+            trace_id=request.trace_id,
+            task_id=request.task_id,
+            instance_id=request.instance_id,
+            role_id=request.role_id,
+            event_type=event_type,
+            payload_json=self._to_json(payload),
         )
 
     @staticmethod
@@ -1148,6 +1174,23 @@ def _tool_calls_from_response(
     )
 
 
+def _first_tool_call_id(tool_calls: Sequence[tuple[int, ToolCallPart]]) -> str:
+    for _index, part in tool_calls:
+        tool_call_id = str(part.tool_call_id or "").strip()
+        if tool_call_id:
+            return tool_call_id
+    return ""
+
+
+def _deterministic_batch_id(
+    *,
+    request: LLMRequest,
+    first_tool_call_id: str,
+) -> str:
+    seed = "|".join((request.trace_id, request.task_id, first_tool_call_id))
+    return f"toolbatch_{sha256(seed.encode('utf-8')).hexdigest()[:16]}"
+
+
 def _batch_item(index: int, part: ToolCallPart) -> PersistedToolCallBatchItem:
     return PersistedToolCallBatchItem(
         tool_call_id=str(part.tool_call_id or "").strip(),
@@ -1163,6 +1206,127 @@ def _observed_tool_execution_status(
     if current is None:
         return ToolExecutionStatus.READY
     return current.execution_status
+
+
+def _tool_call_batch_mutations(
+    *,
+    request: LLMRequest,
+    batch_id: str,
+    items: tuple[PersistedToolCallBatchItem, ...],
+    current_batch: PersistedToolCallBatchState | None,
+    current_calls: dict[str, PersistedToolCallState],
+    status: ToolCallBatchStatus,
+) -> tuple[StateMutation, ...]:
+    now = datetime.now(tz=timezone.utc).isoformat()
+    batch_state = (
+        PersistedToolCallBatchState(
+            batch_id=batch_id,
+            run_id=request.run_id,
+            session_id=request.session_id,
+            instance_id=request.instance_id,
+            role_id=request.role_id,
+            task_id=request.task_id,
+            status=status,
+            items=items,
+            updated_at=now,
+        )
+        if current_batch is None
+        else current_batch.model_copy(
+            update={
+                "run_id": request.run_id,
+                "session_id": request.session_id,
+                "instance_id": request.instance_id,
+                "role_id": request.role_id,
+                "task_id": request.task_id,
+                "status": status,
+                "items": items,
+                "updated_at": now,
+            }
+        )
+    )
+    mutations = [
+        StateMutation(
+            scope=_task_scope(request.task_id),
+            key=_batch_state_key(batch_id),
+            value_json=batch_state.model_dump_json(),
+        )
+    ]
+    batch_size = len(items)
+    for item in items:
+        current = current_calls.get(item.tool_call_id)
+        next_state = (
+            PersistedToolCallState(
+                tool_call_id=item.tool_call_id,
+                tool_name=item.tool_name,
+                run_id=request.run_id,
+                session_id=request.session_id,
+                instance_id=request.instance_id,
+                role_id=request.role_id,
+                args_preview=item.args_preview,
+                execution_status=ToolExecutionStatus.READY,
+                batch_id=batch_id,
+                batch_index=item.index,
+                batch_size=batch_size,
+                updated_at=now,
+            )
+            if current is None
+            else current.model_copy(
+                update={
+                    "tool_name": item.tool_name,
+                    "run_id": request.run_id,
+                    "session_id": request.session_id,
+                    "instance_id": request.instance_id,
+                    "role_id": request.role_id,
+                    "args_preview": item.args_preview,
+                    "execution_status": _observed_tool_execution_status(current),
+                    "batch_id": batch_id,
+                    "batch_index": item.index,
+                    "batch_size": batch_size,
+                    "updated_at": now,
+                }
+            )
+        )
+        mutations.append(
+            StateMutation(
+                scope=_task_scope(request.task_id),
+                key=_state_key(item.tool_call_id),
+                value_json=next_state.model_dump_json(),
+            )
+        )
+    return tuple(mutations)
+
+
+def _load_tool_call_states_from_snapshot(
+    *,
+    shared_store: SharedStateRepository,
+    task_id: str,
+    tool_call_ids: tuple[str, ...],
+) -> dict[str, PersistedToolCallState]:
+    wanted_keys = {
+        _state_key(tool_call_id): tool_call_id for tool_call_id in tool_call_ids
+    }
+    states: dict[str, PersistedToolCallState] = {}
+    for key, value in shared_store.snapshot(_task_scope(task_id)):
+        tool_call_id = wanted_keys.get(key)
+        if tool_call_id is None:
+            continue
+        try:
+            states[tool_call_id] = PersistedToolCallState.model_validate_json(value)
+        except ValueError:
+            continue
+    return states
+
+
+def _task_scope(task_id: str) -> ScopeRef:
+    return ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
+
+
+def _state_key(tool_call_id: str) -> str:
+    return f"tool_call_state:{tool_call_id}"
+
+
+def _batch_state_key(batch_id: str) -> str:
+    return f"tool_call_batch:{batch_id}"
 
 
 def _batch_items(

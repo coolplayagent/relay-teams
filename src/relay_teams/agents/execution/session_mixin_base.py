@@ -377,6 +377,9 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
         published_tool_outcome_ids: set[str] | None = None,
+        safe_index: int | None = None,
+        safe_scan_ms: int = 0,
+        reload_history_after_commit: bool = False,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
@@ -392,6 +395,9 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
         history: list[ModelRequest | ModelResponse],
         pending_messages: list[ModelRequest | ModelResponse],
         published_tool_outcome_ids: set[str] | None = None,
+        safe_index: int | None = None,
+        safe_scan_ms: int = 0,
+        reload_history_after_commit: bool = False,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],

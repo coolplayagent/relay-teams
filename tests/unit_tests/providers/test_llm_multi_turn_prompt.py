@@ -284,6 +284,16 @@ class _FakeMcpSchemaRegistry:
             raise AssertionError("list_tool_schemas should not be called")
         return self._schemas_by_server[name]
 
+    def is_server_runtime_failed(self, name: str) -> bool:
+        _ = name
+        return False
+
+    def mark_server_runtime_failed(self, name: str) -> None:
+        _ = name
+
+    def mark_server_runtime_available(self, name: str) -> None:
+        _ = name
+
     def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
         return tuple(object() for _ in server_names)
 

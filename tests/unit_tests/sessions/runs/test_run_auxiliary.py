@@ -132,8 +132,18 @@ class _AsyncOnlyBackgroundTaskService:
         _ = run_id
         raise AssertionError("sync list_for_run must not run")
 
+    def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        _ = session_id
+        raise AssertionError("sync list_for_session must not run")
+
     async def list_for_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         self.calls.append(f"list:{run_id}")
+        return (self.record,)
+
+    async def list_for_session_async(
+        self, session_id: str
+    ) -> tuple[BackgroundTaskRecord, ...]:
+        self.calls.append(f"list:{session_id}")
         return (self.record,)
 
     def get_for_run(
@@ -145,6 +155,15 @@ class _AsyncOnlyBackgroundTaskService:
         _ = (run_id, background_task_id)
         raise AssertionError("sync get_for_run must not run")
 
+    def get_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        _ = (session_id, background_task_id)
+        raise AssertionError("sync get_for_session must not run")
+
     async def get_for_run_async(
         self,
         *,
@@ -154,6 +173,20 @@ class _AsyncOnlyBackgroundTaskService:
         self.calls.append(f"get:{background_task_id}")
         if (
             self.record.run_id != run_id
+            or self.record.background_task_id != background_task_id
+        ):
+            raise KeyError(background_task_id)
+        return self.record
+
+    async def get_for_session_async(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        self.calls.append(f"get:{background_task_id}")
+        if (
+            self.record.session_id != session_id
             or self.record.background_task_id != background_task_id
         ):
             raise KeyError(background_task_id)
@@ -174,8 +207,22 @@ class _AsyncOnlyBackgroundTaskManager:
         _ = run_id
         raise AssertionError("sync manager list_for_run must not run")
 
+    def list_for_session(self, session_id: str) -> tuple[BackgroundTaskRecord, ...]:
+        _ = session_id
+        raise AssertionError("sync manager list_for_session must not run")
+
     async def list_for_run_async(self, run_id: str) -> tuple[BackgroundTaskRecord, ...]:
         self.calls.append(f"list:{run_id}")
+        return tuple(
+            record
+            for record in (self.background_record, self.foreground_record)
+            if record.run_id == run_id
+        )
+
+    async def list_for_session_async(
+        self, session_id: str
+    ) -> tuple[BackgroundTaskRecord, ...]:
+        self.calls.append(f"list:{session_id}")
         return (self.background_record, self.foreground_record)
 
     def get_for_run(
@@ -186,6 +233,15 @@ class _AsyncOnlyBackgroundTaskManager:
     ) -> BackgroundTaskRecord:
         _ = (run_id, background_task_id)
         raise AssertionError("sync manager get_for_run must not run")
+
+    def get_for_session(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        _ = (session_id, background_task_id)
+        raise AssertionError("sync manager get_for_session must not run")
 
     async def get_for_run_async(
         self,
@@ -201,6 +257,25 @@ class _AsyncOnlyBackgroundTaskManager:
             return self.background_record
         if (
             self.foreground_record.run_id == run_id
+            and self.foreground_record.background_task_id == background_task_id
+        ):
+            return self.foreground_record
+        raise KeyError(background_task_id)
+
+    async def get_for_session_async(
+        self,
+        *,
+        session_id: str,
+        background_task_id: str,
+    ) -> BackgroundTaskRecord:
+        self.calls.append(f"get:{background_task_id}")
+        if (
+            self.background_record.session_id == session_id
+            and self.background_record.background_task_id == background_task_id
+        ):
+            return self.background_record
+        if (
+            self.foreground_record.session_id == session_id
             and self.foreground_record.background_task_id == background_task_id
         ):
             return self.foreground_record
@@ -307,7 +382,50 @@ async def test_run_auxiliary_background_task_async_uses_manager_fallback() -> No
         "background_task_1",
     )
     assert fetched["background_task_id"] == "background_task_1"
-    assert manager.calls == ["list:run-1", "get:background_task_1"]
+    assert manager.calls == [
+        "list:run-1",
+        "get:background_task_1",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_auxiliary_background_task_async_rejects_sibling_run_tasks() -> None:
+    background_record = _background_record(
+        background_task_id="background_task_1",
+        execution_mode="background",
+    )
+    sibling_record = _background_record(
+        background_task_id="sibling_background_task_1",
+        execution_mode="background",
+        run_id="run-2",
+    )
+    manager = _AsyncOnlyBackgroundTaskManager(
+        background_record=background_record,
+        foreground_record=sibling_record,
+    )
+    service = RunAuxiliaryService(
+        get_monitor_service=lambda: None,
+        get_background_task_manager=lambda: cast(BackgroundTaskManager, manager),
+        get_background_task_service=lambda: None,
+        get_todo_service=lambda: None,
+        get_run_session_id=_fail_sync_session_id,
+        get_run_session_id_async=_session_id_async,
+    )
+
+    listed = await service.list_background_tasks_async("run-1")
+
+    assert tuple(item["background_task_id"] for item in listed) == (
+        "background_task_1",
+    )
+    with pytest.raises(KeyError):
+        await service.get_background_task_async(
+            run_id="run-1",
+            background_task_id="sibling_background_task_1",
+        )
+    assert manager.calls == [
+        "list:run-1",
+        "get:sibling_background_task_1",
+    ]
 
 
 @pytest.mark.asyncio
@@ -341,11 +459,12 @@ def _background_record(
     *,
     background_task_id: str,
     execution_mode: Literal["foreground", "background"],
+    run_id: str = "run-1",
 ) -> BackgroundTaskRecord:
     return BackgroundTaskRecord(
         background_task_id=background_task_id,
-        run_id="run-1",
-        session_id="session-1",
+        run_id=run_id,
+        session_id="session-for-run-1",
         instance_id="instance-1",
         role_id="role-1",
         tool_call_id="tool-call-1",

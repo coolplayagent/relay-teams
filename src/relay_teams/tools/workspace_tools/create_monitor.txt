@@ -1,4 +1,4 @@
-Create a managed monitor for a background task started by the current run.
+Create a managed monitor for a background task in the current session.
 
 - Use this after `shell(..., background=True)` to watch task output without polling.
 - By default it subscribes to `background_task.line` events from that task.

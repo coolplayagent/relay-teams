@@ -104,6 +104,8 @@ class XiaolubanGatewayService:
         self._pending_im_replies: dict[str, _IMReplyContext] = {}
         self._pending_im_replies_lock = threading.Lock()
         self._im_poller_started = False
+        self._im_poller_stop = threading.Event()
+        self._im_poller_thread: threading.Thread | None = None
         self._im_active_session: dict[str, str] = {}
         self._im_active_session_lock = threading.Lock()
 
@@ -1236,18 +1238,35 @@ class XiaolubanGatewayService:
         with self._pending_im_replies_lock:
             if self._im_poller_started:
                 return
+            if not self._pending_im_replies:
+                return
             self._im_poller_started = True
-        threading.Thread(
+            self._im_poller_stop.clear()
+        self._im_poller_thread = threading.Thread(
             target=self._im_reply_poller_loop,
             name="xiaoluban-im-reply-poller",
             daemon=True,
-        ).start()
+        )
+        self._im_poller_thread.start()
+
+    def stop_im_reply_poller(self) -> None:
+        self._im_poller_stop.set()
+        thread = self._im_poller_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+        with self._pending_im_replies_lock:
+            self._im_poller_started = False
+            self._im_poller_thread = None
 
     def _im_reply_poller_loop(self) -> None:
-        while True:
-            time.sleep(_IM_REPLY_POLL_INTERVAL_SECONDS)
+        while not self._im_poller_stop.wait(_IM_REPLY_POLL_INTERVAL_SECONDS):
             try:
                 self._drain_im_replies()
+                with self._pending_im_replies_lock:
+                    if not self._pending_im_replies:
+                        self._im_poller_started = False
+                        self._im_poller_thread = None
+                        return
             except (
                 RuntimeError,
                 OSError,
@@ -1313,6 +1332,8 @@ class XiaolubanGatewayService:
         run_id: str,
         reply_target: str,
     ) -> None:
+        if self._event_log is None:
+            return
         ctx = _IMReplyContext(
             account_id=account_id,
             gateway_session_id=gateway_session_id,

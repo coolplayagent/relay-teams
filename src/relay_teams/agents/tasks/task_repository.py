@@ -738,11 +738,11 @@ class TaskRepository(SharedSqliteRepository):
                 placeholders = ", ".join("?" for _ in run_id_chunk)
                 rows.extend(
                     self._conn.execute(
-                        f"SELECT * FROM tasks WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY created_at ASC",
+                        f"SELECT *, rowid AS _rowid FROM tasks WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY created_at ASC, rowid ASC",
                         (session_id, *run_id_chunk),
                     ).fetchall()
                 )
-        rows.sort(key=lambda row: str(row["created_at"] or ""))
+        rows.sort(key=lambda row: (str(row["created_at"] or ""), int(row["_rowid"])))
         return tuple(self._to_record(row) for row in rows)
 
     async def list_by_session_run_ids_async(
@@ -766,11 +766,13 @@ class TaskRepository(SharedSqliteRepository):
                 rows.extend(
                     await async_fetchall(
                         conn,
-                        f"SELECT * FROM tasks WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY created_at ASC",
+                        f"SELECT *, rowid AS _rowid FROM tasks WHERE session_id=? AND trace_id IN ({placeholders}) ORDER BY created_at ASC, rowid ASC",
                         (session_id, *run_id_chunk),
                     )
                 )
-            rows.sort(key=lambda row: str(row["created_at"] or ""))
+            rows.sort(
+                key=lambda row: (str(row["created_at"] or ""), int(row["_rowid"]))
+            )
             return tuple(self._to_record(row) for row in rows)
 
         return await self._run_async_read(lambda _conn: operation())

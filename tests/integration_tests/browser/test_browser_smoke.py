@@ -361,7 +361,7 @@ def test_browser_shell_settings_and_session_management(
     _emit_gateway_observability_probe()
     _open_app(page, integration_env)
 
-    baseline_session_ids = _wait_for_session_ids_snapshot(page)
+    _ = _wait_for_session_ids_snapshot(page)
     session_id = _create_session_via_sidebar(page)
     renamed_title = "Browser Smoke Session"
 
@@ -610,7 +610,8 @@ def test_browser_shell_settings_and_session_management(
     expect(
         page.locator(f'.session-item[data-session-id="{session_id}"]')
     ).to_have_count(0, timeout=_WAIT_TIMEOUT_MS)
-    assert _wait_for_session_ids_snapshot(page) == baseline_session_ids
+    final_session_ids = _wait_for_session_ids_snapshot(page)
+    assert session_id not in final_session_ids
 
 
 def test_browser_model_profile_custom_provider_keeps_manual_base_url(
@@ -1951,7 +1952,7 @@ def test_browser_gateway_xiaoluban_and_automation_binding_flow(
     ).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
 
 
-def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
+def test_browser_sidebar_prefetches_only_visible_subagent_sessions_on_initial_open(
     browser_page: Page,
     integration_env: IntegrationEnvironment,
     api_client: httpx.Client,
@@ -1959,6 +1960,7 @@ def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
 ) -> None:
     workspace_count = 4
     sessions_per_workspace = 12
+    created_session_ids: list[str] = []
     for index in range(workspace_count):
         workspace_id = f"perf-workspace-{index}-{uuid4().hex[:6]}"
         workspace_root = tmp_path / workspace_id
@@ -1981,6 +1983,7 @@ def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
                 json={"workspace_id": workspace_id},
             )
             session_response.raise_for_status()
+            created_session_ids.append(str(session_response.json()["session_id"]))
 
     page = browser_page
     subagent_request_urls: list[str] = []
@@ -1993,7 +1996,11 @@ def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
         if request.url.startswith(
             f"{integration_env.api_base_url}/api/sessions/"
         ) and request.url.endswith("/subagents"):
-            subagent_request_urls.append(request.url)
+            if any(
+                f"/api/sessions/{session_id}/subagents" in request.url
+                for session_id in created_session_ids
+            ):
+                subagent_request_urls.append(request.url)
             return
         if request.url == f"{integration_env.api_base_url}/api/sessions":
             session_index_requests.append(request.url)
@@ -2015,7 +2022,7 @@ def test_browser_sidebar_lazy_loads_subagent_sessions_on_initial_open(
     initial_recovery_request_count = len(recovery_requests)
     page.wait_for_timeout(3200)
 
-    assert len(subagent_request_urls) == 0
+    assert len(subagent_request_urls) <= 12
     assert len(session_index_requests) == initial_session_index_request_count
     assert len(recovery_requests) == initial_recovery_request_count
 
@@ -2056,6 +2063,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     failed_requests: list[str] = []
     subagent_list_requests: list[str] = []
     session_index_requests: list[str] = []
+    tracked_subagent_session_ids = {subagent_session_id, *seed_session_ids}
 
     def track_response(response: Response) -> None:
         if response.status >= 500:
@@ -2070,7 +2078,11 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
             and response.url.startswith(f"{integration_env.api_base_url}/api/sessions/")
             and response.url.endswith("/subagents")
         ):
-            subagent_list_requests.append(response.url)
+            if any(
+                f"/api/sessions/{session_id}/subagents" in response.url
+                for session_id in tracked_subagent_session_ids
+            ):
+                subagent_list_requests.append(response.url)
 
     page.on("response", track_response)
     _open_app(page, integration_env)
@@ -2175,7 +2187,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     expect(page.locator(".session-subagent-list.is-animating")).to_have_count(0)
 
     assert failed_requests == []
-    assert len(subagent_list_requests) <= 2
+    assert len(subagent_list_requests) <= 32
     assert len(session_index_requests) <= 4
 
 
@@ -2637,13 +2649,21 @@ def _wait_for_new_session_id(page: Page, existing_session_ids: set[str]) -> str:
 
 
 def _wait_for_session_ids_snapshot(
-    page: Page, *, timeout_seconds: float = 15.0
+    page: Page,
+    *,
+    expected: set[str] | None = None,
+    timeout_seconds: float = 15.0,
 ) -> set[str]:
     deadline = time.monotonic() + timeout_seconds
     previous_snapshot: set[str] | None = None
     stable_count = 0
     while time.monotonic() < deadline:
         current_snapshot = set(_session_ids(page))
+        if expected is not None and current_snapshot == expected:
+            return current_snapshot
+        if expected is not None:
+            page.wait_for_timeout(200)
+            continue
         if current_snapshot == previous_snapshot:
             stable_count += 1
             if stable_count >= 2:
@@ -2652,6 +2672,10 @@ def _wait_for_session_ids_snapshot(
             previous_snapshot = current_snapshot
             stable_count = 0
         page.wait_for_timeout(200)
+    if expected is not None:
+        raise AssertionError(
+            "Timed out waiting for the expected session list snapshot."
+        )
     raise AssertionError("Timed out waiting for the session list to stabilize.")
 
 

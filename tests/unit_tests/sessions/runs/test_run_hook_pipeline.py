@@ -94,6 +94,7 @@ class TestRunHookPipelineMemoryConsolidation:
         handler.on_run_completed_async.assert_awaited_once_with(
             workspace_id="ws-1",
             session_id="sess-1",
+            run_id="run-1",
         )
 
     def test_on_session_completed_called(self) -> None:

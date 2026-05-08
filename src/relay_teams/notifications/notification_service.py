@@ -29,6 +29,8 @@ _NOTIFICATION_HOOK_ACTIVE: ContextVar[bool] = ContextVar(
     "relay_teams_notification_hook_active",
     default=False,
 )
+_SHARED_HOOK_LOOP: _NotificationHookLoop | None = None
+_SHARED_HOOK_LOOP_LOCK = threading.Lock()
 
 
 class NotificationDispatcher(Protocol):
@@ -254,13 +256,16 @@ class NotificationService:
         await self._run_notification_hook(request)
 
     def _get_hook_loop(self) -> _NotificationHookLoop:
-        hook_loop = self._hook_loop
+        global _SHARED_HOOK_LOOP
+        hook_loop = _SHARED_HOOK_LOOP
         if hook_loop is not None:
+            self._hook_loop = hook_loop
             return hook_loop
-        with self._hook_loop_lock:
-            if self._hook_loop is None:
-                self._hook_loop = _NotificationHookLoop()
-            return self._hook_loop
+        with _SHARED_HOOK_LOOP_LOCK:
+            if _SHARED_HOOK_LOOP is None:
+                _SHARED_HOOK_LOOP = _NotificationHookLoop()
+            self._hook_loop = _SHARED_HOOK_LOOP
+            return _SHARED_HOOK_LOOP
 
     async def _run_notification_hook(self, request: NotificationRequest) -> None:
         hook_service = self._hook_service

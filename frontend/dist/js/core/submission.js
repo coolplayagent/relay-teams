@@ -8,10 +8,12 @@ import { els } from '../utils/dom.js';
 let submissionTokenSeed = 0;
 let activeSubmission = null;
 
-export function beginForegroundSubmission() {
+export function beginForegroundSubmission(options = {}) {
+    const sessionId = String(options.sessionId || '').trim();
     const submission = {
         token: ++submissionTokenSeed,
         detached: false,
+        sessionId,
     };
     activeSubmission = submission;
     return submission;
@@ -22,6 +24,20 @@ export function isForegroundSubmissionActive(submission) {
         submission
         && activeSubmission === submission
         && submission.detached !== true
+    );
+}
+
+export function isForegroundSubmissionActiveForSession(submission, sessionId) {
+    if (!isForegroundSubmissionActive(submission)) {
+        return false;
+    }
+    const safeSessionId = String(sessionId || '').trim();
+    const submissionSessionId = String(submission?.sessionId || '').trim();
+    const currentSessionId = String(state.currentSessionId || '').trim();
+    return !!(
+        safeSessionId
+        && currentSessionId === safeSessionId
+        && (!submissionSessionId || submissionSessionId === safeSessionId)
     );
 }
 

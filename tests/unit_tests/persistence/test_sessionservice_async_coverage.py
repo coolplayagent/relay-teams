@@ -13,6 +13,9 @@ from relay_teams.sessions.session_service import SessionService
 @pytest.mark.asyncio
 async def test_list_sessions_async_delegates() -> None:
     mock_self = MagicMock()
+    mock_self._list_sessions_cache = None
+    mock_self._list_sessions_cache_dirty = False
+    mock_self._list_sessions_cache_ttl_seconds = 0.5
     method = SessionService.list_sessions_async
     await method(mock_self)
     getattr(mock_self, "list_sessions").assert_called_once()

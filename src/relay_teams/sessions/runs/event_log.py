@@ -213,6 +213,91 @@ class EventLog(SharedSqliteRepository):
             raise RuntimeError("Failed to persist run event id")
         return int(lastrowid)
 
+    async def emit_run_events_async(
+        self,
+        events: tuple[RunEvent, ...],
+    ) -> tuple[int, ...]:
+        if not events:
+            return ()
+
+        async def operation() -> tuple[int, ...]:
+            conn = await self._get_async_conn()
+            event_ids: list[int] = []
+            chunk_size = max(1, _SQLITE_SAFE_VARIABLE_LIMIT // 7)
+            for index in range(0, len(events), chunk_size):
+                chunk = events[index : index + chunk_size]
+                placeholders = ", ".join("(?, ?, ?, ?, ?, ?, ?)" for _event in chunk)
+                parameters: list[str | None] = []
+                for event in chunk:
+                    parameters.extend(
+                        (
+                            event.event_type.value,
+                            event.trace_id,
+                            event.session_id,
+                            event.task_id,
+                            event.instance_id,
+                            event.payload_json,
+                            event.occurred_at.isoformat(),
+                        )
+                    )
+                cursor = await conn.execute(
+                    f"""
+                    INSERT INTO events(event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at)
+                    VALUES {placeholders}
+                    """,
+                    tuple(parameters),
+                )
+                lastrowid = cursor.lastrowid
+                await cursor.close()
+                if lastrowid is None:
+                    raise RuntimeError("Failed to persist run event ids")
+                firstrowid = int(lastrowid) - len(chunk) + 1
+                event_ids.extend(range(firstrowid, int(lastrowid) + 1))
+            return tuple(event_ids)
+
+        return await self._run_async_write(
+            operation_name="emit_run_events_async",
+            operation=lambda _conn: operation(),
+        )
+
+    async def emit_run_events_legacy_async(
+        self,
+        events: tuple[RunEvent, ...],
+    ) -> tuple[int, ...]:
+        if not events:
+            return ()
+
+        async def operation() -> tuple[int, ...]:
+            conn = await self._get_async_conn()
+            event_ids: list[int] = []
+            for event in events:
+                cursor = await conn.execute(
+                    """
+                    INSERT INTO events(event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at)
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_type.value,
+                        event.trace_id,
+                        event.session_id,
+                        event.task_id,
+                        event.instance_id,
+                        event.payload_json,
+                        event.occurred_at.isoformat(),
+                    ),
+                )
+                inserted_row_id = cursor.lastrowid
+                await cursor.close()
+                if inserted_row_id is None:
+                    raise RuntimeError("Failed to persist run event id")
+                event_ids.append(int(inserted_row_id))
+            return tuple(event_ids)
+
+        return await self._run_async_write(
+            operation_name="emit_run_events_legacy_async",
+            operation=lambda _conn: operation(),
+        )
+
     def list_by_trace(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         with self._lock:
             rows = self._conn.execute(
@@ -527,6 +612,65 @@ class EventLog(SharedSqliteRepository):
             )
         )
         return tuple(self._row_to_dict(row) for row in rows)
+
+    def list_by_session_run_ids_after_id(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+        after_event_id: int,
+    ) -> tuple[dict[str, JsonValue], ...]:
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
+        )
+        if not normalized_run_ids:
+            return ()
+        rows: list[sqlite3.Row] = []
+        chunk_size = max(1, _SQLITE_SAFE_VARIABLE_LIMIT - 2)
+        with self._lock:
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                placeholders = ", ".join("?" for _run_id in run_id_chunk)
+                rows.extend(
+                    self._conn.execute(
+                        "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                        f"FROM events WHERE session_id=? AND id>? AND trace_id IN ({placeholders}) ORDER BY id ASC",
+                        (session_id, after_event_id, *run_id_chunk),
+                    ).fetchall()
+                )
+        rows.sort(key=_row_event_id)
+        return tuple(self._row_to_dict(row) for row in rows)
+
+    async def list_by_session_run_ids_after_id_async(
+        self,
+        session_id: str,
+        run_ids: tuple[str, ...],
+        after_event_id: int,
+    ) -> tuple[dict[str, JsonValue], ...]:
+        normalized_run_ids = tuple(
+            dict.fromkeys(run_id.strip() for run_id in run_ids if run_id.strip())
+        )
+        if not normalized_run_ids:
+            return ()
+        rows: list[sqlite3.Row] = []
+        chunk_size = max(1, _SQLITE_SAFE_VARIABLE_LIMIT - 2)
+
+        async def operation() -> tuple[dict[str, JsonValue], ...]:
+            conn = await self._get_async_conn()
+            for index in range(0, len(normalized_run_ids), chunk_size):
+                run_id_chunk = normalized_run_ids[index : index + chunk_size]
+                placeholders = ", ".join("?" for _run_id in run_id_chunk)
+                rows.extend(
+                    await async_fetchall(
+                        conn,
+                        "SELECT id, event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at "
+                        f"FROM events WHERE session_id=? AND id>? AND trace_id IN ({placeholders}) ORDER BY id ASC",
+                        (session_id, after_event_id, *run_id_chunk),
+                    )
+                )
+            rows.sort(key=_row_event_id)
+            return tuple(self._row_to_dict(row) for row in rows)
+
+        return await self._run_async_read(lambda _conn: operation())
 
     def list_subagent_run_events_by_session_after_id(
         self, session_id: str, after_event_id: int

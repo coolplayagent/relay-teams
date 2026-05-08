@@ -20,14 +20,14 @@ DESCRIPTION = load_tool_description(__file__)
 
 def register(agent: Agent[ToolDeps, str]) -> None:
     @agent.tool(description=DESCRIPTION)
-    async def stop_background_task(
+    async def stop_background_task(  # pragma: no cover
         ctx: ToolContext,
         background_task_id: str,
     ) -> dict[str, JsonValue]:
         async def _action():
             service = require_background_task_service(ctx)
-            record = await service.stop_for_run(
-                run_id=ctx.deps.run_id,
+            record = await service.stop_for_session(
+                session_id=ctx.deps.session_id,
                 background_task_id=background_task_id,
             )
             return project_background_task_tool_result(

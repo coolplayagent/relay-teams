@@ -21,7 +21,12 @@ from relay_teams.interfaces.server.deps import (
 )
 from relay_teams.interfaces.server.routers import prompts
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
-from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from relay_teams.mcp.mcp_models import (
+    McpConfigScope,
+    McpServerSpec,
+    McpToolInfo,
+    McpToolSchema,
+)
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -269,6 +274,13 @@ class _FakeMcpRegistry(McpRegistry):
         return (
             McpToolInfo(name="docs_read_file", description="Read a file"),
             McpToolInfo(name="docs_search_docs", description="Search docs"),
+        )
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        assert name == "docs"
+        return (
+            McpToolSchema(name="docs_read_file", description="Read a file"),
+            McpToolSchema(name="docs_search_docs", description="Search docs"),
         )
 
 

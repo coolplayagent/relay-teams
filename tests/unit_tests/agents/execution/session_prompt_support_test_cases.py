@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -317,7 +318,7 @@ def test_commit_ready_messages_commits_only_safe_prefix() -> None:
     assert isinstance(appended_part, UserPromptPart)
     assert appended_part.content == "User prompt"
     assert published_outcome_messages == [appended_messages]
-    assert next_history == persisted_history
+    assert next_history == appended_messages
     assert len(remaining) == 1
     assert isinstance(remaining[0], ModelResponse)
     assert tool_events_published is False
@@ -511,6 +512,60 @@ def test_publish_tool_call_events_keeps_event_when_batch_lookup_fails(
         RunEventType.TOOL_CALL,
         RunEventType.TOOL_CALL_BATCH_SEALED,
     ]
+
+
+def test_publish_tool_call_events_persists_batch_state_in_one_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _RunEventHub:
+        def publish(self, event: RunEvent) -> int:
+            published_events.append(event)
+            return len(published_events)
+
+    published_events: list[RunEvent] = []
+    shared_store = SharedStateRepository(tmp_path / "batch-state-one-write.db")
+    original_manage_states = shared_store.manage_states
+    mutation_counts: list[int] = []
+
+    def _manage_states_once(mutations: object) -> None:
+        mutation_tuple = tuple(cast(Any, mutations))
+        mutation_counts.append(len(mutation_tuple))
+        original_manage_states(cast(Any, mutation_tuple))
+
+    monkeypatch.setattr(shared_store, "manage_states", _manage_states_once)
+    service = EventPublishingService(
+        run_event_hub=_RunEventHub(),
+        shared_store=shared_store,
+    )
+    tool_calls = [
+        ToolCallPart(
+            tool_name="search",
+            args=f'{{"q":"moon-{index}"}}',
+            tool_call_id=f"call-{index}",
+        )
+        for index in range(50)
+    ]
+    request = _build_request()
+
+    emitted = service.publish_tool_call_events_from_messages(
+        request=request,
+        messages=[ModelResponse(parts=tool_calls)],
+    )
+
+    assert emitted is True
+    assert mutation_counts == [51]
+    assert [event.event_type for event in published_events].count(
+        RunEventType.TOOL_CALL
+    ) == 50
+    assert published_events[-1].event_type == RunEventType.TOOL_CALL_BATCH_SEALED
+    state = load_tool_call_state(
+        shared_store=shared_store,
+        task_id=request.task_id,
+        tool_call_id="call-0",
+    )
+    assert state is not None
+    assert state.batch_id.startswith("toolbatch_")
 
 
 @pytest.mark.asyncio
@@ -855,6 +910,67 @@ async def test_seal_tool_call_batch_async_keeps_event_when_persistence_fails() -
 
     assert len(run_event_hub.events) == 1
     assert run_event_hub.events[0].event_type == RunEventType.TOOL_CALL_BATCH_SEALED
+
+
+@pytest.mark.asyncio
+async def test_seal_tool_call_batch_async_keeps_timeout_persist_task_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _AsyncRunEventHub:
+        async def publish_async(self, event: RunEvent) -> int:
+            published_events.append(event)
+            return len(published_events)
+
+    published_events: list[RunEvent] = []
+    persist_started = asyncio.Event()
+    release_persist = asyncio.Event()
+    persist_finished = asyncio.Event()
+    service = EventPublishingService(
+        run_event_hub=_AsyncRunEventHub(),
+        shared_store=None,
+    )
+
+    async def _slow_batch_seal_persistence(
+        *,
+        request: object,
+        batch_id: str,
+        items: object,
+    ) -> None:
+        _ = (request, batch_id, items)
+        persist_started.set()
+        await release_persist.wait()
+        persist_finished.set()
+
+    service.__dict__["_persist_tool_call_batch_seal_async"] = (
+        _slow_batch_seal_persistence
+    )
+    monkeypatch.setattr(
+        event_publishing_module,
+        "TOOL_CALL_BATCH_STATE_WRITE_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    await service.seal_tool_call_batch_async(
+        request=_build_request(),
+        batch_id="batch-seal-timeout",
+        tool_calls=[
+            (
+                0,
+                ToolCallPart(
+                    tool_name="search",
+                    args='{"q":"moon"}',
+                    tool_call_id="call-seal-timeout",
+                ),
+            )
+        ],
+    )
+
+    assert persist_started.is_set()
+    assert not persist_finished.is_set()
+    release_persist.set()
+    await asyncio.wait_for(persist_finished.wait(), timeout=1)
+    assert len(published_events) == 1
+    assert published_events[0].event_type == RunEventType.TOOL_CALL_BATCH_SEALED
 
 
 def test_publish_committed_tool_outcome_events_emits_result_and_validation_failure() -> (

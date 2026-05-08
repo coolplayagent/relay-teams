@@ -11,6 +11,10 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_models import McpDiscoveryStatus
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import (
+    cached_runtime_mcp_server_names,
+    should_require_ready_mcp_toolsets,
+)
 from relay_teams.agents.execution.model_builder import (
     build_runtime_chat_model,
 )
@@ -67,6 +71,31 @@ def build_coordination_agent(
             strict=False,
             consumer="agents.execution.coordination_agent_builder",
         )
+        if should_require_ready_mcp_toolsets(
+            requested_server_names=allowed_mcp_servers,
+            resolved_server_count=len(resolved_mcp_servers),
+        ):
+            ready_mcp_servers = cached_runtime_mcp_server_names(
+                mcp_registry=mcp_registry,
+                server_names=resolved_mcp_servers,
+            )
+            skipped_count = len(resolved_mcp_servers) - len(ready_mcp_servers)
+            if skipped_count > 0:
+                log_event(
+                    LOGGER,
+                    logging.DEBUG,
+                    event="llm.mcp_toolset.skip_unready",
+                    message=(
+                        "Skipping MCP toolsets without warm runtime schemas while "
+                        "building coordination agent"
+                    ),
+                    payload={
+                        "resolved_server_count": len(resolved_mcp_servers),
+                        "ready_server_count": len(ready_mcp_servers),
+                        "skipped_count": skipped_count,
+                    },
+                )
+            resolved_mcp_servers = ready_mcp_servers
         for server_name in resolved_mcp_servers:
             if not _mcp_server_is_ready_for_agent(
                 server_name,

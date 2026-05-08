@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import hashlib
 from json import dumps
 import logging
+import os
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -23,6 +24,34 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 
 LOGGER = get_logger(__name__)
 _DEFAULT_DISCOVERY_CONCURRENCY = 3
+_MCP_DISCOVERY_CONCURRENCY_ENV = "RELAY_TEAMS_MCP_DISCOVERY_CONCURRENCY"
+
+
+def _resolve_non_negative_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = int(raw_value.strip())
+    except ValueError:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="mcp.discovery.invalid_env",
+            message="Ignoring invalid MCP discovery environment override",
+            payload={"name": name, "value": raw_value, "default": default},
+        )
+        return default
+    if value < 0:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="mcp.discovery.invalid_env",
+            message="Ignoring negative MCP discovery environment override",
+            payload={"name": name, "value": raw_value, "default": default},
+        )
+        return default
+    return value
 
 
 class McpDiscoveryRecord(BaseModel):
@@ -45,14 +74,23 @@ class McpDiscoveryService:
         self,
         registry: McpRegistry,
         *,
-        max_concurrency: int = _DEFAULT_DISCOVERY_CONCURRENCY,
+        max_concurrency: int | None = None,
     ) -> None:
         self._registry = registry
         self._generation = 0
         self._records: dict[str, McpDiscoveryRecord] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        resolved_concurrency = (
+            _resolve_non_negative_int_env(
+                _MCP_DISCOVERY_CONCURRENCY_ENV,
+                _DEFAULT_DISCOVERY_CONCURRENCY,
+            )
+            if max_concurrency is None
+            else max(0, max_concurrency)
+        )
+        self._discovery_enabled = resolved_concurrency > 0
+        self._semaphore = asyncio.Semaphore(max(1, resolved_concurrency))
         self._reset_records(registry)
 
     def start_warmup(self, registry: McpRegistry) -> None:
@@ -209,6 +247,8 @@ class McpDiscoveryService:
         *,
         force: bool,
     ) -> None:
+        if not self._discovery_enabled:
+            return
         for spec in specs:
             if spec.enabled:
                 record = self._records.get(spec.name)

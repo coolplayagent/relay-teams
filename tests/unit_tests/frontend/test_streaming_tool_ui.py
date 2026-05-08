@@ -46,6 +46,22 @@ def test_tool_result_updates_can_patch_dom_after_stream_finalize() -> None:
     )
 
 
+def test_tool_blocks_use_consistent_compact_vertical_spacing() -> None:
+    tools_css = Path("frontend/dist/css/components/tools.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".tool-block {\n    margin: 0.12rem 0;" in tools_css
+    assert ".tool-block + .tool-block {\n    margin-top: 0.12rem;" in tools_css
+    assert (
+        ".tool-block[open]"
+        not in tools_css.split(
+            ".tool-block + .tool-block {",
+            maxsplit=1,
+        )[0]
+    )
+
+
 def test_streaming_tool_calls_keep_indexed_dom_targets_and_message_metadata() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     stream_script = (
@@ -222,12 +238,20 @@ export function openAgentPanel() { globalThis.__openPanelCalls += 1; }
 globalThis.document = {
   getElementById() { return null; },
   querySelector() { return null; },
+  dispatchEvent(event) { globalThis.__documentEvents.push({ type: event.type, detail: event.detail }); },
+};
+globalThis.CustomEvent = class CustomEvent {
+  constructor(type, init = {}) {
+    this.type = type;
+    this.detail = init.detail || {};
+  }
 };
 globalThis.__appendCalls = [];
 globalThis.__overlayCalls = 0;
 globalThis.__openPanelCalls = 0;
 globalThis.__panelContainerCalls = 0;
 globalThis.__discoveryCalls = 0;
+globalThis.__documentEvents = [];
 
 const { state } = await import('./state.mjs');
 const { handleToolCall } = await import('./toolEvents.mjs');
@@ -257,6 +281,7 @@ console.log(JSON.stringify({
   openPanelCalls: globalThis.__openPanelCalls,
   panelContainerCalls: globalThis.__panelContainerCalls,
   discoveryCalls: globalThis.__discoveryCalls,
+  documentEvents: globalThis.__documentEvents,
 }));
 """.strip(),
         encoding="utf-8",
@@ -291,6 +316,12 @@ console.log(JSON.stringify({
     assert payload["openPanelCalls"] == 0
     assert payload["panelContainerCalls"] == 0
     assert payload["discoveryCalls"] == 1
+    assert payload["documentEvents"] == [
+        {
+            "type": "agent-teams-session-subagent-count-dirty",
+            "detail": {"sessionId": "session-1"},
+        }
+    ]
 
 
 def test_pending_tool_block_name_fallback_does_not_merge_parallel_calls(

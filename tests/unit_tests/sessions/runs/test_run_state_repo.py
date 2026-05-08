@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -132,3 +134,60 @@ async def test_run_state_async_schema_init_and_snapshot_upserts(
     assert latest_snapshot is not None
     assert latest_snapshot.checkpoint_event_id == 3
     assert tuple(item.run_id for item in recoverable) == ("run-1",)
+
+
+@pytest.mark.asyncio
+async def test_apply_events_async_coalesces_consecutive_tool_result_snapshots(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "run_state_repo_batch_snapshots.db"
+    repository = RunStateRepository(db_path)
+    started = RunEvent(
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="run-1",
+        task_id="task-1",
+        instance_id="instance-1",
+        event_type=RunEventType.RUN_STARTED,
+        payload_json="{}",
+    )
+    tool_events = tuple(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            instance_id="instance-1",
+            event_type=RunEventType.TOOL_RESULT,
+            payload_json=json.dumps(
+                {
+                    "tool_call_id": f"tool-{index}",
+                    "tool_name": "read",
+                    "status": "completed",
+                }
+            ),
+        )
+        for index in range(50)
+    )
+
+    try:
+        await repository.apply_event_async(event_id=1, event=started)
+        await repository.apply_events_async(
+            event_ids=tuple(range(2, 52)),
+            events=tool_events,
+        )
+    finally:
+        await repository.close_async()
+
+    with sqlite3.connect(db_path) as conn:
+        snapshot_count = conn.execute(
+            "SELECT COUNT(*) FROM run_snapshots WHERE run_id=?",
+            ("run-1",),
+        ).fetchone()[0]
+        latest_checkpoint = conn.execute(
+            "SELECT MAX(checkpoint_event_id) FROM run_snapshots WHERE run_id=?",
+            ("run-1",),
+        ).fetchone()[0]
+
+    assert snapshot_count == 2
+    assert latest_checkpoint == 51

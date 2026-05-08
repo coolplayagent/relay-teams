@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import logging
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -15,8 +14,11 @@ from relay_teams.agent_runtimes.instances.models import (
     RuntimeToolSnapshotEntry,
     RuntimeToolsSnapshot,
 )
+from relay_teams.mcp.runtime_schema_loader import (
+    load_runtime_mcp_tool_schemas,
+)
 from relay_teams.agents.tasks.models import TaskEnvelope
-from relay_teams.logger import get_logger, log_event
+from relay_teams.logger import get_logger
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -110,31 +112,22 @@ class TaskToolHarness(BaseModel):
                     local_tools.append(entry)
 
         mcp_tools: list[RuntimeToolSnapshotEntry] = []
-        for server_name in self.mcp_registry.resolve_server_names(
+        mcp_server_names = self.mcp_registry.resolve_server_names(
             role.mcp_servers,
             strict=False,
             consumer=(
                 "agents.orchestration.harnesses.tool_harness"
                 ".build_runtime_tools_snapshot"
             ),
-        ):
-            try:
-                server_tool_schemas = await self.mcp_registry.list_tool_schemas(
-                    server_name
-                )
-            except Exception as exc:
-                log_event(
-                    LOGGER,
-                    logging.WARNING,
-                    event="orchestration.runtime_tools.mcp_load_failed",
-                    message=(
-                        "Failed to inspect MCP tools for runtime snapshot; "
-                        "continuing without this MCP server"
-                    ),
-                    payload={"server_name": server_name},
-                    exc_info=exc,
-                )
-                continue
+        )
+        mcp_schema_result = await load_runtime_mcp_tool_schemas(
+            mcp_registry=self.mcp_registry,
+            server_names=mcp_server_names,
+        )
+        for (
+            server_name,
+            server_tool_schemas,
+        ) in mcp_schema_result.schemas_by_server.items():
             for tool in server_tool_schemas:
                 mcp_tools.append(
                     self.tool_entry_from_definition(

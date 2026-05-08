@@ -179,6 +179,18 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
             lifecycle=InstanceLifecycle.EPHEMERAL,
             parent_instance_id="inst-coordinator",
         )
+        await repository.upsert_instance_async(
+            run_id="delegated-run-2",
+            trace_id="delegated-run-2",
+            session_id="session-1",
+            instance_id="inst-ephemeral-nonprefix",
+            role_id="worker",
+            workspace_id="workspace-1",
+            conversation_id="conversation-worker-nonprefix",
+            status=InstanceStatus.RUNNING,
+            lifecycle=InstanceLifecycle.EPHEMERAL,
+            parent_instance_id="inst-coordinator",
+        )
 
         await repository.update_session_workspace_async(
             "session-1",
@@ -190,6 +202,7 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
             "inst-coordinator",
             "inst-reviewer",
             "inst-ephemeral",
+            "inst-ephemeral-nonprefix",
         ]
         assert {record.workspace_id for record in all_records} == {"workspace-updated"}
         assert [
@@ -198,7 +211,12 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
         assert [
             record.instance_id
             for record in await repository.list_by_session_async("session-1")
-        ] == ["inst-coordinator", "inst-reviewer", "inst-ephemeral"]
+        ] == [
+            "inst-coordinator",
+            "inst-reviewer",
+            "inst-ephemeral",
+            "inst-ephemeral-nonprefix",
+        ]
         assert [
             record.instance_id
             for record in await repository.list_running_async("run-1")
@@ -209,7 +227,7 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
         )
         assert await repository.count_normal_mode_subagents_by_session_ids_async(
             ("session-1", "missing-session")
-        ) == {"session-1": 1}
+        ) == {"session-1": 2}
 
         assert [
             record.role_id
@@ -239,7 +257,11 @@ async def test_async_repository_methods_use_direct_sqlite_paths(
         )
 
         failed_instances = await repository.mark_running_instances_failed_async()
-        assert failed_instances == ("inst-coordinator", "inst-ephemeral")
+        assert failed_instances == (
+            "inst-coordinator",
+            "inst-ephemeral",
+            "inst-ephemeral-nonprefix",
+        )
         assert await repository.mark_running_instances_failed_async() == ()
         assert (
             await repository.get_instance_async("inst-coordinator")

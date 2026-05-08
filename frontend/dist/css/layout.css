@@ -728,6 +728,11 @@
     opacity 0.18s ease;
 }
 
+.agent-panel-refresh-reflection[hidden],
+.agent-panel-stop[hidden] {
+  display: none !important;
+}
+
 .agent-panel-refresh-reflection:hover {
   border-color: var(--primary);
   color: var(--primary);

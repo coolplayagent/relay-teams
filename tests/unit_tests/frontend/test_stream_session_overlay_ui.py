@@ -412,6 +412,92 @@ console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinato
     assert overlay["parts"][1]["status"] == "completed"
 
 
+def test_stream_overlay_preserves_thinking_text_tool_order_without_gaps_or_replay_duplicates(
+    tmp_path: Path,
+) -> None:
+    source = Path("frontend/dist/js/components/messageRenderer/stream.js").read_text(
+        encoding="utf-8"
+    )
+    temp_dir = tmp_path / "stream_overlay_order_complete"
+    temp_dir.mkdir()
+    _write_stream_overlay_test_modules(temp_dir, source)
+
+    runner = """
+import {
+  applyStreamOverlayEvent,
+  getRunStreamOverlaySnapshot,
+} from "./stream.js";
+
+const options = {
+  runId: "run-primary",
+  instanceId: "primary",
+  roleId: "main-role",
+  label: "Main Agent",
+};
+const events = [
+  ["thinking_started", { part_index: 0 }, "evt-1"],
+  ["thinking_delta", { part_index: 0, text: "plan " }, "evt-2"],
+  ["thinking_delta", { part_index: 0, text: "first" }, "evt-3"],
+  ["thinking_finished", { part_index: 0 }, "evt-4"],
+  ["text_delta", { text: "answer " }, "evt-5"],
+  ["text_delta", { text: "part" }, "evt-6"],
+  [
+    "tool_call",
+    {
+      tool_name: "read",
+      tool_call_id: "call-read-1",
+      args: { path: "AGENTS.md" },
+    },
+    "evt-7",
+  ],
+  [
+    "tool_result",
+    {
+      tool_name: "read",
+      tool_call_id: "call-read-1",
+      result: { ok: true, data: { preview: "file" } },
+    },
+    "evt-8",
+  ],
+  ["text_delta", { text: " after tool" }, "evt-9"],
+];
+
+events.forEach(([type, payload, eventId]) => {
+  applyStreamOverlayEvent(type, payload, { ...options, eventId });
+});
+events.slice(1, 8).forEach(([type, payload, eventId]) => {
+  applyStreamOverlayEvent(type, payload, { ...options, eventId });
+});
+
+console.log(JSON.stringify(getRunStreamOverlaySnapshot("run-primary").coordinator));
+""".strip()
+
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", runner],
+        cwd=temp_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        timeout=3,
+    )
+
+    overlay = json.loads(result.stdout)
+    assert [part["kind"] for part in overlay["parts"]] == [
+        "thinking",
+        "text",
+        "tool",
+        "text",
+    ]
+    assert overlay["parts"][0]["content"] == "plan first"
+    assert overlay["parts"][0]["finished"] is True
+    assert overlay["parts"][1]["content"] == "answer part"
+    assert overlay["parts"][2]["tool_name"] == "read"
+    assert overlay["parts"][2]["tool_call_id"] == "call-read-1"
+    assert overlay["parts"][2]["status"] == "completed"
+    assert overlay["parts"][3]["content"] == " after tool"
+
+
 def test_stream_overlay_keeps_injection_between_tool_and_next_text(
     tmp_path: Path,
 ) -> None:

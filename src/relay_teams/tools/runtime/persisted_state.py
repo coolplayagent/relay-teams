@@ -124,6 +124,18 @@ def load_tool_call_state(
         return None
 
 
+def tool_call_state_mutation(
+    *,
+    task_id: str,
+    state: PersistedToolCallState,
+) -> StateMutation:
+    return StateMutation(
+        scope=_task_scope(task_id),
+        key=_state_key(state.tool_call_id),
+        value_json=state.model_dump_json(),
+    )
+
+
 async def load_tool_call_state_async(
     *,
     shared_store: SharedStateRepository,
@@ -139,6 +151,35 @@ async def load_tool_call_state_async(
         return PersistedToolCallState.model_validate_json(raw)
     except ValueError:
         return None
+
+
+async def load_tool_call_states_async(
+    *,
+    shared_store: SharedStateRepository,
+    task_id: str,
+    tool_call_ids: tuple[str, ...],
+) -> dict[str, PersistedToolCallState]:
+    normalized_ids = tuple(
+        dict.fromkeys(tool_call_id.strip() for tool_call_id in tool_call_ids)
+    )
+    if not normalized_ids:
+        return {}
+    wanted_keys = {
+        _state_key(tool_call_id): tool_call_id for tool_call_id in normalized_ids
+    }
+    states: dict[str, PersistedToolCallState] = {}
+    for key, value in await shared_store.get_states_async(
+        _task_scope(task_id),
+        tuple(wanted_keys.keys()),
+    ):
+        tool_call_id = wanted_keys.get(key)
+        if tool_call_id is None:
+            continue
+        try:
+            states[tool_call_id] = PersistedToolCallState.model_validate_json(value)
+        except ValueError:
+            continue
+    return states
 
 
 def load_tool_call_batch_state(

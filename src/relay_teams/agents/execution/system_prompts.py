@@ -18,6 +18,11 @@ from relay_teams.agent_runtimes.instances.models import RuntimeToolsSnapshot
 from relay_teams.agents.orchestration.graph_models import (
     build_orchestration_graph_prompt,
 )
+from relay_teams.mcp.runtime_schema_loader import (
+    cached_runtime_mcp_server_names,
+    load_runtime_mcp_tool_schemas,
+    should_require_ready_mcp_toolsets,
+)
 from relay_teams.agents.orchestration.policy_models import (
     build_orchestration_policy_prompt,
 )
@@ -996,25 +1001,33 @@ async def _list_role_mcp_tools(
     )
     if not resolved_server_names:
         return ()
-    if mcp_discovery_service is None:
-        live_tool_groups = await asyncio.gather(
-            *(
-                mcp_registry.list_tools(server_name)
-                for server_name in resolved_server_names
-            )
-        )
+    if mcp_discovery_service is not None:
         return tuple(
             tool_name
-            for tool_group in live_tool_groups
-            for tool_name in _tool_names(tool_group)
+            for server_name in resolved_server_names
+            for tool_name in _ready_mcp_tools_for_prompt(
+                server_name,
+                discovery_service=mcp_discovery_service,
+            )
         )
+    if should_require_ready_mcp_toolsets(
+        requested_server_names=role.mcp_servers,
+        resolved_server_count=len(resolved_server_names),
+    ):
+        resolved_server_names = cached_runtime_mcp_server_names(
+            mcp_registry=mcp_registry,
+            server_names=resolved_server_names,
+        )
+        if not resolved_server_names:
+            return ()
+    schema_result = await load_runtime_mcp_tool_schemas(
+        mcp_registry=mcp_registry,
+        server_names=resolved_server_names,
+    )
     return tuple(
-        tool_name
-        for server_name in resolved_server_names
-        for tool_name in _ready_mcp_tools_for_prompt(
-            server_name,
-            discovery_service=mcp_discovery_service,
-        )
+        tool.name
+        for tools in schema_result.schemas_by_server.values()
+        for tool in tools
     )
 
 

@@ -91,6 +91,7 @@ from relay_teams.interfaces.server.ui_language_models import (
     UiLanguageSettings,
 )
 from relay_teams.interfaces.server.routers import system
+from relay_teams.interfaces.server.runtime_identity import ServerHealthPayload
 from relay_teams.providers.model_connectivity import (
     CodeAgentAuthVerifyResult,
     ModelConnectivityProbeRequest,
@@ -1145,6 +1146,33 @@ def test_health_check_builds_payload_in_worker_thread(
         "skill_registry": None,
         "tool_registry": None,
     }
+
+
+def test_health_check_returns_cached_startup_payload_without_rebuild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_to_thread(
+        func: Callable[..., object],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        _ = (args, kwargs)
+        calls.append(func.__name__)
+        return func()
+
+    monkeypatch.setattr(system, "call_maybe_async_in_isolated_thread", fake_to_thread)
+    client = _create_test_client(_FakeSystemService())
+    app = cast(FastAPI, client.app)
+    app.state.health_payload = ServerHealthPayload(status="ok", version="cached")
+
+    response = client.get("/api/system/health")
+
+    assert response.status_code == 200
+    assert response.json()["version"] == "cached"
+    assert calls == []
 
 
 def test_get_notification_config() -> None:

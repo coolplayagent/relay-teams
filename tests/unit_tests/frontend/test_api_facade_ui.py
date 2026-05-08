@@ -266,6 +266,103 @@ export function invalidateManagedRequestCache() {
     ]
 
 
+def test_fetch_session_subagents_force_refresh_invalidates_subagent_cache(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = (
+        repo_root / "frontend" / "dist" / "js" / "core" / "api" / "sessions.js"
+    )
+    module_under_test_path = tmp_path / "sessions.mjs"
+    mock_request_path = tmp_path / "mockRequest.mjs"
+
+    mock_request_path.write_text(
+        """
+export async function requestJson() {
+    throw new Error('not used');
+}
+
+export async function requestJsonManaged(key, url, options, errorMessage, config) {
+    globalThis.__capturedManagedRequests.push({
+        key,
+        url,
+        options,
+        errorMessage,
+        config,
+    });
+    return [{ instance_id: 'subagent-1' }];
+}
+
+export function invalidateManagedRequests(prefix) {
+    globalThis.__invalidatedPrefixes.push(prefix);
+}
+
+export function invalidateManagedRequestCache() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    source_text = source_path.read_text(encoding="utf-8")
+    module_text = source_text.replace(
+        "from './request.js';",
+        "from './mockRequest.mjs';",
+    )
+    assert module_text != source_text
+    module_under_test_path.write_text(module_text, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "globalThis.__capturedManagedRequests = []; "
+                "globalThis.__invalidatedPrefixes = []; "
+                f"const mod = await import({module_under_test_path.as_uri()!r}); "
+                "await mod.fetchSessionSubagents('session-a'); "
+                "await mod.fetchSessionSubagents('session-a', { forceRefresh: true }); "
+                "console.log(JSON.stringify({"
+                "managedRequests: globalThis.__capturedManagedRequests,"
+                "invalidatedPrefixes: globalThis.__invalidatedPrefixes"
+                "}));"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout.strip())
+    assert payload["invalidatedPrefixes"] == ["sessions:session-a:subagents"]
+    assert payload["managedRequests"] == [
+        {
+            "key": "sessions:session-a:subagents",
+            "url": "/api/sessions/session-a/subagents",
+            "options": {},
+            "errorMessage": "Failed to fetch session subagents",
+            "config": {"lane": "heavy", "ttlMs": 500},
+        },
+        {
+            "key": "sessions:session-a:subagents",
+            "url": "/api/sessions/session-a/subagents?force_refresh=1",
+            "options": {},
+            "errorMessage": "Failed to fetch session subagents",
+            "config": {"lane": "heavy", "ttlMs": 500},
+        },
+    ]
+
+
 def test_role_config_reads_use_managed_requests_and_writes_invalidate_cache(
     tmp_path: Path,
 ) -> None:

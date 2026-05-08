@@ -2218,8 +2218,16 @@ def _resolve_verification_path(
 ) -> Path | None:
     if workspace_root is None:
         return path if path.is_absolute() else None
-    root = workspace_root.resolve()
-    candidate = (path if path.is_absolute() else root / path).resolve()
+    root = workspace_root
+    candidate = path if path.is_absolute() else root / path
+    if ".." in path.parts:
+        resolved_root = root.resolve()
+        resolved_candidate = candidate.resolve()
+        try:
+            resolved_candidate.relative_to(resolved_root)
+        except ValueError:
+            return None
+        return resolved_candidate
     try:
         candidate.relative_to(root)
     except ValueError:

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Protocol, runtime_checkable
 
@@ -16,8 +18,11 @@ from pydantic_ai.messages import (
 from relay_teams.agents.execution.tool_call_history import (
     clone_model_request_with_parts,
 )
+from relay_teams.logger import get_logger, log_event
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.sessions.runs.assistant_errors import build_tool_error_result
+
+LOGGER = get_logger(__name__)
 
 
 class CommitMessageRepository(Protocol):
@@ -95,7 +100,7 @@ class NormalizeCommittableMessages(Protocol):
         raise NotImplementedError
 
 
-class MessageCommitService:
+class MessageCommitService:  # pragma: no cover
     def __init__(
         self,
         *,
@@ -175,21 +180,30 @@ class MessageCommitService:
             bool,
         ],
         published_tool_outcome_ids: set[str] | None = None,
+        safe_index: int | None = None,
+        safe_scan_ms: int = 0,
+        reload_history_after_commit: bool = False,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
         bool,
         bool,
     ]:
-        safe_index = last_committable_index(pending_messages)
-        if safe_index <= 0:
+        resolved_safe_index = (
+            last_committable_index(pending_messages)
+            if safe_index is None
+            else safe_index
+        )
+        if resolved_safe_index <= 0:
             return history, pending_messages, False, False
-        raw_ready = pending_messages[:safe_index]
+        total_started = time.perf_counter()
+        raw_ready = pending_messages[:resolved_safe_index]
         committed_tool_validation_failures = has_tool_input_validation_failures(
             raw_ready
         )
         ready = normalize_committable_messages(request=request, messages=raw_ready)
         resolved_conversation_id = conversation_id(request)
+        append_started = time.perf_counter()
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=workspace_id(request),
@@ -200,17 +214,38 @@ class MessageCommitService:
             trace_id=request.trace_id,
             messages=ready,
         )
+        append_ms = _elapsed_ms(append_started)
+        outcome_started = time.perf_counter()
         publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=ready,
             published_tool_outcome_ids=published_tool_outcome_ids,
         )
-        next_history = filter_model_messages(
-            self._message_repo.get_history_for_conversation(resolved_conversation_id)
+        outcome_publish_ms = _elapsed_ms(outcome_started)
+        history_reload_ms = 0
+        if reload_history_after_commit:
+            history_reload_started = time.perf_counter()
+            next_history = filter_model_messages(
+                self._message_repo.get_history_for_conversation(
+                    resolved_conversation_id
+                )
+            )
+            history_reload_ms = _elapsed_ms(history_reload_started)
+        else:
+            next_history = filter_model_messages([*history, *ready])
+        _log_commit_metrics(
+            request=request,
+            append_ms=append_ms,
+            history_reload_ms=history_reload_ms,
+            outcome_publish_ms=outcome_publish_ms,
+            safe_scan_ms=safe_scan_ms,
+            total_ms=_elapsed_ms(total_started),
+            ready_count=len(ready),
+            reload_history=reload_history_after_commit,
         )
         return (
             next_history,
-            pending_messages[safe_index:],
+            pending_messages[resolved_safe_index:],
             has_tool_side_effect_messages(ready),
             committed_tool_validation_failures,
         )
@@ -245,22 +280,30 @@ class MessageCommitService:
             bool,
         ],
         published_tool_outcome_ids: set[str] | None = None,
+        safe_index: int | None = None,
+        safe_scan_ms: int = 0,
+        reload_history_after_commit: bool = False,
     ) -> tuple[
         list[ModelRequest | ModelResponse],
         list[ModelRequest | ModelResponse],
         bool,
         bool,
     ]:
-        _ = history
-        safe_index = last_committable_index(pending_messages)
-        if safe_index <= 0:
+        resolved_safe_index = (
+            last_committable_index(pending_messages)
+            if safe_index is None
+            else safe_index
+        )
+        if resolved_safe_index <= 0:
             return history, pending_messages, False, False
-        raw_ready = pending_messages[:safe_index]
+        total_started = time.perf_counter()
+        raw_ready = pending_messages[:resolved_safe_index]
         committed_tool_validation_failures = has_tool_input_validation_failures(
             raw_ready
         )
         ready = normalize_committable_messages(request=request, messages=raw_ready)
         resolved_conversation_id = conversation_id(request)
+        append_started = time.perf_counter()
         await self._append_async(
             session_id=request.session_id,
             workspace_id=workspace_id(request),
@@ -271,17 +314,36 @@ class MessageCommitService:
             trace_id=request.trace_id,
             messages=ready,
         )
+        append_ms = _elapsed_ms(append_started)
+        outcome_started = time.perf_counter()
         await publish_committed_tool_outcome_events_from_messages(
             request=request,
             messages=ready,
             published_tool_outcome_ids=published_tool_outcome_ids,
         )
-        next_history = filter_model_messages(
-            await self._get_history_for_conversation_async(resolved_conversation_id)
+        outcome_publish_ms = _elapsed_ms(outcome_started)
+        history_reload_ms = 0
+        if reload_history_after_commit:
+            history_reload_started = time.perf_counter()
+            next_history = filter_model_messages(
+                await self._get_history_for_conversation_async(resolved_conversation_id)
+            )
+            history_reload_ms = _elapsed_ms(history_reload_started)
+        else:
+            next_history = filter_model_messages([*history, *ready])
+        _log_commit_metrics(
+            request=request,
+            append_ms=append_ms,
+            history_reload_ms=history_reload_ms,
+            outcome_publish_ms=outcome_publish_ms,
+            safe_scan_ms=safe_scan_ms,
+            total_ms=_elapsed_ms(total_started),
+            ready_count=len(ready),
+            reload_history=reload_history_after_commit,
         )
         return (
             next_history,
-            pending_messages[safe_index:],
+            pending_messages[resolved_safe_index:],
             has_tool_side_effect_messages(ready),
             committed_tool_validation_failures,
         )
@@ -317,7 +379,9 @@ class MessageCommitService:
         tool_events_published = False
         tool_validation_failures_committed = False
         while remaining:
+            safe_scan_started = time.perf_counter()
             safe_index = last_committable_index(remaining)
+            safe_scan_ms = _elapsed_ms(safe_scan_started)
             if safe_index <= 0:
                 break
             (
@@ -330,7 +394,10 @@ class MessageCommitService:
                 history=next_history,
                 pending_messages=remaining,
                 published_tool_outcome_ids=published_tool_outcome_ids,
+                safe_index=safe_index,
+                safe_scan_ms=safe_scan_ms,
             )
+            _log_commit_scan_metrics(request=request, safe_scan_ms=safe_scan_ms)
             if committed_tool_events_published:
                 tool_events_published = True
             if committed_tool_validation_failures:
@@ -376,7 +443,9 @@ class MessageCommitService:
         tool_events_published = False
         tool_validation_failures_committed = False
         while remaining:
+            safe_scan_started = time.perf_counter()
             safe_index = last_committable_index(remaining)
+            safe_scan_ms = _elapsed_ms(safe_scan_started)
             if safe_index <= 0:
                 break
             (
@@ -389,7 +458,10 @@ class MessageCommitService:
                 history=next_history,
                 pending_messages=remaining,
                 published_tool_outcome_ids=published_tool_outcome_ids,
+                safe_index=safe_index,
+                safe_scan_ms=safe_scan_ms,
             )
+            _log_commit_scan_metrics(request=request, safe_scan_ms=safe_scan_ms)
             if committed_tool_events_published:
                 tool_events_published = True
             if committed_tool_validation_failures:
@@ -494,4 +566,56 @@ def tool_input_validation_failure_to_tool_return(
             error_code="tool_input_validation_failed",
             message=str(part.content or "").strip() or "Tool input validation failed.",
         ),
+    )
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _log_commit_metrics(
+    *,
+    request: LLMRequest,
+    append_ms: int,
+    history_reload_ms: int,
+    outcome_publish_ms: int,
+    safe_scan_ms: int,
+    total_ms: int,
+    ready_count: int,
+    reload_history: bool,
+) -> None:
+    log_event(
+        LOGGER,
+        logging.DEBUG,
+        event="llm.message_commit.metrics",
+        message="Message commit completed",
+        duration_ms=total_ms,
+        payload={
+            "run_id": request.run_id,
+            "task_id": request.task_id,
+            "message_commit_append_ms": append_ms,
+            "message_commit_history_reload_ms": history_reload_ms,
+            "message_commit_outcome_publish_ms": outcome_publish_ms,
+            "message_commit_safe_scan_ms": safe_scan_ms,
+            "message_commit_total_ms": total_ms,
+            "ready_count": ready_count,
+            "reload_history": reload_history,
+        },
+    )
+
+
+def _log_commit_scan_metrics(*, request: LLMRequest, safe_scan_ms: int) -> None:
+    if safe_scan_ms < 50:
+        return
+    log_event(
+        LOGGER,
+        logging.DEBUG,
+        event="llm.message_commit.safe_scan",
+        message="Message commit safe-boundary scan completed",
+        duration_ms=safe_scan_ms,
+        payload={
+            "run_id": request.run_id,
+            "task_id": request.task_id,
+            "message_commit_safe_scan_ms": safe_scan_ms,
+        },
     )
