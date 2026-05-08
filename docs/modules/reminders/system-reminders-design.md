@@ -55,6 +55,18 @@ runtime boundary
 `relay_teams.reminders` owns policy, state, and rendering. Execution, orchestration,
 and prompt modules only report observations and consume decisions.
 
+Reminder delivery mode and rendered text classification are part of the same
+reminder contract:
+
+- `relay_teams.reminders.delivery` owns `SystemReminderDeliveryMode`.
+- `relay_teams.reminders.text` owns the `<system-reminder>` marker and rendered
+  text classifier.
+- `relay_teams.reminders.__init__` re-exports public reminder APIs for callers that
+  need the package-level contract.
+- Root-package modules such as `relay_teams.system_reminder_delivery` and
+  `relay_teams.system_reminder_text` must not exist; they split the reminder
+  contract away from the policy, state, renderer, and service that own it.
+
 `sessions/runs/system_injection.py` owns the shared delivery boundary:
 
 - `enqueue_only` wakes an already-active loop at the next safe boundary.
