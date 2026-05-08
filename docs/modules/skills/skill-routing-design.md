@@ -164,8 +164,9 @@ flag. The normal flow is:
 The `skill-teams` group contains:
 
 - `list_skill_roles(skill_name)`: scans skill-local markdown files that expose role
-  front matter and returns role summaries only; directory and workflow file names
-  are not part of the contract.
+  front matter and returns role summaries only. `agents/*.md` is the preferred
+  convention for skill-local subagents, and the full document contract is defined
+  in [Skill-local agent roles](skill-local-agent-roles-spec.md).
 - `activate_skill_roles(skill_name, role_ids)`: materializes selected skill-local
   roles as run-scoped effective roles. Returned `effective_role_id` values may be
   passed to existing `spawn_subagent` or `orch_dispatch_task`.

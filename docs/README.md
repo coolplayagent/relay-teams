@@ -32,6 +32,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Sessions](modules/sessions/)
 - [SP-3 spec checkpoint refresh](modules/sessions/spec-checkpoint-refresh-design.md)
 - [Skills](modules/skills/)
+- [Skill-local agent roles](modules/skills/skill-local-agent-roles-spec.md)
 - [Workspace runtime](modules/workspace/)
 
 ## Interfaces And Operations
