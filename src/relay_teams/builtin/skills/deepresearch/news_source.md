@@ -4,6 +4,17 @@
 - [AI Brief 中文](https://ai-brief.liziran.com/zh/)
 - [Block AI](https://block.xyz/ai)
 - [Block AI News](https://block.xyz/news/ai)
+- [AI Engineer](https://www.ai.engineer/)
+- [AI Engineer Europe](https://www.ai.engineer/europe)
+
+## 会议与演讲内容
+
+- `ai.engineer`
+  Site: <https://www.ai.engineer/>
+  用途：AI Engineer 会议、World's Fair、Summit 等技术演讲和活动内容。
+- `ai.engineer/europe`
+  Site: <https://www.ai.engineer/europe>
+  用途：AI Engineer Europe 的议程、演讲主题、讲者和相关会议内容。
 
 ## RSS 博客池
 
