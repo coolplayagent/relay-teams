@@ -41,3 +41,15 @@ def test_deepresearch_news_sources_include_block_ai_source_entries() -> None:
     assert "- [Block AI](https://block.xyz/ai)" in content
     assert "- [Block AI News](https://block.xyz/news/ai)" in content
     assert "RSS: <https://engineering.block.xyz/blog/rss.xml>" in content
+
+
+def test_deepresearch_news_sources_include_ai_engineer_talk_sources() -> None:
+    news_source_path = get_builtin_skills_dir() / "deepresearch" / "news_source.md"
+
+    content = news_source_path.read_text(encoding="utf-8")
+
+    assert "- [AI Engineer](https://www.ai.engineer/)" in content
+    assert "- [AI Engineer Europe](https://www.ai.engineer/europe)" in content
+    assert "## 会议与演讲内容" in content
+    assert "Site: <https://www.ai.engineer/>" in content
+    assert "Site: <https://www.ai.engineer/europe>" in content

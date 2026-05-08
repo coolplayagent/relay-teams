@@ -140,6 +140,16 @@ skills:
 - [alphaxiv](https://www.alphaxiv.org/)
 - [Block AI](https://block.xyz/ai)
 - [Block AI News](https://block.xyz/news/ai)
+- [AI Engineer](https://www.ai.engineer/)
+- [AI Engineer Europe](https://www.ai.engineer/europe)
+
+## 会议与演讲内容
+
+- 将 AI Engineer 作为高质量技术演讲内容来源，重点跟踪 AI 工程实践、Agent、开发工具、基础设施、评测和产品化经验。
+- `ai.engineer`
+  Site: <https://www.ai.engineer/>
+- `ai.engineer/europe`
+  Site: <https://www.ai.engineer/europe>
 
 ## X 账号信源
 
