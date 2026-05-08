@@ -463,6 +463,26 @@ def test_terminal_completed_overlay_does_not_block_processed_group_in_browser(
     assert payload["groupToolCount"] == 1
 
 
+def test_terminal_payload_output_renders_when_stream_has_no_text_in_browser(
+    browser_page: Page,
+    tmp_path: Path,
+) -> None:
+    page = browser_page
+    _open_harness(page, tmp_path)
+
+    payload = page.evaluate(
+        """
+        () => window.__streamTimelineHarness.renderTerminalPayloadOutput()
+        """
+    )
+
+    assert "terminal payload final answer" in payload["text"]
+    assert payload["occurrences"] == 1
+    assert "failed assistant final answer" in payload["failedText"]
+    assert "stopped diagnostic output" not in payload["stoppedText"]
+    assert payload["cursorCount"] == 0
+
+
 def test_terminal_rounds_collapse_only_when_final_output_is_projected_in_browser(
     browser_page: Page,
     tmp_path: Path,
@@ -513,6 +533,7 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
         history_module = (
             f"{base_url}/frontend/dist/js/components/messageRenderer/history.js"
         )
+        event_router_module = f"{base_url}/frontend/dist/js/core/eventRouter/index.js"
         html_path.write_text(
             f"""
 <!doctype html>
@@ -524,6 +545,7 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
   <link rel="stylesheet" href="{base_url}/frontend/dist/css/components/subagent.css">
 </head>
 <body>
+  <div id="chat-messages"></div>
   <script type="module">
     import {{
       appendStreamChunk,
@@ -543,6 +565,9 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
     import {{
       renderHistoricalMessageList,
     }} from {json.dumps(history_module)};
+    import {{
+      routeEvent,
+    }} from {json.dumps(event_router_module)};
 
     function makeContainer(id) {{
       const container = document.createElement('section');
@@ -1793,6 +1818,72 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
         return {{
           groupCount: container.querySelectorAll('.tool-group').length,
           groupToolCount: container.querySelectorAll('.tool-group .tool-block').length,
+        }};
+      }},
+
+      renderTerminalPayloadOutput() {{
+        clearAllStreamState();
+        const runId = 'run-terminal-payload-output';
+        const container = makeContainer('terminal-payload-output');
+        container.className = 'session-round-section';
+        container.dataset.runId = runId;
+        routeEvent(
+          'run_completed',
+          {{
+            trace_id: runId,
+            root_task_id: 'task-terminal-output',
+            status: 'completed',
+            output: [{{ kind: 'text', text: 'terminal payload final answer' }}],
+          }},
+          {{
+            run_id: runId,
+            trace_id: runId,
+            event_id: 'terminal-payload-output-event',
+          }},
+        );
+        const failedRunId = 'run-terminal-payload-failed-output';
+        const failedContainer = makeContainer('terminal-payload-failed-output');
+        failedContainer.className = 'session-round-section';
+        failedContainer.dataset.runId = failedRunId;
+        routeEvent(
+          'run_failed',
+          {{
+            trace_id: failedRunId,
+            root_task_id: 'task-terminal-failed-output',
+            status: 'failed',
+            completion_reason: 'assistant_response',
+            output: [{{ kind: 'text', text: 'failed assistant final answer' }}],
+          }},
+          {{
+            run_id: failedRunId,
+            trace_id: failedRunId,
+            event_id: 'terminal-payload-failed-output-event',
+          }},
+        );
+        const stoppedRunId = 'run-terminal-payload-stopped-output';
+        const stoppedContainer = makeContainer('terminal-payload-stopped-output');
+        stoppedContainer.className = 'session-round-section';
+        stoppedContainer.dataset.runId = stoppedRunId;
+        routeEvent(
+          'run_stopped',
+          {{
+            trace_id: stoppedRunId,
+            root_task_id: 'task-terminal-stopped-output',
+            status: 'stopped',
+            output: [{{ kind: 'text', text: 'stopped diagnostic output' }}],
+          }},
+          {{
+            run_id: stoppedRunId,
+            trace_id: stoppedRunId,
+            event_id: 'terminal-payload-stopped-output-event',
+          }},
+        );
+        return {{
+          text: container.textContent || '',
+          failedText: failedContainer.textContent || '',
+          stoppedText: stoppedContainer.textContent || '',
+          occurrences: countSubstring(container.textContent || '', 'terminal payload final answer'),
+          cursorCount: container.querySelectorAll('.streaming-cursor').length,
         }};
       }},
 

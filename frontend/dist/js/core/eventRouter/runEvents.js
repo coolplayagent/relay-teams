@@ -43,6 +43,7 @@ import {
     appendStreamOutputParts,
     finalizeThinking,
     finalizeStream,
+    getCoordinatorStreamOverlay,
     getOrCreateStreamBlock,
     reconcileTerminalRunStreamState,
     startThinkingBlock,
@@ -448,7 +449,7 @@ export function handleSubagentRunTerminal(instanceId, status, eventMeta = null, 
     }
 }
 
-export function handleRunCompleted(eventMeta) {
+export function handleRunCompleted(eventMeta, payload = null) {
     sysLog('Run completed.');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     markLlmRetrySucceeded(runId);
@@ -473,6 +474,12 @@ export function handleRunCompleted(eventMeta) {
             els.promptInput.focus();
         }
     }
+    appendMissingTerminalOutput(runId, payload, {
+        roleId: getRunPrimaryRoleId(runId),
+        label: getRunPrimaryRoleLabel(runId),
+        eventMeta,
+        allowFailedAssistantResponse: false,
+    });
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     reconcileTerminalRunStreamState(runId);
     clearRunPrimaryRole(runId);
@@ -537,6 +544,12 @@ export function handleRunFailed(eventMeta, payload) {
         els.stopBtn.style.display = 'none';
     }
     if (els.promptInput) els.promptInput.disabled = !!state.activeSubagentSession;
+    appendMissingTerminalOutput(runId, payload, {
+        roleId: getRunPrimaryRoleId(runId),
+        label: getRunPrimaryRoleLabel(runId),
+        eventMeta,
+        allowFailedAssistantResponse: true,
+    });
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     reconcileTerminalRunStreamState(runId);
     clearRunPrimaryRole(runId);
@@ -558,6 +571,96 @@ function markCurrentSessionTerminalViewed(eventMeta = null) {
             'log-error',
         );
     });
+}
+
+function appendMissingTerminalOutput(
+    runId,
+    payload,
+    {
+        roleId = '',
+        label = '',
+        eventMeta = null,
+        allowFailedAssistantResponse = false,
+    } = {},
+) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId || !payload || typeof payload !== 'object') {
+        return;
+    }
+    if (!isDisplayableTerminalOutput(payload, allowFailedAssistantResponse)) {
+        return;
+    }
+    if (coordinatorOverlayHasFinalContent(safeRunId)) {
+        return;
+    }
+    const outputParts = normalizeTerminalOutputParts(payload.output);
+    if (outputParts.length === 0) {
+        return;
+    }
+    const container = coordinatorContainerFor(eventMeta);
+    const primaryRoleId = String(roleId || getRunPrimaryRoleId(safeRunId) || '').trim();
+    const primaryLabel = String(label || getRunPrimaryRoleLabel(safeRunId) || 'Main Agent');
+    getOrCreateStreamBlock(container, 'primary', primaryRoleId, primaryLabel, safeRunId);
+    appendStreamOutputParts('primary', outputParts, {
+        container,
+        runId: safeRunId,
+        roleId: primaryRoleId,
+        label: primaryLabel,
+    });
+}
+
+function isDisplayableTerminalOutput(payload, allowFailedAssistantResponse) {
+    const status = String(payload.status || '').trim().toLowerCase();
+    if (status === 'completed') {
+        return true;
+    }
+    if (!allowFailedAssistantResponse || status !== 'failed') {
+        return false;
+    }
+    const completionReason = String(payload.completion_reason || '').trim().toLowerCase();
+    return completionReason === 'assistant_response';
+}
+
+function coordinatorOverlayHasFinalContent(runId) {
+    const overlay = getCoordinatorStreamOverlay(runId);
+    if (!overlay || !Array.isArray(overlay.parts)) {
+        return false;
+    }
+    return overlay.parts.some(part => {
+        const kind = String(part?.kind || '').trim();
+        if (kind === 'text') {
+            return String(part.content || part.text || '').trim().length > 0;
+        }
+        return kind === 'media_ref' || kind === 'inline_media';
+    });
+}
+
+function normalizeTerminalOutputParts(output) {
+    if (typeof output === 'string') {
+        const text = output.trim();
+        return text ? [{ kind: 'text', text }] : [];
+    }
+    if (!Array.isArray(output)) {
+        return [];
+    }
+    return output
+        .map(normalizeTerminalOutputPart)
+        .filter(part => part !== null);
+}
+
+function normalizeTerminalOutputPart(part) {
+    if (!part || typeof part !== 'object') {
+        return null;
+    }
+    const kind = String(part.kind || '').trim();
+    if (kind === 'text') {
+        const text = String(part.text || part.content || '').trim();
+        return text ? { ...part, kind: 'text', text } : null;
+    }
+    if (kind === 'media_ref' || kind === 'inline_media') {
+        return { ...part, kind };
+    }
+    return null;
 }
 
 async function markSessionTerminalRunViewedWithRetry(sessionId) {
