@@ -37,6 +37,11 @@ class PreparedWorkspace(BaseModel):
     # Docker mode: the repo path as a raw POSIX string as seen INSIDE the
     # container. Avoids Windows path conversion of repo_path on the host.
     container_repo_path: str | None = None
+    # Terminal-Bench mode: docker compose project/file used to stop the task.
+    compose_project_name: str | None = None
+    compose_file_path: Path | None = None
+    # Terminal-Bench mode: copied task directory used for scoring artifacts.
+    terminalbench_task_path: Path | None = None
 
 
 class WorkspaceSetup(ABC):

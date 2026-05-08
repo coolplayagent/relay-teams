@@ -100,17 +100,56 @@ generated `setup_repo.sh` as-is. If an instance image build fails, the run
 fails during workspace preparation and surfaces the exact `build_image.log`
 path instead of continuing into `docker run` retries for a missing image.
 
+### terminalbench mode
+
+Runs each eval item inside its Terminal-Bench task container. The runner copies
+the task directory to `evals_workdir`, patches that copy of `docker-compose.yaml`
+to mount the relay-teams runtime and expose the container server port, starts
+relay-teams inside the Terminal-Bench client container, then registers the
+container working directory as the eval workspace.
+
+```yaml
+dataset: terminalbench
+dataset_path: .agent_teams/evals/datasets/terminal-bench-core
+scorer: terminalbench
+workspace_mode: terminalbench
+
+terminalbench:
+  auto_download_dataset: true
+  dataset_name: "terminal-bench-core"
+  dataset_version: "head"
+  overwrite_dataset: false
+  agent_runtime_image: "agent-teams-runtime:latest"
+  build_runtime_image: true
+  container_startup_timeout_seconds: 60
+```
+
+Run one of the checked-in configs. If `dataset_path` is missing or empty, the
+loader downloads `terminalbench.dataset_name` through the official
+Terminal-Bench registry client before starting containers:
+
+```bash
+relay-teams-evals run \
+  --config .agent_teams/evals/configs/normal/eval-terminalbench-smoke.yaml \
+  --restart
+```
+
+Terminal-Bench tasks keep `tests/` hidden from the agent during the solve phase.
+The `terminalbench` scorer copies `run-tests.sh` and `tests/` into `/tests`
+after the agent finishes, runs `bash /tests/run-tests.sh` in the same task
+container, and parses the output with the parser declared in `task.yaml`.
+
 ## Config file reference
 
 All settings live in a single YAML file. Use `init-config` to generate a commented template.
 
 ```yaml
 # --- Dataset ---
-dataset: jsonl                          # jsonl | swebench
+dataset: jsonl                          # jsonl | swebench | terminalbench
 dataset_path: .agent_teams/evals/datasets/custom.jsonl
 
 # --- Scorer ---
-scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker
+scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker | terminalbench
 swebench_pass_threshold: 0.8            # patch Jaccard threshold (primary for swebench, auxiliary for swebench_docker)
 
 # --- Backend ---
@@ -129,7 +168,7 @@ agent_teams:
                                         # null = use whatever config is in the container
 
 # --- Workspace ---
-workspace_mode: git                     # git | docker
+workspace_mode: git                     # git | docker | terminalbench
 evals_workdir: .agent_teams/evals/workspaces
 git_clone_timeout_seconds: 120
 
@@ -142,6 +181,20 @@ docker:
     - HTTP_PROXY
     - HTTPS_PROXY
     - NO_PROXY
+
+terminalbench:
+  auto_download_dataset: true
+  dataset_name: "terminal-bench-core"
+  dataset_version: "head"
+  registry_url: null
+  local_registry_path: null
+  overwrite_dataset: false
+  agent_runtime_image: "agent-teams-runtime:latest"
+  agent_runtime_bin: "/opt/agent-runtime/bin/relay-teams"
+  build_runtime_image: false
+  container_startup_timeout_seconds: 60
+  no_rebuild: false
+  cleanup: false
 
 # --- Filtering ---
 limit: null                             # max items to run, null = all
@@ -203,6 +256,17 @@ from the original `problem_statement` content:
 - `hints_text`, when present, is emitted as a separate `<hints_text>` block
 - `FAIL_TO_PASS`, `PASS_TO_PASS`, and `test_patch` remain scorer-only metadata and are not included in the agent-facing intent
 
+### Terminal-Bench
+
+Set `dataset: terminalbench` and point `dataset_path` at either a directory that
+contains Terminal-Bench task directories or a single task directory. Each task
+must include the official `task.yaml`, `docker-compose.yaml`, `run-tests.sh`,
+and optional `tests/` directory. When `terminalbench.auto_download_dataset` is
+enabled and `dataset_path` is missing or contains no tasks, the loader downloads
+`terminalbench.dataset_name` / `terminalbench.dataset_version` into
+`dataset_path`. The loader maps `task.yaml`'s `instruction` into the
+agent-facing intent and stores task metadata for the scorer.
+
 ## Scorers
 
 | Scorer | Passes when | Requires |
@@ -212,6 +276,7 @@ from the original `problem_statement` content:
 | `event_status` | run outcome is `completed` (baseline) | -- |
 | `swebench` | Jaccard similarity of generated vs reference patch >= threshold | git diff, `reference_patch` |
 | `swebench_docker` | filtered candidate patch applies, `test_patch` applies, `fail_to_pass` tests pass, and `pass_to_pass` tests do not regress | docker mode, `fail_to_pass`/`pass_to_pass` |
+| `terminalbench` | official Terminal-Bench task tests parse as passed | terminalbench mode, Docker, `terminal-bench` |
 
 For SWE-bench, `swebench_docker` is the recommended primary scorer. It runs `pytest`
 inside a fresh scoring container started from the same SWE-bench instance image used
@@ -239,6 +304,17 @@ recorded as an auxiliary diagnostic score for the scored patch.
 4. A temporary workspace is registered pointing to `container_repo_path` inside the container
 5. After the run, the workspace is deleted and the container is removed (unless `keep_workspaces: true`)
 6. The runtime data container is removed after all items finish
+
+### terminalbench mode
+
+1. The dataset loader downloads the configured Terminal-Bench dataset when `dataset_path` is missing or empty
+2. A stopped runtime data container is created once from `agent_runtime_image`
+3. For each item, the task directory is copied to the eval workdir
+4. The copied `docker-compose.yaml` is patched to mount the runtime, forward configured environment variables, and publish the relay-teams server port
+5. The Terminal-Bench client container is built and started with Docker Compose
+6. The relay-teams server starts inside that container and the workspace points at the container working directory
+7. After the agent run, the scorer copies official tests into `/tests`, runs `run-tests.sh`, and parses the output with the task parser
+8. The compose project and runtime data container are cleaned up
 
 ## Output
 
@@ -319,6 +395,7 @@ src/relay_teams_evals/
         base.py             DatasetLoader ABC
         jsonl_loader.py     generic JSONL (multi-line JSON supported)
         swebench_loader.py  SWE-bench field mapping
+        terminalbench_loader.py  Terminal-Bench task.yaml mapping
     scorers/
         base.py             Scorer ABC
         keyword_scorer.py
@@ -326,10 +403,12 @@ src/relay_teams_evals/
         event_status_scorer.py
         swebench_scorer.py      Jaccard patch similarity
         swebench_docker_scorer.py  pytest inside container via docker exec
+        terminalbench_scorer.py  Terminal-Bench run-tests.sh scoring
     workspace/
         base.py             PreparedWorkspace model + WorkspaceSetup ABC
         git_setup.py        git clone + checkout per item
         docker_setup.py     DockerConfig + DockerWorkspaceSetup
+        terminalbench_setup.py Terminal-Bench Docker Compose workspace setup
         patch_extractor.py  git diff extraction (local or via docker exec)
     jsonl/
         eval_custom.py      pytest parametrize scenario for custom JSONL

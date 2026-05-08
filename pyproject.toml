@@ -107,6 +107,7 @@ evals = [
   "swebench>=4.0.0",
   "docker>=7.0.0",
   "datasets>=2.14.0",
+  "terminal-bench>=0.2.18",
 ]
 
 [tool.uv]

@@ -1,0 +1,52 @@
+# Terminal-Bench smoke eval - normal mode
+# Run:
+#   relay-teams-evals run --config .agent_teams/evals/configs/normal/eval-terminalbench-smoke.yaml
+
+dataset: terminalbench
+dataset_path: .agent_teams/evals/datasets/terminal-bench-core
+
+scorer: terminalbench
+
+backend: agent_teams
+agent_teams:
+  base_url: "http://127.0.0.1:8000"
+  execution_mode: ai
+  session_mode: normal
+  orchestration_preset_id: null
+  yolo: true
+  timeout_seconds: 600
+  config_dir: "~/.config/agent-teams"
+
+workspace_mode: terminalbench
+evals_workdir: .agent_teams/evals/workspaces
+
+terminalbench:
+  auto_download_dataset: true
+  dataset_name: "terminal-bench-core"
+  dataset_version: "head"
+  overwrite_dataset: false
+  agent_runtime_image: "agent-teams-runtime:latest"
+  build_runtime_image: true
+  container_startup_timeout_seconds: 60
+  no_rebuild: false
+  cleanup: false
+#  extra_env:
+#    HTTP_PROXY: "http://host.docker.internal:7897"
+#    HTTPS_PROXY: "http://host.docker.internal:7897"
+#    http_proxy: "http://host.docker.internal:7897"
+#    https_proxy: "http://host.docker.internal:7897"
+#    NO_PROXY: "localhost,127.0.0.1"
+#    no_proxy: "localhost,127.0.0.1"
+
+limit: 3
+item_ids: []
+
+concurrency: 1
+keep_workspaces: false
+save_artifacts: true
+
+output_dir: .agent_teams/evals/results/normal/terminalbench-smoke
+report_format: both
+
+cost_per_million_input_tokens: 3.0
+cost_per_million_output_tokens: 15.0

@@ -196,6 +196,7 @@ def run(
     )
     from relay_teams_evals.loaders.jsonl_loader import JsonlLoader
     from relay_teams_evals.loaders.swebench_loader import SWEBenchLoader
+    from relay_teams_evals.loaders.terminalbench_loader import TerminalBenchLoader
     from relay_teams_evals.reporter import EvalReporter
     from relay_teams_evals.run_config import load_run_config
     from relay_teams_evals.runner import EvalRunner
@@ -204,10 +205,14 @@ def run(
     from relay_teams_evals.scorers.regex_scorer import RegexScorer
     from relay_teams_evals.scorers.swebench_docker_scorer import SWEBenchDockerScorer
     from relay_teams_evals.scorers.swebench_scorer import SWEBenchScorer
+    from relay_teams_evals.scorers.terminalbench_scorer import TerminalBenchScorer
     from relay_teams_evals.workspace.artifact_collector import ArtifactCollector
     from relay_teams_evals.workspace.docker_setup import DockerWorkspaceSetup
     from relay_teams_evals.workspace.git_setup import GitWorkspaceSetup
     from relay_teams_evals.workspace.patch_extractor import PatchExtractor
+    from relay_teams_evals.workspace.terminalbench_setup import (
+        TerminalBenchWorkspaceSetup,
+    )
 
     cfg = load_run_config(config_file)
     try:
@@ -261,6 +266,12 @@ def run(
     workspace_setup = None
     patch_extractor = None
     match cfg.workspace_mode:
+        case "terminalbench":
+            workspace_setup = TerminalBenchWorkspaceSetup(
+                workdir=cfg.evals_workdir,
+                config=cfg.terminalbench,
+                agent_config_dir=cfg.agent_teams.config_dir,
+            )
         case "docker":
             workspace_setup = DockerWorkspaceSetup(
                 cfg.docker, cfg.agent_teams.config_dir
@@ -274,6 +285,8 @@ def run(
 
     # Scorer
     match cfg.scorer:
+        case "terminalbench":
+            scorer = TerminalBenchScorer()
         case "swebench_docker":
             scorer = SWEBenchDockerScorer(
                 client=_load_docker_module().from_env(),
@@ -293,7 +306,9 @@ def run(
             scorer = KeywordScorer()
 
     # Load dataset
-    if cfg.dataset == "swebench":
+    if cfg.dataset == "terminalbench":
+        loader = TerminalBenchLoader(cfg.terminalbench)
+    elif cfg.dataset == "swebench":
         loader = SWEBenchLoader()
     else:
         loader = JsonlLoader(dataset_name=cfg.dataset)

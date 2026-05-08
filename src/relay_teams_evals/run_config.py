@@ -7,6 +7,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams_evals.backends.agent_teams_config import AgentTeamsConfig
+from relay_teams_evals.workspace.terminalbench_setup import TerminalBenchConfig
 from relay_teams_evals.workspace.docker_setup import DockerConfig
 
 _SAMPLE_YAML = """\
@@ -18,11 +19,11 @@ _SAMPLE_YAML = """\
 #   relay-teams-evals run --config eval.yaml --restart
 
 # --- Dataset ---
-dataset: jsonl                          # jsonl | swebench
+dataset: jsonl                          # jsonl | swebench | terminalbench
 dataset_path: .agent_teams/evals/datasets/custom.jsonl
 
 # --- Scorer ---
-scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker
+scorer: keyword                         # keyword | regex | event_status | swebench | swebench_docker | terminalbench
 swebench_pass_threshold: 0.8            # patch Jaccard threshold (primary for swebench, auxiliary for swebench_docker)
 
 # --- Backend ---
@@ -42,7 +43,7 @@ agent_teams:
                                         # null = use whatever config is in the container
 
 # --- Workspace ---
-workspace_mode: git                     # git | docker
+workspace_mode: git                     # git | docker | terminalbench
 evals_workdir: .agent_teams/evals/workspaces
 git_clone_timeout_seconds: 120
 
@@ -65,6 +66,23 @@ docker:
   # extra_env:
   #   HTTP_PROXY: "http://host.docker.internal:7897"
   #   HTTPS_PROXY: "http://host.docker.internal:7897"
+
+terminalbench:
+  # Terminal-Bench mode launches each task's docker-compose.yaml, patches the
+  # client service to mount the relay-teams runtime, then runs official tests
+  # in the same task container after the agent finishes.
+  auto_download_dataset: true
+  dataset_name: "terminal-bench-core"
+  dataset_version: "head"
+  registry_url: null
+  local_registry_path: null
+  overwrite_dataset: false
+  agent_runtime_image: "agent-teams-runtime:latest"
+  agent_runtime_bin: "/opt/agent-runtime/bin/relay-teams"
+  build_runtime_image: false
+  container_startup_timeout_seconds: 60
+  no_rebuild: false
+  cleanup: false
 
 # --- Filtering ---
 limit: null                             # max items to run, null = all
@@ -110,6 +128,7 @@ class RunConfig(BaseModel):
     evals_workdir: Path = Path(".agent_teams/evals/workspaces")
     git_clone_timeout_seconds: float = 120.0
     docker: DockerConfig = Field(default_factory=DockerConfig)
+    terminalbench: TerminalBenchConfig = Field(default_factory=TerminalBenchConfig)
 
     # Filtering
     limit: int | None = None

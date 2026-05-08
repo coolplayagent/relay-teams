@@ -1,0 +1,46 @@
+name: Terminal-Bench Evaluation
+
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: "relay-teams-evals config to run"
+        required: false
+        default: ".agent_teams/evals/configs/normal/eval-terminalbench-smoke.yaml"
+      limit:
+        description: "Maximum tasks to run"
+        required: false
+        default: "3"
+
+jobs:
+  terminalbench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run Terminal-Bench eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          uv run relay-teams-evals run \
+            --config "${{ github.event.inputs.config }}" \
+            --limit "${{ github.event.inputs.limit }}" \
+            --restart
+
+      - name: Upload Terminal-Bench results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminalbench-results
+          path: .agent_teams/evals/results/
