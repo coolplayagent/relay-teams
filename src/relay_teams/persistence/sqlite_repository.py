@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from threading import RLock
-from typing import Awaitable, Callable, ParamSpec, TypeVar
+from typing import Awaitable, Callable, TypeVar
 from weakref import WeakKeyDictionary, WeakSet
 
 import aiosqlite
@@ -20,7 +20,6 @@ from relay_teams.persistence.db import (
 )
 
 ResultT = TypeVar("ResultT")
-ParamT = ParamSpec("ParamT")
 
 
 async def async_fetchone(
@@ -301,16 +300,6 @@ class SharedSqliteRepository:
             repository_name=self._repository_name,
             operation_name=operation_name,
         )
-
-    # noinspection PyMethodMayBeStatic
-    async def _call_sync_async(
-        self,
-        function: Callable[ParamT, ResultT],
-        /,
-        *args: ParamT.args,
-        **kwargs: ParamT.kwargs,
-    ) -> ResultT:
-        return await asyncio.to_thread(function, *args, **kwargs)
 
 
 _LIVE_REPOSITORIES: WeakSet[SharedSqliteRepository] = WeakSet()
