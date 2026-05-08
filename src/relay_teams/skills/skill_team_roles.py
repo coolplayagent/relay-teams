@@ -6,9 +6,12 @@ import logging
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from relay_teams.computer import ExecutionSurface
 from relay_teams.logger import get_logger, log_event
+from relay_teams.roles.memory_models import MemoryProfile, default_memory_profile
+from relay_teams.roles.role_contracts import RoleContract
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_registry import RoleLoader
 from relay_teams.roles.temporary_role_models import TemporaryRoleSpec
@@ -39,11 +42,37 @@ class SkillTeamRoleDefinition(BaseModel):
     role: RoleDefinition
 
 
+class SkillLocalRoleFrontMatter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    version: str = Field(default="1", min_length=1, coerce_numbers_to_str=True)
+    tools: tuple[str, ...] = Field(min_length=1)
+    mcp_servers: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
+    model_profile: str = Field(default="default", min_length=1)
+    bound_agent_id: str | None = None
+    execution_surface: ExecutionSurface = ExecutionSurface.API
+    mode: RoleMode = RoleMode.SUBAGENT
+    memory_profile: MemoryProfile = Field(default_factory=default_memory_profile)
+    contract: RoleContract = Field(default_factory=RoleContract)
+    hooks: object | None = None
+
+    @field_validator("mcp_servers", "skills", mode="before")
+    @classmethod
+    def _blank_optional_lists_to_empty_tuple(cls, value: object) -> object:
+        if value is None:
+            return ()
+        return value
+
+
 def list_skill_team_roles(skill: Skill) -> tuple[SkillTeamRoleDefinition, ...]:
     roles_by_id: dict[str, SkillTeamRoleDefinition] = {}
     for role_path in _iter_skill_role_files(skill.directory):
         try:
-            role = RoleLoader().load_one(role_path)
+            role = _load_skill_local_role(role_path)
             if role.role_id in roles_by_id:
                 log_event(
                     LOGGER,
@@ -152,6 +181,43 @@ def _iter_skill_role_files(skill_dir: Path) -> tuple[Path, ...]:
         for path in sorted(skill_dir.rglob("*.md"))
         if path.name.casefold() != "skill.md" and _looks_like_role_file(path)
     )
+
+
+def _load_skill_local_role(path: Path) -> RoleDefinition:
+    raw = path.read_text(encoding="utf-8")
+    front_matter, body = _split_markdown_front_matter(raw)
+    parsed = yaml.safe_load(front_matter)
+    role_front_matter = SkillLocalRoleFrontMatter.model_validate(parsed)
+    normalized_front_matter = yaml.safe_dump(
+        role_front_matter.model_dump(mode="json", exclude_none=True),
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    normalized_content = f"---\n{normalized_front_matter}---\n{body}"
+    return RoleLoader().load_from_text(normalized_content, source_name=str(path))
+
+
+def _split_markdown_front_matter(content: str) -> tuple[str, str]:
+    content = content.lstrip("\ufeff")
+    if not content.startswith("---"):
+        raise ValueError("Markdown front matter is missing")
+
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("Markdown front matter is missing")
+
+    end_index: int | None = None
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            end_index = idx
+            break
+
+    if end_index is None:
+        raise ValueError("Markdown front matter is incomplete")
+
+    front_matter = "".join(lines[1:end_index])
+    body = "".join(lines[end_index + 1 :])
+    return front_matter, body
 
 
 def _looks_like_role_file(path: Path) -> bool:

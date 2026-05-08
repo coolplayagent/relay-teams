@@ -48,6 +48,94 @@ def test_build_skill_team_role_spec_forces_subagent_mode(tmp_path: Path) -> None
     assert spec.tools == ("read", "office_read_markdown")
 
 
+def test_list_skill_team_roles_loads_agents_directory_subagents(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "skills" / "ci-loop"
+    agents_dir = skill_dir / "agents"
+    agents_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: ci-loop\n"
+        "description: Fix CI pipeline failures.\n"
+        "---\n"
+        "Use the CI workflow.\n",
+        encoding="utf-8",
+    )
+    (agents_dir / "ci-analyzer.md").write_text(
+        "---\n"
+        "role_id: ci-analyzer\n"
+        "name: CI Pipeline Analyzer\n"
+        "description: Analyzes CI pipeline failures and fixes issues.\n"
+        "tools:\n"
+        "  - read\n"
+        "  - edit\n"
+        "  - shell\n"
+        "---\n"
+        "You are a CI Pipeline Fixer agent.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "skills"),)
+        )
+    )
+    skill = registry.get_skill_definition("ci-loop")
+    assert skill is not None
+
+    role_entry = list_skill_team_roles(skill)[0]
+
+    assert role_entry.summary.role_id == "ci-analyzer"
+    assert role_entry.summary.name == "CI Pipeline Analyzer"
+    assert role_entry.summary.source_path == "agents/ci-analyzer.md"
+    assert {"read", "edit", "shell"}.issubset(set(role_entry.summary.tools))
+    assert "office_read_markdown" in role_entry.summary.tools
+    assert role_entry.role.version == "1"
+    assert role_entry.role.mode == RoleMode.SUBAGENT
+
+
+def test_list_skill_team_roles_accepts_blank_optional_lists(
+    tmp_path: Path,
+) -> None:
+    skill_dir = tmp_path / "skills" / "ci-loop"
+    agents_dir = skill_dir / "agents"
+    agents_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: ci-loop\n"
+        "description: Fix CI pipeline failures.\n"
+        "---\n"
+        "Use the CI workflow.\n",
+        encoding="utf-8",
+    )
+    (agents_dir / "ci-analyzer.md").write_text(
+        "---\n"
+        "role_id: ci-analyzer\n"
+        "name: CI Pipeline Analyzer\n"
+        "description: Analyzes CI pipeline failures and fixes issues.\n"
+        "tools:\n"
+        "  - read\n"
+        "mcp_servers:\n"
+        "skills:\n"
+        "---\n"
+        "You are a CI Pipeline Fixer agent.\n",
+        encoding="utf-8",
+    )
+    registry = SkillRegistry(
+        directory=SkillsDirectory(
+            sources=((SkillSource.USER_RELAY_TEAMS, tmp_path / "skills"),)
+        )
+    )
+    skill = registry.get_skill_definition("ci-loop")
+    assert skill is not None
+
+    role_entry = list_skill_team_roles(skill)[0]
+
+    assert role_entry.summary.role_id == "ci-analyzer"
+    assert role_entry.summary.mcp_servers == ()
+    assert role_entry.summary.skills == ()
+
+
 def test_list_skill_team_roles_reports_activation_effective_tools(
     tmp_path: Path,
 ) -> None:
