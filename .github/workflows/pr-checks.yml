@@ -24,7 +24,58 @@ permissions:
   pull-requests: read
 
 jobs:
-  agents-self-check:
+  agents-self-check-unit-coverage:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Require linked issue for PRs into main
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: python src/relay_teams/release/pull_request_issue_link.py
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev --no-default-groups
+
+      - name: Unit tests with coverage
+        env:
+          RELAY_TEAMS_UNIT_TEST_TIMEOUT_SECONDS: "5"
+        run: >
+          uv run --extra dev pytest -q tests/unit_tests
+          --cov=src/relay_teams
+          --cov=src/relay_teams_evals
+          --cov-report=xml:coverage.xml
+
+      - name: Build copy-aware coverage diff
+        run: |
+          mkdir -p .tmp
+          git diff -C1% origin/main...HEAD > .tmp/diff-cover-copy-aware.diff
+
+      - name: Enforce changed-line unit coverage
+        run: >
+          uv run --extra dev diff-cover coverage.xml
+          --config-file pyproject.toml
+          --diff-file .tmp/diff-cover-copy-aware.diff
+
+      - name: Verify repository is unchanged after checks
+        run: git diff --exit-code
+
+  agents-self-check-quality-integration:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
@@ -77,26 +128,6 @@ jobs:
           --exclude src/relay_teams/builtin/skills/pptx-craft/scripts/svg_to_pptx
           src/relay_teams
           src/relay_teams_evals
-
-      - name: Unit tests with coverage
-        env:
-          RELAY_TEAMS_UNIT_TEST_TIMEOUT_SECONDS: "5"
-        run: >
-          uv run --extra dev pytest -q tests/unit_tests
-          --cov=src/relay_teams
-          --cov=src/relay_teams_evals
-          --cov-report=xml:coverage.xml
-
-      - name: Build copy-aware coverage diff
-        run: |
-          mkdir -p .tmp
-          git diff -C1% origin/main...HEAD > .tmp/diff-cover-copy-aware.diff
-
-      - name: Enforce changed-line unit coverage
-        run: >
-          uv run --extra dev diff-cover coverage.xml
-          --config-file pyproject.toml
-          --diff-file .tmp/diff-cover-copy-aware.diff
 
       - name: Install Playwright Chromium
         env:
