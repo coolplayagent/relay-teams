@@ -15,7 +15,7 @@ from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
 
-def build_role_with_memory(
+async def build_role_with_memory_async(
     *,
     role_registry: RoleRegistry,
     role_memory_service: RoleMemoryService | None,
@@ -37,7 +37,7 @@ def build_role_with_memory(
 
     # Legacy reflection memory section
     if role_memory_service is not None:
-        reflection_text = role_memory_service.build_injected_memory(
+        reflection_text = await role_memory_service.build_injected_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
@@ -46,7 +46,7 @@ def build_role_with_memory(
 
     # New structured memory bank section (PERSISTENT + MEDIUM_TERM only)
     if memory_bank_service is not None:
-        project_memory = _build_project_memory_section(
+        project_memory = await _build_project_memory_section_async(
             memory_bank_service=memory_bank_service,
             workspace_id=workspace_id,
             role_id=role_id,
@@ -56,12 +56,12 @@ def build_role_with_memory(
 
     # RP-2: Role Evolution section (performance + maturity)
     if role_memory_service is not None:
-        performance = role_memory_service.get_performance_metrics(
+        performance = await role_memory_service.get_performance_metrics_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
         if performance is not None and performance.task_counts.total_tasks > 0:
-            evolution = _build_role_evolution_section(
+            evolution = await _build_role_evolution_section_async(
                 memory_bank_service=memory_bank_service,
                 workspace_id=workspace_id,
                 role_id=role_id,
@@ -81,7 +81,7 @@ def build_role_with_memory(
     )
 
 
-def _build_role_evolution_section(
+async def _build_role_evolution_section_async(
     *,
     memory_bank_service: MemoryBankService | None,
     workspace_id: str,
@@ -106,12 +106,12 @@ def _build_role_evolution_section(
     maturity_level: str | None = None
     adjustment_count: int | None = None
     if memory_bank_service is not None:
-        maturity_level = _find_latest_maturity_level(
+        maturity_level = await _find_latest_maturity_level_async(
             memory_bank_service=memory_bank_service,
             workspace_id=workspace_id,
             role_id=role_id,
         )
-        adjustment_count = _count_applied_adjustments(
+        adjustment_count = await _count_applied_adjustments_async(
             memory_bank_service=memory_bank_service,
             workspace_id=workspace_id,
             role_id=role_id,
@@ -125,7 +125,7 @@ def _build_role_evolution_section(
     return "\n".join(lines)
 
 
-def _find_latest_maturity_level(
+async def _find_latest_maturity_level_async(
     *,
     memory_bank_service: MemoryBankService,
     workspace_id: str,
@@ -141,7 +141,7 @@ def _find_latest_maturity_level(
         limit=10,
     )
     try:
-        result = memory_bank_service.list_entries(query)
+        result = await memory_bank_service.list_entries_async(query)
     except (ValueError, OSError, RuntimeError):
         return None
 
@@ -160,7 +160,7 @@ def _find_latest_maturity_level(
     return None
 
 
-def _count_applied_adjustments(
+async def _count_applied_adjustments_async(
     *,
     memory_bank_service: MemoryBankService,
     workspace_id: str,
@@ -176,7 +176,7 @@ def _count_applied_adjustments(
         limit=50,
     )
     try:
-        result = memory_bank_service.list_entries(query)
+        result = await memory_bank_service.list_entries_async(query)
     except (ValueError, OSError, RuntimeError):
         return None
 
@@ -188,7 +188,7 @@ def _count_applied_adjustments(
     return count
 
 
-def _build_project_memory_section(
+async def _build_project_memory_section_async(
     *,
     memory_bank_service: MemoryBankService,
     workspace_id: str,
@@ -205,7 +205,7 @@ def _build_project_memory_section(
             limit=20,
         )
         try:
-            result = memory_bank_service.list_entries(query)
+            result = await memory_bank_service.list_entries_async(query)
         except (ValueError, OSError, RuntimeError):
             continue
         if not result.items:

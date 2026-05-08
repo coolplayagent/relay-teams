@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -62,6 +63,55 @@ def test_propose_adjustment_creates_proposed(
     assert decision.trigger_source == "self_assessment"
     assert decision.triggered_by == "assessment-1"
     assert decision.version == 1
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_adjustment_repository_and_engine(
+    repo: PromptAdjustmentRepository,
+    mock_registry: MagicMock,
+) -> None:
+    assert await repo.get_decision_async("missing") is None
+    assert (
+        await repo.get_latest_applied_async(role_id="test-role", workspace_id="ws-1")
+        is None
+    )
+
+    engine = SystemPromptAdjustmentEngine(repository=repo, role_registry=mock_registry)
+    first = await engine.propose_adjustment_async(
+        role_id="test-role",
+        workspace_id="ws-1",
+        current_prompt="## strategy\nOld",
+        recommendations=(_make_rec(text="Async v1"),),
+        trigger_source="self_assessment",
+        triggered_by="async-1",
+    )
+    applied = first.model_copy(
+        update={
+            "status": PromptAdjustmentStatus.APPLIED,
+            "applied_at": datetime.now(tz=timezone.utc),
+        }
+    )
+    _ = await repo.save_decision_async(applied)
+
+    second = await engine.propose_adjustment_async(
+        role_id="test-role",
+        workspace_id="ws-1",
+        current_prompt="## strategy\nAsync v1",
+        recommendations=(_make_rec(text="Async v2"),),
+        trigger_source="self_assessment",
+        triggered_by="async-2",
+    )
+
+    latest = await repo.get_latest_applied_async(
+        role_id="test-role",
+        workspace_id="ws-1",
+    )
+    retrieved = await repo.get_decision_async(second.decision_id)
+    assert latest is not None
+    assert latest.decision_id == first.decision_id
+    assert retrieved is not None
+    assert retrieved.version == 2
+    assert second.version == 2
 
 
 def test_approve_transitions_to_approved(

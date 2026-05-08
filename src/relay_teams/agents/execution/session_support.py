@@ -30,7 +30,10 @@ from pydantic_ai.messages import (
 from relay_teams.agents.execution.event_publishing import EventPublishingService
 from relay_teams.agents.execution.failure_reporting import FailureHandlingService
 from relay_teams.agents.execution.message_commit import MessageCommitService
-from relay_teams.agents.execution.prompt_history import PromptHistoryService
+from relay_teams.agents.execution.prompt_history import (
+    AsyncRunIntentRepository,
+    PromptHistoryService,
+)
 from relay_teams.agents.execution.recovery_flow import AttemptRecoveryService
 from relay_teams.agents.execution.recovery_flow import (
     RESUME_SUPERSEDED_TOOL_CALL_ERROR_CODE,
@@ -55,16 +58,15 @@ from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskReco
 from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_result_payload,
 )
-from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.tools.runtime.persisted_state import (
     PersistedToolCallBatchState,
     PersistedToolCallState,
     ToolCallBatchStatus,
     ToolExecutionStatus,
+    load_or_recover_tool_call_state_async,
     merge_tool_call_state_async,
-    load_or_recover_tool_call_state,
-    recover_tool_call_batches_from_event_log,
+    recover_tool_call_batches_from_event_log_async,
 )
 from relay_teams.tools.runtime.context import ToolDeps
 from relay_teams.tools.runtime.recoverable_invoker import RecoverableToolInvoker
@@ -84,6 +86,24 @@ class _AsyncConversationHistoryRepo(Protocol):
         raise NotImplementedError  # pragma: no cover
 
 
+@runtime_checkable
+class _AsyncTraceEventLog(Protocol):
+    async def list_by_trace_async(
+        self,
+        trace_id: str,
+    ) -> tuple[dict[str, JsonValue], ...]:
+        raise NotImplementedError  # pragma: no cover
+
+
+@runtime_checkable
+class _AsyncSharedStateSnapshotStore(Protocol):
+    async def snapshot_async(
+        self,
+        scope: ScopeRef,
+    ) -> tuple[tuple[str, str], ...]:
+        raise NotImplementedError  # pragma: no cover
+
+
 class _NullPromptHistoryMessageRepo:
     def get_history_for_conversation(
         self,
@@ -92,11 +112,12 @@ class _NullPromptHistoryMessageRepo:
         _ = conversation_id
         return []
 
+    @staticmethod
     async def get_history_for_conversation_async(
-        self,
         conversation_id: str,
     ) -> list[ModelRequest | ModelResponse]:
-        return self.get_history_for_conversation(conversation_id)
+        _ = conversation_id
+        return []
 
     def get_history_for_conversation_task(
         self,
@@ -106,12 +127,13 @@ class _NullPromptHistoryMessageRepo:
         _ = (conversation_id, task_id)
         return []
 
+    @staticmethod
     async def get_history_for_conversation_task_async(
-        self,
         conversation_id: str,
         task_id: str,
     ) -> list[ModelRequest | ModelResponse]:
-        return self.get_history_for_conversation_task(conversation_id, task_id)
+        _ = (conversation_id, task_id)
+        return []
 
     def prune_conversation_history_to_safe_boundary(
         self,
@@ -119,11 +141,11 @@ class _NullPromptHistoryMessageRepo:
     ) -> None:
         _ = conversation_id
 
+    @staticmethod
     async def prune_conversation_history_to_safe_boundary_async(
-        self,
         conversation_id: str,
     ) -> None:
-        self.prune_conversation_history_to_safe_boundary(conversation_id)
+        _ = conversation_id
 
     def append(
         self,
@@ -148,8 +170,8 @@ class _NullPromptHistoryMessageRepo:
             messages,
         )
 
+    @staticmethod
     async def append_async(
-        self,
         *,
         session_id: str,
         workspace_id: str,
@@ -160,15 +182,15 @@ class _NullPromptHistoryMessageRepo:
         trace_id: str,
         messages: list[ModelRequest | ModelResponse],
     ) -> None:
-        self.append(
-            session_id=session_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            messages=messages,
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+            messages,
         )
 
     def append_system_prompt_if_missing(
@@ -182,7 +204,7 @@ class _NullPromptHistoryMessageRepo:
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None:
+    ) -> bool:
         _ = (
             session_id,
             workspace_id,
@@ -193,9 +215,10 @@ class _NullPromptHistoryMessageRepo:
             trace_id,
             content,
         )
+        return False
 
+    @staticmethod
     async def append_system_prompt_if_missing_async(
-        self,
         *,
         session_id: str,
         workspace_id: str,
@@ -205,17 +228,18 @@ class _NullPromptHistoryMessageRepo:
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None:
-        self.append_system_prompt_if_missing(
-            session_id=session_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            content=content,
+    ) -> bool:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+            content,
         )
+        return False
 
     def replace_pending_user_prompt(
         self,
@@ -241,8 +265,8 @@ class _NullPromptHistoryMessageRepo:
         )
         return False
 
+    @staticmethod
     async def replace_pending_user_prompt_async(
-        self,
         *,
         session_id: str,
         workspace_id: str,
@@ -253,16 +277,17 @@ class _NullPromptHistoryMessageRepo:
         trace_id: str,
         content: object,
     ) -> bool:
-        return self.replace_pending_user_prompt(
-            session_id=session_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=agent_role_id,
-            instance_id=instance_id,
-            task_id=task_id,
-            trace_id=trace_id,
-            content=content,
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+            content,
         )
+        return False
 
 
 @runtime_checkable
@@ -293,14 +318,12 @@ class _SubagentRecordLookupService(Protocol):
 
 
 class _NullRunIntentRepo:
-    def get(self, run_id: str, *, fallback_session_id: str | None = None) -> object:
+    @staticmethod
+    async def get_async(
+        run_id: str, *, fallback_session_id: str | None = None
+    ) -> object:
         _ = (run_id, fallback_session_id)
         return type("_Intent", (), {"intent": ""})()
-
-    async def get_async(
-        self, run_id: str, *, fallback_session_id: str | None = None
-    ) -> object:
-        return self.get(run_id, fallback_session_id=fallback_session_id)
 
 
 def _tool_result_error_code(result: dict[str, JsonValue]) -> str:
@@ -334,6 +357,13 @@ def _tool_args_from_preview(value: str) -> dict[str, JsonValue] | str:
     if isinstance(decoded, dict):
         return decoded
     return text
+
+
+async def _empty_safe_history_async(
+    conversation_id: str,
+) -> list[ModelRequest | ModelResponse]:
+    _ = conversation_id
+    return []
 
 
 class SessionSupportMixin(AgentLlmSessionMixinBase):
@@ -942,11 +972,15 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 pending_messages
             )
         }
-        committed_tool_call_ids = self._committed_tool_call_ids_for_request(request)
-        recovered_tool_call_messages = self._recover_orphaned_spawn_subagent_calls(
-            request=request,
-            pending_tool_calls=pending_tool_calls,
-            committed_tool_call_ids=committed_tool_call_ids,
+        committed_tool_call_ids = await self._committed_tool_call_ids_for_request_async(
+            request
+        )
+        recovered_tool_call_messages = (
+            await self._recover_orphaned_spawn_subagent_calls_async(
+                request=request,
+                pending_tool_calls=pending_tool_calls,
+                committed_tool_call_ids=committed_tool_call_ids,
+            )
         )
         recovered_orphaned_tool_call_ids = {
             str(part.tool_call_id or "").strip()
@@ -968,7 +1002,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         recovered_tool_call_ids: list[str] = []
         recovered_tool_names: list[str] = []
         for tool_call_id, tool_name in pending_tool_calls.items():
-            state = load_or_recover_tool_call_state(
+            state = await load_or_recover_tool_call_state_async(
                 shared_store=self._shared_store,
                 event_log=self._event_bus,
                 trace_id=request.trace_id,
@@ -1050,7 +1084,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         if self._shared_store is None or self._event_bus is None:
             return history, 0
         try:
-            _ = recover_tool_call_batches_from_event_log(
+            _ = await recover_tool_call_batches_from_event_log_async(
                 event_log=self._event_bus,
                 shared_store=self._shared_store,
                 trace_id=request.trace_id,
@@ -1077,7 +1111,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         committed_tool_call_ids = self._committed_tool_call_ids_from_history(history)
         recovered_count = 0
         current_history = history
-        for batch in self._task_tool_call_batch_states(request.task_id):
+        for batch in await self._task_tool_call_batch_states_async(request.task_id):
             if not self._batch_matches_request(batch=batch, request=request):
                 continue
             if not self._is_recoverable_tool_call_batch(batch):
@@ -1132,7 +1166,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         result_parts: list[ToolReturnPart] = []
         for item in sorted(batch.items, key=lambda candidate: candidate.index):
             try:
-                state = load_or_recover_tool_call_state(
+                state = await load_or_recover_tool_call_state_async(
                     shared_store=self._shared_store,
                     event_log=self._event_bus,
                     trace_id=request.trace_id,
@@ -1350,7 +1384,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 interleaved.append(ModelRequest(parts=message_recovered_parts))
         return interleaved
 
-    def _recover_orphaned_spawn_subagent_calls(
+    async def _recover_orphaned_spawn_subagent_calls_async(
         self,
         *,
         request: LLMRequest,
@@ -1358,8 +1392,10 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         committed_tool_call_ids: set[str],
     ) -> list[ModelResponse]:
         recovered_parts: list[ToolCallPart] = []
-        superseded_tool_call_ids = self._superseded_tool_call_ids_for_request(request)
-        for state in self._task_tool_call_states(request.task_id):
+        superseded_tool_call_ids = (
+            await self._superseded_tool_call_ids_for_request_async(request)
+        )
+        for state in await self._task_tool_call_states_async(request.task_id):
             if str(state.run_id or "").strip() != request.run_id:
                 continue
             if str(state.instance_id or "").strip() != request.instance_id:
@@ -1467,12 +1503,14 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return False
 
-    def _superseded_tool_call_ids_for_request(self, request: LLMRequest) -> set[str]:
+    async def _superseded_tool_call_ids_for_request_async(
+        self, request: LLMRequest
+    ) -> set[str]:
         event_bus = getattr(self, "_event_bus", None)
-        if event_bus is None:
+        if not isinstance(event_bus, _AsyncTraceEventLog):
             return set()
         try:
-            events = event_bus.list_by_trace(request.trace_id)
+            events = await event_bus.list_by_trace_async(request.trace_id)
         except (KeyError, RuntimeError, ValueError, sqlite3.Error):
             return set()
         superseded_ids: set[str] = set()
@@ -1490,7 +1528,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                 continue
             payload_map = payload
             if not self._tool_result_event_matches_request_scope(
-                event=cast(dict[str, JsonValue], event),
+                event=event,
                 payload=payload_map,
                 request=request,
             ):
@@ -1534,16 +1572,18 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             RESUME_SUPERSEDED_TOOL_CALL_ERROR_CODE,
         }
 
-    def _committed_tool_call_ids_for_request(self, request: LLMRequest) -> set[str]:
+    async def _committed_tool_call_ids_for_request_async(
+        self, request: LLMRequest
+    ) -> set[str]:
         message_repo = getattr(self, "_message_repo", None)
-        if message_repo is None:
+        if not isinstance(message_repo, _AsyncConversationHistoryRepo):
             return set()
         resolved_conversation_id = request.conversation_id or build_conversation_id(
             request.session_id,
             request.role_id,
         )
         try:
-            history = message_repo.get_history_for_conversation(
+            history = await message_repo.get_history_for_conversation_async(
                 resolved_conversation_id
             )
         except (KeyError, RuntimeError, ValueError, sqlite3.Error):
@@ -1564,15 +1604,15 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                         committed_ids.add(tool_call_id)
         return committed_ids
 
-    def _task_tool_call_states(
+    async def _task_tool_call_states_async(
         self,
         task_id: str,
     ) -> tuple[PersistedToolCallState, ...]:
         shared_store = getattr(self, "_shared_store", None)
-        if shared_store is None:
+        if not isinstance(shared_store, _AsyncSharedStateSnapshotStore):
             return ()
         try:
-            entries = shared_store.snapshot(
+            entries = await shared_store.snapshot_async(
                 ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
             )
         except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
@@ -1603,15 +1643,15 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         states.sort(key=lambda item: item.updated_at)
         return tuple(states)
 
-    def _task_tool_call_batch_states(
+    async def _task_tool_call_batch_states_async(
         self,
         task_id: str,
     ) -> tuple[PersistedToolCallBatchState, ...]:
         shared_store = getattr(self, "_shared_store", None)
-        if shared_store is None:
+        if not isinstance(shared_store, _AsyncSharedStateSnapshotStore):
             return ()
         try:
-            entries = shared_store.snapshot(
+            entries = await shared_store.snapshot_async(
                 ScopeRef(scope_type=ScopeType.TASK, scope_id=task_id)
             )
         except (KeyError, RuntimeError, ValueError, sqlite3.Error) as exc:
@@ -1837,26 +1877,15 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         safe_index = self._last_committable_index(messages)
         return messages[:safe_index]
 
-    def _load_safe_history_for_conversation(
-        self,
-        conversation_id: str,
-    ) -> list[ModelRequest | ModelResponse]:
-        return self._truncate_history_to_safe_boundary(
-            self._filter_model_messages(
-                self._message_repo.get_history_for_conversation(conversation_id)
-            )
-        )
-
     async def _load_safe_history_for_conversation_async(
         self,
         conversation_id: str,
     ) -> list[ModelRequest | ModelResponse]:
-        if isinstance(self._message_repo, _AsyncConversationHistoryRepo):
-            history = await self._message_repo.get_history_for_conversation_async(
-                conversation_id
-            )
-        else:
-            history = self._message_repo.get_history_for_conversation(conversation_id)
+        if not isinstance(self._message_repo, _AsyncConversationHistoryRepo):
+            return []
+        history = await self._message_repo.get_history_for_conversation_async(
+            conversation_id
+        )
         return self._truncate_history_to_safe_boundary(
             self._filter_model_messages(history)
         )
@@ -1870,6 +1899,9 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
         if not isinstance(mcp_tool_context_token_cache, dict):
             mcp_tool_context_token_cache = {}
         self._mcp_tool_context_token_cache = mcp_tool_context_token_cache
+        run_intent_repo = getattr(self, "_run_intent_repo", None)
+        if not isinstance(run_intent_repo, AsyncRunIntentRepository):
+            run_intent_repo = _NullRunIntentRepo()
         return PromptHistoryService(
             config=getattr(
                 self,
@@ -1880,10 +1912,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
                     api_key="secret",
                 ),
             ),
-            run_intent_repo=cast(
-                RunIntentRepository,
-                getattr(self, "_run_intent_repo", _NullRunIntentRepo()),
-            ),
+            run_intent_repo=run_intent_repo,
             message_repo=getattr(
                 self,
                 "_message_repo",
@@ -1906,15 +1935,10 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
             hook_service=getattr(self, "_hook_service", None),
             reminder_service=getattr(self, "_reminder_service", None),
             run_event_hub=getattr(self, "_run_event_hub", None),
-            load_safe_history_for_conversation=getattr(
-                self,
-                "_load_safe_history_for_conversation",
-                lambda _conversation_id: [],
-            ),
             load_safe_history_for_conversation_async=getattr(
                 self,
                 "_load_safe_history_for_conversation_async",
-                None,
+                _empty_safe_history_async,
             ),
         )
 

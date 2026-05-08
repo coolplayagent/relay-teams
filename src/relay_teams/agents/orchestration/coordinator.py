@@ -1814,7 +1814,7 @@ class CoordinatorGraph(BaseModel):
             return allowed_tools, None
         try:
             instance = await self.agent_repo.get_instance_async(instance_id)
-            workspace = workspace_manager.resolve(
+            workspace = await workspace_manager.resolve_async(
                 session_id=task.session_id,
                 role_id=role_id,
                 instance_id=instance_id,

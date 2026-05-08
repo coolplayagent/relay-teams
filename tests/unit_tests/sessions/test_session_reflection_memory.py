@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.event_stream import RunEventHub
@@ -45,7 +47,8 @@ def _build_workspace_service(db_path: Path) -> WorkspaceService:
     return WorkspaceService(repository=WorkspaceRepository(db_path))
 
 
-def test_session_service_updates_and_deletes_agent_reflection(
+@pytest.mark.asyncio
+async def test_session_service_updates_and_deletes_agent_reflection(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "session_reflection_memory.db"
@@ -63,7 +66,7 @@ def test_session_service_updates_and_deletes_agent_reflection(
         status=InstanceStatus.IDLE,
     )
 
-    updated = service.update_agent_reflection(
+    updated = await service.update_agent_reflection_async(
         "session-1",
         "inst-1",
         summary="- Prefer concise implementation notes",
@@ -74,11 +77,11 @@ def test_session_service_updates_and_deletes_agent_reflection(
     assert updated["source"] == "manual_edit"
     assert updated["updated_at"] is not None
 
-    stored = service.get_agent_reflection("session-1", "inst-1")
+    stored = await service.get_agent_reflection_async("session-1", "inst-1")
     assert stored["summary"] == "- Prefer concise implementation notes"
     assert stored["updated_at"] is not None
 
-    deleted = service.delete_agent_reflection("session-1", "inst-1")
+    deleted = await service.delete_agent_reflection_async("session-1", "inst-1")
     assert deleted == {
         "instance_id": "inst-1",
         "role_id": "writer",
@@ -88,7 +91,7 @@ def test_session_service_updates_and_deletes_agent_reflection(
         "source": "manual_delete",
     }
 
-    empty = service.get_agent_reflection("session-1", "inst-1")
+    empty = await service.get_agent_reflection_async("session-1", "inst-1")
     assert empty == {
         "instance_id": "inst-1",
         "role_id": "writer",
@@ -99,7 +102,39 @@ def test_session_service_updates_and_deletes_agent_reflection(
     }
 
 
-def test_rebind_session_workspace_keeps_old_role_memory_without_migration(
+@pytest.mark.asyncio
+async def test_list_agents_in_session_async_projects_reflection_memory(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "session_agent_reflection_list.db"
+    service = _build_service(db_path)
+    _ = service.create_session(session_id="session-1", workspace_id="default")
+
+    agent_repo = AgentInstanceRepository(db_path)
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="writer",
+        workspace_id="default",
+        status=InstanceStatus.IDLE,
+    )
+    _ = await service.update_agent_reflection_async(
+        "session-1",
+        "inst-1",
+        summary="- Prefer concise drafts",
+    )
+
+    agents = await service.list_agents_in_session_async("session-1")
+
+    assert len(agents) == 1
+    assert agents[0]["reflection_summary_preview"] == "- Prefer concise drafts"
+    assert agents[0]["reflection_updated_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_rebind_session_workspace_keeps_old_role_memory_without_migration(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "session_reflection_rebind.db"
@@ -133,7 +168,7 @@ def test_rebind_session_workspace_keeps_old_role_memory_without_migration(
         workspace_id=default_workspace.workspace_id,
         status=InstanceStatus.IDLE,
     )
-    _ = service.update_agent_reflection(
+    _ = await service.update_agent_reflection_async(
         "session-1",
         "inst-1",
         summary="- Keep the old workspace memory",
@@ -148,7 +183,7 @@ def test_rebind_session_workspace_keeps_old_role_memory_without_migration(
     assert (
         agent_repo.get_instance("inst-1").workspace_id == target_workspace.workspace_id
     )
-    assert service.get_agent_reflection("session-1", "inst-1") == {
+    assert await service.get_agent_reflection_async("session-1", "inst-1") == {
         "instance_id": "inst-1",
         "role_id": "writer",
         "summary": "",

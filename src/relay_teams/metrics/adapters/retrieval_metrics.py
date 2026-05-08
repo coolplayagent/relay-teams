@@ -42,6 +42,38 @@ def record_retrieval_search(
         )
 
 
+async def record_retrieval_search_async(
+    recorder: MetricRecorder,
+    *,
+    backend: str,
+    scope_kind: str,
+    duration_ms: int,
+    success: bool,
+) -> None:
+    tags = _build_tags(
+        backend=backend,
+        scope_kind=scope_kind,
+        operation="search",
+        status="success" if success else "failure",
+    )
+    await recorder.emit_async(
+        definition_name=RETRIEVAL_SEARCHES.name,
+        value=1,
+        tags=tags,
+    )
+    await recorder.emit_async(
+        definition_name=RETRIEVAL_SEARCH_DURATION_MS.name,
+        value=duration_ms,
+        tags=tags,
+    )
+    if not success:
+        await recorder.emit_async(
+            definition_name=RETRIEVAL_SEARCH_FAILURES.name,
+            value=1,
+            tags=tags,
+        )
+
+
 def record_retrieval_rebuild(
     recorder: MetricRecorder,
     *,
@@ -64,6 +96,32 @@ def record_retrieval_rebuild(
     )
 
 
+async def record_retrieval_rebuild_async(
+    recorder: MetricRecorder,
+    *,
+    backend: str,
+    scope_kind: str,
+    duration_ms: int,
+    success: bool,
+) -> None:
+    tags = _build_tags(
+        backend=backend,
+        scope_kind=scope_kind,
+        operation="rebuild",
+        status="success" if success else "failure",
+    )
+    await recorder.emit_async(
+        definition_name=RETRIEVAL_REBUILDS.name,
+        value=1,
+        tags=tags,
+    )
+    await recorder.emit_async(
+        definition_name=RETRIEVAL_REBUILD_DURATION_MS.name,
+        value=duration_ms,
+        tags=tags,
+    )
+
+
 def record_retrieval_document_count(
     recorder: MetricRecorder,
     *,
@@ -73,6 +131,26 @@ def record_retrieval_document_count(
     document_count: int,
 ) -> None:
     recorder.emit(
+        definition_name=RETRIEVAL_DOCUMENT_COUNT.name,
+        value=document_count,
+        tags=_build_tags(
+            backend=backend,
+            scope_kind=scope_kind,
+            operation=operation,
+            status="success",
+        ),
+    )
+
+
+async def record_retrieval_document_count_async(
+    recorder: MetricRecorder,
+    *,
+    backend: str,
+    scope_kind: str,
+    operation: str,
+    document_count: int,
+) -> None:
+    await recorder.emit_async(
         definition_name=RETRIEVAL_DOCUMENT_COUNT.name,
         value=document_count,
         tags=_build_tags(

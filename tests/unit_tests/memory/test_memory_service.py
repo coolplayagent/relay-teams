@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,12 +16,15 @@ from relay_teams.memory.models import (
     MemoryQuery,
     MemoryScope,
     MemorySearchRequest,
+    MemorySearchResult,
     MemorySourceKind,
     MemoryTier,
     UpdateMemoryEntryRequest,
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
+
+pytestmark = pytest.mark.asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -57,26 +60,26 @@ def _create_request(**overrides: object) -> CreateMemoryEntryRequest:
 
 
 class TestCreateEntry:
-    def test_create_persistent(self, service: MemoryBankService) -> None:
+    async def test_create_persistent(self, service: MemoryBankService) -> None:
         req = _create_request(
             tier=MemoryTier.PERSISTENT,
             scope=MemoryScope.WORKSPACE,
         )
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
         assert entry.id.startswith("mem-")
         assert entry.tier == MemoryTier.PERSISTENT
         assert entry.confidence_score == 1.0
         assert entry.expires_at is None  # persistent has no TTL
 
-    def test_create_working_has_ttl(self, service: MemoryBankService) -> None:
+    async def test_create_working_has_ttl(self, service: MemoryBankService) -> None:
         req = _create_request()
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
         assert entry.expires_at is not None
         assert entry.expires_at > datetime.now(tz=timezone.utc)
 
-    def test_create_with_tags(self, service: MemoryBankService) -> None:
+    async def test_create_with_tags(self, service: MemoryBankService) -> None:
         req = _create_request(tags=("python", "pydantic"))
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
         assert entry.tags == ("python", "pydantic")
 
 
@@ -86,32 +89,34 @@ class TestCreateEntry:
 
 
 class TestUpdateEntry:
-    def test_update_increments_version(self, service: MemoryBankService) -> None:
+    async def test_update_increments_version(self, service: MemoryBankService) -> None:
         req = _create_request()
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
         original_updated_at = entry.updated_at
 
         update = UpdateMemoryEntryRequest(
             content=MemoryContent(title="Updated title", body="Updated body")
         )
-        updated = service.update_entry(entry.id, update)
+        updated = await service.update_entry_async(entry.id, update)
         assert updated is not None
         assert updated.version == 2
         assert updated.content.title == "Updated title"
         assert updated.updated_at >= original_updated_at
 
-    def test_update_nonexistent_returns_none(self, service: MemoryBankService) -> None:
+    async def test_update_nonexistent_returns_none(
+        self, service: MemoryBankService
+    ) -> None:
         update = UpdateMemoryEntryRequest(content=MemoryContent(title="X", body="Y"))
-        assert service.update_entry("mem-nonexistent", update) is None
+        assert await service.update_entry_async("mem-nonexistent", update) is None
 
-    def test_update_auto_expires_low_confidence(
+    async def test_update_auto_expires_low_confidence(
         self, service: MemoryBankService
     ) -> None:
         req = _create_request()
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
 
         update = UpdateMemoryEntryRequest(confidence_score=0.1)
-        updated = service.update_entry(entry.id, update)
+        updated = await service.update_entry_async(entry.id, update)
         assert updated is not None
         assert updated.status == MemoryEntryStatus.EXPIRED
 
@@ -122,13 +127,13 @@ class TestUpdateEntry:
 
 
 class TestConsolidation:
-    def test_consolidate_working_to_medium_term(
+    async def test_consolidate_working_to_medium_term(
         self, service: MemoryBankService
     ) -> None:
         req = _create_request()
-        service.create_entry(req)
+        await service.create_entry_async(req)
 
-        result = service.consolidate(
+        result = await service.consolidate_async(
             MemoryConsolidationRequest(
                 workspace_id="ws-test",
                 session_id="sess-1",
@@ -141,11 +146,11 @@ class TestConsolidation:
         assert len(result.new_entry_ids) >= 1
         assert len(result.superseded_entry_ids) >= 1
 
-    def test_consolidate_target_cannot_be_working(
+    async def test_consolidate_target_cannot_be_working(
         self, service: MemoryBankService
     ) -> None:
         with pytest.raises(Exception):
-            service.consolidate(
+            await service.consolidate_async(
                 MemoryConsolidationRequest(
                     workspace_id="ws-test",
                     target_tier=MemoryTier.WORKING,
@@ -160,19 +165,19 @@ class TestConsolidation:
 
 
 class TestForgetting:
-    def test_forget_expired(self, service: MemoryBankService) -> None:
+    async def test_forget_expired(self, service: MemoryBankService) -> None:
         req = _create_request()
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
 
         # Manually set expires_at to past
         past = datetime.now(tz=timezone.utc) - timedelta(hours=1)
         update = UpdateMemoryEntryRequest(expires_at=past)
-        service.update_entry(entry.id, update)
+        await service.update_entry_async(entry.id, update)
 
-        count = service.forget_expired()
+        count = await service.forget_expired_async()
         assert count >= 1
 
-        loaded = service.get_entry(entry.id)
+        loaded = await service.get_entry_async(entry.id)
         assert loaded is not None
         assert loaded.status == MemoryEntryStatus.EXPIRED
 
@@ -183,14 +188,14 @@ class TestForgetting:
 
 
 class TestSearch:
-    def test_search_finds_match(self, service: MemoryBankService) -> None:
+    async def test_search_finds_match(self, service: MemoryBankService) -> None:
         req = _create_request(
             content=MemoryContent(
                 title="Pydantic validation", body="Uses Pydantic v2 models"
             )
         )
-        service.create_entry(req)
-        result = service.search(
+        await service.create_entry_async(req)
+        result = await service.search_async(
             MemorySearchRequest(
                 workspace_id="ws-test",
                 text_query="pydantic",
@@ -199,10 +204,10 @@ class TestSearch:
         assert result.total_count >= 1
         assert "pydantic" in result.items[0].entry.content_title.lower()
 
-    def test_search_no_match(self, service: MemoryBankService) -> None:
+    async def test_search_no_match(self, service: MemoryBankService) -> None:
         req = _create_request()
-        service.create_entry(req)
-        result = service.search(
+        await service.create_entry_async(req)
+        result = await service.search_async(
             MemorySearchRequest(
                 workspace_id="ws-test",
                 text_query="xyznonexistent",
@@ -217,26 +222,26 @@ class TestSearch:
 
 
 class TestGetListDelete:
-    def test_get_existing(self, service: MemoryBankService) -> None:
+    async def test_get_existing(self, service: MemoryBankService) -> None:
         req = _create_request()
-        entry = service.create_entry(req)
-        loaded = service.get_entry(entry.id)
+        entry = await service.create_entry_async(req)
+        loaded = await service.get_entry_async(entry.id)
         assert loaded is not None
         assert loaded.id == entry.id
 
-    def test_get_nonexistent(self, service: MemoryBankService) -> None:
-        assert service.get_entry("mem-none") is None
+    async def test_get_nonexistent(self, service: MemoryBankService) -> None:
+        assert await service.get_entry_async("mem-none") is None
 
-    def test_list_entries(self, service: MemoryBankService) -> None:
-        service.create_entry(_create_request())
-        result = service.list_entries(MemoryQuery(workspace_id="ws-test"))
+    async def test_list_entries(self, service: MemoryBankService) -> None:
+        await service.create_entry_async(_create_request())
+        result = await service.list_entries_async(MemoryQuery(workspace_id="ws-test"))
         assert result.total_count >= 1
 
-    def test_delete_entry(self, service: MemoryBankService) -> None:
+    async def test_delete_entry(self, service: MemoryBankService) -> None:
         req = _create_request()
-        entry = service.create_entry(req)
-        assert service.delete_entry(entry.id) is True
-        assert service.get_entry(entry.id) is None
+        entry = await service.create_entry_async(req)
+        assert await service.delete_entry_async(entry.id) is True
+        assert await service.get_entry_async(entry.id) is None
 
 
 # ---------------------------------------------------------------------------
@@ -247,17 +252,17 @@ class TestGetListDelete:
 class TestSearchFTS5:
     """Tests for the search method covering both FTS5-backed and fallback paths."""
 
-    def test_search_method_exists(self, service: MemoryBankService) -> None:
+    async def test_search_method_exists(self, service: MemoryBankService) -> None:
         """The search method must be callable and return MemorySearchResult."""
         req = _create_request()
-        service.create_entry(req)
-        result = service.search(
+        await service.create_entry_async(req)
+        result = await service.search_async(
             MemorySearchRequest(workspace_id="ws-test", text_query="pattern")
         )
-        assert hasattr(result, "total_count")
-        assert hasattr(result, "items")
+        assert isinstance(result, MemorySearchResult)
+        assert result.total_count >= 0
 
-    def test_search_without_retrieval_service_uses_fallback(
+    async def test_search_without_retrieval_service_uses_fallback(
         self, service: MemoryBankService
     ) -> None:
         """When no retrieval_service is configured, fallback LIKE search is used."""
@@ -267,8 +272,8 @@ class TestSearchFTS5:
                 title="Pydantic patterns", body="Advanced Pydantic v2 usage"
             )
         )
-        service.create_entry(req)
-        result = service.search(
+        await service.create_entry_async(req)
+        result = await service.search_async(
             MemorySearchRequest(workspace_id="ws-test", text_query="pydantic")
         )
         assert result.total_count >= 1
@@ -277,7 +282,7 @@ class TestSearchFTS5:
         assert hit.rank >= 1
         assert "pydantic" in hit.entry.content_title.lower()
 
-    def test_search_with_retrieval_service_uses_fts(
+    async def test_search_with_retrieval_service_uses_fts(
         self, service: MemoryBankService
     ) -> None:
         """When a retrieval_service IS configured, the FTS5 path is used."""
@@ -289,46 +294,50 @@ class TestSearchFTS5:
         req = _create_request(
             content=MemoryContent(title="FastAPI tips", body="Use dependency injection")
         )
-        entry = service.create_entry(req)
+        entry = await service.create_entry_async(req)
 
         # Build a mock retrieval service
         mock_retrieval = MagicMock()
-        mock_retrieval.search.return_value = [
-            RetrievalHit(
-                document_id=entry.id,
-                title="FastAPI tips",
-                snippet="...FastAPI...",
-                score=0.85,
-                rank=1,
-            )
-        ]
+        mock_retrieval.search_async = AsyncMock(
+            return_value=[
+                RetrievalHit(
+                    document_id=entry.id,
+                    title="FastAPI tips",
+                    snippet="...FastAPI...",
+                    score=0.85,
+                    rank=1,
+                )
+            ]
+        )
         service._retrieval_service = mock_retrieval
 
-        result = service.search(
+        result = await service.search_async(
             MemorySearchRequest(workspace_id="ws-test", text_query="fastapi")
         )
         assert result.total_count >= 1
         assert result.items[0].entry.id == entry.id
         assert result.items[0].score == 0.85
 
-    def test_search_fts_no_hits_returns_empty(self, service: MemoryBankService) -> None:
+    async def test_search_fts_no_hits_returns_empty(
+        self, service: MemoryBankService
+    ) -> None:
         """FTS5 path with zero hits returns empty result."""
         mock_retrieval = MagicMock()
-        mock_retrieval.search.return_value = []
+        mock_retrieval.search_async = AsyncMock(return_value=[])
         service._retrieval_service = mock_retrieval
 
-        result = service.search(
+        result = await service.search_async(
             MemorySearchRequest(workspace_id="ws-test", text_query="nope")
         )
         assert result.total_count == 0
         assert len(result.items) == 0
 
-    def test_build_snippet_short_body(self) -> None:
+    async def test_build_snippet_short_body(self) -> None:
         """_build_snippet returns body preview when query not found."""
         result = MemoryBankService._build_snippet("Short body text", "missing")
         assert result == "Short body text"
 
-    def test_build_snippet_highlights_match(self) -> None:
+    async def test_build_snippet_highlights_match(self) -> None:
         """_build_snippet extracts context around the match."""
         body = "A" * 100 + "TARGET" + "B" * 100
         result = MemoryBankService._build_snippet(body, "target")
@@ -343,11 +352,11 @@ class TestSearchFTS5:
 class TestCapacityEnforcement:
     """Tests for enforce_capacity which prunes oldest entries when limits exceeded."""
 
-    def test_enforce_capacity_returns_zero_when_below_limit(
+    async def test_enforce_capacity_returns_zero_when_below_limit(
         self, service: MemoryBankService
     ) -> None:
         """No pruning when entry count is below the capacity limit."""
-        pruned = service.enforce_capacity(
+        pruned = await service.enforce_capacity_async(
             workspace_id="ws-test",
             tier=MemoryTier.PERSISTENT,
             scope=MemoryScope.WORKSPACE,
@@ -355,7 +364,7 @@ class TestCapacityEnforcement:
         # We have 0 persistent entries, well below 2000 limit
         assert pruned == 0
 
-    def test_enforce_capacity_prunes_working_entries(
+    async def test_enforce_capacity_prunes_working_entries(
         self, service: MemoryBankService
     ) -> None:
         """When WORKING entries exceed MAX_WORKING_PER_RUN limit, oldest are pruned."""
@@ -365,10 +374,10 @@ class TestCapacityEnforcement:
         run_id = "run-cap-test"
         for i in range(MAX_WORKING_PER_RUN + 1):
             req = _create_request(run_id=run_id)
-            service.create_entry(req)
+            await service.create_entry_async(req)
 
         # Verify capacity enforcement happened during create
-        result = service.list_entries(
+        result = await service.list_entries_async(
             MemoryQuery(
                 workspace_id="ws-test",
                 tier=MemoryTier.WORKING,
@@ -379,7 +388,7 @@ class TestCapacityEnforcement:
         active_count = result.total_count
         assert active_count <= MAX_WORKING_PER_RUN
 
-    def test_enforce_capacity_does_not_affect_different_tier(
+    async def test_enforce_capacity_does_not_affect_different_tier(
         self, service: MemoryBankService
     ) -> None:
         """Creating many WORKING entries should not prune PERSISTENT entries."""
@@ -388,20 +397,22 @@ class TestCapacityEnforcement:
             tier=MemoryTier.PERSISTENT,
             scope=MemoryScope.WORKSPACE,
         )
-        persistent = service.create_entry(req_p)
+        persistent = await service.create_entry_async(req_p)
 
         # Create many working entries
         for i in range(10):
             req_w = _create_request(run_id=f"run-{i}")
-            service.create_entry(req_w)
+            await service.create_entry_async(req_w)
 
         # Persistent entry should still exist and be active
-        loaded = service.get_entry(persistent.id)
+        loaded = await service.get_entry_async(persistent.id)
         assert loaded is not None
         assert loaded.status == MemoryEntryStatus.ACTIVE
         assert loaded.tier == MemoryTier.PERSISTENT
 
-    def test_enforce_capacity_prunes_by_age(self, service: MemoryBankService) -> None:
+    async def test_enforce_capacity_prunes_by_age(
+        self, service: MemoryBankService
+    ) -> None:
         """When PERSISTENT entries exceed capacity, oldest are expired first."""
         from relay_teams.memory import memory_defaults
 
@@ -415,11 +426,11 @@ class TestCapacityEnforcement:
                     tier=MemoryTier.PERSISTENT,
                     scope=MemoryScope.WORKSPACE,
                 )
-                entry = service.create_entry(req)
+                entry = await service.create_entry_async(req)
                 ids.append(entry.id)
 
             # Count active entries -- should be <= 3
-            result = service.list_entries(
+            result = await service.list_entries_async(
                 MemoryQuery(
                     workspace_id="ws-test",
                     tier=MemoryTier.PERSISTENT,
@@ -438,7 +449,9 @@ class TestCapacityEnforcement:
 
 
 class TestCondensation:
-    def test_condense_raises_not_implemented(self, service: MemoryBankService) -> None:
+    async def test_condense_raises_not_implemented(
+        self, service: MemoryBankService
+    ) -> None:
         """Condensation is a placeholder that raises NotImplementedError."""
         with pytest.raises(NotImplementedError, match="not yet implemented"):
             service.condense("ws-test")

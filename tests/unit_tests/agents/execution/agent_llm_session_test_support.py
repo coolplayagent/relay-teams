@@ -142,6 +142,13 @@ class _FakeMessageRepo:
         self.requested_conversation_ids.append(conversation_id)
         return list(self._history)
 
+    async def get_history_for_conversation_async(
+        self,
+        conversation_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        self.requested_conversation_ids.append(conversation_id)
+        return list(self._history)
+
     def get_history_for_conversation_task(
         self,
         conversation_id: str,
@@ -150,10 +157,46 @@ class _FakeMessageRepo:
         _ = task_id
         return self.get_history_for_conversation(conversation_id)
 
+    async def get_history_for_conversation_task_async(
+        self,
+        conversation_id: str,
+        task_id: str,
+    ) -> list[ModelRequest | ModelResponse]:
+        _ = task_id
+        return await self.get_history_for_conversation_async(conversation_id)
+
     def prune_conversation_history_to_safe_boundary(self, conversation_id: str) -> None:
         self.pruned_conversation_ids.append(conversation_id)
 
+    async def prune_conversation_history_to_safe_boundary_async(
+        self, conversation_id: str
+    ) -> None:
+        self.pruned_conversation_ids.append(conversation_id)
+
     def append(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        messages: list[ModelRequest | ModelResponse],
+    ) -> None:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+        )
+        self.append_calls.append(list(messages))
+
+    async def append_async(
         self,
         *,
         session_id: str,
@@ -187,7 +230,7 @@ class _FakeMessageRepo:
         task_id: str,
         trace_id: str,
         content: str,
-    ) -> None:
+    ) -> bool:
         _ = (
             session_id,
             workspace_id,
@@ -198,6 +241,31 @@ class _FakeMessageRepo:
             trace_id,
         )
         self.appended_system_prompts.append(content)
+        return True
+
+    async def append_system_prompt_if_missing_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: str,
+    ) -> bool:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+        )
+        self.appended_system_prompts.append(content)
+        return True
 
     def replace_pending_user_prompt(
         self,
@@ -210,6 +278,30 @@ class _FakeMessageRepo:
         task_id: str,
         trace_id: str,
         content: str,
+    ) -> bool:
+        _ = (
+            session_id,
+            workspace_id,
+            conversation_id,
+            agent_role_id,
+            instance_id,
+            task_id,
+            trace_id,
+            content,
+        )
+        return False
+
+    async def replace_pending_user_prompt_async(
+        self,
+        *,
+        session_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        agent_role_id: str,
+        instance_id: str,
+        task_id: str,
+        trace_id: str,
+        content: object,
     ) -> bool:
         _ = (
             session_id,
@@ -304,6 +396,12 @@ class _FakeRunIntentRepo:
         self._intent = intent
 
     def get(self, run_id: str, *, fallback_session_id: str | None = None) -> object:
+        _ = (run_id, fallback_session_id)
+        return type("_Intent", (), {"intent": self._intent})()
+
+    async def get_async(
+        self, run_id: str, *, fallback_session_id: str | None = None
+    ) -> object:
         _ = (run_id, fallback_session_id)
         return type("_Intent", (), {"intent": self._intent})()
 

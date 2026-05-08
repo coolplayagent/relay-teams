@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, create_autospec
+from unittest.mock import MagicMock, create_autospec
 
 from relay_teams.hooks import HookService
 from relay_teams.memory.event_handler import MemoryEventHandler
@@ -13,9 +12,26 @@ from relay_teams.sessions.runs.run_hook_pipeline import RunHookPipeline
 from relay_teams.sessions.session_repository import SessionRepository
 
 
+class _FakeCaptureService:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[str, str]] = []
+
+    async def capture_all_for_session(
+        self,
+        *,
+        _session_id: str,
+        _workspace_id: str,
+    ) -> tuple[object, ...]:
+        self.calls.append((_session_id, _workspace_id))
+        if self.fail:
+            raise RuntimeError("capture error")
+        return ()
+
+
 def _make_pipeline(
     *,
-    memory_event_handler: object | None = None,
+    memory_event_handler: MemoryEventHandler | None = None,
     session_workspace_id: str | None = "ws-1",
 ) -> tuple[RunHookPipeline, MagicMock]:
     hook_service = create_autospec(HookService, instance=True)
@@ -26,7 +42,10 @@ def _make_pipeline(
     session_repo = create_autospec(SessionRepository, instance=True)
     mock_session = MagicMock()
     mock_session.workspace_id = session_workspace_id
-    session_repo.get.return_value = mock_session if session_workspace_id else None
+    if session_workspace_id is None:
+        session_repo.get_async.side_effect = KeyError("missing session")
+    else:
+        session_repo.get_async.return_value = mock_session
     run_event_hub = create_autospec(RunEventHub, instance=True)
     append_followup = MagicMock(return_value=True)
 
@@ -40,7 +59,7 @@ def _make_pipeline(
     return pipeline, hook_service
 
 
-def _run(coro: Coroutine[Any, Any, None]) -> None:
+def _run(coro: Coroutine[object, object, None]) -> None:
     asyncio.run(coro)
 
 
@@ -72,7 +91,7 @@ class TestRunHookPipelineMemoryConsolidation:
                 output_text="ok",
             )
         )
-        handler.on_run_completed.assert_called_once_with(
+        handler.on_run_completed_async.assert_awaited_once_with(
             workspace_id="ws-1",
             session_id="sess-1",
         )
@@ -90,7 +109,7 @@ class TestRunHookPipelineMemoryConsolidation:
                 output_text="ok",
             )
         )
-        handler.on_session_completed.assert_called_once_with(
+        handler.on_session_completed_async.assert_awaited_once_with(
             workspace_id="ws-1",
             session_id="sess-1",
         )
@@ -111,12 +130,12 @@ class TestRunHookPipelineMemoryConsolidation:
                 output_text="ok",
             )
         )
-        handler.on_run_completed.assert_not_called()
-        handler.on_session_completed.assert_not_called()
+        handler.on_run_completed_async.assert_not_awaited()
+        handler.on_session_completed_async.assert_not_awaited()
 
     def test_run_completed_exception_suppressed(self) -> None:
         handler = create_autospec(MemoryEventHandler, instance=True)
-        handler.on_run_completed.side_effect = RuntimeError("db error")
+        handler.on_run_completed_async.side_effect = RuntimeError("db error")
         pipeline, _ = _make_pipeline(memory_event_handler=handler)
 
         _run(
@@ -129,11 +148,11 @@ class TestRunHookPipelineMemoryConsolidation:
             )
         )
         # on_session_completed should still be called after failure
-        handler.on_session_completed.assert_called_once()
+        handler.on_session_completed_async.assert_awaited_once()
 
     def test_session_completed_exception_suppressed(self) -> None:
         handler = create_autospec(MemoryEventHandler, instance=True)
-        handler.on_session_completed.side_effect = RuntimeError("db error")
+        handler.on_session_completed_async.side_effect = RuntimeError("db error")
         pipeline, _ = _make_pipeline(memory_event_handler=handler)
 
         _run(
@@ -145,7 +164,7 @@ class TestRunHookPipelineMemoryConsolidation:
                 output_text="ok",
             )
         )
-        handler.on_run_completed.assert_called_once()
+        handler.on_run_completed_async.assert_awaited_once()
 
 
 class TestRunHookPipelineTemporaryKnowledgeCapture:
@@ -155,8 +174,7 @@ class TestRunHookPipelineTemporaryKnowledgeCapture:
         handler = create_autospec(MemoryEventHandler, instance=True)
         pipeline, _ = _make_pipeline(memory_event_handler=handler)
 
-        capture_svc = MagicMock()
-        capture_svc.capture_all_for_session = AsyncMock(return_value=())
+        capture_svc = _FakeCaptureService()
         pipeline.set_temporary_knowledge_capture_service(capture_svc)
 
         _run(
@@ -168,7 +186,7 @@ class TestRunHookPipelineTemporaryKnowledgeCapture:
                 output_text="ok",
             )
         )
-        capture_svc.capture_all_for_session.assert_called_once()
+        assert capture_svc.calls == [("sess-1", "ws-1")]
 
     def test_capture_service_not_called_when_none(self) -> None:
         handler = create_autospec(MemoryEventHandler, instance=True)
@@ -189,10 +207,7 @@ class TestRunHookPipelineTemporaryKnowledgeCapture:
         handler = create_autospec(MemoryEventHandler, instance=True)
         pipeline, _ = _make_pipeline(memory_event_handler=handler)
 
-        capture_svc = MagicMock()
-        capture_svc.capture_all_for_session = AsyncMock(
-            side_effect=RuntimeError("capture error")
-        )
+        capture_svc = _FakeCaptureService(fail=True)
         pipeline.set_temporary_knowledge_capture_service(capture_svc)
 
         _run(
@@ -205,14 +220,14 @@ class TestRunHookPipelineTemporaryKnowledgeCapture:
             )
         )
         # Should not raise — capture failure is suppressed
-        capture_svc.capture_all_for_session.assert_called_once()
+        assert capture_svc.calls == [("sess-1", "ws-1")]
 
     def test_resolve_workspace_id_returns_workspace(self) -> None:
         pipeline, _ = _make_pipeline(session_workspace_id="ws-42")
-        result = pipeline._resolve_workspace_id("sess-1")
+        result = asyncio.run(pipeline._resolve_workspace_id_async("sess-1"))
         assert result == "ws-42"
 
     def test_resolve_workspace_id_returns_none_when_no_session(self) -> None:
         pipeline, _ = _make_pipeline(session_workspace_id=None)
-        result = pipeline._resolve_workspace_id("sess-missing")
+        result = asyncio.run(pipeline._resolve_workspace_id_async("sess-missing"))
         assert result is None

@@ -24,7 +24,10 @@ from pydantic_ai.settings import ModelSettings
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.logger import get_logger, log_event
 from relay_teams.media import user_prompt_content_to_text
-from relay_teams.net.llm_client import build_llm_http_client
+from relay_teams.net.llm_client import (
+    build_llm_http_client,
+    reset_llm_http_client_cache_entry,
+)
 from relay_teams.providers.llm_retry import (
     extract_retry_error_info,
     run_with_llm_retry,
@@ -158,12 +161,12 @@ class SubagentReflectionService:
             source_char_budget=plan.source_char_budget,
         )
         if summary:
-            _ = self._role_memory_service.update_reflection_memory(
+            _ = await self._role_memory_service.update_reflection_memory_async(
                 role_id=role.role_id,
                 workspace_id=workspace_id,
                 content_markdown=summary,
             )
-        self._message_repo.compact_conversation_history(
+        await self._message_repo.compact_conversation_history_async(
             conversation_id,
             keep_message_count=len(recent_history),
         )
@@ -188,9 +191,11 @@ class SubagentReflectionService:
         workspace_id: str,
         conversation_id: str,
     ) -> RoleMemoryRecord:
-        history = self._message_repo.get_history_for_conversation(conversation_id)
+        history = await self._message_repo.get_history_for_conversation_async(
+            conversation_id
+        )
         if not history or role.memory_profile.enabled is False:
-            return self._role_memory_service.get_reflection_record(
+            return await self._role_memory_service.get_reflection_record_async(
                 role_id=role.role_id,
                 workspace_id=workspace_id,
             )
@@ -201,11 +206,11 @@ class SubagentReflectionService:
             source_char_budget=24000,
         )
         if not summary:
-            return self._role_memory_service.get_reflection_record(
+            return await self._role_memory_service.get_reflection_record_async(
                 role_id=role.role_id,
                 workspace_id=workspace_id,
             )
-        record = self._role_memory_service.update_reflection_memory(
+        record = await self._role_memory_service.update_reflection_memory_async(
             role_id=role.role_id,
             workspace_id=workspace_id,
             content_markdown=summary,
@@ -232,7 +237,7 @@ class SubagentReflectionService:
         fallback_hop: int = 0,
         visited_profiles: tuple[str, ...] | None = None,
     ) -> str:
-        existing_summary = self._role_memory_service.build_injected_memory(
+        existing_summary = await self._role_memory_service.build_injected_memory_async(
             role_id=role.role_id,
             workspace_id=workspace_id,
         )
@@ -242,16 +247,9 @@ class SubagentReflectionService:
         )
         if not transcript.strip():
             return existing_summary.strip()
-        agent = Agent[None, str](
-            model=self._build_model(),
-            output_type=str,
-            instructions=(
-                "You maintain long-term reflection memory for a reusable subagent. "
-                "Rewrite the memory as concise markdown bullets. Keep only stable strategies, preferences, workflow lessons, and recurring warnings that will help future sessions. "
-                "Remove duplicates, stale points, task-specific facts, timestamps, and narration. Output only the final markdown. Keep it under 8 bullets."
-            ),
-            model_settings=self._model_settings(),
-            retries=3,
+        cache_scope = _reflection_llm_cache_scope(
+            role_id=role.role_id,
+            workspace_id=workspace_id,
         )
         prompt = (
             f"Role: {role.role_id}\n\n"
@@ -260,12 +258,18 @@ class SubagentReflectionService:
         )
         try:
             result = await run_with_llm_retry(
-                operation=lambda: self._run_streaming_reflection(
-                    agent=agent, prompt=prompt
+                operation=lambda: self._run_reflection_rewrite_attempt(
+                    prompt=prompt,
+                    cache_scope=cache_scope,
                 ),
                 config=self._retry_config,
                 is_retry_allowed=lambda: True,
-                on_retry_scheduled=lambda _schedule: None,
+                on_retry_scheduled=lambda schedule: (
+                    self._reset_reflection_llm_client_on_transport_retry(
+                        cache_scope=cache_scope,
+                        transport_error=schedule.error.transport_error,
+                    )
+                ),
             )
             return result.strip()
         except Exception as exc:
@@ -302,6 +306,27 @@ class SubagentReflectionService:
                 visited_profiles=resolved_visited_profiles
                 + (decision.to_profile_name,),
             )
+        finally:
+            await self._reset_reflection_llm_client(cache_scope=cache_scope)
+
+    async def _run_reflection_rewrite_attempt(
+        self,
+        *,
+        prompt: str,
+        cache_scope: str,
+    ) -> str:
+        agent = Agent[None, str](
+            model=self._build_model(cache_scope=cache_scope),
+            output_type=str,
+            instructions=(
+                "You maintain long-term reflection memory for a reusable subagent. "
+                "Rewrite the memory as concise markdown bullets. Keep only stable strategies, preferences, workflow lessons, and recurring warnings that will help future sessions. "
+                "Remove duplicates, stale points, task-specific facts, timestamps, and narration. Output only the final markdown. Keep it under 8 bullets."
+            ),
+            model_settings=self._model_settings(),
+            retries=3,
+        )
+        return await self._run_streaming_reflection(agent=agent, prompt=prompt)
 
     async def _run_streaming_reflection(
         self,
@@ -320,13 +345,31 @@ class SubagentReflectionService:
                 raise RuntimeError("Reflection rewrite did not produce a final result")
             return agent_run.result.output.strip()
 
-    def _build_model(self) -> RuntimeChatModel:
+    def _build_model(self, *, cache_scope: str) -> RuntimeChatModel:
         return build_runtime_chat_model(
             config=self._config,
             http_client=build_llm_http_client(
                 connect_timeout_seconds=self._config.connect_timeout_seconds,
                 ssl_verify=self._config.ssl_verify,
+                cache_scope=cache_scope,
             ),
+        )
+
+    async def _reset_reflection_llm_client_on_transport_retry(
+        self,
+        *,
+        cache_scope: str,
+        transport_error: bool,
+    ) -> None:
+        if not transport_error:
+            return
+        await self._reset_reflection_llm_client(cache_scope=cache_scope)
+
+    async def _reset_reflection_llm_client(self, *, cache_scope: str) -> None:
+        await reset_llm_http_client_cache_entry(
+            connect_timeout_seconds=self._config.connect_timeout_seconds,
+            ssl_verify=self._config.ssl_verify,
+            cache_scope=cache_scope,
         )
 
     def _model_settings(self) -> ModelSettings:
@@ -366,6 +409,10 @@ def _render_transcript(
         if remaining <= 0:
             break
     return "\n\n".join(lines).strip()
+
+
+def _reflection_llm_cache_scope(*, role_id: str, workspace_id: str) -> str:
+    return f"subagent_reflection:{workspace_id}:{role_id}"
 
 
 def _render_message(message: ModelRequest | ModelResponse) -> str:

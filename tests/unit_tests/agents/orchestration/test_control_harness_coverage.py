@@ -52,7 +52,10 @@ def wakeup_repo() -> AsyncMock:
 
 @pytest.fixture()
 def artifact_repo() -> MagicMock:
-    return MagicMock()
+    repo = MagicMock()
+    repo.get_artifact_async = AsyncMock()
+    repo.append_entry_async = AsyncMock()
+    return repo
 
 
 @pytest.fixture()
@@ -329,7 +332,7 @@ class TestAppendArtifactEntry:
     async def test_returns_none_when_no_artifact(
         self, harness: TaskControlHarness, artifact_repo: MagicMock
     ) -> None:
-        artifact_repo.get_artifact.return_value = None
+        artifact_repo.get_artifact_async.return_value = None
         result = await harness.append_artifact_entry("task_1", MagicMock())
         assert result is None
 
@@ -341,7 +344,7 @@ class TestAppendArtifactEntry:
         artifact1.entries = [MagicMock()]
         artifact2 = MagicMock()
         artifact2.entries = [MagicMock(), MagicMock()]
-        artifact_repo.get_artifact.side_effect = [artifact1, artifact2]
+        artifact_repo.get_artifact_async.side_effect = [artifact1, artifact2]
         result = await harness.append_artifact_entry("task_1", MagicMock())
         assert result == 2
 

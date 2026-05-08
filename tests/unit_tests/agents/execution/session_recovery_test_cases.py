@@ -374,10 +374,16 @@ async def test_resume_after_tool_outcomes_commits_backfilled_tool_results(
         },
     )
 
+    async def _load_or_recover_tool_call_state_async(
+        **kwargs: object,
+    ) -> PersistedToolCallState:
+        _ = kwargs
+        return persisted_state
+
     monkeypatch.setattr(
         session_support_module,
-        "load_or_recover_tool_call_state",
-        lambda **kwargs: persisted_state,
+        "load_or_recover_tool_call_state_async",
+        _load_or_recover_tool_call_state_async,
     )
 
     captured_pending_messages: list[ModelRequest | ModelResponse] = []

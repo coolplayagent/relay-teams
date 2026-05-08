@@ -69,7 +69,7 @@ class RoleEvolutionHistoryService:
         self._adjustment_repository = adjustment_repository
         self._memory_bank_service = memory_bank_service
 
-    def record_event(
+    async def record_event_async(
         self,
         *,
         role_id: str,
@@ -102,7 +102,7 @@ class RoleEvolutionHistoryService:
             },
         )
 
-        self._memory_bank_service.create_entry(
+        await self._memory_bank_service.create_entry_async(
             CreateMemoryEntryRequest(
                 tier=MemoryTier.MEDIUM_TERM,
                 scope=MemoryScope.ROLE,
@@ -133,14 +133,14 @@ class RoleEvolutionHistoryService:
         )
         return event
 
-    def get_timeline(
+    async def get_timeline_async(
         self,
         *,
         role_id: str,
         workspace_id: str,
         limit: int = 50,
     ) -> RoleEvolutionTimeline:
-        result = self._memory_bank_service.list_entries(
+        result = await self._memory_bank_service.list_entries_async(
             MemoryQuery(
                 workspace_id=workspace_id,
                 role_id=role_id,
@@ -154,7 +154,7 @@ class RoleEvolutionHistoryService:
 
         events: list[RoleEvolutionEvent] = []
         for summary in result.items:
-            entry = self._memory_bank_service.get_entry(summary.id)
+            entry = await self._memory_bank_service.get_entry_async(summary.id)
             if entry is not None:
                 event = _entry_to_evolution_event(entry)
                 if event is not None:
@@ -168,13 +168,13 @@ class RoleEvolutionHistoryService:
             adjustment_repository=self._adjustment_repository,
         )
 
-    def get_current_state(
+    async def get_current_state_async(
         self,
         *,
         role_id: str,
         workspace_id: str,
     ) -> RoleEvolutionTimeline:
-        return self.get_timeline(
+        return await self.get_timeline_async(
             role_id=role_id,
             workspace_id=workspace_id,
             limit=100,

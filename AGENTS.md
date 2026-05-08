@@ -41,6 +41,8 @@
 - `tests/unit_tests/` should mirror `src/relay_teams/`. Add matching `__init__.py` files for new test directories.
 - Prefer focused unit tests first. Add integration coverage when run/SSE/interface flows change.
 - New tools should follow the shared runtime middleware path via `execute_tool_call(..., raw_args=locals())`; do not reimplement hook-aware input parsing or approval plumbing inside each tool.
+- Runtime, service, and repository code must not add paired synchronous and asynchronous public methods for the same operation, such as `get_entry()` plus `get_entry_async()`, when they only delegate to matching lower-layer methods. Use one real runtime interface, normally async, and migrate callers through the stack instead of adding shallow wrappers.
+- Async request, run, hook, memory, retrieval, network, and LLM paths must not call synchronous SQLite, HTTP, retrieval, or provider helpers internally. Add or use the real async downstream API and await it through the stack.
 
 ## Interface Boundaries
 - Public backend contract is `/api/*`.

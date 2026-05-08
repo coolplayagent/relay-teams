@@ -4044,6 +4044,57 @@ async def test_create_run_async_queues_followup_for_recoverable_run(
 
 
 @pytest.mark.asyncio
+async def test_create_run_async_queues_new_run_after_terminal_active_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "run_async_terminal_active_record.db"
+    manager = _build_manager(db_path)
+
+    run_id, session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("first"),
+        )
+    )
+    _ = manager._pending_runs.pop(run_id)
+    manager._running_run_ids.add(run_id)
+    manager._injection_manager.activate(run_id)
+    RunRuntimeRepository(db_path).update(
+        run_id,
+        status=RunRuntimeStatus.COMPLETED,
+        phase=RunRuntimePhase.TERMINAL,
+    )
+    appended: list[str] = []
+
+    def _append_followup(
+        run_id: str,
+        content: str,
+        *,
+        enqueue: bool,
+        source: InjectionSource = InjectionSource.USER,
+    ) -> bool:
+        _ = (content, enqueue, source)
+        appended.append(run_id)
+        return True
+
+    monkeypatch.setattr(manager, "_append_followup_to_coordinator", _append_followup)
+
+    next_run_id, next_session_id = await manager.create_run_async(
+        IntentInput(
+            session_id="session-1",
+            input=content_parts_from_text("second"),
+        )
+    )
+
+    assert next_session_id == session_id
+    assert next_run_id != run_id
+    assert next_run_id in manager._pending_runs
+    assert appended == []
+    assert manager._active_run_registry.get_active_run_id(session_id) == next_run_id
+
+
+@pytest.mark.asyncio
 async def test_async_run_start_helpers_cover_missing_and_failed_startup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

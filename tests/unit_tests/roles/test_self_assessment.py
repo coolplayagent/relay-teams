@@ -30,7 +30,9 @@ def mock_llm_evaluator() -> MagicMock:
 
 @pytest.fixture
 def mock_role_memory_service() -> MagicMock:
-    return MagicMock()
+    service = MagicMock()
+    service.get_reflection_record_async = AsyncMock()
+    return service
 
 
 def _make_performance(
@@ -109,7 +111,7 @@ async def test_maybe_assess_below_task_threshold(
         workspace_id="ws-1",
         performance=perf,
     )
-    mock_role_memory_service.get_reflection_record.return_value = record
+    mock_role_memory_service.get_reflection_record_async.return_value = record
 
     service = RoleSelfAssessmentService(
         llm_evaluator=mock_llm_evaluator,
@@ -140,7 +142,7 @@ async def test_maybe_assess_success(
         workspace_id="ws-1",
         performance=perf,
     )
-    mock_role_memory_service.get_reflection_record.return_value = record
+    mock_role_memory_service.get_reflection_record_async.return_value = record
 
     mock_llm_evaluator.evaluate_role_performance.return_value = LLMEvaluationResult(
         scores=[
@@ -190,7 +192,7 @@ async def test_self_assessment_result_stored(
         workspace_id="ws-1",
         performance=perf,
     )
-    mock_role_memory_service.get_reflection_record.return_value = record
+    mock_role_memory_service.get_reflection_record_async.return_value = record
 
     mock_llm_evaluator.evaluate_role_performance.return_value = LLMEvaluationResult(
         scores=[
@@ -228,7 +230,7 @@ async def test_maybe_assess_performance_none(
     config = SelfAssessmentConfig(trigger_every_n_runs=10, enabled=True)
     record = RoleMemoryRecord(role_id="test-role", workspace_id="ws-1")
     assert record.performance is None
-    mock_role_memory_service.get_reflection_record.return_value = record
+    mock_role_memory_service.get_reflection_record_async.return_value = record
 
     service = RoleSelfAssessmentService(
         llm_evaluator=mock_llm_evaluator,
@@ -259,7 +261,7 @@ async def test_maybe_assess_llm_fallback(
         workspace_id="ws-1",
         performance=perf,
     )
-    mock_role_memory_service.get_reflection_record.return_value = record
+    mock_role_memory_service.get_reflection_record_async.return_value = record
     mock_llm_evaluator.evaluate_role_performance.side_effect = OSError("API down")
 
     service = RoleSelfAssessmentService(
@@ -296,7 +298,7 @@ async def test_maybe_assess_empty_recommendations(
         workspace_id="ws-1",
         performance=perf,
     )
-    mock_role_memory_service.get_reflection_record.return_value = record
+    mock_role_memory_service.get_reflection_record_async.return_value = record
     mock_llm_evaluator.evaluate_role_performance.return_value = LLMEvaluationResult(
         scores=[],
         overall_score=3.0,

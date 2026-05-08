@@ -17,6 +17,9 @@ from relay_teams.memory.models import (
     MemoryTier,
 )
 from relay_teams.memory.repository import MemoryBankRepository, generate_memory_id
+from relay_teams.persistence.sqlite_repository import async_fetchall, async_fetchone
+
+pytestmark = pytest.mark.asyncio
 
 
 # ---------------------------------------------------------------------------
@@ -55,19 +58,23 @@ def repo(tmp_path: Path) -> MemoryBankRepository:
 
 
 class TestSchemaInit:
-    def test_table_created_on_init(self, repo: MemoryBankRepository) -> None:
-        row = repo._run_read(
-            lambda: repo._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_entries'"
-            ).fetchone()
+    async def test_table_created_on_init(self, repo: MemoryBankRepository) -> None:
+        row = await repo._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='memory_entries'",
+            )
         )
         assert row is not None
 
-    def test_indexes_created(self, repo: MemoryBankRepository) -> None:
-        rows = repo._run_read(
-            lambda: repo._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_memory_entries_%'"
-            ).fetchall()
+    async def test_indexes_created(self, repo: MemoryBankRepository) -> None:
+        rows = await repo._run_async_read(
+            lambda conn: async_fetchall(
+                conn,
+                "SELECT name FROM sqlite_master "
+                "WHERE type='index' AND name LIKE 'idx_memory_entries_%'",
+            )
         )
         index_names = {str(row["name"]) for row in rows}
         expected = {
@@ -88,43 +95,45 @@ class TestSchemaInit:
 
 
 class TestCRUD:
-    def test_create_and_read(self, repo: MemoryBankRepository) -> None:
+    async def test_create_and_read(self, repo: MemoryBankRepository) -> None:
         entry = _make_entry()
-        repo.create_entry(entry=entry)
-        loaded = repo.get_by_id(entry.id)
+        await repo.create_entry_async(entry=entry)
+        loaded = await repo.get_by_id_async(entry.id)
         assert loaded is not None
         assert loaded.id == entry.id
         assert loaded.content.title == "Test entry"
         assert loaded.tier == MemoryTier.PERSISTENT
 
-    def test_read_nonexistent_returns_none(self, repo: MemoryBankRepository) -> None:
-        assert repo.get_by_id("mem-nonexistent") is None
+    async def test_read_nonexistent_returns_none(
+        self, repo: MemoryBankRepository
+    ) -> None:
+        assert await repo.get_by_id_async("mem-nonexistent") is None
 
-    def test_update(self, repo: MemoryBankRepository) -> None:
+    async def test_update(self, repo: MemoryBankRepository) -> None:
         entry = _make_entry()
-        repo.create_entry(entry=entry)
+        await repo.create_entry_async(entry=entry)
         updated = entry.model_copy(
             update={
                 "content": MemoryContent(title="Updated", body="New body"),
                 "version": 2,
             }
         )
-        result = repo.update_entry(entry.id, entry=updated)
+        result = await repo.update_entry_async(entry.id, entry=updated)
         assert result.content.title == "Updated"
         assert result.version == 2
 
-        reloaded = repo.get_by_id(entry.id)
+        reloaded = await repo.get_by_id_async(entry.id)
         assert reloaded is not None
         assert reloaded.content.title == "Updated"
 
-    def test_delete(self, repo: MemoryBankRepository) -> None:
+    async def test_delete(self, repo: MemoryBankRepository) -> None:
         entry = _make_entry()
-        repo.create_entry(entry=entry)
-        assert repo.delete_entry(entry.id) is True
-        assert repo.get_by_id(entry.id) is None
+        await repo.create_entry_async(entry=entry)
+        assert await repo.delete_entry_async(entry.id) is True
+        assert await repo.get_by_id_async(entry.id) is None
 
-    def test_delete_nonexistent(self, repo: MemoryBankRepository) -> None:
-        assert repo.delete_entry("mem-nonexistent") is False
+    async def test_delete_nonexistent(self, repo: MemoryBankRepository) -> None:
+        assert await repo.delete_entry_async("mem-nonexistent") is False
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +142,7 @@ class TestCRUD:
 
 
 class TestQuery:
-    def _seed_entries(self, repo: MemoryBankRepository) -> list[MemoryEntry]:
+    async def _seed_entries(self, repo: MemoryBankRepository) -> list[MemoryEntry]:
         entries = [
             _make_entry(
                 id="mem-p1",
@@ -162,35 +171,35 @@ class TestQuery:
             ),
         ]
         for e in entries:
-            repo.create_entry(entry=e)
+            await repo.create_entry_async(entry=e)
         return entries
 
-    def test_filter_by_tier(self, repo: MemoryBankRepository) -> None:
-        self._seed_entries(repo)
-        result = repo.query_entries(
+    async def test_filter_by_tier(self, repo: MemoryBankRepository) -> None:
+        await self._seed_entries(repo)
+        result = await repo.query_entries_async(
             MemoryQuery(workspace_id="ws-test", tier=MemoryTier.PERSISTENT)
         )
         assert result.total_count >= 1
         assert all(s.tier == MemoryTier.PERSISTENT for s in result.items)
 
-    def test_filter_by_kind(self, repo: MemoryBankRepository) -> None:
-        self._seed_entries(repo)
-        result = repo.query_entries(
+    async def test_filter_by_kind(self, repo: MemoryBankRepository) -> None:
+        await self._seed_entries(repo)
+        result = await repo.query_entries_async(
             MemoryQuery(workspace_id="ws-test", kind=MemoryEntryKind.INSIGHT)
         )
         assert result.total_count >= 1
         assert all(s.kind == MemoryEntryKind.INSIGHT for s in result.items)
 
-    def test_filter_by_min_confidence(self, repo: MemoryBankRepository) -> None:
-        self._seed_entries(repo)
-        result = repo.query_entries(
+    async def test_filter_by_min_confidence(self, repo: MemoryBankRepository) -> None:
+        await self._seed_entries(repo)
+        result = await repo.query_entries_async(
             MemoryQuery(workspace_id="ws-test", min_confidence=0.8)
         )
         assert all(s.confidence_score >= 0.8 for s in result.items)
 
-    def test_pagination(self, repo: MemoryBankRepository) -> None:
-        self._seed_entries(repo)
-        result = repo.query_entries(
+    async def test_pagination(self, repo: MemoryBankRepository) -> None:
+        await self._seed_entries(repo)
+        result = await repo.query_entries_async(
             MemoryQuery(workspace_id="ws-test", limit=2, offset=0)
         )
         assert len(result.items) <= 2
@@ -204,33 +213,33 @@ class TestQuery:
 
 
 class TestExpiry:
-    def test_expire_entries(self, repo: MemoryBankRepository) -> None:
+    async def test_expire_entries(self, repo: MemoryBankRepository) -> None:
         past = datetime.now(tz=timezone.utc) - timedelta(hours=1)
         entry = _make_entry(
             status=MemoryEntryStatus.ACTIVE,
             expires_at=past,
         )
-        repo.create_entry(entry=entry)
+        await repo.create_entry_async(entry=entry)
 
-        expired_count = repo.expire_entries()
+        expired_count = await repo.expire_entries_async()
         assert expired_count >= 1
 
-        loaded = repo.get_by_id(entry.id)
+        loaded = await repo.get_by_id_async(entry.id)
         assert loaded is not None
         assert loaded.status == MemoryEntryStatus.EXPIRED
 
-    def test_no_expire_future(self, repo: MemoryBankRepository) -> None:
+    async def test_no_expire_future(self, repo: MemoryBankRepository) -> None:
         future = datetime.now(tz=timezone.utc) + timedelta(hours=10)
         entry = _make_entry(
             status=MemoryEntryStatus.ACTIVE,
             expires_at=future,
         )
-        repo.create_entry(entry=entry)
+        await repo.create_entry_async(entry=entry)
 
-        expired_count = repo.expire_entries()
+        expired_count = await repo.expire_entries_async()
         assert expired_count == 0
 
-        loaded = repo.get_by_id(entry.id)
+        loaded = await repo.get_by_id_async(entry.id)
         assert loaded is not None
         assert loaded.status == MemoryEntryStatus.ACTIVE
 
@@ -241,35 +250,35 @@ class TestExpiry:
 
 
 class TestConfidenceDecay:
-    def test_decay_and_expire(self, repo: MemoryBankRepository) -> None:
+    async def test_decay_and_expire(self, repo: MemoryBankRepository) -> None:
         entry = _make_entry(
             tier=MemoryTier.MEDIUM_TERM,
             confidence_score=0.21,
         )
-        repo.create_entry(entry=entry)
+        await repo.create_entry_async(entry=entry)
 
         # With min_confidence=0.2, 0.21*0.98 = 0.2058 which is still >= 0.2
         # So we need min_confidence to be above that
-        count = repo.apply_confidence_decay(min_confidence=0.21)
+        count = await repo.apply_confidence_decay_async(min_confidence=0.21)
         # After decay: 0.21 * 0.98 = 0.2058, which is < 0.21 threshold
         assert count >= 1
 
-        loaded = repo.get_by_id(entry.id)
+        loaded = await repo.get_by_id_async(entry.id)
         assert loaded is not None
         assert loaded.status == MemoryEntryStatus.EXPIRED
 
-    def test_no_decay_working_tier(self, repo: MemoryBankRepository) -> None:
+    async def test_no_decay_working_tier(self, repo: MemoryBankRepository) -> None:
         entry = _make_entry(
             tier=MemoryTier.WORKING,
             run_id="run-1",
             confidence_score=0.5,
         )
-        repo.create_entry(entry=entry)
+        await repo.create_entry_async(entry=entry)
 
         # Working tier doesn't decay, but min_confidence check still applies
-        repo.apply_confidence_decay(min_confidence=0.4)
+        await repo.apply_confidence_decay_async(min_confidence=0.4)
 
-        loaded = repo.get_by_id(entry.id)
+        loaded = await repo.get_by_id_async(entry.id)
         assert loaded is not None
         assert loaded.confidence_score == 0.5  # unchanged -- working tier
 
@@ -280,7 +289,7 @@ class TestConfidenceDecay:
 
 
 class TestGenerateId:
-    def test_generates_mem_prefix(self) -> None:
+    async def test_generates_mem_prefix(self) -> None:
         mid = generate_memory_id()
         assert mid.startswith("mem-")
         assert len(mid) > 4

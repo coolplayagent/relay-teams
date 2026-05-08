@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -19,6 +19,8 @@ from relay_teams.memory.models import (
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.roles.memory_service import RoleMemoryService
+
+pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture
@@ -52,24 +54,24 @@ def handler_with_dual_write(
     )
 
 
-def _list_entries(
+async def _list_entries(
     svc: MemoryBankService,
     workspace_id: str,
     tier: MemoryTier,
 ) -> list[MemoryEntrySummary]:
-    result = svc.list_entries(
+    result = await svc.list_entries_async(
         MemoryQuery(workspace_id=workspace_id, tier=tier, limit=100)
     )
     return list(result.items)
 
 
 class TestOnTaskCompleted:
-    def test_creates_working_entry(
+    async def test_creates_working_entry(
         self,
         handler: MemoryEventHandler,
         memory_bank_service: MemoryBankService,
     ) -> None:
-        handler.on_task_completed(
+        await handler.on_task_completed_async(
             workspace_id="ws-1",
             role_id="role-1",
             session_id="sess-1",
@@ -78,7 +80,7 @@ class TestOnTaskCompleted:
             objective="Fix login bug",
             result="Fixed null pointer in auth module",
         )
-        entries = _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
+        entries = await _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
         assert len(entries) == 1
         e = entries[0]
         assert e.kind == MemoryEntryKind.SUMMARY
@@ -89,11 +91,11 @@ class TestOnTaskCompleted:
         assert e.status == MemoryEntryStatus.ACTIVE
         assert "Fix login bug" in e.content_title
 
-    def test_dual_writes_to_role_memories(
+    async def test_dual_writes_to_role_memories(
         self,
         handler_with_dual_write: MemoryEventHandler,
     ) -> None:
-        handler_with_dual_write.on_task_completed(
+        await handler_with_dual_write.on_task_completed_async(
             workspace_id="ws-1",
             role_id="role-1",
             session_id="sess-1",
@@ -104,7 +106,7 @@ class TestOnTaskCompleted:
         )
         rm = handler_with_dual_write._role_memory_service
         assert rm is not None
-        rm.record_task_result.assert_called_once_with(  # type: ignore[attr-defined]
+        rm.record_task_result_async.assert_awaited_once_with(  # type: ignore[attr-defined]
             role_id="role-1",
             workspace_id="ws-1",
             session_id="sess-1",
@@ -114,17 +116,19 @@ class TestOnTaskCompleted:
             transcript_lines=(),
         )
 
-    def test_dual_write_failure_does_not_block_entry(
+    async def test_dual_write_failure_does_not_block_entry(
         self,
         memory_bank_service: MemoryBankService,
     ) -> None:
         mock_rm = MagicMock(spec=RoleMemoryService)
-        mock_rm.record_task_result.side_effect = RuntimeError("db error")
+        mock_rm.record_task_result_async = AsyncMock(
+            side_effect=RuntimeError("db error")
+        )
         h = MemoryEventHandler(
             memory_bank_service=memory_bank_service,
             role_memory_service=mock_rm,
         )
-        h.on_task_completed(
+        await h.on_task_completed_async(
             workspace_id="ws-1",
             role_id="role-1",
             session_id="sess-1",
@@ -133,19 +137,19 @@ class TestOnTaskCompleted:
             objective="Test",
             result="OK",
         )
-        entries = _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
+        entries = await _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
         assert len(entries) == 1
 
 
 class TestOnRunCompleted:
-    def test_consolidates_working_to_medium_term(
+    async def test_consolidates_working_to_medium_term(
         self,
         handler: MemoryEventHandler,
         memory_bank_service: MemoryBankService,
     ) -> None:
         # Create some WORKING entries first
         for i in range(3):
-            handler.on_task_completed(
+            await handler.on_task_completed_async(
                 workspace_id="ws-1",
                 role_id="role-1",
                 session_id="sess-1",
@@ -155,29 +159,31 @@ class TestOnRunCompleted:
                 result=f"Result {i}",
             )
         # Verify entries are WORKING
-        working = _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
+        working = await _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
         assert len(working) == 3
 
         # Consolidate on run completion
-        handler.on_run_completed(
+        await handler.on_run_completed_async(
             workspace_id="ws-1",
             session_id="sess-1",
             role_id="role-1",
         )
         # After consolidation, entries should be promoted to MEDIUM_TERM
-        medium = _list_entries(memory_bank_service, "ws-1", MemoryTier.MEDIUM_TERM)
+        medium = await _list_entries(
+            memory_bank_service, "ws-1", MemoryTier.MEDIUM_TERM
+        )
         assert len(medium) >= 1
 
 
 class TestOnSessionCompleted:
-    def test_consolidates_medium_to_persistent(
+    async def test_consolidates_medium_to_persistent(
         self,
         handler: MemoryEventHandler,
         memory_bank_service: MemoryBankService,
     ) -> None:
         # Create and promote to MEDIUM_TERM via run consolidation
         for i in range(2):
-            handler.on_task_completed(
+            await handler.on_task_completed_async(
                 workspace_id="ws-1",
                 role_id="role-1",
                 session_id="sess-1",
@@ -186,41 +192,43 @@ class TestOnSessionCompleted:
                 objective=f"Obj {i}",
                 result=f"Res {i}",
             )
-        handler.on_run_completed(
+        await handler.on_run_completed_async(
             workspace_id="ws-1",
             session_id="sess-1",
             role_id="role-1",
         )
 
         # Now consolidate on session completion
-        handler.on_session_completed(
+        await handler.on_session_completed_async(
             workspace_id="ws-1",
             session_id="sess-1",
             role_id="role-1",
         )
 
-        persistent = _list_entries(memory_bank_service, "ws-1", MemoryTier.PERSISTENT)
+        persistent = await _list_entries(
+            memory_bank_service, "ws-1", MemoryTier.PERSISTENT
+        )
         assert len(persistent) >= 1
 
 
 class TestGetInjectableMemoryText:
-    def test_returns_empty_for_no_entries(
+    async def test_returns_empty_for_no_entries(
         self,
         handler: MemoryEventHandler,
     ) -> None:
-        text = handler.get_injectable_memory_text(
+        text = await handler.get_injectable_memory_text_async(
             workspace_id="ws-empty",
             role_id="role-1",
         )
         assert text == ""
 
-    def test_returns_text_for_persistent_entries(
+    async def test_returns_text_for_persistent_entries(
         self,
         handler: MemoryEventHandler,
         memory_bank_service: MemoryBankService,
     ) -> None:
         # Create and promote entries to PERSISTENT
-        handler.on_task_completed(
+        await handler.on_task_completed_async(
             workspace_id="ws-1",
             role_id="role-1",
             session_id="sess-1",
@@ -229,18 +237,18 @@ class TestGetInjectableMemoryText:
             objective="Important insight",
             result="Discovered X",
         )
-        handler.on_run_completed(
+        await handler.on_run_completed_async(
             workspace_id="ws-1",
             session_id="sess-1",
             role_id="role-1",
         )
-        handler.on_session_completed(
+        await handler.on_session_completed_async(
             workspace_id="ws-1",
             session_id="sess-1",
             role_id="role-1",
         )
 
-        text = handler.get_injectable_memory_text(
+        text = await handler.get_injectable_memory_text_async(
             workspace_id="ws-1",
             role_id="role-1",
         )

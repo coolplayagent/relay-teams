@@ -140,7 +140,7 @@ class _FakeWorkspaceManager:
     def __init__(self, workdir: Path) -> None:
         self._workdir = workdir
 
-    def resolve(self, **_kwargs: object) -> _FakeWorkspaceHandle:
+    async def resolve_async(self, **_kwargs: object) -> _FakeWorkspaceHandle:
         return _FakeWorkspaceHandle(self._workdir)
 
 

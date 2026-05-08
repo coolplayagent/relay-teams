@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import create_autospec
+from unittest.mock import AsyncMock, create_autospec
+
+import pytest
 
 from relay_teams.memory.models import (
     CreateMemoryEntryRequest,
     MemoryContent,
     MemoryEntryKind,
-    MemoryQuery,
     MemoryScope,
     MemorySourceKind,
     MemoryTier,
@@ -16,12 +17,14 @@ from relay_teams.memory.models import (
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.roles.memory_injection import (
-    _build_project_memory_section,
-    build_role_with_memory,
+    _build_project_memory_section_async,
+    build_role_with_memory_async,
 )
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import MemoryProfile, RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
+
+pytestmark = pytest.mark.asyncio
 
 
 def _make_role(**overrides: object) -> RoleDefinition:
@@ -37,7 +40,7 @@ def _make_role(**overrides: object) -> RoleDefinition:
     return RoleDefinition(**base)  # type: ignore[arg-type]
 
 
-def _create_entry(
+async def _create_entry(
     service: MemoryBankService, tier: MemoryTier, **overrides: object
 ) -> None:
     base: dict[str, object] = {
@@ -50,15 +53,15 @@ def _create_entry(
         "source": MemorySourceKind.MANUAL,
     }
     base.update(overrides)
-    service.create_entry(CreateMemoryEntryRequest(**base))  # type: ignore[arg-type]
+    await service.create_entry_async(CreateMemoryEntryRequest(**base))  # type: ignore[arg-type]
 
 
 class TestBuildRoleWithMemory:
-    def test_skips_coordinator_role(self, tmp_path: Path) -> None:
+    async def test_skips_coordinator_role(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = True
         role = _make_role()
-        result = build_role_with_memory(
+        result = await build_role_with_memory_async(
             role_registry=registry,
             role_memory_service=None,
             role=role,
@@ -67,11 +70,11 @@ class TestBuildRoleWithMemory:
         )
         assert result.system_prompt == role.system_prompt
 
-    def test_skips_disabled_memory(self, tmp_path: Path) -> None:
+    async def test_skips_disabled_memory(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = False
         role = _make_role(memory_profile=MemoryProfile(enabled=False))
-        result = build_role_with_memory(
+        result = await build_role_with_memory_async(
             role_registry=registry,
             role_memory_service=None,
             role=role,
@@ -80,11 +83,11 @@ class TestBuildRoleWithMemory:
         )
         assert result.system_prompt == role.system_prompt
 
-    def test_skips_when_no_services(self, tmp_path: Path) -> None:
+    async def test_skips_when_no_services(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = False
         role = _make_role()
-        result = build_role_with_memory(
+        result = await build_role_with_memory_async(
             role_registry=registry,
             role_memory_service=None,
             memory_bank_service=None,
@@ -94,14 +97,14 @@ class TestBuildRoleWithMemory:
         )
         assert result.system_prompt == role.system_prompt
 
-    def test_appends_reflection_memory(self, tmp_path: Path) -> None:
+    async def test_appends_reflection_memory(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = False
         role = _make_role()
         mock_role_memory = create_autospec(RoleMemoryService, instance=True)
-        mock_role_memory.build_injected_memory.return_value = "Past lessons"
-        mock_role_memory.get_performance_metrics.return_value = None
-        result = build_role_with_memory(
+        mock_role_memory.build_injected_memory_async.return_value = "Past lessons"
+        mock_role_memory.get_performance_metrics_async.return_value = None
+        result = await build_role_with_memory_async(
             role_registry=registry,
             role_memory_service=mock_role_memory,
             role=role,
@@ -111,14 +114,14 @@ class TestBuildRoleWithMemory:
         assert "Reflection Memory" in result.system_prompt
         assert "Past lessons" in result.system_prompt
 
-    def test_appends_project_memory(self, tmp_path: Path) -> None:
+    async def test_appends_project_memory(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = False
         role = _make_role()
         repo = MemoryBankRepository(tmp_path / "test.db")
         service = MemoryBankService(repository=repo)
-        _create_entry(service, MemoryTier.PERSISTENT)
-        result = build_role_with_memory(
+        await _create_entry(service, MemoryTier.PERSISTENT)
+        result = await build_role_with_memory_async(
             role_registry=registry,
             role_memory_service=None,
             memory_bank_service=service,
@@ -128,14 +131,14 @@ class TestBuildRoleWithMemory:
         )
         assert "Project Memory" in result.system_prompt
 
-    def test_no_append_when_empty_memory(self, tmp_path: Path) -> None:
+    async def test_no_append_when_empty_memory(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = False
         role = _make_role()
         mock_role_memory = create_autospec(RoleMemoryService, instance=True)
-        mock_role_memory.build_injected_memory.return_value = ""
-        mock_role_memory.get_performance_metrics.return_value = None
-        result = build_role_with_memory(
+        mock_role_memory.build_injected_memory_async.return_value = ""
+        mock_role_memory.get_performance_metrics_async.return_value = None
+        result = await build_role_with_memory_async(
             role_registry=registry,
             role_memory_service=mock_role_memory,
             role=role,
@@ -146,11 +149,11 @@ class TestBuildRoleWithMemory:
 
 
 class TestBuildProjectMemorySection:
-    def test_returns_text_for_entries(self, tmp_path: Path) -> None:
+    async def test_returns_text_for_entries(self, tmp_path: Path) -> None:
         repo = MemoryBankRepository(tmp_path / "test.db")
         service = MemoryBankService(repository=repo)
-        _create_entry(service, MemoryTier.PERSISTENT)
-        result = _build_project_memory_section(
+        await _create_entry(service, MemoryTier.PERSISTENT)
+        result = await _build_project_memory_section_async(
             memory_bank_service=service,
             workspace_id="ws-1",
             role_id="crafter",
@@ -158,45 +161,34 @@ class TestBuildProjectMemorySection:
         assert "Persistent" in result
         assert "Test insight" in result
 
-    def test_returns_empty_when_no_entries(self, tmp_path: Path) -> None:
+    async def test_returns_empty_when_no_entries(self, tmp_path: Path) -> None:
         repo = MemoryBankRepository(tmp_path / "test.db")
         service = MemoryBankService(repository=repo)
-        result = _build_project_memory_section(
+        result = await _build_project_memory_section_async(
             memory_bank_service=service,
             workspace_id="ws-1",
         )
         assert result == ""
 
-    def test_handles_service_exception(self, tmp_path: Path) -> None:
-        repo = MemoryBankRepository(tmp_path / "test.db")
-        service = MemoryBankService(repository=repo)
-        original_list = service.list_entries
-        call_count = 0
-
-        def failing_list(query: MemoryQuery) -> object:
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 2:
-                raise RuntimeError("db error")
-            return original_list(query)
-
-        service.list_entries = failing_list  # type: ignore[assignment]
-        result = _build_project_memory_section(
+    async def test_handles_service_exception(self, tmp_path: Path) -> None:
+        service = create_autospec(MemoryBankService, instance=True)
+        service.list_entries_async = AsyncMock(side_effect=RuntimeError("db error"))
+        result = await _build_project_memory_section_async(
             memory_bank_service=service,
             workspace_id="ws-1",
         )
         assert result == ""
 
-    def test_includes_medium_term_entries(self, tmp_path: Path) -> None:
+    async def test_includes_medium_term_entries(self, tmp_path: Path) -> None:
         repo = MemoryBankRepository(tmp_path / "test.db")
         service = MemoryBankService(repository=repo)
-        _create_entry(
+        await _create_entry(
             service,
             MemoryTier.MEDIUM_TERM,
             scope=MemoryScope.SESSION,
             session_id="s1",
         )
-        result = _build_project_memory_section(
+        result = await _build_project_memory_section_async(
             memory_bank_service=service,
             workspace_id="ws-1",
             role_id="crafter",

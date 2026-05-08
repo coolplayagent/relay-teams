@@ -17,22 +17,6 @@ def normalize_instruction_path(path: Path) -> str:
     return resolved
 
 
-def record_prompt_instruction_loaded(
-    *,
-    shared_store: SharedStateRepository,
-    task_id: str,
-    path: Path,
-) -> None:
-    resolved_path = path.expanduser().resolve()
-    shared_store.manage_state(
-        StateMutation(
-            scope=_task_scope(task_id),
-            key=_state_key(resolved_path),
-            value_json='"loaded"',
-        )
-    )
-
-
 async def record_prompt_instruction_loaded_async(
     *,
     shared_store: SharedStateRepository,
@@ -49,20 +33,6 @@ async def record_prompt_instruction_loaded_async(
     )
 
 
-def record_prompt_instruction_paths_loaded(
-    *,
-    shared_store: SharedStateRepository,
-    task_id: str,
-    paths: tuple[Path, ...],
-) -> None:
-    for path in paths:
-        record_prompt_instruction_loaded(
-            shared_store=shared_store,
-            task_id=task_id,
-            path=path,
-        )
-
-
 async def record_prompt_instruction_paths_loaded_async(
     *,
     shared_store: SharedStateRepository,
@@ -77,15 +47,6 @@ async def record_prompt_instruction_paths_loaded_async(
         )
 
 
-def is_prompt_instruction_loaded(
-    *,
-    shared_store: SharedStateRepository,
-    task_id: str,
-    path: Path,
-) -> bool:
-    return shared_store.get_state(_task_scope(task_id), _state_key(path)) is not None
-
-
 async def is_prompt_instruction_loaded_async(
     *,
     shared_store: SharedStateRepository,
@@ -95,23 +56,6 @@ async def is_prompt_instruction_loaded_async(
     return (
         await shared_store.get_state_async(_task_scope(task_id), _state_key(path))
         is not None
-    )
-
-
-def filter_unloaded_prompt_instruction_paths(
-    *,
-    shared_store: SharedStateRepository,
-    task_id: str,
-    paths: tuple[Path, ...],
-) -> tuple[Path, ...]:
-    return tuple(
-        path
-        for path in paths
-        if not is_prompt_instruction_loaded(
-            shared_store=shared_store,
-            task_id=task_id,
-            path=path,
-        )
     )
 
 

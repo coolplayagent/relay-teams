@@ -15,6 +15,7 @@ from relay_teams.agents.execution.system_prompts import (
     RuntimePromptBuilder,
     RuntimePromptSections,
 )
+from relay_teams.agents.instances.enums import InstanceStatus
 from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
 from relay_teams.agents.instances.models import (
     AgentRuntimeRecord,
@@ -67,8 +68,6 @@ from relay_teams.sessions.runs.todo_service import TodoService
 from relay_teams.skills.skill_models import SkillInstructionEntry
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.workspace import WorkspaceHandle, WorkspaceManager
-
-from relay_teams.agents.instances.enums import InstanceStatus
 
 LOGGER = get_logger(__name__)
 
@@ -196,7 +195,7 @@ class ExecutionHarness(BaseModel):
             role = self.role_registry.get(role_id)
 
         prompt_harness = self._prompt_harness()
-        role_for_run = prompt_harness.role_with_memory(
+        role_for_run = await prompt_harness.role_with_memory_async(
             role=role,
             role_id=role_id,
             workspace_id=workspace.ref.workspace_id,
@@ -205,7 +204,7 @@ class ExecutionHarness(BaseModel):
         run_kind = RunKind.CONVERSATION
         if self.run_intent_repo is not None:
             try:
-                intent = self.run_intent_repo.get(
+                intent = await self.run_intent_repo.get_async(
                     task.trace_id,
                     fallback_session_id=task.session_id,
                 )
@@ -337,30 +336,15 @@ class ExecutionHarness(BaseModel):
                 payload_json="{}",
             )
         )
-        await persistence.record_memory_if_needed_async(
+        await self._record_completed_task_memory_async(
+            task=task,
             role_id=role_id,
             workspace_id=workspace.ref.workspace_id,
-            task=task,
             conversation_id=workspace.ref.conversation_id,
             instance_id=instance_id,
             lifecycle=instance_record.lifecycle.value,
             result=result,
         )
-        # Memory bank lifecycle: record task result as a WORKING entry
-        # and trigger run/session consolidation.  The handler is a
-        # no-op when ``memory_event_handler`` is ``None`` (e.g. tests or
-        # lightweight runtimes that skip the container wiring).
-        memory_handler = self.memory_event_handler
-        if memory_handler is not None:
-            memory_handler.on_task_completed(
-                workspace_id=workspace.ref.workspace_id,
-                role_id=role_id,
-                session_id=task.session_id,
-                run_id=task.trace_id,
-                task_id=task.task_id,
-                objective=task.objective or "",
-                result=result,
-            )
         log_event(
             LOGGER,
             logging.DEBUG,
@@ -372,6 +356,39 @@ class ExecutionHarness(BaseModel):
                 "role_id": role_id,
             },
         )
+
+    async def _record_completed_task_memory_async(
+        self,
+        *,
+        task: TaskEnvelope,
+        role_id: str,
+        workspace_id: str,
+        conversation_id: str,
+        instance_id: str,
+        lifecycle: str,
+        result: str,
+    ) -> None:
+        persistence = self._full_persistence_harness()
+        await persistence.record_memory_if_needed_async(
+            role_id=role_id,
+            workspace_id=workspace_id,
+            task=task,
+            conversation_id=conversation_id,
+            instance_id=instance_id,
+            lifecycle=lifecycle,
+            result=result,
+        )
+        memory_handler = self.memory_event_handler
+        if memory_handler is not None:
+            await memory_handler.on_task_completed_async(
+                workspace_id=workspace_id,
+                role_id=role_id,
+                session_id=task.session_id,
+                run_id=task.trace_id,
+                task_id=task.task_id,
+                objective=task.objective or "",
+                result=result,
+            )
 
     @staticmethod
     async def handle_execution_error(
@@ -474,36 +491,6 @@ class ExecutionHarness(BaseModel):
             persistence_harness=TaskPersistenceHarness.model_construct(),
         ).thinking_for_run_async(run_id)
 
-    def evaluate_completion_guard(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        workspace: WorkspaceHandle,
-        conversation_id: str,
-        output_text: str,
-    ) -> ReminderDecision:
-        return TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            todo_service=self.todo_service,
-            reminder_service=self.reminder_service,
-            persistence_harness=TaskPersistenceHarness.model_construct(),
-        ).evaluate_completion_guard(
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            workspace=workspace,
-            conversation_id=conversation_id,
-            output_text=output_text,
-        )
-
-    def thinking_for_run(self, run_id: str) -> RunThinkingConfig:
-        return TaskLlmHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-            persistence_harness=TaskPersistenceHarness.model_construct(),
-        ).thinking_for_run(run_id)
-
     # ── Hook execution ────────────────────────────────────────────────
 
     async def execute_task_completed_hooks(
@@ -525,31 +512,6 @@ class ExecutionHarness(BaseModel):
         )
 
     # ── Persistence helpers ───────────────────────────────────────────
-
-    def complete_with_assistant_error(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        conversation_id: str,
-        workspace_id: str,
-        assistant_message: str,
-        error_code: str,
-        error_message: str,
-        append_message: bool = True,
-    ) -> TaskExecutionResult:
-        return self._full_persistence_harness().complete_with_assistant_error(
-            task=task,
-            instance_id=instance_id,
-            role_id=role_id,
-            conversation_id=conversation_id,
-            workspace_id=workspace_id,
-            assistant_message=assistant_message,
-            error_code=error_code,
-            error_message=error_message,
-            append_message=append_message,
-        )
 
     async def complete_with_assistant_error_async(
         self,
@@ -578,29 +540,6 @@ class ExecutionHarness(BaseModel):
             )
         )
 
-    def record_memory_if_needed(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-        task: TaskEnvelope,
-        conversation_id: str,
-        instance_id: str,
-        lifecycle: str,
-        result: str,
-    ) -> None:
-        TaskPersistenceHarness.model_construct(
-            shared_store=self.shared_store,
-        ).record_memory_if_needed(
-            role_id=role_id,
-            workspace_id=workspace_id,
-            task=task,
-            conversation_id=conversation_id,
-            instance_id=instance_id,
-            lifecycle=lifecycle,
-            result=result,
-        )
-
     async def record_memory_if_needed_async(
         self,
         *,
@@ -624,17 +563,6 @@ class ExecutionHarness(BaseModel):
             result=result,
         )
 
-    def mark_runtime_idle_after_success(
-        self,
-        *,
-        run_id: str,
-        completed_task_id: str,
-    ) -> None:
-        self._runtime_persistence_harness().mark_runtime_idle_after_success(
-            run_id=run_id,
-            completed_task_id=completed_task_id,
-        )
-
     async def mark_runtime_idle_after_success_async(
         self,
         *,
@@ -648,31 +576,6 @@ class ExecutionHarness(BaseModel):
         ).mark_runtime_idle_after_success_async(
             run_id=run_id,
             completed_task_id=completed_task_id,
-        )
-
-    def mark_runtime_after_terminal_task_update(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        status: RunRuntimeStatus,
-        phase: RunRuntimePhase,
-        active_instance_id: str | None,
-        active_task_id: str | None,
-        active_role_id: str | None,
-        active_subagent_instance_id: str | None,
-        last_error: str | None,
-    ) -> None:
-        self._runtime_persistence_harness().mark_runtime_after_terminal_task_update(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            status=status,
-            phase=phase,
-            active_instance_id=active_instance_id,
-            active_task_id=active_task_id,
-            active_role_id=active_role_id,
-            active_subagent_instance_id=active_subagent_instance_id,
-            last_error=last_error,
         )
 
     async def mark_runtime_after_terminal_task_update_async(
@@ -704,19 +607,6 @@ class ExecutionHarness(BaseModel):
             last_error=last_error,
         )
 
-    def promote_running_runtime_lane(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        last_error: str | None,
-    ) -> bool:
-        return self._runtime_persistence_harness().promote_running_runtime_lane(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            last_error=last_error,
-        )
-
     async def promote_running_runtime_lane_async(
         self,
         *,
@@ -729,19 +619,6 @@ class ExecutionHarness(BaseModel):
             run_runtime_repo=self.run_runtime_repo,
             run_control_manager=self.run_control_manager,
         ).promote_running_runtime_lane_async(
-            run_id=run_id,
-            terminal_task_id=terminal_task_id,
-            last_error=last_error,
-        )
-
-    def promote_paused_runtime_lane(
-        self,
-        *,
-        run_id: str,
-        terminal_task_id: str,
-        last_error: str | None,
-    ) -> bool:
-        return self._runtime_persistence_harness().promote_paused_runtime_lane(
             run_id=run_id,
             terminal_task_id=terminal_task_id,
             last_error=last_error,
@@ -766,18 +643,6 @@ class ExecutionHarness(BaseModel):
 
     # ── Prompt helpers ────────────────────────────────────────────────
 
-    def topology_for_run(self, run_id: str) -> RunTopologySnapshot | None:
-        return TaskPromptHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-        ).topology_for_run(run_id)
-
-    def conversation_context_for_run(
-        self, run_id: str
-    ) -> RuntimePromptConversationContext | None:
-        return TaskPromptHarness.model_construct(
-            run_intent_repo=self.run_intent_repo,
-        ).conversation_context_for_run(run_id)
-
     async def topology_for_run_async(self, run_id: str) -> RunTopologySnapshot | None:
         return await TaskPromptHarness.model_construct(
             run_intent_repo=self.run_intent_repo,
@@ -790,13 +655,13 @@ class ExecutionHarness(BaseModel):
             run_intent_repo=self.run_intent_repo,
         ).conversation_context_for_run_async(run_id)
 
-    def role_with_memory(
+    async def role_with_memory_async(
         self, *, role: RoleDefinition, role_id: str, workspace_id: str
     ) -> RoleDefinition:
-        return TaskPromptHarness.model_construct(
+        return await TaskPromptHarness.model_construct(
             role_registry=self.role_registry,
             role_memory_service=self.role_memory_service,
-        ).role_with_memory(role=role, role_id=role_id, workspace_id=workspace_id)
+        ).role_with_memory_async(role=role, role_id=role_id, workspace_id=workspace_id)
 
     async def prepare_runtime_snapshot(
         self,
@@ -841,17 +706,6 @@ class ExecutionHarness(BaseModel):
             skill_instructions=skill_instructions,
         )
 
-    def shared_state_snapshot(
-        self, *, session_id: str, role_id: str, conversation_id: str
-    ) -> tuple[tuple[str, str], ...]:
-        return TaskPromptHarness.model_construct(
-            shared_store=self.shared_store,
-        ).shared_state_snapshot(
-            session_id=session_id,
-            role_id=role_id,
-            conversation_id=conversation_id,
-        )
-
     async def shared_state_snapshot_async(
         self, *, session_id: str, role_id: str, conversation_id: str
     ) -> tuple[tuple[str, str], ...]:
@@ -861,31 +715,6 @@ class ExecutionHarness(BaseModel):
             session_id=session_id,
             role_id=role_id,
             conversation_id=conversation_id,
-        )
-
-    def ensure_committed_task_prompt(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-        conversation_id: str,
-        instance_id: str,
-        task: TaskEnvelope,
-        user_prompt_text: str,
-        user_prompt_override: str | None,
-    ) -> None:
-        TaskPromptHarness.model_construct(
-            message_repo=self.message_repo,
-            run_intent_repo=self.run_intent_repo,
-            media_asset_service=self.media_asset_service,
-        ).ensure_committed_task_prompt(
-            role_id=role_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            instance_id=instance_id,
-            task=task,
-            user_prompt_text=user_prompt_text,
-            user_prompt_override=user_prompt_override,
         )
 
     async def ensure_committed_task_prompt_async(
@@ -911,27 +740,6 @@ class ExecutionHarness(BaseModel):
             task=task,
             user_prompt_text=user_prompt_text,
             user_prompt_override=user_prompt_override,
-        )
-
-    def build_user_prompt(
-        self,
-        *,
-        role: RoleDefinition,
-        objective: str,
-        shared_state_snapshot: tuple[tuple[str, str], ...],
-        conversation_context: RuntimePromptConversationContext | None,
-        orchestration_prompt: str,
-        skill_names: tuple[str, ...] | None = None,
-    ) -> tuple[str, tuple[PromptSkillInstruction, ...]]:
-        return TaskPromptHarness.model_construct(
-            skill_runtime_service=self.skill_runtime_service,
-        ).build_user_prompt(
-            role=role,
-            objective=objective,
-            shared_state_snapshot=shared_state_snapshot,
-            conversation_context=conversation_context,
-            orchestration_prompt=orchestration_prompt,
-            skill_names=skill_names,
         )
 
     @staticmethod

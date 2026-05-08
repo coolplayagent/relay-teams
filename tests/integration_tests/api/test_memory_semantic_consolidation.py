@@ -13,6 +13,7 @@ from relay_teams.memory.models import (
     MemoryScope,
     MemoryTier,
 )
+from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.providers.provider_contracts import EchoProvider
@@ -81,8 +82,6 @@ class TestRunCompletionTriggersSemantic:
     async def test_on_run_completed_async_structural(
         self, service: MemoryBankService
     ) -> None:
-        from relay_teams.memory.event_handler import MemoryEventHandler
-
         handler = MemoryEventHandler(memory_bank_service=service)
         # Should not raise
         await handler.on_run_completed_async(
@@ -95,24 +94,11 @@ class TestRunCompletionTriggersSemantic:
     async def test_on_run_completed_async_with_semantic(
         self, service: MemoryBankService
     ) -> None:
-        from relay_teams.memory.event_handler import MemoryEventHandler
-
         handler = MemoryEventHandler(memory_bank_service=service)
         # Should not raise even if semantic fails
         await handler.on_run_completed_async(
             workspace_id="ws-test",
             session_id="sess-1",
             role_id="crafter",
-            run_id="run-1",
-        )
-
-    def test_on_run_completed_sync_unchanged(self, service: MemoryBankService) -> None:
-        from relay_teams.memory.event_handler import MemoryEventHandler
-
-        handler = MemoryEventHandler(memory_bank_service=service)
-        # Sync version should still work
-        handler.on_run_completed(
-            workspace_id="ws-test",
-            session_id="sess-1",
             run_id="run-1",
         )

@@ -61,9 +61,72 @@ class _FakeEventLog:
         self.requested_trace_ids.append(trace_id)
         return self._events
 
+    async def list_by_trace_async(
+        self, trace_id: str
+    ) -> tuple[dict[str, JsonValue], ...]:
+        self.requested_trace_ids.append(trace_id)
+        return self._events
+
     def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         self.requested_trace_ids.append(trace_id)
         return self._events
+
+    async def list_by_trace_with_ids_async(
+        self, trace_id: str
+    ) -> tuple[dict[str, JsonValue], ...]:
+        self.requested_trace_ids.append(trace_id)
+        return self._events
+
+
+@pytest.mark.asyncio
+async def test_null_prompt_history_repo_async_contracts_return_empty() -> None:
+    repo = session_support_module._NullPromptHistoryMessageRepo()
+
+    assert await repo.get_history_for_conversation_async("conversation-1") == []
+    assert (
+        await repo.get_history_for_conversation_task_async("conversation-1", "task-1")
+        == []
+    )
+    await repo.prune_conversation_history_to_safe_boundary_async("conversation-1")
+    await repo.append_async(
+        session_id="session-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        agent_role_id="writer",
+        instance_id="inst-1",
+        task_id="task-1",
+        trace_id="run-1",
+        messages=[],
+    )
+    assert (
+        await repo.append_system_prompt_if_missing_async(
+            session_id="session-1",
+            workspace_id="workspace-1",
+            conversation_id="conversation-1",
+            agent_role_id="writer",
+            instance_id="inst-1",
+            task_id="task-1",
+            trace_id="run-1",
+            content="system",
+        )
+        is False
+    )
+    assert (
+        await repo.replace_pending_user_prompt_async(
+            session_id="session-1",
+            workspace_id="workspace-1",
+            conversation_id="conversation-1",
+            agent_role_id="writer",
+            instance_id="inst-1",
+            task_id="task-1",
+            trace_id="run-1",
+            content="prompt",
+        )
+        is False
+    )
+    assert (
+        await session_support_module._empty_safe_history_async("conversation-1") == []
+    )
 
 
 def test_apply_streamed_text_fallback_repairs_truncated_final_message() -> None:
@@ -670,10 +733,16 @@ async def test_restore_pending_tool_results_from_state_backfills_completed_dispa
         },
     )
 
+    async def _load_persisted_dispatch_state(
+        **kwargs: object,
+    ) -> PersistedToolCallState:
+        _ = kwargs
+        return persisted_state
+
     monkeypatch.setattr(
         session_support_module,
-        "load_or_recover_tool_call_state",
-        lambda **kwargs: persisted_state,
+        "load_or_recover_tool_call_state_async",
+        _load_persisted_dispatch_state,
     )
 
     (
@@ -1202,12 +1271,16 @@ async def test_running_spawn_subagent_without_durable_launch_reinvokes_batch_ite
     assert invoke_calls[0]["tool_call_id"] == "call-subagent-prelaunch"
 
 
-def test_task_tool_call_batch_states_handles_missing_store_and_invalid_rows(
+@pytest.mark.asyncio
+async def test_task_tool_call_batch_states_handles_missing_store_and_invalid_rows(
     tmp_path: Path,
 ) -> None:
     session = object.__new__(AgentLlmSession)
     setattr(session, "_shared_store", None)
-    assert AgentLlmSession._task_tool_call_batch_states(session, "task-1") == ()
+    assert (
+        await AgentLlmSession._task_tool_call_batch_states_async(session, "task-1")
+        == ()
+    )
 
     shared_store = SharedStateRepository(tmp_path / "session-batch-states.db")
     shared_store.manage_state(
@@ -1240,7 +1313,9 @@ def test_task_tool_call_batch_states_handles_missing_store_and_invalid_rows(
     )
     session._shared_store = shared_store
 
-    assert AgentLlmSession._task_tool_call_batch_states(session, "task-1") == (good,)
+    assert await AgentLlmSession._task_tool_call_batch_states_async(
+        session, "task-1"
+    ) == (good,)
 
 
 @pytest.mark.asyncio
@@ -1252,7 +1327,7 @@ async def test_recover_uncommitted_tool_batches_ignores_event_log_read_failures(
     history: list[ModelRequest | ModelResponse] = []
 
     class _FailingBatchReplayEventLog:
-        def list_by_trace_with_ids(
+        async def list_by_trace_with_ids_async(
             self,
             trace_id: str,
         ) -> tuple[dict[str, JsonValue], ...]:
@@ -1289,7 +1364,7 @@ async def test_recover_uncommitted_tool_batches_ignores_batch_snapshot_failures(
     history: list[ModelRequest | ModelResponse] = []
 
     class _FailingBatchSnapshotStore:
-        def snapshot(self, scope: ScopeRef) -> tuple[tuple[str, str], ...]:
+        async def snapshot_async(self, scope: ScopeRef) -> tuple[tuple[str, str], ...]:
             _ = scope
             raise sqlite3.OperationalError("database is locked")
 
@@ -1603,7 +1678,7 @@ async def test_recover_uncommitted_tool_batches_skips_item_state_read_failures(
         ),
     )
 
-    def _raise_state_read_failure(
+    async def _raise_state_read_failure(
         *,
         shared_store: object,
         event_log: object,
@@ -1631,7 +1706,7 @@ async def test_recover_uncommitted_tool_batches_skips_item_state_read_failures(
 
     monkeypatch.setattr(
         session_support_module,
-        "load_or_recover_tool_call_state",
+        "load_or_recover_tool_call_state_async",
         _raise_state_read_failure,
     )
     session.__dict__["_shared_store"] = shared_store
@@ -2256,7 +2331,8 @@ async def test_restore_pending_tool_results_ignores_committed_orphaned_subagent_
     assert message_repo.requested_conversation_ids == ["conv_session_1_writer"]
 
 
-def test_superseded_tool_call_ids_scope_to_current_instance_and_role() -> None:
+@pytest.mark.asyncio
+async def test_superseded_tool_call_ids_scope_to_current_instance_and_role() -> None:
     session = object.__new__(AgentLlmSession)
     session.__dict__["_event_bus"] = _FakeEventLog(
         (
@@ -2335,7 +2411,7 @@ def test_superseded_tool_call_ids_scope_to_current_instance_and_role() -> None:
         )
     )
 
-    superseded_ids = AgentLlmSession._superseded_tool_call_ids_for_request(
+    superseded_ids = await AgentLlmSession._superseded_tool_call_ids_for_request_async(
         session,
         _build_request(),
     )
@@ -2343,17 +2419,20 @@ def test_superseded_tool_call_ids_scope_to_current_instance_and_role() -> None:
     assert superseded_ids == {"call-current"}
 
 
-def test_best_effort_replay_lookups_ignore_sqlite_read_failures() -> None:
+@pytest.mark.asyncio
+async def test_best_effort_replay_lookups_ignore_sqlite_read_failures() -> None:
     request = _build_request()
     session = object.__new__(AgentLlmSession)
 
     class _FailingEventBus:
-        def list_by_trace(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
+        async def list_by_trace_async(
+            self, trace_id: str
+        ) -> tuple[dict[str, JsonValue], ...]:
             _ = trace_id
             raise sqlite3.OperationalError("database is locked")
 
     class _FailingMessageRepo:
-        def get_history_for_conversation(
+        async def get_history_for_conversation_async(
             self,
             conversation_id: str,
         ) -> list[ModelRequest | ModelResponse]:
@@ -2364,10 +2443,16 @@ def test_best_effort_replay_lookups_ignore_sqlite_read_failures() -> None:
     session.__dict__["_message_repo"] = _FailingMessageRepo()
 
     assert (
-        AgentLlmSession._superseded_tool_call_ids_for_request(session, request) == set()
+        await AgentLlmSession._superseded_tool_call_ids_for_request_async(
+            session, request
+        )
+        == set()
     )
     assert (
-        AgentLlmSession._committed_tool_call_ids_for_request(session, request) == set()
+        await AgentLlmSession._committed_tool_call_ids_for_request_async(
+            session, request
+        )
+        == set()
     )
 
 

@@ -484,7 +484,7 @@ class ExternalAcpHostToolBridge:
                     message="Host tool bridge is not configured with a role.",
                 )
             )
-        deps = self._build_tool_deps(request=request)
+        deps = await self._build_tool_deps_async(request=request)
         tool = definition.tool
         tool_call_id = f"acp_mcp_{uuid4().hex[:12]}"
         ctx = RunContext[ToolDeps](
@@ -515,16 +515,23 @@ class ExternalAcpHostToolBridge:
             ctx,
         )
 
-    def _build_tool_deps(self, *, request: LLMRequest) -> ToolDeps:
+    async def _build_tool_deps_async(self, *, request: LLMRequest) -> ToolDeps:
         resolved_conversation_id = request.conversation_id or build_conversation_id(
             request.session_id,
             request.role_id,
         )
         yolo = False
         try:
-            yolo = self._run_intent_repo.get(request.run_id).yolo
+            yolo = (await self._run_intent_repo.get_async(request.run_id)).yolo
         except KeyError:
             yolo = False
+        workspace = await self._workspace_manager.resolve_async(
+            session_id=request.session_id,
+            role_id=request.role_id,
+            instance_id=request.instance_id,
+            workspace_id=request.workspace_id,
+            conversation_id=resolved_conversation_id,
+        )
         return ToolDeps(
             task_repo=self._task_repo,
             shared_store=self._shared_store,
@@ -536,13 +543,7 @@ class ExternalAcpHostToolBridge:
             injection_manager=self._injection_manager,
             run_event_hub=self._run_event_hub,
             agent_repo=self._agent_repo,
-            workspace=self._workspace_manager.resolve(
-                session_id=request.session_id,
-                role_id=request.role_id,
-                instance_id=request.instance_id,
-                workspace_id=request.workspace_id,
-                conversation_id=resolved_conversation_id,
-            ),
+            workspace=workspace,
             role_memory=self._role_memory_service,
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,

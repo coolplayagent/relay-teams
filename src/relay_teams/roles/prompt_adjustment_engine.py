@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+import aiosqlite
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.persistence import async_fetchone
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -157,12 +159,101 @@ class PromptAdjustmentRepository(SharedSqliteRepository):
             )
         return _decision
 
+    async def save_decision_async(
+        self,
+        decision: PromptAdjustmentDecision,
+    ) -> PromptAdjustmentDecision:
+        now = decision.proposed_at.isoformat()
+        rec_json = json.dumps(
+            [r.model_dump() for r in decision.recommendations],
+            ensure_ascii=False,
+        )
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                """
+                INSERT INTO prompt_adjustments(
+                    decision_id, role_id, workspace_id, version,
+                    previous_prompt, proposed_prompt, recommendations_json,
+                    status, trigger_source, triggered_by, proposed_at,
+                    reviewed_at, reviewed_by, rejection_reason,
+                    applied_at, rolled_back_at, rollback_reason
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(decision_id)
+                DO UPDATE SET
+                    role_id=excluded.role_id,
+                    workspace_id=excluded.workspace_id,
+                    version=excluded.version,
+                    previous_prompt=excluded.previous_prompt,
+                    proposed_prompt=excluded.proposed_prompt,
+                    recommendations_json=excluded.recommendations_json,
+                    status=excluded.status,
+                    trigger_source=excluded.trigger_source,
+                    triggered_by=excluded.triggered_by,
+                    reviewed_at=excluded.reviewed_at,
+                    reviewed_by=excluded.reviewed_by,
+                    rejection_reason=excluded.rejection_reason,
+                    applied_at=excluded.applied_at,
+                    rolled_back_at=excluded.rolled_back_at,
+                    rollback_reason=excluded.rollback_reason
+                """,
+                (
+                    decision.decision_id,
+                    decision.role_id,
+                    decision.workspace_id,
+                    decision.version,
+                    decision.previous_prompt,
+                    decision.proposed_prompt,
+                    rec_json,
+                    decision.status.value,
+                    decision.trigger_source,
+                    decision.triggered_by,
+                    now,
+                    decision.reviewed_at.isoformat() if decision.reviewed_at else None,
+                    decision.reviewed_by,
+                    decision.rejection_reason,
+                    decision.applied_at.isoformat() if decision.applied_at else None,
+                    decision.rolled_back_at.isoformat()
+                    if decision.rolled_back_at
+                    else None,
+                    decision.rollback_reason,
+                ),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="save_decision_async",
+            operation=operation,
+        )
+        _decision = await self.get_decision_async(decision.decision_id)
+        if _decision is None:
+            raise ValueError(
+                f"Failed to retrieve decision after save: {decision.decision_id}"
+            )
+        return _decision
+
     def get_decision(self, decision_id: str) -> PromptAdjustmentDecision | None:
         row = self._run_read(
             lambda: self._conn.execute(
                 "SELECT * FROM prompt_adjustments WHERE decision_id=?",
                 (decision_id,),
             ).fetchone()
+        )
+        if row is None:
+            return None
+        return _row_to_decision(row)
+
+    async def get_decision_async(
+        self,
+        decision_id: str,
+    ) -> PromptAdjustmentDecision | None:
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM prompt_adjustments WHERE decision_id=?",
+                (decision_id,),
+            )
         )
         if row is None:
             return None
@@ -203,6 +294,23 @@ class PromptAdjustmentRepository(SharedSqliteRepository):
                 "ORDER BY applied_at DESC LIMIT 1",
                 (role_id, workspace_id, PromptAdjustmentStatus.APPLIED.value),
             ).fetchone()
+        )
+        if row is None:
+            return None
+        return _row_to_decision(row)
+
+    async def get_latest_applied_async(
+        self,
+        role_id: str,
+        workspace_id: str,
+    ) -> PromptAdjustmentDecision | None:
+        row = await self._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT * FROM prompt_adjustments WHERE role_id=? AND workspace_id=? AND status=? "
+                "ORDER BY applied_at DESC LIMIT 1",
+                (role_id, workspace_id, PromptAdjustmentStatus.APPLIED.value),
+            )
         )
         if row is None:
             return None
@@ -343,6 +451,38 @@ class SystemPromptAdjustmentEngine:
             proposed_at=datetime.now(tz=timezone.utc),
         )
         return self._repository.save_decision(decision)
+
+    async def propose_adjustment_async(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        current_prompt: str,
+        recommendations: tuple[PromptAdjustmentRecommendation, ...],
+        trigger_source: str,
+        triggered_by: str,
+    ) -> PromptAdjustmentDecision:
+        latest = await self._repository.get_latest_applied_async(
+            role_id=role_id,
+            workspace_id=workspace_id,
+        )
+        version = 1 if latest is None else latest.version + 1
+        proposed_prompt = _merge_sections(current_prompt, recommendations)
+
+        decision = PromptAdjustmentDecision(
+            decision_id=_new_decision_id(),
+            role_id=role_id,
+            workspace_id=workspace_id,
+            version=version,
+            previous_prompt=current_prompt,
+            proposed_prompt=proposed_prompt,
+            recommendations=recommendations,
+            status=PromptAdjustmentStatus.PROPOSED,
+            trigger_source=trigger_source,
+            triggered_by=triggered_by,
+            proposed_at=datetime.now(tz=timezone.utc),
+        )
+        return await self._repository.save_decision_async(decision)
 
     def approve_adjustment(
         self,

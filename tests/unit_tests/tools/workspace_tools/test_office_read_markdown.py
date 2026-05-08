@@ -223,10 +223,10 @@ async def test_office_read_markdown_tool_converts_supported_pdf(
         is not None
     )
     from relay_teams.agents.execution.prompt_instruction_state import (
-        is_prompt_instruction_loaded,
+        is_prompt_instruction_loaded_async,
     )
 
-    assert is_prompt_instruction_loaded(
+    assert await is_prompt_instruction_loaded_async(
         shared_store=shared_store,
         task_id="task-1",
         path=instruction_path,

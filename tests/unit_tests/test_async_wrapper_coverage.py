@@ -1459,6 +1459,9 @@ class _PermissiveAsyncReceiver:
     async def _get_async_conn(self) -> "_PermissiveAsyncReceiver":
         return self
 
+    def _async_message_repo(self) -> "_PermissiveAsyncReceiver":
+        return self
+
     async def _run_async_read(self, operation: Callable[[object], object]) -> object:
         result = operation(self)
         if inspect.isawaitable(result):

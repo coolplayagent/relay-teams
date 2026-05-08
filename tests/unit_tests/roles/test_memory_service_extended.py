@@ -139,7 +139,8 @@ async def test_record_verification_outcome_trend_trimmed(tmp_path: Path) -> None
     assert len(record.performance.trend) == 20
 
 
-def test_get_performance_metrics() -> None:
+@pytest.mark.asyncio
+async def test_get_performance_metrics() -> None:
     perf = RolePerformanceMetrics(
         role_id="test-role",
         workspace_id="ws-1",
@@ -161,10 +162,10 @@ def test_get_performance_metrics() -> None:
     )
 
     mock_repo = MagicMock(spec=RoleMemoryRepository)
-    mock_repo.read_role_memory.return_value = record
+    mock_repo.read_role_memory_async.return_value = record
 
     service = RoleMemoryService(repository=mock_repo)
-    result = service.get_performance_metrics(
+    result = await service.get_performance_metrics_async(
         role_id="test-role",
         workspace_id="ws-1",
     )
@@ -173,7 +174,8 @@ def test_get_performance_metrics() -> None:
     assert result.verification_pass_rate.pass_rate == 0.6
 
 
-def test_get_performance_metrics_none() -> None:
+@pytest.mark.asyncio
+async def test_get_performance_metrics_none() -> None:
     record = RoleMemoryRecord(
         role_id="test-role",
         workspace_id="ws-1",
@@ -181,10 +183,10 @@ def test_get_performance_metrics_none() -> None:
     )
 
     mock_repo = MagicMock(spec=RoleMemoryRepository)
-    mock_repo.read_role_memory.return_value = record
+    mock_repo.read_role_memory_async.return_value = record
 
     service = RoleMemoryService(repository=mock_repo)
-    result = service.get_performance_metrics(
+    result = await service.get_performance_metrics_async(
         role_id="test-role",
         workspace_id="ws-1",
     )

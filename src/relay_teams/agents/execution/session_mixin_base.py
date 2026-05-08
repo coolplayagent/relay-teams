@@ -481,7 +481,9 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     def _conversation_id(self, request: LLMRequest) -> str:
         raise NotImplementedError
 
-    def _resolve_tool_approval_policy(self, run_id: str) -> ToolApprovalPolicy:
+    async def _resolve_tool_approval_policy_async(
+        self, run_id: str
+    ) -> ToolApprovalPolicy:
         raise NotImplementedError
 
     async def _maybe_recover_from_tool_args_parse_failure(

@@ -881,12 +881,14 @@ async def test_agent_runtime(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     runtime_cwd = None
     if config.protocol == ExternalAgentProtocol.CLI:
-        runtime_cwd = workspace_manager.resolve(
-            session_id=_AGENT_RUNTIME_PROBE_SESSION_ID,
-            role_id=_AGENT_RUNTIME_PROBE_ROLE_ID,
-            instance_id=None,
-            workspace_id=_AGENT_RUNTIME_PROBE_WORKSPACE_ID,
-            conversation_id=_AGENT_RUNTIME_PROBE_SESSION_ID,
+        runtime_cwd = (
+            await workspace_manager.resolve_async(
+                session_id=_AGENT_RUNTIME_PROBE_SESSION_ID,
+                role_id=_AGENT_RUNTIME_PROBE_ROLE_ID,
+                instance_id=None,
+                workspace_id=_AGENT_RUNTIME_PROBE_WORKSPACE_ID,
+                conversation_id=_AGENT_RUNTIME_PROBE_SESSION_ID,
+            )
         ).resolve_workdir()
     result = await probe_agent_runtime(config, runtime_cwd=runtime_cwd)
     if result.ok:

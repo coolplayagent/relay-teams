@@ -537,10 +537,10 @@ async def test_read_tool_reads_notebook_cell_without_outputs(
     assert '"source": "print(1)\\n"' in output
     assert '"outputs"' not in output
     from relay_teams.agents.execution.prompt_instruction_state import (
-        is_prompt_instruction_loaded,
+        is_prompt_instruction_loaded_async,
     )
 
-    assert is_prompt_instruction_loaded(
+    assert await is_prompt_instruction_loaded_async(
         shared_store=shared_store,
         task_id="task-1",
         path=instruction_path,
@@ -665,7 +665,7 @@ async def test_resolve_read_instruction_sections_skips_preloaded_paths(
     tmp_path: Path,
 ) -> None:
     from relay_teams.agents.execution.prompt_instruction_state import (
-        record_prompt_instruction_loaded,
+        record_prompt_instruction_loaded_async,
     )
     from relay_teams.tools.workspace_tools.read import resolve_read_instruction_sections
 
@@ -679,7 +679,7 @@ async def test_resolve_read_instruction_sections_skips_preloaded_paths(
     instruction_path.write_text("Nested instructions.", encoding="utf-8")
     file_path.write_text("print('hello')\n", encoding="utf-8")
     shared_store = SharedStateRepository(db_path)
-    record_prompt_instruction_loaded(
+    await record_prompt_instruction_loaded_async(
         shared_store=shared_store,
         task_id="task-1",
         path=instruction_path,

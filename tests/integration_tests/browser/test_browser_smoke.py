@@ -19,6 +19,7 @@ from relay_teams.env.web_config_models import (
 from relay_teams.gateway.acp_stdio import AcpGatewayServer, _AcpRequestContext
 from relay_teams.interfaces.cli.gateway_cli import _build_acp_stdio_runtime
 from pydantic import JsonValue
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Locator, Page, Request, Response
 from playwright.sync_api import expect
 from playwright.sync_api import sync_playwright
@@ -2076,9 +2077,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
 
     switch_targets = [subagent_session_id, *reversed(seed_session_ids[-8:])]
     for session_id in switch_targets:
-        page.locator(f'.session-item[data-session-id="{session_id}"]').first.click(
-            force=True,
-        )
+        _click_visible_session_item(page, session_id)
     expect(page.locator(".session-item.active")).to_have_attribute(
         "data-session-id",
         switch_targets[-1],
@@ -2103,9 +2102,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     send_feedback_ms = int((time.perf_counter() - send_started) * 1000)
     assert send_feedback_ms < 2500
 
-    page.locator(f'.session-item[data-session-id="{subagent_session_id}"]').first.click(
-        force=True,
-    )
+    _click_visible_session_item(page, subagent_session_id)
     expect(page.locator(".session-item.active")).to_have_attribute(
         "data-session-id",
         subagent_session_id,
@@ -2128,9 +2125,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
     assert child_feedback_ms < 2500
 
     parent_started = time.perf_counter()
-    page.locator(f'.session-item[data-session-id="{subagent_session_id}"]').first.click(
-        force=True,
-    )
+    _click_visible_session_item(page, subagent_session_id)
     expect(
         page.locator(".subagent-main-session-loading, .session-round-section").first
     ).to_be_visible(timeout=1000)
@@ -2169,9 +2164,7 @@ def test_browser_session_send_switch_and_subagent_view_stay_responsive_under_loa
         re.compile(r"\bis-active\b"),
         timeout=_WAIT_TIMEOUT_MS,
     )
-    page.locator(f'.session-item[data-session-id="{subagent_session_id}"]').first.click(
-        force=True,
-    )
+    _click_visible_session_item(page, subagent_session_id)
     expect(page.locator(".session-item.active")).to_have_attribute(
         "data-session-id",
         subagent_session_id,
@@ -2377,6 +2370,25 @@ def _open_app(page: Page, integration_env: IntegrationEnvironment) -> None:
         timeout=_WAIT_TIMEOUT_MS,
     )
     expect(page.locator("#projects-list")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+
+def _click_visible_session_item(page: Page, session_id: str) -> None:
+    deadline = time.monotonic() + (_WAIT_TIMEOUT_MS / 1000)
+    last_error: AssertionError | PlaywrightError | None = None
+    selector = f'.session-item[data-session-id="{session_id}"]'
+    while time.monotonic() < deadline:
+        session_item = page.locator(selector).filter(visible=True).first
+        try:
+            expect(session_item).to_be_visible(timeout=500)
+            session_item.scroll_into_view_if_needed(timeout=500)
+            session_item.click(force=True, timeout=500)
+            return
+        except (AssertionError, PlaywrightError) as exc:
+            last_error = exc
+            page.wait_for_timeout(100)
+    raise AssertionError(
+        f"Timed out clicking visible session item: {session_id}"
+    ) from last_error
 
 
 def _api_path(integration_env: IntegrationEnvironment, url: str) -> str:

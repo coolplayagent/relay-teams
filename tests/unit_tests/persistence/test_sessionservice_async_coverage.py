@@ -27,14 +27,6 @@ async def test_list_normal_mode_subagents_async_delegates() -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_agents_in_session_async_delegates() -> None:
-    mock_self = MagicMock()
-    method = SessionService.list_agents_in_session_async
-    await method(mock_self, cast(Any, ""))
-    getattr(mock_self, "list_agents_in_session").assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_get_session_rounds_async_delegates() -> None:
     mock_self = MagicMock()
     method = SessionService.get_session_rounds_async

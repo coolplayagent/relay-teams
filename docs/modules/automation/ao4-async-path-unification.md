@@ -62,6 +62,23 @@ returning and reload records when callers expect stored database state.
 still exists for a deliberate boundary, its async equivalent must contain its own
 async SQL implementation rather than wrapping the sync method.
 
+Runtime services and repositories must not keep shallow paired methods for the
+same operation. Do not add a synchronous public method and a matching `_async`
+method where each one only forwards to a lower layer, for example
+`get_entry()` delegating to `repo.get_by_id()` beside `get_entry_async()`
+delegating to `repo.get_by_id_async()`. That pattern recreates the old split
+runtime surface even when the async method itself uses `await`.
+
+The required shape is a single runtime path. For runtime database operations,
+define the async method as the primary service/repository API and migrate
+callers to `await` it through the stack. A synchronous adapter may exist only at
+a documented process or compatibility boundary, such as a CLI or SDK wrapper,
+and it must not become a second domain-service implementation.
+
+Async services must also stay async internally. Do not call synchronous SQLite,
+network, retrieval, or LLM methods from an async run, hook, or memory path; add
+or use the real async downstream API and await it instead.
+
 Claim and queue operations must remain atomic. Each claim updates a row only
 from its eligible pending state, or from a stale in-progress state, and then
 reloads the same row inside the write operation. A zero-row update means another

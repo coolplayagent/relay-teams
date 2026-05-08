@@ -73,6 +73,113 @@ def test_append_entry(repo: TaskArtifactRepository):
     assert row_id > 0
 
 
+@pytest.mark.asyncio
+async def test_async_artifact_lifecycle(repo: TaskArtifactRepository) -> None:
+    artifact = await repo.ensure_artifact_async("task-async-1", "spec-async-1")
+    assert artifact.task_id == "task-async-1"
+
+    row_id = await repo.append_entry_async(
+        "task-async-1",
+        TaskArtifactEntry(
+            entry_id="entry-async-1",
+            phase=TaskArtifactPhase.EXECUTION,
+            timestamp="2024-01-01T00:00:00",
+            event_type="tool_call",
+            description="Ran async artifact write",
+        ),
+    )
+    assert row_id > 0
+
+    await repo.update_summary_async("task-async-1", "Async checks passed")
+    loaded = await repo.get_artifact_async("task-async-1")
+    assert loaded is not None
+    assert loaded.summary == "Async checks passed"
+    assert len(loaded.entries) == 1
+
+    entries, total = await repo.query_entries_async(task_id="task-async-1")
+    assert total == 1
+    assert entries[0].entry_id == "entry-async-1"
+
+
+@pytest.mark.asyncio
+async def test_async_artifact_summary_evidence_and_filters(
+    repo: TaskArtifactRepository,
+) -> None:
+    assert await repo.get_artifact_async("missing") is None
+    assert await repo.get_artifact_summary_async("missing") is None
+
+    _ = await repo.ensure_artifact_async("task-async-2", "spec-async-2")
+    await repo.append_entry_async(
+        "task-async-2",
+        TaskArtifactEntry(
+            entry_id="entry-async-2a",
+            phase=TaskArtifactPhase.EXECUTION,
+            timestamp="2024-01-01T00:00:00",
+            event_type="tool_call",
+            description="Ran async tool",
+        ),
+    )
+    await repo.append_entry_async(
+        "task-async-2",
+        TaskArtifactEntry(
+            entry_id="entry-async-2b",
+            phase=TaskArtifactPhase.VERIFICATION,
+            timestamp="2024-01-01T00:00:01",
+            event_type="check",
+            description="Verified async tool",
+        ),
+    )
+    bundle = VerificationEvidenceBundle(
+        task_id="task-async-2",
+        items=(
+            VerificationEvidenceItem(
+                evidence_id="ev-async-1",
+                kind=VerificationEvidenceKind.TASK_RESULT,
+                summary="Async task completed",
+            ),
+        ),
+    )
+    await repo.update_evidence_bundle_async("task-async-2", bundle)
+
+    artifact = await repo.get_artifact_async("task-async-2")
+    assert artifact is not None
+    assert artifact.evidence_bundle is not None
+    assert len(artifact.evidence_bundle.items) == 1
+
+    summary = await repo.get_artifact_summary_async("task-async-2")
+    assert summary is not None
+    assert summary.phase_counts == {"execution": 1, "verification": 1}
+    assert summary.evidence_item_count == 1
+    assert summary.has_verification_bundle is True
+
+    phase_entries, phase_total = await repo.query_entries_async(
+        task_id="task-async-2",
+        phase=TaskArtifactPhase.VERIFICATION,
+    )
+    event_entries, event_total = await repo.query_entries_async(
+        task_id="task-async-2",
+        event_type="tool_call",
+    )
+    assert phase_total == 1
+    assert phase_entries[0].entry_id == "entry-async-2b"
+    assert event_total == 1
+    assert event_entries[0].entry_id == "entry-async-2a"
+
+
+@pytest.mark.asyncio
+async def test_ensure_artifact_async_raises_when_insert_cannot_be_read(
+    repo: TaskArtifactRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def missing_artifact(_task_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(repo, "get_artifact_async", missing_artifact)
+
+    with pytest.raises(RuntimeError, match="Failed to create task artifact"):
+        await repo.ensure_artifact_async("task-1", "spec-1")
+
+
 class _WalFailingConnection:
     def execute(self, sql: str) -> object:
         if sql == "PRAGMA journal_mode = WAL":
