@@ -483,6 +483,23 @@ def test_terminal_payload_output_renders_when_stream_has_no_text_in_browser(
     assert payload["cursorCount"] == 0
 
 
+def test_terminal_payload_output_dedupes_hydrated_history_in_browser(
+    browser_page: Page,
+    tmp_path: Path,
+) -> None:
+    page = browser_page
+    _open_harness(page, tmp_path)
+
+    payload = page.evaluate(
+        """
+        () => window.__streamTimelineHarness.renderTerminalPayloadDedupesHydratedHistory()
+        """
+    )
+
+    assert payload["occurrences"] == 1
+    assert payload["messageCount"] == 1
+
+
 def test_terminal_rounds_collapse_only_when_final_output_is_projected_in_browser(
     browser_page: Page,
     tmp_path: Path,
@@ -1882,6 +1899,52 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
           stoppedText: stoppedContainer.textContent || '',
           occurrences: countSubstring(container.textContent || '', 'terminal payload final answer'),
           cursorCount: container.querySelectorAll('.streaming-cursor').length,
+        }};
+      }},
+
+      renderTerminalPayloadDedupesHydratedHistory() {{
+        clearAllStreamState();
+        const runId = 'run-terminal-payload-history-dedupe';
+        const container = makeContainer('terminal-payload-history-dedupe');
+        container.className = 'session-round-section';
+        container.dataset.runId = runId;
+        const terminalText = [
+          'codehub-mr-loop skill defines these available roles:',
+          '| Role | File | Responsibility |',
+          '| --- | --- | --- |',
+          '| ci-analyzer | `agents/ci-analyzer.md` | Query CI pipeline status |',
+          'The previous request could not be completed because of an API or execution error.',
+        ].join('\\n\\n');
+        renderHistory(container, [{{
+          role: 'assistant',
+          role_id: 'Coordinator',
+          instance_id: 'primary',
+          message: {{
+            parts: [{{ part_kind: 'text', content: terminalText }}],
+          }},
+        }}], {{
+          runId,
+          runStatus: 'completed',
+          timelineView: 'main',
+          canonicalStreamKey: 'primary',
+        }});
+        routeEvent(
+          'run_completed',
+          {{
+            trace_id: runId,
+            root_task_id: 'task-terminal-history-dedupe',
+            output: [{{ kind: 'text', text: terminalText }}],
+          }},
+          {{
+            run_id: runId,
+            trace_id: runId,
+            event_id: 'terminal-payload-history-dedupe-event',
+          }},
+        );
+        return {{
+          text: container.textContent || '',
+          occurrences: countSubstring(container.textContent || '', 'codehub-mr-loop skill'),
+          messageCount: container.querySelectorAll('.message').length,
         }};
       }},
 

@@ -44,6 +44,7 @@ import {
     finalizeThinking,
     finalizeStream,
     getCoordinatorStreamOverlay,
+    getRunTimelineSnapshot,
     getOrCreateStreamBlock,
     reconcileTerminalRunStreamState,
     startThinkingBlock,
@@ -590,11 +591,14 @@ function appendMissingTerminalOutput(
     if (!isDisplayableTerminalOutput(payload, terminalStatus)) {
         return;
     }
-    if (coordinatorOverlayHasFinalContent(safeRunId)) {
-        return;
-    }
     const outputParts = normalizeTerminalOutputParts(payload.output);
     if (outputParts.length === 0) {
+        return;
+    }
+    if (
+        coordinatorOverlayHasFinalContent(safeRunId)
+        || coordinatorTimelineHasTerminalOutput(safeRunId, outputParts)
+    ) {
         return;
     }
     const container = coordinatorContainerFor(eventMeta);
@@ -635,6 +639,22 @@ function coordinatorOverlayHasFinalContent(runId) {
     });
 }
 
+function coordinatorTimelineHasTerminalOutput(runId, outputParts) {
+    const expectedText = normalizeTerminalOutputText(outputParts);
+    if (!expectedText) {
+        return false;
+    }
+    const timeline = getRunTimelineSnapshot(runId);
+    const parts = Array.isArray(timeline?.coordinator?.parts)
+        ? timeline.coordinator.parts
+        : [];
+    const actualText = normalizeTerminalOutputText(parts);
+    if (actualText === expectedText) {
+        return true;
+    }
+    return parts.some(part => normalizeTerminalOutputText([part]) === expectedText);
+}
+
 function normalizeTerminalOutputParts(output) {
     if (typeof output === 'string') {
         const text = output.trim();
@@ -646,6 +666,21 @@ function normalizeTerminalOutputParts(output) {
     return output
         .map(normalizeTerminalOutputPart)
         .filter(part => part !== null);
+}
+
+function normalizeTerminalOutputText(parts) {
+    if (!Array.isArray(parts)) {
+        return '';
+    }
+    return parts
+        .filter(part => {
+            const kind = String(part?.kind || part?.part_kind || '').trim();
+            return kind === 'text';
+        })
+        .map(part => String(part.text || part.content || '').trim())
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
 }
 
 function normalizeTerminalOutputPart(part) {
