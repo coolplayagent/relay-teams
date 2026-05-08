@@ -11,8 +11,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
-from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
-from relay_teams.agents.instances.models import (
+from relay_teams.agent_runtimes.instances.enums import InstanceLifecycle, InstanceStatus
+from relay_teams.agent_runtimes.instances.models import (
     SubAgentInstance,
     create_subagent_instance,
 )

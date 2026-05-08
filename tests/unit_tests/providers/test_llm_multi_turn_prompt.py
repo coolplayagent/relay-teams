@@ -84,7 +84,9 @@ from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository

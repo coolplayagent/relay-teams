@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
-from relay_teams.external_agents.host_tool_bridge import (
+from relay_teams.agent_runtimes.host_tool_bridge import (
     HOST_TOOL_CONFIG_DIR_ENV,
     HOST_TOOL_CONVERSATION_ID_ENV,
     HOST_TOOL_INSTANCE_ID_ENV,

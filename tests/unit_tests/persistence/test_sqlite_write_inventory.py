@@ -16,7 +16,7 @@ _ALLOWED_COMMIT_FILES = {
 _SHARED_SQLITE_WRITERS = {
     Path("src/relay_teams/agents/execution/message_repository.py"): "MessageRepository",
     Path(
-        "src/relay_teams/agents/instances/instance_repository.py"
+        "src/relay_teams/agent_runtimes/instances/instance_repository.py"
     ): "AgentInstanceRepository",
     Path("src/relay_teams/agents/tasks/task_repository.py"): "TaskRepository",
     Path(
@@ -32,7 +32,7 @@ _SHARED_SQLITE_WRITERS = {
         "src/relay_teams/automation/automation_repository.py"
     ): "AutomationProjectRepository",
     Path(
-        "src/relay_teams/external_agents/session_repository.py"
+        "src/relay_teams/agent_runtimes/session_repository.py"
     ): "ExternalAgentSessionRepository",
     Path("src/relay_teams/gateway/feishu/account_repository.py"): (
         "FeishuAccountRepository"

@@ -30,7 +30,9 @@ from relay_teams.agents.execution.session_recovery import SessionRecoveryMixin
 from relay_teams.agents.execution.session_runtime import SessionRuntimeMixin
 from relay_teams.agents.execution.session_support import SessionSupportMixin
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.task_contracts import (
     TaskExecutionServiceLike,
     TaskOrchestrationServiceLike,

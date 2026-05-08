@@ -23,8 +23,10 @@ from relay_teams.roles.role_contracts import (
 )
 from relay_teams.roles.role_registry import RoleRegistry
 
-from relay_teams.agents.instances.enums import InstanceLifecycle
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.enums import InstanceLifecycle
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository

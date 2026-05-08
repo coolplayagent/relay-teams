@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.agents.orchestration.a2a_bus import A2ABus
-from relay_teams.agents.orchestration.a2a_bus_models import (
+from relay_teams.agent_runtimes.bus import A2ABus
+from relay_teams.agent_runtimes.bus_models import (
     A2aBusMessage,
     A2aBusState,
     A2aSubscription,

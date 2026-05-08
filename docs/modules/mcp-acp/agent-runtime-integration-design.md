@@ -1,5 +1,9 @@
 # Agent Runtime Integration Design
 
+This design has been superseded by the consolidated
+[`agent-runtimes`](../agent-runtimes/) module documentation. Keep this file as
+historical context for the original ACP/A2A/CLI integration work.
+
 ## 1. Goal
 
 Agent Teams needs an open agent-runtime integration point instead of a closed list of built-in local runtimes.

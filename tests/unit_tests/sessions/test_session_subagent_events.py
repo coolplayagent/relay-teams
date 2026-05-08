@@ -6,7 +6,9 @@ import asyncio
 import pytest
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.sessions.runs.enums import RunEventType

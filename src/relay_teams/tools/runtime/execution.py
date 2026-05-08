@@ -35,7 +35,7 @@ from uuid import uuid4
 
 from relay_teams.audit import AuditEventCreate, AuditEventType, AuditService
 from relay_teams.logger import get_logger, log_event, log_tool_error
-from relay_teams.agents.instances.models import (
+from relay_teams.agent_runtimes.instances.models import (
     AgentRuntimeRecord,
     RuntimeToolSnapshotEntry,
     RuntimeToolsSnapshot,

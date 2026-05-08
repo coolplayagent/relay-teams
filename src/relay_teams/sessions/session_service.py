@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from time import monotonic
 from typing import TYPE_CHECKING, cast
 
-from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
 from relay_teams.media import ContentPart
 from relay_teams.media import content_parts_to_text
 from relay_teams.media import user_prompt_content_to_text
@@ -36,7 +36,9 @@ from relay_teams.sessions.session_rounds_projection import (
     paginate_rounds,
     timeline_rounds,
 )
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository

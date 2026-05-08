@@ -9,11 +9,11 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
-from relay_teams.external_agents.models import (
+from relay_teams.agent_runtimes.models import (
     ExternalAgentSessionRecord,
     ExternalAgentTransportType,
 )
-from relay_teams.external_agents.session_repository import (
+from relay_teams.agent_runtimes.session_repository import (
     ExternalAgentSessionRepository,
 )
 from relay_teams.gateway.feishu.account_repository import (

@@ -8,8 +8,10 @@ import pytest
 
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.todo_models import TodoItem, TodoSnapshot, TodoStatus
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.harnesses.execution_harness import (
     ExecutionHarness,
 )

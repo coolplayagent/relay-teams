@@ -17,14 +17,16 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
 from relay_teams.sessions.session_rounds_projection import build_session_rounds
 from relay_teams.sessions.session_rounds_projection import build_session_timeline_rounds
 from relay_teams.sessions.session_rounds_projection import (
     _coordinator_event_tool_messages,
     _merge_event_tool_messages,
 )
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.runs.assistant_errors import RunCompletionReason

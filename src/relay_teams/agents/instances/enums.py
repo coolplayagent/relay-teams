@@ -1,17 +1,12 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from enum import Enum
+from relay_teams.agent_runtimes.instances.enums import (
+    InstanceLifecycle,
+    InstanceStatus,
+)
 
-
-class InstanceStatus(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    STOPPED = "stopped"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    TIMEOUT = "timeout"
-
-
-class InstanceLifecycle(str, Enum):
-    REUSABLE = "reusable"
-    EPHEMERAL = "ephemeral"
+__all__ = [
+    "InstanceLifecycle",
+    "InstanceStatus",
+]

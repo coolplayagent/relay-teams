@@ -854,12 +854,11 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 
 - `relay_teams.persistence`: shared SQLite connection setup, scope models, and `shared_state`.
 - `relay_teams.sessions`: `sessions`, `external_session_bindings`, `session_history_markers`.
-- `relay_teams.external_agents`: `external_agent_sessions`.
+- `relay_teams.agent_runtimes`: `external_agent_sessions`, `agent_instances`.
 - `relay_teams.workspace`: `workspaces`.
 - `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`, `run_todos`.
 - `relay_teams.audit`: `security_audit_events`.
 - `relay_teams.monitors`: `monitor_subscriptions`, `monitor_triggers`.
-- `relay_teams.agents`: `agent_instances`.
 - `relay_teams.agents.tasks`: `tasks`, `task_spec_artifacts`.
 - `relay_teams.agents.execution`: `messages`.
 - `relay_teams.tools.runtime`: `approval_tickets`.

@@ -12,8 +12,8 @@ from typing import Callable
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import ModelResponse, TextPart
 
-from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
-from relay_teams.agents.instances.models import (
+from relay_teams.agent_runtimes.instances.enums import InstanceLifecycle, InstanceStatus
+from relay_teams.agent_runtimes.instances.models import (
     AgentRuntimeRecord,
     create_subagent_instance,
 )
@@ -54,7 +54,9 @@ from relay_teams.sessions.runs.assistant_errors import (
     RunCompletionReason,
     build_assistant_error_message,
 )
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.sessions.session_repository import SessionRepository
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,

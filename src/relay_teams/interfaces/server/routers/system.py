@@ -47,14 +47,14 @@ from relay_teams.env.localhost_run_tunnel_service import (
     LocalhostRunTunnelStopRequest,
     LocalhostRunTunnelService,
 )
-from relay_teams.external_agents import (
+from relay_teams.agent_runtimes import (
     ExternalAgentConfig,
     ExternalAgentConfigService,
     ExternalAgentProtocol,
     ExternalAgentSummary,
     ExternalAgentTestResult,
 )
-from relay_teams.external_agents.runtime_probe import probe_agent_runtime
+from relay_teams.agent_runtimes.runtime_probe import probe_agent_runtime
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvInput
 from relay_teams.env.web_config_models import WebConfig

@@ -15,7 +15,7 @@ import pytest
 from pydantic import JsonValue
 
 from relay_teams.env.proxy_env import ProxyEnvInput
-from relay_teams.external_agents import (
+from relay_teams.agent_runtimes import (
     ExternalAgentConfig,
     ExternalAgentProtocol,
     ExternalAgentSummary,

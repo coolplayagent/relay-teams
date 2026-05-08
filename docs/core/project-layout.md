@@ -4,6 +4,7 @@
 
 - Core package: `src/relay_teams/`
 - Main modules:
+  - `agent_runtimes/`: agent-runtime configuration, ACP/A2A/CLI protocol clients, runtime instance records, runtime message bus, probes, host-tool bridge, native config, and skill bridge
   - `agents/`: agent models, execution flow, orchestration, and task domain
     - `agents/execution/`: prompt assembly, message persistence, subagent running, LLM session flow
     - `agents/orchestration/`: coordinator, meta-agent, verification, human gate, task execution/orchestration

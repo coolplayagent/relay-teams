@@ -14,7 +14,7 @@ import typer
 from relay_teams.commands.command_cli import build_commands_app
 from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
 from relay_teams.env.env_cli import env_app
-from relay_teams.external_agents.agent_cli import build_agent_runtimes_app
+from relay_teams.agent_runtimes.agent_cli import build_agent_runtimes_app
 from relay_teams.interfaces.cli.gateway_cli import build_gateway_app
 from relay_teams.interfaces.cli.approvals_cli import build_approvals_app
 from relay_teams.interfaces.cli.hooks_cli import build_hooks_app

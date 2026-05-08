@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from typing import cast
 
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
 from relay_teams.media import InlineMediaContentPart
 from relay_teams.media import MediaModality
 from relay_teams.media import TextContentPart
 from relay_teams.sessions.session_rounds_projection import build_session_rounds
 from relay_teams.sessions.session_rounds_projection import build_session_timeline_rounds
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimePhase,

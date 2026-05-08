@@ -66,11 +66,11 @@ from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.proxy_env import ProxyEnvConfig, sync_proxy_env_to_process_env
 from relay_teams.env.runtime_env import sync_app_env_to_process_env
 from relay_teams.env.web_config_service import WebConfigService
-from relay_teams.external_agents import (
+from relay_teams.agent_runtimes import (
     ExternalAgentConfigService,
     ExternalAgentSessionRepository,
 )
-from relay_teams.external_agents.provider import ExternalAcpSessionManager
+from relay_teams.agent_runtimes.provider import AgentRuntimeSessionManager
 from relay_teams.gateway.feishu.account_repository import FeishuAccountRepository
 from relay_teams.gateway.feishu.client import FeishuClient
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
@@ -182,7 +182,9 @@ from relay_teams.skills.config_reload_service import SkillsConfigReloadService
 from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.skills.skill_routing_service import SkillRuntimeService
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -706,7 +708,7 @@ class ServerContainer:
         self.tool_approval_manager: ToolApprovalManager = ToolApprovalManager()
         self.user_question_manager: UserQuestionManager = UserQuestionManager()
         self.tool_approval_policy: ToolApprovalPolicy = ToolApprovalPolicy()
-        self.external_acp_session_manager = ExternalAcpSessionManager(
+        self.external_acp_session_manager = AgentRuntimeSessionManager(
             config_dir=self.config_dir,
             config_service=self.external_agent_config_service,
             session_repo=self.external_agent_session_repo,

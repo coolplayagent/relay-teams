@@ -7,7 +7,9 @@ from datetime import datetime
 import json
 from typing import cast
 
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.media import ContentPart
 from relay_teams.media import ContentPartAdapter
 from relay_teams.media import content_parts_from_text
