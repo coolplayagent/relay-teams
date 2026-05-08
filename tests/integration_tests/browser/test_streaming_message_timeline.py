@@ -1832,7 +1832,6 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
           {{
             trace_id: runId,
             root_task_id: 'task-terminal-output',
-            status: 'completed',
             output: [{{ kind: 'text', text: 'terminal payload final answer' }}],
           }},
           {{
@@ -1850,7 +1849,6 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
           {{
             trace_id: failedRunId,
             root_task_id: 'task-terminal-failed-output',
-            status: 'failed',
             completion_reason: 'assistant_response',
             output: [{{ kind: 'text', text: 'failed assistant final answer' }}],
           }},

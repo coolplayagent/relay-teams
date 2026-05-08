@@ -478,7 +478,7 @@ export function handleRunCompleted(eventMeta, payload = null) {
         roleId: getRunPrimaryRoleId(runId),
         label: getRunPrimaryRoleLabel(runId),
         eventMeta,
-        allowFailedAssistantResponse: false,
+        terminalStatus: 'completed',
     });
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     reconcileTerminalRunStreamState(runId);
@@ -548,7 +548,7 @@ export function handleRunFailed(eventMeta, payload) {
         roleId: getRunPrimaryRoleId(runId),
         label: getRunPrimaryRoleLabel(runId),
         eventMeta,
-        allowFailedAssistantResponse: true,
+        terminalStatus: 'failed',
     });
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     reconcileTerminalRunStreamState(runId);
@@ -580,14 +580,14 @@ function appendMissingTerminalOutput(
         roleId = '',
         label = '',
         eventMeta = null,
-        allowFailedAssistantResponse = false,
+        terminalStatus = '',
     } = {},
 ) {
     const safeRunId = String(runId || '').trim();
     if (!safeRunId || !payload || typeof payload !== 'object') {
         return;
     }
-    if (!isDisplayableTerminalOutput(payload, allowFailedAssistantResponse)) {
+    if (!isDisplayableTerminalOutput(payload, terminalStatus)) {
         return;
     }
     if (coordinatorOverlayHasFinalContent(safeRunId)) {
@@ -609,12 +609,12 @@ function appendMissingTerminalOutput(
     });
 }
 
-function isDisplayableTerminalOutput(payload, allowFailedAssistantResponse) {
-    const status = String(payload.status || '').trim().toLowerCase();
+function isDisplayableTerminalOutput(payload, terminalStatus) {
+    const status = String(terminalStatus || '').trim().toLowerCase();
     if (status === 'completed') {
         return true;
     }
-    if (!allowFailedAssistantResponse || status !== 'failed') {
+    if (status !== 'failed') {
         return false;
     }
     const completionReason = String(payload.completion_reason || '').trim().toLowerCase();
