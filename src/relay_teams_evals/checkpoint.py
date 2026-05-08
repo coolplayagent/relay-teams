@@ -74,7 +74,7 @@ def build_checkpoint_signature(
         agent_yolo=cfg.agent_teams.yolo,
         agent_timeout_seconds=cfg.agent_teams.timeout_seconds,
         agent_config_dir=(
-            str(cfg.agent_teams.config_dir.resolve())
+            str(cfg.agent_teams.config_dir.expanduser().resolve())
             if cfg.agent_teams.config_dir is not None
             else None
         ),

@@ -56,3 +56,11 @@ def test_eval_entrypoint_copies_only_whitelisted_config_entries(tmp_path: Path) 
     assert not (target_dir / "relay_teams.db").exists()
     assert not (target_dir / "log").exists()
     assert not (target_dir / "secrets.txt").exists()
+
+
+def test_eval_entrypoint_defaults_to_runtime_config_dir() -> None:
+    script_path = Path(__file__).resolve().parents[4] / "docker" / "eval-entrypoint.sh"
+
+    assert 'CONFIG_TARGET="${AGENT_TEAMS_CONFIG_TARGET:-/root/.relay-teams}"' in (
+        script_path.read_text(encoding="utf-8")
+    )

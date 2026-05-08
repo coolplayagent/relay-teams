@@ -15,7 +15,7 @@ agent_teams:
   orchestration_preset_id: null
   yolo: true
   timeout_seconds: 600
-  config_dir: "~/.config/agent-teams"
+  config_dir: "~/.relay-teams"
 
 workspace_mode: docker
 evals_workdir: .agent_teams/evals/workspaces

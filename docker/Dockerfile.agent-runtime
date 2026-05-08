@@ -57,7 +57,11 @@ RUN python3 -m pip wheel --quiet --no-cache-dir \
         --wheel-dir /opt/agent-runtime/wheels \
         pydantic">=2.7.0" pydantic-ai "pydantic-ai-slim[fastmcp]" \
         PyYAML">=6.0.1" typer">=0.12.3" "fastapi>=0.100.0" \
-        "uvicorn[standard]>=0.23.0" "httpx>=0.27.0"
+        "uvicorn[standard]>=0.23.0" "httpx>=0.27.0" \
+        "json-repair>=0.58.7" "lark-oapi==1.5.3" \
+        "markitdown[pdf,docx,pptx,xlsx]>=0.1.5,<0.2" \
+        "markdownify>=1.2.0" "defusedxml>=0.7.1" \
+        "qrcode>=8.0" "aiosqlite>=0.22.1"
 
 # -- Stage 2: project wheel (rebuilds when source changes) --
 COPY src/relay_teams/ src/relay_teams/
@@ -78,6 +82,7 @@ mkdir -p "$WORK_ROOT"\n\
 "$RUNTIME_ROOT/bin/uv" -q venv --clear --no-project \\\n\
     --python "$RUNTIME_ROOT/bin/python3.12" "$VENV_PATH"\n\
 "$RUNTIME_ROOT/bin/uv" -q pip install --offline --no-index --no-build \\\n\
+    --prerelease=allow \\\n\
     --python "$VENV_PATH/bin/python" \\\n\
     --find-links "$RUNTIME_ROOT/wheels" relay-teams\n\
 cd "$RUNTIME_ROOT"\n\
@@ -99,4 +104,3 @@ RUN /opt/agent-runtime/bin/rg --version > /dev/null && \
 
 # Declare volume so --volumes-from mounts /opt/agent-runtime/ into eval containers.
 VOLUME /opt/agent-runtime
-

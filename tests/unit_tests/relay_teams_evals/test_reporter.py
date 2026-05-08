@@ -173,8 +173,69 @@ def test_write_json_includes_swebench_diagnostics() -> None:
     ]
     assert "rerun_command" not in payload["results"][0]
     assert payload["results"][0]["error"] is None
+    assert payload["results"][0]["log_path"] is None
     assert "scorer_log" not in payload["results"][0]
     assert "build_error_summary" not in payload["results"][0]
+
+
+def test_write_json_keeps_error_separate_from_log_path() -> None:
+    report = build_report(
+        [
+            EvalResult(
+                item_id="demo",
+                dataset="swebench",
+                run_id="run-1",
+                session_id="session-1",
+                outcome=RunOutcome.FAILED,
+                passed=False,
+                score=0.0,
+                scorer_name="swebench_docker",
+                error=None,
+                scorer_log="pytest output",
+                token_usage=TokenUsage(),
+            )
+        ],
+        dataset="swebench",
+        scorer_name="swebench_docker",
+    )
+    path = _local_tmp_dir("reporter-json-log") / "report.json"
+
+    EvalReporter().write_json(report, path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["errored"] == 0
+    assert payload["results"][0]["error"] is None
+    assert payload["results"][0]["log_path"] == "artifacts/demo/scorer_log.txt"
+    assert "scorer_log" not in payload["results"][0]
+
+
+def test_write_json_preserves_serialized_log_path_without_scorer_log() -> None:
+    report = build_report(
+        [
+            EvalResult(
+                item_id="demo",
+                dataset="swebench",
+                run_id="run-1",
+                session_id="session-1",
+                outcome=RunOutcome.FAILED,
+                passed=False,
+                score=0.0,
+                scorer_name="swebench_docker",
+                error="docker failed",
+                log_path="artifacts/demo/scorer_log.txt",
+                token_usage=TokenUsage(),
+            )
+        ],
+        dataset="swebench",
+        scorer_name="swebench_docker",
+    )
+    path = _local_tmp_dir("reporter-json-preserve-log") / "report.json"
+
+    EvalReporter().write_json(report, path)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["results"][0]["error"] == "docker failed"
+    assert payload["results"][0]["log_path"] == "artifacts/demo/scorer_log.txt"
 
 
 def test_write_html_shows_log_path_instead_of_error_text() -> None:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+
+import pytest
 
 from relay_teams_evals.models import (
     AuxiliaryScore,
@@ -9,6 +12,7 @@ from relay_teams_evals.models import (
     RunOutcome,
     TokenUsage,
 )
+from relay_teams_evals.workspace.base import PreparedWorkspace
 from relay_teams_evals.workspace.artifact_collector import ArtifactCollector
 
 
@@ -206,3 +210,130 @@ def test_artifact_collector_overwrites_previous_artifacts_for_rerun(tmp_path) ->
     assert not (artifact_dir / "patch.diff").exists()
     assert not (artifact_dir / "raw_patch.diff").exists()
     assert not (artifact_dir / "scorer_log.txt").exists()
+
+
+def test_artifact_collector_copies_sqlite_wal_sidecars(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(
+        command: list[str],
+        capture_output: bool,
+        check: bool = False,
+        text: bool = False,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, check, text, encoding, errors
+        commands.append(tuple(command))
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(
+        "relay_teams_evals.workspace.artifact_collector.subprocess.run",
+        fake_run,
+    )
+    collector = ArtifactCollector(tmp_path)
+    item = EvalItem(item_id="demo-db", dataset="swebench", intent="demo")
+    result = EvalResult(
+        item_id="demo-db",
+        dataset="swebench",
+        run_id="run-1",
+        session_id="session-1",
+        outcome=RunOutcome.COMPLETED,
+        passed=True,
+        score=1.0,
+        scorer_name="swebench_docker",
+        token_usage=TokenUsage(),
+    )
+    workspace = PreparedWorkspace(
+        item_id="demo-db",
+        repo_path=tmp_path / "repo",
+        base_commit="abc123",
+        container_id="container-1",
+    )
+
+    collector.collect(item, result, workspace=workspace)
+
+    artifact_dir = tmp_path / "artifacts" / "demo-db"
+    docker_cp_commands = [
+        command for command in commands if command[:2] == ("docker", "cp")
+    ]
+    assert docker_cp_commands == [
+        (
+            "docker",
+            "cp",
+            "container-1:/root/.relay-teams/relay_teams.db",
+            str(artifact_dir / "relay_teams.db"),
+        ),
+        (
+            "docker",
+            "cp",
+            "container-1:/root/.relay-teams/relay_teams.db-wal",
+            str(artifact_dir / "relay_teams.db-wal"),
+        ),
+        (
+            "docker",
+            "cp",
+            "container-1:/root/.relay-teams/relay_teams.db-shm",
+            str(artifact_dir / "relay_teams.db-shm"),
+        ),
+    ]
+
+
+def test_artifact_collector_logs_missing_container_db_sidecars(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fake_run(
+        command: list[str],
+        capture_output: bool,
+        check: bool = False,
+        text: bool = False,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, check, text, encoding, errors
+        if command[:2] == ["docker", "cp"] and command[2].endswith(
+            "relay_teams.db-wal"
+        ):
+            raise subprocess.CalledProcessError(returncode=1, cmd=command)
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(
+        "relay_teams_evals.workspace.artifact_collector.subprocess.run",
+        fake_run,
+    )
+    collector = ArtifactCollector(tmp_path)
+    item = EvalItem(item_id="demo-missing-wal", dataset="swebench", intent="demo")
+    result = EvalResult(
+        item_id="demo-missing-wal",
+        dataset="swebench",
+        run_id="run-1",
+        session_id="session-1",
+        outcome=RunOutcome.COMPLETED,
+        passed=True,
+        score=1.0,
+        scorer_name="swebench_docker",
+        token_usage=TokenUsage(),
+    )
+    workspace = PreparedWorkspace(
+        item_id="demo-missing-wal",
+        repo_path=tmp_path / "repo",
+        base_commit="abc123",
+        container_id="container-1",
+    )
+
+    collector.collect(item, result, workspace=workspace)
+
+    out = capsys.readouterr().out
+    assert (
+        "[demo-missing-wal] skipped missing container DB artifact: "
+        "/root/.relay-teams/relay_teams.db-wal"
+    ) in out

@@ -109,3 +109,22 @@ def test_build_checkpoint_signature_includes_session_mode_and_orchestration(
 
     assert signature.agent_session_mode == "orchestration"
     assert signature.agent_orchestration_preset_id == "default"
+
+
+def test_build_checkpoint_signature_expands_agent_config_dir(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "dataset.jsonl"
+    dataset_path.write_text('{"item_id":"a","intent":"demo"}\n', encoding="utf-8")
+    config_dir = Path("~/.config/agent-teams")
+    cfg = RunConfig(
+        dataset_path=dataset_path,
+        workspace_mode="docker",
+        agent_teams=AgentTeamsConfig(config_dir=config_dir),
+    )
+
+    signature = build_checkpoint_signature(
+        cfg,
+        dataset_path=dataset_path,
+        item_ids=("a",),
+    )
+
+    assert signature.agent_config_dir == str(config_dir.expanduser().resolve())

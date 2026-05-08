@@ -117,16 +117,18 @@ class ArtifactCollector:
         self, artifact_dir: Path, workspace: PreparedWorkspace
     ) -> None:
         db_src = "/root/.relay-teams/relay_teams.db"
-        db_dest = artifact_dir / "relay_teams.db"
-        try:
-            container_id = workspace.container_id or ""
-            subprocess.run(
-                ["docker", "cp", f"{container_id}:{db_src}", str(db_dest)],
-                capture_output=True,
-                check=True,
-            )
-        except (subprocess.CalledProcessError, OSError):
-            pass
+        for suffix in ("", "-wal", "-shm"):
+            src = f"{db_src}{suffix}"
+            dest = artifact_dir / f"relay_teams.db{suffix}"
+            try:
+                container_id = workspace.container_id or ""
+                subprocess.run(
+                    ["docker", "cp", f"{container_id}:{src}", str(dest)],
+                    capture_output=True,
+                    check=True,
+                )
+            except (subprocess.CalledProcessError, OSError):
+                _log(workspace.item_id, f"skipped missing container DB artifact: {src}")
 
     def _collect_container_log(
         self, artifact_dir: Path, workspace: PreparedWorkspace

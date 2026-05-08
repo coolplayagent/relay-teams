@@ -385,3 +385,72 @@ def test_agent_teams_backend_configures_orchestration_session(
 
     assert [event.type for event in events] == ["metadata", "token_usage", "completed"]
     assert "configuring session mode: orchestration preset=default" in out
+
+
+class _FakeFailedClient(_FakeClient):
+    def stream_run_events(self, run_id: str) -> Iterator[dict[str, object]]:
+        assert run_id == "run-1"
+        yield {
+            "event_type": "run_failed",
+            "payload_json": (
+                '{"trace_id": "run-1", "root_task_id": "root_12345678", '
+                '"error_message": "assistant error"}'
+            ),
+        }
+
+
+class _FakeStoppedClient(_FakeClient):
+    def stream_run_events(self, run_id: str) -> Iterator[dict[str, object]]:
+        assert run_id == "run-1"
+        yield {
+            "event_type": "run_stopped",
+            "payload_json": '{"trace_id": "run-1", "root_task_id": "root_12345678"}',
+        }
+
+
+def test_agent_teams_backend_maps_failed_terminal_event(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "relay_teams_evals.backends.agent_teams.AgentTeamsClient",
+        _FakeFailedClient,
+    )
+    backend = AgentTeamsBackend(
+        AgentTeamsConfig(
+            base_url="http://localhost:8000",
+            timeout_seconds=30.0,
+            yolo=True,
+        )
+    )
+    workspace = PreparedWorkspace(
+        item_id="demo",
+        repo_path=Path("."),
+        base_commit="abc123",
+        container_repo_path="/testbed",
+    )
+
+    events = list(backend.run("demo intent", workspace))
+
+    assert [event.type for event in events] == ["metadata", "failed"]
+
+
+def test_agent_teams_backend_maps_stopped_terminal_event(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "relay_teams_evals.backends.agent_teams.AgentTeamsClient",
+        _FakeStoppedClient,
+    )
+    backend = AgentTeamsBackend(
+        AgentTeamsConfig(
+            base_url="http://localhost:8000",
+            timeout_seconds=30.0,
+            yolo=True,
+        )
+    )
+    workspace = PreparedWorkspace(
+        item_id="demo",
+        repo_path=Path("."),
+        base_commit="abc123",
+        container_repo_path="/testbed",
+    )
+
+    events = list(backend.run("demo intent", workspace))
+
+    assert [event.type for event in events] == ["metadata", "stopped"]
