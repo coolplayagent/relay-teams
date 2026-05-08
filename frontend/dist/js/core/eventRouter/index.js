@@ -176,7 +176,7 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'model_step_finished') {
         handleModelStepFinished(eventMeta, instanceId, roleId);
     } else if (evType === 'run_completed') {
-        handleRunCompleted(eventMeta);
+        handleRunCompleted(eventMeta, payload);
         roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'run_stopped') {
         handleRunStopped(eventMeta, payload);

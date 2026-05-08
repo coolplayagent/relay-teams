@@ -1121,7 +1121,9 @@ Notes:
 - `compaction_marker_before.label` is `History compacted (rolling summary)` when the marker metadata reports `compaction_strategy = rolling_summary`; older markers without strategy metadata may still render as `History compacted`.
 - `microcompact` and `compaction_marker_before` may both be present on the same round. In that case the request first used microcompact and then also crossed a persisted full-compaction boundary.
 - Automatic history compaction is logical only. Older messages are marked hidden-from-context for model reads, but remain available to raw/history endpoints.
-- When legacy destructive clear behavior left a completed run with no persisted coordinator message rows, the round projection may synthesize one assistant text message from the persisted `run_completed.output`.
+- A terminal `run_completed` event with non-empty `output` is a valid final-answer source. The live frontend must render that terminal output when no `text_delta` or `output_delta` has already produced final coordinator content for the run.
+- A terminal `run_failed` event with `completion_reason = "assistant_response"` follows the same final-output rule; other failed terminal outputs remain diagnostic and are not treated as final answers.
+- When legacy destructive clear behavior left a completed run with no persisted coordinator message rows, the round projection may synthesize one assistant text message from the persisted terminal event output.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
 

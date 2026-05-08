@@ -914,6 +914,10 @@ export function reconcileTerminalRunStreamState(runId) {
     globalThis.__reconcileTerminalRunStreamStateCalls.push(runId);
 }
 
+export function getCoordinatorStreamOverlay() {
+    return null;
+}
+
 export function getOrCreateStreamBlock() {
     return undefined;
 }
