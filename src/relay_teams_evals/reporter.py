@@ -87,6 +87,8 @@ def _report_log_path(result: EvalResult) -> str:
         return result.build_log_path
     if result.scorer_log:
         return _artifact_log_path(result.item_id, "scorer_log.txt")
+    if result.log_path:
+        return result.log_path
     if result.error:
         return _artifact_log_path(result.item_id, "container.log")
     return ""
@@ -98,7 +100,7 @@ def _report_payload(report: EvalReport) -> dict[str, object]:
     assert isinstance(raw_results, list)
     for raw_result, result in zip(raw_results, report.results):
         assert isinstance(raw_result, dict)
-        raw_result["error"] = _report_log_path(result) or None
+        raw_result["log_path"] = _report_log_path(result) or None
         raw_result.pop("scorer_log", None)
         raw_result.pop("build_error_summary", None)
     return payload

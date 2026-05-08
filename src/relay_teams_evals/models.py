@@ -108,6 +108,7 @@ class EvalResult(BaseModel):
     workspace_path: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(tz=timezone.utc))
     error: str | None = None
+    log_path: str | None = None
     build_log_path: str | None = None
     build_error_summary: str | None = None
 

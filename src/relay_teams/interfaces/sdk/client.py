@@ -12,6 +12,8 @@ from relay_teams.media import content_parts_from_text
 from relay_teams.env import load_proxy_env_config
 from relay_teams.net import create_async_http_client
 
+_STREAM_TERMINAL_EVENTS = frozenset({"run_completed", "run_failed", "run_stopped"})
+
 
 class RunHandle(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -337,6 +339,8 @@ class AsyncAgentTeamsClient:
                         parsed = json.loads(payload)
                         if isinstance(parsed, dict):
                             yield parsed
+                            if parsed.get("event_type") in _STREAM_TERMINAL_EVENTS:
+                                return
             except httpx.HTTPStatusError as exc:
                 body = (await exc.response.aread()).decode("utf-8", errors="replace")
                 raise RuntimeError(

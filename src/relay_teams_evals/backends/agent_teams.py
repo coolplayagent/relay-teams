@@ -476,6 +476,7 @@ class AgentTeamsBackend(AgentBackend):
 
             _log(workspace.item_id, "streaming events ...")
             event_count = 0
+            terminal_event_type: str | None = None
             stream = await _maybe_await(client.stream_run_events(run_id))
             async for raw_event in _iter_raw_events(stream):
                 event_count += 1
@@ -523,15 +524,16 @@ class AgentTeamsBackend(AgentBackend):
                         str(event_type),
                         data,
                     )
-                    if event_type == "run_completed":
-                        yield AgentEvent(type="completed")
-                    elif event_type == "run_failed":
-                        yield AgentEvent(type="failed")
-                    elif event_type == "run_stopped":
-                        yield AgentEvent(type="stopped")
 
                 if event_type in _TERMINAL_EVENTS:
-                    break
+                    terminal_event_type = str(event_type)
+
+            if terminal_event_type == "run_completed":
+                yield AgentEvent(type="completed")
+            elif terminal_event_type == "run_failed":
+                yield AgentEvent(type="failed")
+            elif terminal_event_type == "run_stopped":
+                yield AgentEvent(type="stopped")
 
         finally:
             if not keep_workspace:

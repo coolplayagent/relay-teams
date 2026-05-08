@@ -13,7 +13,7 @@
 #       /opt/agent-runtime/bin/relay-teams server start ...
 
 CONFIG_STAGING="${AGENT_TEAMS_CONFIG_STAGING:-/tmp/agent-config-host}"
-CONFIG_TARGET="${AGENT_TEAMS_CONFIG_TARGET:-/root/.config/agent-teams}"
+CONFIG_TARGET="${AGENT_TEAMS_CONFIG_TARGET:-/root/.relay-teams}"
 
 if [ -d "$CONFIG_STAGING" ]; then
     mkdir -p "$CONFIG_TARGET"
