@@ -6,8 +6,8 @@ from typing import cast
 
 from pydantic import JsonValue
 
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.models import (
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.models import (
     AgentRuntimeRecord,
     RuntimeToolSnapshotEntry,
     RuntimeToolsSnapshot,

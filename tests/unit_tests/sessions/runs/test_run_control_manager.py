@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import UserPromptPart
 
-from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
+from relay_teams.agent_runtimes.instances.enums import InstanceLifecycle, InstanceStatus
 from relay_teams.sessions.runs.enums import (
     InjectionDeliveryMode,
     InjectionSource,
@@ -13,7 +15,9 @@ from relay_teams.sessions.runs.enums import (
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_runtime_repo import (

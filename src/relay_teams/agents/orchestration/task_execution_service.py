@@ -14,8 +14,10 @@ from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.execution.system_prompts import (
     RuntimePromptBuilder,
 )
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.harnesses import (
     TASK_MEMORY_RESULT_EXCERPT_CHARS,
     ExecutionHarness,

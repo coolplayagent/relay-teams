@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType

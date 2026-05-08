@@ -13,6 +13,7 @@ This directory is organized by documentation purpose and runtime module.
 ## Modules
 
 - [Agents](modules/agents/)
+- [Agent runtimes](modules/agent-runtimes/)
 - [Orchestration policy](modules/agents/orchestration-policy-design.md)
 - [Verification evidence and semantic checks](modules/agents/verification-evidence-semantic-spec.md)
 - [SP-2 role contracts](modules/agents/sp2-role-contracts-spec.md)
@@ -22,7 +23,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Frontend](modules/frontend/README.md)
 - [Runtime hooks](modules/hooks/relay-teams-runtime-hooks-design.md)
 - [Logger](modules/logger/logger-desensitize-design.md)
-- [MCP, ACP, and agent runtimes](modules/mcp-acp/)
+- [MCP and ACP](modules/mcp-acp/)
 - [Memory](modules/memory/)
 - [Metrics](modules/metrics/metrics-platform-design.md)
 - [Prompt behavior](modules/prompt/system-prompt-layering.md)

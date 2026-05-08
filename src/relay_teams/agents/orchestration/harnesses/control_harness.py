@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
 
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
 from relay_teams.agents.tasks.agent_wakeup_repository import AgentWakeupRepository
 from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository

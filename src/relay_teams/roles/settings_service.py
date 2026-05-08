@@ -42,7 +42,7 @@ from relay_teams.roles.role_contracts import (
 import asyncio
 
 if TYPE_CHECKING:
-    from relay_teams.external_agents import ExternalAgentConfigService
+    from relay_teams.agent_runtimes import ExternalAgentConfigService
 
 
 from relay_teams.roles.tool_diet_validation import should_reject

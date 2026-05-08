@@ -23,7 +23,7 @@ from relay_teams.env.github_config_service import GitHubConfigService
 from relay_teams.env.localhost_run_tunnel_service import LocalhostRunTunnelService
 from relay_teams.env.proxy_config_service import ProxyConfigService
 from relay_teams.env.web_config_service import WebConfigService
-from relay_teams.external_agents import ExternalAgentConfigService
+from relay_teams.agent_runtimes import ExternalAgentConfigService
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
 from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
 from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler

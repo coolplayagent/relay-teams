@@ -616,6 +616,8 @@ Deletes one ClawHub-managed app skill directory and reloads the runtime skill re
 
 Returns configured agent runtimes.
 
+Implementation ownership lives in `relay_teams.agent_runtimes`.
+
 Each item includes:
 - `agent_id`
 - `name`
@@ -2711,6 +2713,10 @@ Rules:
 ### `spawn_subagent`
 
 Starts a fresh one-shot subagent run under a subagent-capable role.
+
+Runtime ownership: the launched child is persisted as an agent-runtime instance.
+The subagent name is a product/API projection, not a separate execution
+architecture.
 
 Arguments:
 - `role_id`: target role. The role must resolve to `mode="subagent"` or `mode="all"`.

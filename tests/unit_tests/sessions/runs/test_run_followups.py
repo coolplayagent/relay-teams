@@ -7,9 +7,11 @@ from typing import cast
 import pytest
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
+from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.sessions.runs.active_run_registry import ActiveSessionRunRegistry
 from relay_teams.sessions.runs.background_tasks.manager import BackgroundTaskManager

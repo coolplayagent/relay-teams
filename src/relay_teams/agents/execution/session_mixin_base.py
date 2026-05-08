@@ -39,7 +39,9 @@ from relay_teams.agents.execution.stream_events import StreamEventService
 from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.agents.execution.tool_args_recovery import ToolArgsRecoveryService
 from relay_teams.agents.execution.tool_result_state import ToolResultStateService
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.task_contracts import (
     TaskExecutionServiceLike,
     TaskOrchestrationServiceLike,

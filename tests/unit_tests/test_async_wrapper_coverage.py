@@ -147,32 +147,32 @@ _RUN_INTENT_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
 
 _AGENT_INSTANCE_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
     _WrapperSpec(
-        "relay_teams.agents.instances.instance_repository",
+        "relay_teams.agent_runtimes.instances.instance_repository",
         "AgentInstanceRepository",
         "upsert_instance_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.instances.instance_repository",
+        "relay_teams.agent_runtimes.instances.instance_repository",
         "AgentInstanceRepository",
         "update_runtime_snapshot_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.instances.instance_repository",
+        "relay_teams.agent_runtimes.instances.instance_repository",
         "AgentInstanceRepository",
         "mark_status_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.instances.instance_repository",
+        "relay_teams.agent_runtimes.instances.instance_repository",
         "AgentInstanceRepository",
         "list_by_run_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.instances.instance_repository",
+        "relay_teams.agent_runtimes.instances.instance_repository",
         "AgentInstanceRepository",
         "get_instance_async",
     ),
     _WrapperSpec(
-        "relay_teams.agents.instances.instance_repository",
+        "relay_teams.agent_runtimes.instances.instance_repository",
         "AgentInstanceRepository",
         "get_session_role_instance_async",
     ),

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from relay_teams.computer import ExecutionSurface
-from relay_teams.external_agents import ExternalAgentOption, ExternalAgentTransportType
+from relay_teams.agent_runtimes import ExternalAgentOption, ExternalAgentTransportType
 from relay_teams.interfaces.server.deps import (
     get_external_agent_config_service,
     get_mcp_service,

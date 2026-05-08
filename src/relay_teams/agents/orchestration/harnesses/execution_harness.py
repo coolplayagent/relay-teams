@@ -15,9 +15,11 @@ from relay_teams.agents.execution.system_prompts import (
     RuntimePromptBuilder,
     RuntimePromptSections,
 )
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.agents.instances.models import (
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
+from relay_teams.agent_runtimes.instances.models import (
     AgentRuntimeRecord,
     RuntimeToolSnapshotEntry,
     RuntimeToolsSnapshot,

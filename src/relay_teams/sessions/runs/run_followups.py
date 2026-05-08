@@ -9,9 +9,11 @@ from pydantic import JsonValue
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.agents.instances.models import AgentRuntimeRecord
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
+from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
 from relay_teams.agents.tasks.models import TaskRecord
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.logger import get_logger, log_event

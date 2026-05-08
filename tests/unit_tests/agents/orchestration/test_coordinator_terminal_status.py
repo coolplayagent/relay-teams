@@ -7,8 +7,8 @@ from typing import cast
 import pytest
 
 from relay_teams.media import content_parts_from_text
-from relay_teams.agents.instances.enums import InstanceStatus
-from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
 from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraph,
@@ -37,7 +37,9 @@ from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.runs.run_models import RunTopologySnapshot
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.sessions.runs.run_runtime_repo import (

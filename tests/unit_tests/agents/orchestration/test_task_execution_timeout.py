@@ -14,7 +14,7 @@ from relay_teams.agents.orchestration import (
     task_execution_service as task_execution_module,
 )
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
 from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction
 from relay_teams.agents.tasks.events import EventType
 from relay_teams.agents.tasks.models import TaskHandoff, TaskLifecyclePolicy

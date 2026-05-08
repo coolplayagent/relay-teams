@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from relay_teams.agents.instances.models import AgentRuntimeRecord, SubAgentInstance
+from relay_teams.agent_runtimes.instances.models import (
+    AgentRuntimeRecord,
+    SubAgentInstance,
+)
 from relay_teams.roles.role_models import RoleDefinition
 
 
@@ -46,7 +49,7 @@ def build_a2a_bus_message(
     sender_instance_id: str,
 ) -> object:
     """Build an A2aBusMessage from an A2aMessage."""
-    from relay_teams.agents.orchestration.a2a_bus_models import A2aBusMessage
+    from relay_teams.agent_runtimes.bus_models import A2aBusMessage
 
     return A2aBusMessage(
         message_id=message_id,

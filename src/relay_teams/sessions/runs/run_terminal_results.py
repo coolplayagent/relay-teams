@@ -6,7 +6,9 @@ from json import dumps
 import sqlite3
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.runs.assistant_errors import (
     RunCompletionReason,

@@ -15,7 +15,7 @@ from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
 from relay_teams.media import (
     MediaAssetService,
     TextContentPart,
@@ -66,7 +66,9 @@ from relay_teams.sessions.runs.recoverable_pause import (
     RecoverableRunPauseError,
     RecoverableRunPausePayload,
 )
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRecord,
     ApprovalTicketRepository,

@@ -5,12 +5,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from relay_teams.agents.orchestration.a2a_bus import A2ABus
-from relay_teams.agents.orchestration.a2a_bus_models import (
+from relay_teams.agent_runtimes.bus import A2ABus
+from relay_teams.agent_runtimes.bus_models import (
     A2aBusMessage,
     A2aSubscription,
 )
-from relay_teams.agents.orchestration.a2a_tool import (
+from relay_teams.agent_runtimes.tools import (
     send_a2a_message,
     subscribe_a2a_topic,
 )

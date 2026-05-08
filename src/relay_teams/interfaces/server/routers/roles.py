@@ -35,7 +35,7 @@ from relay_teams.roles import (
     ensure_required_system_roles,
 )
 from relay_teams.roles.role_registry import is_reserved_system_role_definition
-from relay_teams.external_agents import ExternalAgentConfigService
+from relay_teams.agent_runtimes import ExternalAgentConfigService
 from relay_teams.interfaces.server.router_error_mapping import http_exception_for
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.skills.config_reload_service import SkillsConfigReloadService

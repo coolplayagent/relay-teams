@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
 from relay_teams.monitors import (
     MonitorActionType,
     MonitorSourceKind,
@@ -26,7 +26,9 @@ from relay_teams.sessions.runs.background_tasks.repository import (
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.session_service import SessionService
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.tools.workspace_tools.edit_state import (
     load_file_read_state,

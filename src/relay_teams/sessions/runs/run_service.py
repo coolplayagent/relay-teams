@@ -64,7 +64,9 @@ from relay_teams.sessions.runs.run_models import (
     RunKind,
     RunResult,
 )
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import (
     ApprovalTicketRecord,
     ApprovalTicketRepository,

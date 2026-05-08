@@ -14,7 +14,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from relay_teams.agents.instances.models import RuntimeToolsSnapshot
+from relay_teams.agent_runtimes.instances.models import RuntimeToolsSnapshot
 from relay_teams.agents.orchestration.graph_models import (
     build_orchestration_graph_prompt,
 )

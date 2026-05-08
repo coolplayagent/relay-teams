@@ -7,6 +7,10 @@ from typing import cast
 import pytest
 
 import relay_teams.providers.provider_factory as runtime_factory_module
+from relay_teams.agent_runtimes.provider import (
+    AgentRuntimeProvider,
+    AgentRuntimeSessionManager,
+)
 from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
@@ -31,7 +35,9 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig, RuntimePaths
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
@@ -99,7 +105,11 @@ def _build_runtime(
     )
 
 
-def _build_role(*, model_profile: str) -> RoleDefinition:
+def _build_role(
+    *,
+    model_profile: str,
+    bound_agent_id: str | None = None,
+) -> RoleDefinition:
     return RoleDefinition(
         role_id="spec_coder",
         name="Spec Coder",
@@ -109,6 +119,7 @@ def _build_role(*, model_profile: str) -> RoleDefinition:
         mcp_servers=(),
         skills=(),
         model_profile=model_profile,
+        bound_agent_id=bound_agent_id,
         system_prompt="Implement code.",
     )
 
@@ -118,6 +129,7 @@ def _build_factory(
     monkeypatch: pytest.MonkeyPatch,
     runtime: RuntimeConfig,
     provider_registry: _CapturingProviderRegistry,
+    external_agent_session_manager: AgentRuntimeSessionManager | None = None,
 ):
     monkeypatch.setattr(
         runtime_factory_module,
@@ -153,8 +165,43 @@ def _build_factory(
         notification_service=cast(NotificationService | None, None),
         get_task_execution_service=lambda: cast(TaskExecutionService, object()),
         token_usage_repo=cast(TokenUsageRepository | None, None),
-        external_agent_session_manager=None,
+        external_agent_session_manager=external_agent_session_manager,
     )
+
+
+def test_create_provider_factory_returns_agent_runtime_provider_for_bound_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_registry = _CapturingProviderRegistry()
+    factory = _build_factory(
+        monkeypatch=monkeypatch,
+        runtime=_build_runtime(profiles={}),
+        provider_registry=provider_registry,
+        external_agent_session_manager=cast(AgentRuntimeSessionManager, object()),
+    )
+
+    provider = factory(
+        _build_role(model_profile="default", bound_agent_id="codex_local"), None
+    )
+
+    assert isinstance(provider, AgentRuntimeProvider)
+
+
+def test_create_provider_factory_reports_bound_role_without_runtime_manager(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_registry = _CapturingProviderRegistry()
+    factory = _build_factory(
+        monkeypatch=monkeypatch,
+        runtime=_build_runtime(profiles={}),
+        provider_registry=provider_registry,
+    )
+
+    provider = factory(
+        _build_role(model_profile="default", bound_agent_id="codex_local"), None
+    )
+
+    assert isinstance(provider, MisconfiguredProvider)
 
 
 def test_create_provider_factory_uses_role_model_profile_when_present(

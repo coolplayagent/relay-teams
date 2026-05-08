@@ -1,5 +1,9 @@
 # Agent Runtime A2A and CLI Spec
 
+This spec has been superseded by the consolidated
+[`agent-runtimes`](../agent-runtimes/) module documentation. Keep this file as
+historical context for the original A2A and CLI protocol work.
+
 ## 1. Scope
 
 This feature extends the existing external ACP role backend into a protocol-aware agent runtime surface. It covers:

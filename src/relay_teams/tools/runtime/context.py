@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 from pydantic_ai import RunContext
 
 from relay_teams.audit import AuditService
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.execution.message_repository import MessageRepository
 from relay_teams.agents.orchestration.task_contracts import (
     TaskExecutionServiceLike,

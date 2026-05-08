@@ -5,7 +5,9 @@ import pytest
 from pydantic import ValidationError
 from typing import cast
 
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )

@@ -10,7 +10,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.agents.tasks.agent_wakeup_repository import AgentWakeupRepository
 from relay_teams.agents.tasks.enums import TaskStatus, TaskTimeoutAction
 from relay_teams.agents.tasks.models import (

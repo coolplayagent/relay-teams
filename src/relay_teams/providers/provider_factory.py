@@ -8,9 +8,9 @@ from threading import Lock
 from typing import TYPE_CHECKING
 
 from relay_teams.audit import AuditService
-from relay_teams.external_agents.provider import (
-    ExternalAcpProvider,
-    ExternalAcpSessionManager,
+from relay_teams.agent_runtimes.provider import (
+    AgentRuntimeProvider,
+    AgentRuntimeSessionManager,
 )
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.agents.orchestration.task_orchestration_service import (
@@ -45,7 +45,9 @@ from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
 from relay_teams.skills.skill_registry import SkillRegistry
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
 from relay_teams.computer import ComputerRuntime
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
@@ -122,7 +124,7 @@ def create_provider_factory(
     | None = None,
     get_gateway_session_lookup: Callable[[], GatewaySessionLookupLike | None]
     | None = None,
-    external_agent_session_manager: ExternalAcpSessionManager | None = None,
+    external_agent_session_manager: AgentRuntimeSessionManager | None = None,
     session_model_profile_lookup: Callable[[str], ModelEndpointConfig | None]
     | None = None,
     hook_service: HookService | None = None,
@@ -167,7 +169,7 @@ def create_provider_factory(
                     "External agent runtime is not available. "
                     "Reload the server configuration and try again."
                 )
-            return ExternalAcpProvider(
+            return AgentRuntimeProvider(
                 role=role,
                 session_manager=external_agent_session_manager,
             )

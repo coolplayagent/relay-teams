@@ -11,7 +11,7 @@ from pydantic_ai.toolsets.function import FunctionToolset
 from relay_teams.agents.execution.coordination_agent_builder import (
     build_coordination_agent,
 )
-from relay_teams.agents.instances.models import (
+from relay_teams.agent_runtimes.instances.models import (
     RuntimeToolSnapshotEntry,
     RuntimeToolsSnapshot,
 )

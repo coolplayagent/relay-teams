@@ -9,9 +9,11 @@ from typing import cast
 from pydantic import JsonValue
 
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.instances.enums import InstanceLifecycle, InstanceStatus
-from relay_teams.agents.instances.instance_repository import AgentInstanceRepository
-from relay_teams.agents.instances.models import create_subagent_instance
+from relay_teams.agent_runtimes.instances.enums import InstanceLifecycle, InstanceStatus
+from relay_teams.agent_runtimes.instances.instance_repository import (
+    AgentInstanceRepository,
+)
+from relay_teams.agent_runtimes.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.claim_service import (
     BlockersNotResolvedError,
     ClaimConflictError,

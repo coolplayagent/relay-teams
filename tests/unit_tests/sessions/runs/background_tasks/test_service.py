@@ -11,7 +11,7 @@ from typing import Literal, cast
 
 import pytest
 
-from relay_teams.agents.instances.enums import InstanceStatus
+from relay_teams.agent_runtimes.instances.enums import InstanceStatus
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.models import TaskEnvelope, TaskRecord, VerificationPlan
 from relay_teams.agents.orchestration.task_contracts import TaskExecutionResult
