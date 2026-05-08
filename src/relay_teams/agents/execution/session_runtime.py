@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 from copy import deepcopy
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Sequence
 from json import dumps, loads
-from typing import Any, Protocol, cast
+from typing import Protocol, TypeVar, cast
 
+import httpx
 from pydantic_ai._agent_graph import CallToolsNode, ModelRequestNode
 from pydantic import JsonValue
 from pydantic_ai.exceptions import ModelAPIError
@@ -36,7 +39,7 @@ from relay_teams.agents.execution.spec_checkpoint import (
     SpecCheckpointDecision,
     build_spec_checkpoint_decision,
 )
-from relay_teams.agents.tasks.models import TaskRecord
+from relay_teams.agents.tasks.models import TaskRecord, TaskSpecArtifact
 from relay_teams.agents.tasks.task_repository import TaskRepository as _TaskRepo
 from relay_teams.logger import (
     close_model_stream,
@@ -55,7 +58,11 @@ from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_tools import runtime_tools_for_role
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
-from relay_teams.sessions.runs.event_stream import publish_run_event_async
+from relay_teams.sessions.runs.event_stream import (
+    AsyncRunEventPublisher,
+    SyncRunEventPublisher,
+    publish_run_event_async,
+)
 from relay_teams.sessions.runs.injection_classification import (
     INJECTION_CLASSIFIER,
     InjectionBoundaryContext,
@@ -76,6 +83,8 @@ from relay_teams.workspace import build_conversation_id
 
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
+_LLM_CLIENT_CLOSE_TASKS: set[asyncio.Task[None]] = set()
+StreamItemT = TypeVar("StreamItemT")
 
 
 class _InjectionRestartApplied(Exception):
@@ -277,6 +286,50 @@ def model_step_payload(
 
 
 class SessionRuntimeMixin(AgentLlmSessionMixinBase):
+    def _schedule_run_scoped_llm_http_client_close(
+        self,
+        *,
+        request: LLMRequest,
+    ) -> None:
+        close_task = asyncio.create_task(
+            self._close_run_scoped_llm_http_client(request=request)
+        )
+        _LLM_CLIENT_CLOSE_TASKS.add(close_task)
+
+        def _finish(completed_task: asyncio.Task[None]) -> None:
+            _LLM_CLIENT_CLOSE_TASKS.discard(completed_task)
+            try:
+                completed_task.result()
+            except asyncio.CancelledError:
+                log_event(
+                    LOGGER,
+                    logging.DEBUG,
+                    event="llm.http_client.close.cancelled",
+                    message="Run-scoped LLM HTTP client close was cancelled",
+                    payload={
+                        "run_id": request.run_id,
+                        "task_id": request.task_id,
+                        "instance_id": request.instance_id,
+                        "role_id": request.role_id,
+                    },
+                )
+            except Exception as exc:
+                log_event(
+                    LOGGER,
+                    logging.WARNING,
+                    event="llm.http_client.close.failed",
+                    message="Run-scoped LLM HTTP client close failed",
+                    payload={
+                        "run_id": request.run_id,
+                        "task_id": request.task_id,
+                        "instance_id": request.instance_id,
+                        "role_id": request.role_id,
+                    },
+                    exc_info=exc,
+                )
+
+        close_task.add_done_callback(_finish)
+
     async def _publish_tool_outcome_event_from_stream_async(
         self,
         *,
@@ -385,6 +438,13 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 allowed_skills=self._allowed_skills,
             )
             coordination_agent = cast(CoordinationAgent, agent)
+            workspace = await self._workspace_manager.resolve_async(
+                session_id=request.session_id,
+                role_id=request.role_id,
+                instance_id=request.instance_id,
+                workspace_id=resolved_workspace_id,
+                conversation_id=resolved_conversation_id,
+            )
             deps = ToolDeps(
                 task_repo=self._task_repo,
                 shared_store=self._shared_store,
@@ -396,13 +456,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 injection_manager=self._injection_manager,
                 run_event_hub=self._run_event_hub,
                 agent_repo=self._agent_repo,
-                workspace=self._workspace_manager.resolve(
-                    session_id=request.session_id,
-                    role_id=request.role_id,
-                    instance_id=request.instance_id,
-                    workspace_id=resolved_workspace_id,
-                    conversation_id=resolved_conversation_id,
-                ),
+                workspace=workspace,
                 role_memory=self._role_memory_service,
                 media_asset_service=self._media_asset_service,
                 computer_runtime=self._computer_runtime,
@@ -430,7 +484,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 run_control_manager=self._run_control_manager,
                 tool_approval_manager=self._tool_approval_manager,
                 user_question_manager=self._user_question_manager,
-                tool_approval_policy=self._resolve_tool_approval_policy(request.run_id),
+                tool_approval_policy=await self._resolve_tool_approval_policy_async(
+                    request.run_id
+                ),
                 shell_approval_repo=self._shell_approval_repo,
                 metric_recorder=self._metric_recorder,
                 notification_service=self._notification_service,
@@ -455,6 +511,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             control_ctx = self._run_control_manager.context(
                 run_id=request.run_id,
                 instance_id=request.instance_id,
+            )
+            llm_event_timeout_seconds = _llm_stream_event_timeout_seconds(
+                self._config.connect_timeout_seconds
             )
 
             printed_any = False
@@ -1001,7 +1060,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     and await apply_spec_checkpoint_if_due()
                 )
         except BaseException:
-            await self._close_run_scoped_llm_http_client(request=request)
+            self._schedule_run_scoped_llm_http_client_close(request=request)
             raise
 
         try:
@@ -1027,7 +1086,10 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                     ) as agent_run:
                         boundary_checked_after_latest_batch = False
                         observed_stream_messages = []
-                        async for node in agent_run:
+                        async for node in _aiter_with_timeout(
+                            cast(AsyncIterable[object], agent_run),
+                            timeout_seconds=llm_event_timeout_seconds,
+                        ):
                             try:
                                 control_ctx.raise_if_cancelled()
                                 if await apply_interrupt_injections():
@@ -1048,15 +1110,24 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                     )
                                     streamed_text_start = len(emitted_text_chunks)
                                     usage_before = deepcopy(agent_run.usage())
-                                    async with streamable_node.stream(
+                                    stream_context = streamable_node.stream(
                                         agent_run.ctx
+                                    )
+                                    async with _llm_stream_context_with_timeout(
+                                        stream_context,
+                                        timeout_seconds=llm_event_timeout_seconds,
                                     ) as stream:
                                         stream_iter = getattr(stream, "__aiter__", None)
                                         if callable(stream_iter):
                                             text_lengths: dict[int, int] = {}
                                             thinking_lengths: dict[int, int] = {}
                                             started_thinking_parts: set[int] = set()
-                                            async for stream_event in stream:
+                                            async for (
+                                                stream_event
+                                            ) in _aiter_with_timeout(
+                                                cast(AsyncIterable[object], stream),
+                                                timeout_seconds=llm_event_timeout_seconds,
+                                            ):
                                                 control_ctx.raise_if_cancelled()
                                                 if await apply_interrupt_injections():
                                                     raise _InjectionRestartApplied
@@ -1095,8 +1166,9 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                                     if active_retry_number > 0:
                                                         active_retry_number = 0
                                         else:
-                                            async for text_delta in stream.stream_text(
-                                                delta=True
+                                            async for text_delta in _aiter_with_timeout(
+                                                stream.stream_text(delta=True),
+                                                timeout_seconds=llm_event_timeout_seconds,
                                             ):
                                                 control_ctx.raise_if_cancelled()
                                                 if await apply_interrupt_injections():
@@ -1117,6 +1189,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                                                         request=request,
                                                         text=text_delta,
                                                     )
+                                    _raise_if_stream_finished_without_reason(stream)
                                     if await apply_interrupt_injections():
                                         raise _InjectionRestartApplied
                                     usage_after = stream.usage()
@@ -1558,7 +1631,7 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
             )
             return text
         finally:
-            await self._close_run_scoped_llm_http_client(request=request)
+            self._schedule_run_scoped_llm_http_client_close(request=request)
 
 
 def _observed_tool_result_message(
@@ -1574,6 +1647,77 @@ def _observed_tool_result_message(
     if isinstance(result, ToolReturnPart):
         return ModelRequest(parts=[result])
     return None
+
+
+def _raise_if_stream_finished_without_reason(stream: object) -> None:
+    raw_stream = getattr(stream, "_raw_stream_response", None)
+    if raw_stream is None:
+        return
+    raw_stream_type = type(raw_stream).__name__
+    if "OpenAI" not in raw_stream_type and "OpenRouter" not in raw_stream_type:
+        return
+    if getattr(raw_stream, "finish_reason", None) is not None:
+        return
+    raise httpx.RemoteProtocolError(
+        "LLM stream ended before the provider sent a finish reason."
+    )
+
+
+async def _aiter_with_timeout(
+    aiterable: AsyncIterable[StreamItemT],
+    *,
+    timeout_seconds: float,
+) -> AsyncIterator[StreamItemT]:
+    iterator = aiter(aiterable)
+    while True:
+        try:
+            yield await asyncio.wait_for(
+                anext(iterator),
+                timeout=timeout_seconds,
+            )
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            raise httpx.ReadTimeout(
+                "Timed out waiting for the next LLM stream event."
+            ) from exc
+
+
+@asynccontextmanager
+async def _llm_stream_context_with_timeout(
+    context: AgentNodeStreamContext,
+    *,
+    timeout_seconds: float,
+) -> AsyncIterator[AgentNodeStream]:
+    try:
+        stream = await asyncio.wait_for(
+            context.__aenter__(),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        raise httpx.ReadTimeout(
+            "Timed out waiting for the LLM stream to open."
+        ) from exc
+    try:
+        yield stream
+    except asyncio.CancelledError as exc:
+        suppress = await context.__aexit__(type(exc), exc, exc.__traceback__)
+        if not suppress:
+            raise
+    except GeneratorExit as exc:
+        suppress = await context.__aexit__(type(exc), exc, exc.__traceback__)
+        if not suppress:
+            raise
+    except Exception as exc:
+        suppress = await context.__aexit__(type(exc), exc, exc.__traceback__)
+        if not suppress:
+            raise
+    else:
+        await context.__aexit__(None, None, None)
+
+
+def _llm_stream_event_timeout_seconds(connect_timeout_seconds: float) -> float:
+    return max(5.0, connect_timeout_seconds * 2)
 
 
 def _missing_stream_observed_messages(
@@ -1720,7 +1864,7 @@ class _SpecCheckpointTaskRepository(Protocol):
         raise NotImplementedError  # pragma: no cover
 
     @staticmethod
-    async def get_spec_artifact_async(artifact_id: str) -> Any:
+    async def get_spec_artifact_async(artifact_id: str) -> TaskSpecArtifact:
         raise NotImplementedError  # pragma: no cover
 
 
@@ -1799,11 +1943,11 @@ def _spec_checkpoint_event_payload(
 
 async def _evaluate_checkpoint_drift(
     *,
-    task_repo: Any,
+    task_repo: object,
     task_record: TaskRecord | None,
     request: LLMRequest,
     decision: SpecCheckpointDecision,
-    run_event_hub: Any,
+    run_event_hub: AsyncRunEventPublisher | SyncRunEventPublisher,
 ) -> None:
     if task_record is None:
         return

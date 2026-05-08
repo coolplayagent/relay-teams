@@ -55,7 +55,7 @@ class _FakeWorkspaceService:
     def __init__(self, known_workspace_ids: set[str]) -> None:
         self._known_workspace_ids = known_workspace_ids
 
-    def require_workspace(self, workspace_id: str) -> None:
+    async def require_workspace_async(self, workspace_id: str) -> None:
         if workspace_id not in self._known_workspace_ids:
             raise KeyError(workspace_id)
 
@@ -72,7 +72,7 @@ class _FakeWorkspaceHandle:
 
 
 class _FakeWorkspaceManager:
-    def resolve(
+    async def resolve_async(
         self,
         *,
         session_id: str,
@@ -148,7 +148,7 @@ class _FakeSkillRuntimeService:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def prepare_prompt(
+    async def prepare_prompt_async(
         self,
         *,
         role: RoleDefinition,

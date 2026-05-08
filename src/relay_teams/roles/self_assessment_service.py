@@ -69,7 +69,7 @@ class RoleSelfAssessmentService:
         if run_count_since_last < self._config.trigger_every_n_runs:
             return None
 
-        record = self._role_memory_service.get_reflection_record(
+        record = await self._role_memory_service.get_reflection_record_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )

@@ -7,8 +7,11 @@ from relay_teams.logger import get_logger
 from relay_teams.metrics import MetricRecorder
 from relay_teams.metrics.adapters import (
     record_retrieval_document_count,
+    record_retrieval_document_count_async,
     record_retrieval_rebuild,
+    record_retrieval_rebuild_async,
     record_retrieval_search,
+    record_retrieval_search_async,
 )
 from relay_teams.retrieval.retrieval_models import (
     RetrievalDocument,
@@ -78,6 +81,31 @@ class RetrievalService:
         self._record_document_count(stats=stats, operation="upsert")
         return stats
 
+    async def upsert_documents_async(
+        self,
+        *,
+        config: RetrievalScopeConfig,
+        documents: tuple[RetrievalDocument, ...],
+    ) -> RetrievalStats:
+        self._validate_scope_documents(config=config, documents=documents)
+        with trace_span(
+            LOGGER,
+            component="retrieval.service",
+            operation="upsert_documents_async",
+            attributes={
+                "backend": self._store.backend_kind.value,
+                "scope_kind": config.scope_kind.value,
+                "scope_id": config.scope_id,
+                "document_count": len(documents),
+            },
+        ):
+            stats = await self._store.upsert_documents_async(
+                config=config,
+                documents=documents,
+            )
+        await self._record_document_count_async(stats=stats, operation="upsert")
+        return stats
+
     def delete_documents(
         self,
         *,
@@ -130,6 +158,36 @@ class RetrievalService:
                 return result
             finally:
                 self._record_search_metric(
+                    scope_kind=query.scope_kind,
+                    duration_ms=int((time.perf_counter() - started) * 1000),
+                    success=success,
+                )
+
+    async def search_async(
+        self,
+        *,
+        query: RetrievalQuery,
+    ) -> tuple[RetrievalHit, ...]:
+        started = time.perf_counter()
+        success = False
+        with trace_span(
+            LOGGER,
+            component="retrieval.service",
+            operation="search_async",
+            attributes={
+                "backend": self._store.backend_kind.value,
+                "scope_kind": query.scope_kind.value,
+                "scope_id": query.scope_id,
+                "limit": query.limit,
+                "query_term_count": _query_term_count(query.text),
+            },
+        ):
+            try:
+                result = await self._store.search_async(query=query)
+                success = True
+                return result
+            finally:
+                await self._record_search_metric_async(
                     scope_kind=query.scope_kind,
                     duration_ms=int((time.perf_counter() - started) * 1000),
                     success=success,
@@ -203,6 +261,23 @@ class RetrievalService:
             success=success,
         )
 
+    async def _record_search_metric_async(
+        self,
+        *,
+        scope_kind: RetrievalScopeKind,
+        duration_ms: int,
+        success: bool,
+    ) -> None:
+        if self._metric_recorder is None:
+            return
+        await record_retrieval_search_async(
+            self._metric_recorder,
+            backend=self._store.backend_kind.value,
+            scope_kind=scope_kind.value,
+            duration_ms=duration_ms,
+            success=success,
+        )
+
     def _record_rebuild_metric(
         self,
         *,
@@ -220,6 +295,23 @@ class RetrievalService:
             success=success,
         )
 
+    async def _record_rebuild_metric_async(
+        self,
+        *,
+        scope_kind: RetrievalScopeKind,
+        duration_ms: int,
+        success: bool,
+    ) -> None:
+        if self._metric_recorder is None:
+            return
+        await record_retrieval_rebuild_async(
+            self._metric_recorder,
+            backend=self._store.backend_kind.value,
+            scope_kind=scope_kind.value,
+            duration_ms=duration_ms,
+            success=success,
+        )
+
     def _record_document_count(
         self,
         *,
@@ -229,6 +321,22 @@ class RetrievalService:
         if self._metric_recorder is None:
             return
         record_retrieval_document_count(
+            self._metric_recorder,
+            backend=stats.backend.value,
+            scope_kind=stats.scope_kind.value,
+            operation=operation,
+            document_count=stats.document_count,
+        )
+
+    async def _record_document_count_async(
+        self,
+        *,
+        stats: RetrievalStats,
+        operation: str,
+    ) -> None:
+        if self._metric_recorder is None:
+            return
+        await record_retrieval_document_count_async(
             self._metric_recorder,
             backend=stats.backend.value,
             scope_kind=stats.scope_kind.value,

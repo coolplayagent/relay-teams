@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
+import sqlite3
 
 from relay_teams.agents.tasks.models import VerificationReport
 from relay_teams.logger import get_logger
@@ -41,7 +41,7 @@ class MemoryEventHandler:
         self._memory_bank = memory_bank_service
         self._role_memory_service = role_memory_service
 
-    def on_task_completed(
+    async def on_task_completed_async(
         self,
         *,
         workspace_id: str,
@@ -56,7 +56,7 @@ class MemoryEventHandler:
         """Create a WORKING memory entry for a completed task.
 
         Also performs a dual-write to the legacy role_memories table so that
-        ``build_injected_memory()`` continues to work during the migration
+        ``build_injected_memory_async()`` continues to work during the migration
         period.
         """
         content = MemoryContent(
@@ -78,8 +78,8 @@ class MemoryEventHandler:
             source_ref=task_id,
         )
         try:
-            self._memory_bank.create_entry(request)
-        except (ValueError, OSError, RuntimeError):
+            await self._memory_bank.create_entry_async(request)
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
             LOGGER.warning(
                 "failed to create WORKING memory entry for task %s",
                 task_id,
@@ -89,7 +89,7 @@ class MemoryEventHandler:
         # Dual-write bridge: also record in legacy role_memories
         if self._role_memory_service is not None:
             try:
-                self._role_memory_service.record_task_result(
+                await self._role_memory_service.record_task_result_async(
                     role_id=role_id,
                     workspace_id=workspace_id,
                     session_id=session_id,
@@ -98,7 +98,7 @@ class MemoryEventHandler:
                     result=result,
                     transcript_lines=(),
                 )
-            except (ValueError, OSError, RuntimeError):
+            except (ValueError, OSError, RuntimeError, sqlite3.Error):
                 LOGGER.warning(
                     "failed to dual-write task result to role_memories for task %s",
                     task_id,
@@ -108,53 +108,17 @@ class MemoryEventHandler:
         # RP-2: record verification outcome for role performance metrics
         if self._role_memory_service is not None and verification_report is not None:
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop is not None:
-                loop.create_task(
-                    self._role_memory_service.record_verification_outcome(
-                        role_id=role_id,
-                        workspace_id=workspace_id,
-                        verification_report=verification_report,
-                    )
+                await self._role_memory_service.record_verification_outcome(
+                    role_id=role_id,
+                    workspace_id=workspace_id,
+                    verification_report=verification_report,
                 )
-
-    def on_run_completed(
-        self,
-        *,
-        workspace_id: str,
-        session_id: str,
-        role_id: str | None = None,
-        run_id: str | None = None,
-    ) -> None:
-        """Consolidate WORKING entries -> MEDIUM_TERM on run completion."""
-        request = MemoryConsolidationRequest(
-            workspace_id=workspace_id,
-            session_id=session_id,
-            role_id=role_id,
-            source_run_id=run_id,
-            target_tier=MemoryTier.MEDIUM_TERM,
-            target_scope=MemoryScope.SESSION if session_id else MemoryScope.ROLE,
-        )
-        try:
-            result = self._memory_bank.consolidate(request)
-            if result.source_entry_count > 0:
-                LOGGER.info(
-                    "run consolidation: %d WORKING -> %d MEDIUM_TERM "
-                    "workspace=%s session=%s",
-                    result.source_entry_count,
-                    result.consolidated_entry_count,
-                    workspace_id,
-                    session_id,
+            except (ValueError, OSError, RuntimeError, sqlite3.Error):
+                LOGGER.warning(
+                    "failed to record verification outcome for task %s",
+                    task_id,
+                    exc_info=True,
                 )
-        except (ValueError, OSError, RuntimeError):
-            LOGGER.warning(
-                "failed to consolidate WORKING->MEDIUM_TERM workspace=%s session=%s",
-                workspace_id,
-                session_id,
-                exc_info=True,
-            )
 
     async def on_run_completed_async(
         self,
@@ -166,11 +130,11 @@ class MemoryEventHandler:
     ) -> None:
         """Consolidate WORKING entries -> MEDIUM_TERM on run completion.
 
-        Performs structural consolidation (sync) and then additionally
+        Performs structural consolidation and then additionally
         triggers SEMANTIC mode consolidation for high-signal extraction.
         SEMANTIC failures do not affect the structural path.
         """
-        # 1. Structural consolidation (same as sync version)
+        # 1. Structural consolidation.
         structural_request = MemoryConsolidationRequest(
             workspace_id=workspace_id,
             session_id=session_id,
@@ -236,7 +200,7 @@ class MemoryEventHandler:
                     exc_info=True,
                 )
 
-    def on_session_completed(
+    async def on_session_completed_async(
         self,
         *,
         workspace_id: str,
@@ -252,7 +216,7 @@ class MemoryEventHandler:
             target_scope=MemoryScope.WORKSPACE,
         )
         try:
-            result = self._memory_bank.consolidate(request)
+            result = await self._memory_bank.consolidate_async(request)
             if result.source_entry_count > 0:
                 LOGGER.info(
                     "session consolidation: %d MEDIUM_TERM -> %d PERSISTENT "
@@ -270,7 +234,7 @@ class MemoryEventHandler:
                 exc_info=True,
             )
 
-    def get_injectable_memory_text(
+    async def get_injectable_memory_text_async(
         self,
         *,
         workspace_id: str,
@@ -291,7 +255,7 @@ class MemoryEventHandler:
                 limit=20,
             )
             try:
-                result = self._memory_bank.list_entries(query)
+                result = await self._memory_bank.list_entries_async(query)
             except (ValueError, OSError, RuntimeError):
                 LOGGER.warning(
                     "failed to query %s memory for injection workspace=%s",

@@ -225,7 +225,7 @@ class _StaticSkillRuntimeService:
     def __init__(self) -> None:
         self.skill_name_calls: list[tuple[str, ...] | None] = []
 
-    def prepare_prompt(
+    async def prepare_prompt_async(
         self,
         *,
         role: RoleDefinition,
@@ -1784,7 +1784,7 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
     role_memory_service = RoleMemoryService(repository=RoleMemoryRepository(db_path))
-    role_memory_service.record_task_result(
+    await role_memory_service.record_task_result_async(
         role_id="time",
         workspace_id="default",
         session_id="seed-session",
@@ -1793,7 +1793,7 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
         result="Prefer concise output.",
         transcript_lines=(),
     )
-    role_memory_service.record_task_result(
+    await role_memory_service.record_task_result_async(
         role_id="time",
         workspace_id="other-workspace",
         session_id="other-session",
@@ -1841,7 +1841,7 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
     assert "## Reflection Memory" in provider.system_prompts[0]
     assert "Prefer concise output." in provider.system_prompts[0]
     assert "/d/workspace/aider" not in provider.system_prompts[0]
-    durable = role_memory_service.build_injected_memory(
+    durable = await role_memory_service.build_injected_memory_async(
         role_id="time",
         workspace_id="default",
     )

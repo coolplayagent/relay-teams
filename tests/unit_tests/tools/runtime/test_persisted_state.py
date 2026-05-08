@@ -20,12 +20,16 @@ from relay_teams.tools.runtime.persisted_state import (
     ToolCallBatchStatus,
     ToolExecutionStatus,
     load_or_recover_tool_call_state,
+    load_or_recover_tool_call_state_async,
     load_tool_call_batch_state,
     load_tool_call_batch_state_async,
     load_tool_call_state,
     merge_tool_call_state,
+    merge_tool_call_state_async,
     recover_tool_call_batches_from_event_log,
+    recover_tool_call_batches_from_event_log_async,
     recover_tool_call_state_from_event_log,
+    recover_tool_call_state_from_event_log_async,
     update_tool_call_call_state_async,
 )
 
@@ -156,6 +160,227 @@ def test_recover_tool_call_batch_and_result_from_event_log(tmp_path: Path) -> No
         expected_tool_name="current_time",
         to_json_compatible=lambda value: cast(JsonValue, value),
     ) == {"time": "2026-03-07T10:00:00Z"}
+
+
+@pytest.mark.asyncio
+async def test_async_recover_tool_call_batch_and_result_from_event_log(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "persisted_state_async_recovery.db"
+    event_log = EventLog(db_path)
+    shared_store = SharedStateRepository(db_path)
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_CALL,
+            payload={
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "tool_name": "current_time",
+                "tool_call_id": "call-a",
+                "args": {"timezone": "UTC"},
+                "batch_id": "batch-1",
+                "batch_index": 0,
+                "batch_size": 1,
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+    result_event_id = await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_RESULT,
+            payload={
+                "tool_name": "current_time",
+                "tool_call_id": "call-a",
+                "result": {"time": "2026-03-07T10:00:00Z"},
+                "error": False,
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+
+    batches = await recover_tool_call_batches_from_event_log_async(
+        event_log=event_log,
+        shared_store=shared_store,
+        trace_id="trace-1",
+        task_id="task-1",
+    )
+    recovered_call = await recover_tool_call_state_from_event_log_async(
+        event_log=event_log,
+        shared_store=shared_store,
+        trace_id="trace-1",
+        task_id="task-1",
+        tool_call_id="call-a",
+    )
+
+    assert len(batches) == 1
+    assert batches[0].status == ToolCallBatchStatus.OPEN
+    assert [item.tool_call_id for item in batches[0].items] == ["call-a"]
+    assert recovered_call is not None
+    assert recovered_call.execution_status == ToolExecutionStatus.COMPLETED
+    assert recovered_call.result_event_id == result_event_id
+    assert recovered_call.result_envelope == {"time": "2026-03-07T10:00:00Z"}
+
+
+@pytest.mark.asyncio
+async def test_async_recover_tool_call_state_handles_approval_and_result_meta(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "persisted_state_async_approval.db"
+    event_log = EventLog(db_path)
+    shared_store = SharedStateRepository(db_path)
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_CALL,
+            payload={
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "tool_name": "current_time",
+                "tool_call_id": "call-approval",
+                "args_preview": {"timezone": "UTC"},
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_APPROVAL_REQUESTED,
+            payload={
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "tool_name": "current_time",
+                "tool_call_id": "call-approval",
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_APPROVAL_RESOLVED,
+            payload={
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "tool_name": "current_time",
+                "tool_call_id": "call-approval",
+                "action": "approve_exact",
+                "feedback": "ok",
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_RESULT,
+            payload={
+                "tool_name": "current_time",
+                "tool_call_id": "call-approval",
+                "result": {
+                    "ok": False,
+                    "meta": {
+                        "approval_status": "deny",
+                        "approval_mode": "approval_flow",
+                        "run_yolo": True,
+                    },
+                },
+                "error": True,
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+
+    recovered_call = await recover_tool_call_state_from_event_log_async(
+        event_log=event_log,
+        shared_store=shared_store,
+        trace_id="trace-1",
+        task_id="task-1",
+        tool_call_id="call-approval",
+    )
+
+    assert recovered_call is not None
+    assert recovered_call.approval_status == ToolApprovalStatus.DENY
+    assert recovered_call.execution_status == ToolExecutionStatus.FAILED
+    assert recovered_call.run_yolo is True
+    assert recovered_call.result_envelope == {
+        "ok": False,
+        "meta": {
+            "approval_status": "deny",
+            "approval_mode": "approval_flow",
+            "run_yolo": True,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_recover_tool_call_batches_skips_invalid_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "persisted_state_async_invalid_batches.db"
+    event_log = EventLog(db_path)
+    shared_store = SharedStateRepository(db_path)
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_CALL,
+            payload={
+                "batch_id": "batch-other-task",
+                "tool_call_id": "call-other",
+                "tool_name": "current_time",
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        ).model_copy(update={"task_id": "task-other"})
+    )
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_CALL,
+            payload={
+                "batch_id": "batch-invalid-call",
+                "tool_call_id": "",
+                "tool_name": "current_time",
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_CALL_BATCH_SEALED,
+            payload={
+                "batch_id": "batch-non-list",
+                "tool_calls": "bad",
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+    await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_CALL_BATCH_SEALED,
+            payload={
+                "batch_id": "batch-good",
+                "tool_calls": (
+                    {"tool_call_id": "call-good", "tool_name": "current_time"},
+                ),
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+
+    batches = await recover_tool_call_batches_from_event_log_async(
+        event_log=event_log,
+        shared_store=shared_store,
+        trace_id="trace-1",
+        task_id="task-1",
+    )
+
+    assert len(batches) == 1
+    assert batches[0].batch_id == "batch-good"
+    assert batches[0].status == ToolCallBatchStatus.SEALED
 
 
 def test_recover_open_tool_call_batch_preserves_json_args_preview(
@@ -317,6 +542,58 @@ def test_load_or_recover_replays_result_event_over_stale_running_state(
         "data": {"time": "2026-03-07T10:00:00Z"},
         "meta": {"tool_result_event_published": True},
     }
+
+
+@pytest.mark.asyncio
+async def test_load_or_recover_async_replays_result_event_over_stale_running_state(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "persisted_state_async_stale_running.db"
+    event_log = EventLog(db_path)
+    shared_store = SharedStateRepository(db_path)
+    await merge_tool_call_state_async(
+        shared_store=shared_store,
+        task_id="task-1",
+        tool_call_id="call-a",
+        tool_name="current_time",
+        run_id="run-1",
+        session_id="session-1",
+        instance_id="inst-1",
+        role_id="time",
+        args_preview='{"timezone":"UTC"}',
+        execution_status=ToolExecutionStatus.RUNNING,
+        call_state={"resume_token": "token-1"},
+    )
+    result_event_id = await event_log.emit_run_event_async(
+        _event(
+            RunEventType.TOOL_RESULT,
+            payload={
+                "tool_name": "current_time",
+                "tool_call_id": "call-a",
+                "result": {
+                    "ok": True,
+                    "data": {"time": "2026-03-07T10:00:00Z"},
+                    "meta": {"tool_result_event_published": True},
+                },
+                "error": False,
+                "role_id": "time",
+                "instance_id": "inst-1",
+            },
+        )
+    )
+
+    recovered_call = await load_or_recover_tool_call_state_async(
+        event_log=event_log,
+        shared_store=shared_store,
+        trace_id="trace-1",
+        task_id="task-1",
+        tool_call_id="call-a",
+    )
+
+    assert recovered_call is not None
+    assert recovered_call.execution_status == ToolExecutionStatus.COMPLETED
+    assert recovered_call.result_event_id == result_event_id
+    assert recovered_call.call_state == {"resume_token": "token-1"}
 
 
 def test_parallel_load_or_recover_replays_result_events_without_state_corruption(

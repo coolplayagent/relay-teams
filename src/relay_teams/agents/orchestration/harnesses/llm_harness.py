@@ -181,102 +181,10 @@ class TaskLlmHarness(BaseModel):
         except KeyError:
             return RunThinkingConfig()
 
-    def evaluate_completion_guard(
-        self,
-        *,
-        task: TaskEnvelope,
-        instance_id: str,
-        role_id: str,
-        workspace: WorkspaceHandle,
-        conversation_id: str,
-        output_text: str,
-    ) -> ReminderDecision:
-        if task.parent_task_id is not None:
-            if self.todo_service is not None:
-                self._finalize_subtask_todos(task, instance_id)
-            return ReminderDecision()
-        if self.reminder_service is None or self.todo_service is None:
-            return ReminderDecision()
-        snapshot = self.todo_service.get_for_run(
-            run_id=task.trace_id,
-            session_id=task.session_id,
-        )
-        incomplete = tuple(
-            IncompleteTodoItem(content=item.content, status=item.status.value)
-            for item in snapshot.items
-            if item.status != TodoStatus.COMPLETED
-        )
-        return self.reminder_service.evaluate_completion_attempt(
-            CompletionAttemptObservation(
-                session_id=task.session_id,
-                run_id=task.trace_id,
-                trace_id=task.trace_id,
-                task_id=task.task_id,
-                instance_id=instance_id,
-                role_id=role_id,
-                workspace_id=workspace.ref.workspace_id,
-                conversation_id=conversation_id,
-                output_text=output_text,
-                incomplete_todos=incomplete,
-            )
-        )
-
-    def thinking_for_run(self, run_id: str) -> RunThinkingConfig:
-        if self.run_intent_repo is None:
-            return RunThinkingConfig()
-        try:
-            return self.run_intent_repo.get(run_id).thinking
-        except KeyError:
-            return RunThinkingConfig()
-
-    def _finalize_subtask_todos(self, task: TaskEnvelope, instance_id: str) -> None:
-        """Finalize sub-task-scoped todos.
-
-        Only marks ``IN_PROGRESS`` items as ``COMPLETED``.  ``PENDING``
-        items are left untouched because concurrent sub-tasks may own
-        them.  This avoids corrupting shared todo state when parallel
-        delegation is active.
-        """
-        assert self.todo_service is not None  # guarded by caller
-        snapshot = self.todo_service.get_for_run(
-            run_id=task.trace_id,
-            session_id=task.session_id,
-        )
-        in_progress_indices = tuple(
-            idx
-            for idx, item in enumerate(snapshot.items)
-            if item.status == TodoStatus.IN_PROGRESS
-        )
-        if not in_progress_indices:
-            return
-        finalized = tuple(
-            TodoItem(content=item.content, status=TodoStatus.COMPLETED)
-            if idx in in_progress_indices
-            else item
-            for idx, item in enumerate(snapshot.items)
-        )
-        self.todo_service.replace_for_run(
-            run_id=task.trace_id,
-            session_id=task.session_id,
-            items=finalized,
-            updated_by_instance_id=instance_id,
-        )
-        log_event(
-            LOGGER,
-            logging.INFO,
-            event="task.execution.subtask_todos_finalized",
-            message="Finalized in-progress sub-task todos as completed",
-            payload={
-                "task_id": task.task_id,
-                "trace_id": task.trace_id,
-                "finalized_count": len(in_progress_indices),
-            },
-        )
-
     async def _finalize_subtask_todos_async(
         self, task: TaskEnvelope, instance_id: str
     ) -> None:
-        """Async counterpart of :meth:`_finalize_subtask_todos`."""
+        """Finalize sub-task-scoped todos without touching pending sibling work."""
         assert self.todo_service is not None  # guarded by caller
         snapshot = await self.todo_service.get_for_run_async(
             run_id=task.trace_id,

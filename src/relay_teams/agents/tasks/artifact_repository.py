@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import TypeVar, cast
+
+import aiosqlite
 
 from relay_teams.agents.tasks.enums import TaskArtifactPhase
 from relay_teams.logger import get_logger
@@ -21,8 +23,11 @@ from relay_teams.persistence.db import (
     BlockingSqliteConnection,
     SQLITE_BUSY_TIMEOUT_MS,
     SQLITE_TIMEOUT_SECONDS,
+    open_async_sqlite,
+    run_async_sqlite_write_with_retry,
     run_sqlite_write_with_retry,
 )
+from relay_teams.persistence.sqlite_repository import async_fetchall, async_fetchone
 
 ResultT = TypeVar("ResultT")
 
@@ -84,6 +89,11 @@ class TaskArtifactRepository:
         _enable_wal_if_available(conn)
         return conn
 
+    async def _connect_async(self) -> aiosqlite.Connection:
+        conn = await open_async_sqlite(self._db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
     def _run_write(
         self,
         *,
@@ -102,6 +112,25 @@ class TaskArtifactRepository:
             )
         finally:
             conn.close()
+
+    async def _run_async_write(
+        self,
+        *,
+        operation_name: str,
+        operation: Callable[[aiosqlite.Connection], Awaitable[ResultT]],
+    ) -> ResultT:
+        conn = await self._connect_async()
+        try:
+            return await run_async_sqlite_write_with_retry(
+                conn=conn,
+                db_path=self._db_path,
+                operation=lambda: operation(conn),
+                lock=None,
+                repository_name=type(self).__name__,
+                operation_name=operation_name,
+            )
+        finally:
+            await conn.close()
 
     def get_artifact(self, task_id: str) -> TaskArtifact | None:
         """Load the full artifact including all entries."""
@@ -146,9 +175,82 @@ class TaskArtifactRepository:
         finally:
             conn.close()
 
+    async def get_artifact_async(self, task_id: str) -> TaskArtifact | None:
+        """Load the full artifact including all entries."""
+        conn = await self._connect_async()
+        try:
+            row = await async_fetchone(
+                conn,
+                "SELECT * FROM task_artifacts WHERE task_id = ?",
+                (task_id,),
+            )
+            if row is None:
+                return None
+
+            artifact_row = dict(row)
+            entry_rows = await async_fetchall(
+                conn,
+                "SELECT * FROM task_artifact_entries WHERE task_id = ? ORDER BY id ASC",
+                (task_id,),
+            )
+            entries = [self._row_to_entry(dict(row)) for row in entry_rows]
+
+            evidence_bundle = None
+            eb_json = artifact_row.get("evidence_bundle_json")
+            if eb_json:
+                try:
+                    evidence_bundle = VerificationEvidenceBundle.model_validate_json(
+                        eb_json
+                    )
+                except (json.JSONDecodeError, ValueError):
+                    get_logger(__name__).debug(
+                        "Malformed evidence_bundle_json tolerated; falling back to None"
+                    )
+
+            return TaskArtifact(
+                task_id=artifact_row["task_id"],
+                spec_artifact_id=artifact_row.get("spec_artifact_id", ""),
+                entries=entries,
+                evidence_bundle=evidence_bundle,
+                summary=artifact_row.get("summary", ""),
+                created_at=artifact_row.get("created_at", ""),
+                updated_at=artifact_row.get("updated_at", ""),
+            )
+        finally:
+            await conn.close()
+
     def get_artifact_summary(self, task_id: str) -> TaskArtifactSummary | None:
         """Compute and return a summary view of the artifact."""
         artifact = self.get_artifact(task_id)
+        if artifact is None:
+            return None
+
+        phase_counts: dict[str, int] = {}
+        for entry in artifact.entries:
+            phase = entry.phase.value
+            phase_counts[phase] = phase_counts.get(phase, 0) + 1
+
+        evidence_count = 0
+        if artifact.evidence_bundle is not None:
+            evidence_count = len(artifact.evidence_bundle.items)
+
+        return TaskArtifactSummary(
+            task_id=artifact.task_id,
+            spec_artifact_id=artifact.spec_artifact_id,
+            total_entries=len(artifact.entries),
+            phase_counts=phase_counts,
+            evidence_item_count=evidence_count,
+            has_verification_bundle=artifact.evidence_bundle is not None,
+            has_summary=bool(artifact.summary),
+            created_at=artifact.created_at,
+            updated_at=artifact.updated_at,
+        )
+
+    async def get_artifact_summary_async(
+        self, task_id: str
+    ) -> TaskArtifactSummary | None:
+        """Compute and return a summary view of the artifact."""
+        artifact = await self.get_artifact_async(task_id)
         if artifact is None:
             return None
 
@@ -192,6 +294,31 @@ class TaskArtifactRepository:
             raise RuntimeError(f"Failed to create task artifact for task_id={task_id}")
         return artifact
 
+    async def ensure_artifact_async(
+        self, task_id: str, spec_artifact_id: str
+    ) -> TaskArtifact:
+        """Create the artifact record if it does not exist."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "INSERT OR IGNORE INTO task_artifacts "
+                "(task_id, spec_artifact_id, summary, "
+                "created_at, updated_at) "
+                "VALUES (?, ?, '', ?, ?)",
+                (task_id, spec_artifact_id, now, now),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="ensure_artifact_async",
+            operation=operation,
+        )
+        artifact = await self.get_artifact_async(task_id)
+        if artifact is None:
+            raise RuntimeError(f"Failed to create task artifact for task_id={task_id}")
+        return artifact
+
     def append_entry(
         self,
         task_id: str,
@@ -228,6 +355,50 @@ class TaskArtifactRepository:
 
         return self._run_write(operation_name="append_entry", operation=operation)
 
+    async def append_entry_async(
+        self,
+        task_id: str,
+        entry: TaskArtifactEntry,
+    ) -> int:
+        """Append an entry to the artifact."""
+
+        async def operation(conn: aiosqlite.Connection) -> int:
+            cursor = await conn.execute(
+                "INSERT INTO task_artifact_entries "
+                "(entry_id, task_id, phase, timestamp, role_id, "
+                "instance_id, event_type, description, payload_json, "
+                "linked_evidence_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry.entry_id,
+                    task_id,
+                    entry.phase.value,
+                    entry.timestamp,
+                    entry.role_id,
+                    entry.instance_id,
+                    entry.event_type,
+                    entry.description,
+                    entry.payload_json,
+                    json.dumps(list(entry.linked_evidence_ids)),
+                ),
+            )
+            inserted_row_id = cursor.lastrowid
+            await cursor.close()
+            now = datetime.now(tz=timezone.utc).isoformat()
+            cursor = await conn.execute(
+                "UPDATE task_artifacts SET updated_at = ? WHERE task_id = ?",
+                (now, task_id),
+            )
+            await cursor.close()
+            if inserted_row_id is None:
+                raise RuntimeError("SQLite append_entry returned no row id")
+            return int(inserted_row_id)
+
+        return await self._run_async_write(
+            operation_name="append_entry_async",
+            operation=operation,
+        )
+
     def update_evidence_bundle(
         self,
         task_id: str,
@@ -246,6 +417,28 @@ class TaskArtifactRepository:
 
         self._run_write(operation_name="update_evidence_bundle", operation=operation)
 
+    async def update_evidence_bundle_async(
+        self,
+        task_id: str,
+        bundle: VerificationEvidenceBundle,
+    ) -> None:
+        """Update the evidence bundle for an artifact."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "UPDATE task_artifacts "
+                "SET evidence_bundle_json = ?, updated_at = ? "
+                "WHERE task_id = ?",
+                (bundle.model_dump_json(), now, task_id),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="update_evidence_bundle_async",
+            operation=operation,
+        )
+
     def update_summary(
         self,
         task_id: str,
@@ -262,6 +455,27 @@ class TaskArtifactRepository:
             )
 
         self._run_write(operation_name="update_summary", operation=operation)
+
+    async def update_summary_async(
+        self,
+        task_id: str,
+        summary: str,
+    ) -> None:
+        """Update the summary text for an artifact."""
+        now = datetime.now(tz=timezone.utc).isoformat()
+
+        async def operation(conn: aiosqlite.Connection) -> None:
+            cursor = await conn.execute(
+                "UPDATE task_artifacts SET summary = ?, updated_at = ? "
+                "WHERE task_id = ?",
+                (summary, now, task_id),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="update_summary_async",
+            operation=operation,
+        )
 
     def query_entries(
         self,
@@ -307,6 +521,53 @@ class TaskArtifactRepository:
             return entries, total
         finally:
             conn.close()
+
+    async def query_entries_async(
+        self,
+        *,
+        task_id: str,
+        phase: TaskArtifactPhase | None = None,
+        event_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[TaskArtifactEntry], int]:
+        """Query artifact entries with optional filters.
+
+        Returns (entries, total_count).
+        """
+        conn = await self._connect_async()
+        try:
+            conditions: list[str] = ["task_id = ?"]
+            params: list[object] = [task_id]
+
+            if phase is not None:
+                conditions.append("phase = ?")
+                params.append(phase.value)
+            if event_type is not None:
+                conditions.append("event_type = ?")
+                params.append(event_type)
+
+            where = " AND ".join(conditions)
+            count_row = await async_fetchone(
+                conn,
+                f"SELECT COUNT(*) FROM task_artifact_entries WHERE {where}",
+                tuple(params),
+            )
+            total = int(count_row[0]) if count_row else 0
+
+            params.append(limit)
+            params.append(offset)
+            rows = await async_fetchall(
+                conn,
+                f"SELECT * FROM task_artifact_entries "
+                f"WHERE {where} "
+                f"ORDER BY id ASC LIMIT ? OFFSET ?",
+                tuple(params),
+            )
+            entries = [self._row_to_entry(dict(row)) for row in rows]
+            return entries, total
+        finally:
+            await conn.close()
 
     @staticmethod
     def _row_to_entry(raw: dict[str, object]) -> TaskArtifactEntry:

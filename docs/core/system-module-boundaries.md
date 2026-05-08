@@ -108,6 +108,35 @@ Boundary:
 Cross-cutting behavior should land in these shared modules when it is reused across
 features.
 
+### Async-Only Runtime Interfaces
+
+Runtime, service, and repository layers must not expose paired synchronous and
+asynchronous public methods for the same operation. A pair such as
+`get_entry()` plus `get_entry_async()` is not an acceptable compatibility layer
+when both methods simply delegate to matching lower-layer calls.
+
+Do not write shallow facades like this:
+
+```python
+def get_entry(self, memory_id: str) -> MemoryEntry | None:
+    return self._repo.get_by_id(memory_id)
+
+async def get_entry_async(self, memory_id: str) -> MemoryEntry | None:
+    return await self._repo.get_by_id_async(memory_id)
+```
+
+Choose one runtime interface and migrate callers to it. For database, network,
+and LLM runtime paths, that interface is async unless a documented process
+boundary requires otherwise. If a synchronous public API is still required for a
+CLI, script, or SDK compatibility boundary, keep the blocking adapter at that
+boundary only. Do not duplicate the domain service or repository API with a
+parallel sync path.
+
+Async runtime methods must not call synchronous SQLite, network, retrieval, or
+LLM helpers internally. If the method is part of an async request, run, hook, or
+memory path, each downstream repository/provider call must also use its async
+API so the event loop is never held behind a hidden blocking adapter.
+
 ## Runtime Injection Boundary
 
 Runtime injection semantics are defined in `runtime-injection-semantics.md`.

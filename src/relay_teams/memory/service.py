@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from relay_teams.logger import get_logger
+from relay_teams.memory import memory_defaults
 from relay_teams.memory.memory_defaults import (
     MIN_CONFIDENCE_ACTIVE,
     MIN_CONFIDENCE_CONSOLIDATION,
@@ -28,6 +29,12 @@ from relay_teams.memory.models import (
 )
 from relay_teams.memory.repository import MemoryBankRepository, generate_memory_id
 from relay_teams.providers.provider_contracts import LLMProvider
+from relay_teams.retrieval.retrieval_models import (
+    RetrievalDocument,
+    RetrievalQuery,
+    RetrievalScopeConfig,
+    RetrievalScopeKind,
+)
 from relay_teams.retrieval.retrieval_service import RetrievalService
 
 LOGGER = get_logger(__name__)
@@ -48,45 +55,6 @@ class MemoryBankService:
     # ------------------------------------------------------------------
     # 1. Create
     # ------------------------------------------------------------------
-
-    def create_entry(self, request: CreateMemoryEntryRequest) -> MemoryEntry:
-        now = datetime.now(tz=timezone.utc)
-        memory_id = generate_memory_id()
-        expires_at = request.expires_at
-        if expires_at is None:
-            expires_at = default_ttl_for_tier(request.tier)
-
-        entry = MemoryEntry(
-            id=memory_id,
-            tier=request.tier,
-            scope=request.scope,
-            workspace_id=request.workspace_id,
-            session_id=request.session_id,
-            run_id=request.run_id,
-            role_id=request.role_id,
-            kind=request.kind,
-            status=MemoryEntryStatus.ACTIVE,
-            content=request.content,
-            tags=request.tags,
-            confidence_score=request.confidence_score,
-            source=request.source,
-            source_ref=request.source_ref,
-            expires_at=expires_at,
-            created_at=now,
-            updated_at=now,
-            metadata=request.metadata,
-        )
-        self.enforce_capacity(
-            workspace_id=request.workspace_id,
-            tier=request.tier,
-            scope=request.scope,
-            session_id=request.session_id,
-            role_id=request.role_id,
-            run_id=request.run_id,
-        )
-        created = self._repo.create_entry(entry=entry)
-        self._index_entry(created)
-        return created
 
     async def create_entry_async(
         self, request: CreateMemoryEntryRequest
@@ -117,7 +85,7 @@ class MemoryBankService:
             updated_at=now,
             metadata=request.metadata,
         )
-        self.enforce_capacity(
+        await self.enforce_capacity_async(
             workspace_id=request.workspace_id,
             tier=request.tier,
             scope=request.scope,
@@ -126,21 +94,15 @@ class MemoryBankService:
             run_id=request.run_id,
         )
         created = await self._repo.create_entry_async(entry=entry)
-        self._index_entry(created)
+        await self._index_entry_async(created)
         return created
 
     # ------------------------------------------------------------------
     # 2. Get / List
     # ------------------------------------------------------------------
 
-    def get_entry(self, memory_id: str) -> MemoryEntry | None:
-        return self._repo.get_by_id(memory_id)
-
     async def get_entry_async(self, memory_id: str) -> MemoryEntry | None:
         return await self._repo.get_by_id_async(memory_id)
-
-    def list_entries(self, query: MemoryQuery) -> MemoryQueryResult:
-        return self._repo.query_entries(query)
 
     async def list_entries_async(self, query: MemoryQuery) -> MemoryQueryResult:
         return await self._repo.query_entries_async(query)
@@ -148,18 +110,6 @@ class MemoryBankService:
     # ------------------------------------------------------------------
     # 3. Update
     # ------------------------------------------------------------------
-
-    def update_entry(
-        self, memory_id: str, request: UpdateMemoryEntryRequest
-    ) -> MemoryEntry | None:
-        entry = self._repo.get_by_id(memory_id)
-        if entry is None:
-            return None
-        updated = self._apply_update(entry, request)
-        result = self._repo.update_entry(memory_id, entry=updated)
-        if result is not None:
-            self._index_entry(result)
-        return result
 
     async def update_entry_async(
         self, memory_id: str, request: UpdateMemoryEntryRequest
@@ -170,7 +120,7 @@ class MemoryBankService:
         updated = self._apply_update(entry, request)
         result = await self._repo.update_entry_async(memory_id, entry=updated)
         if result is not None:
-            self._index_entry(result)
+            await self._index_entry_async(result)
         return result
 
     @staticmethod
@@ -211,9 +161,6 @@ class MemoryBankService:
     # 4. Delete
     # ------------------------------------------------------------------
 
-    def delete_entry(self, memory_id: str) -> bool:
-        return self._repo.delete_entry(memory_id)
-
     async def delete_entry_async(self, memory_id: str) -> bool:
         return await self._repo.delete_entry_async(memory_id)
 
@@ -221,7 +168,7 @@ class MemoryBankService:
     # 4b. Capacity enforcement
     # ------------------------------------------------------------------
 
-    def enforce_capacity(
+    async def enforce_capacity_async(
         self,
         *,
         workspace_id: str,
@@ -236,25 +183,19 @@ class MemoryBankService:
         Returns the number of entries pruned.  Called automatically before
         ``create_entry`` so the capacity cap is never exceeded.
         """
-        from relay_teams.memory.memory_defaults import (
-            MAX_MEDIUM_TERM_PER_SESSION_ROLE,
-            MAX_PERSISTENT_PER_WORKSPACE,
-            MAX_WORKING_PER_RUN,
-        )
-
         _ = (session_id, role_id, scope)  # reserved for granular capacity counting
 
         limit: int
         if tier == MemoryTier.WORKING and run_id is not None:
-            limit = MAX_WORKING_PER_RUN
+            limit = memory_defaults.MAX_WORKING_PER_RUN
         elif tier == MemoryTier.MEDIUM_TERM:
-            limit = MAX_MEDIUM_TERM_PER_SESSION_ROLE
+            limit = memory_defaults.MAX_MEDIUM_TERM_PER_SESSION_ROLE
         elif tier == MemoryTier.PERSISTENT:
-            limit = MAX_PERSISTENT_PER_WORKSPACE
+            limit = memory_defaults.MAX_PERSISTENT_PER_WORKSPACE
         else:
             return 0
 
-        current_count = self._repo.count_entries(
+        current_count = await self._repo.count_entries_async(
             workspace_id=workspace_id,
             tier=tier,
             status=MemoryEntryStatus.ACTIVE,
@@ -264,7 +205,7 @@ class MemoryBankService:
 
         overflow = current_count - limit + 1
         if tier == MemoryTier.WORKING and run_id is not None:
-            return self._repo.expire_oldest(
+            return await self._repo.expire_oldest_async(
                 workspace_id=workspace_id,
                 tier=tier,
                 run_id=run_id,
@@ -273,7 +214,7 @@ class MemoryBankService:
             )
 
         # For medium_term/persistent, prune by confidence then age
-        return self._repo.expire_oldest(
+        return await self._repo.expire_oldest_async(
             workspace_id=workspace_id,
             tier=tier,
             status=MemoryEntryStatus.ACTIVE,
@@ -283,96 +224,6 @@ class MemoryBankService:
     # ------------------------------------------------------------------
     # 5. Consolidation
     # ------------------------------------------------------------------
-
-    def consolidate(
-        self, request: MemoryConsolidationRequest
-    ) -> MemoryConsolidationResult:
-        """Promote entries from a lower tier to the target tier.
-
-        For STRUCTURAL mode this is a direct tier promotion (no LLM
-        extraction).  For SEMANTIC mode the LLM extracts structured
-        entries from the conversation history.
-        """
-        if request.consolidation_mode == ConsolidationMode.SEMANTIC:
-            LOGGER.warning(
-                "SEMANTIC consolidation invoked via sync consolidate();"
-                " async consolidate_async() is preferred for LLM calls."
-                " Falling back to STRUCTURAL."
-            )
-        return self._consolidate_structural(request)
-
-    def _consolidate_structural(
-        self, request: MemoryConsolidationRequest
-    ) -> MemoryConsolidationResult:
-        source_tier = self._source_tier_for(request.target_tier)
-
-        query = MemoryQuery(
-            workspace_id=request.workspace_id,
-            tier=source_tier,
-            status=MemoryEntryStatus.ACTIVE,
-            min_confidence=MIN_CONFIDENCE_CONSOLIDATION,
-        )
-        if request.session_id is not None:
-            query = query.model_copy(update={"session_id": request.session_id})
-        if request.role_id is not None:
-            query = query.model_copy(update={"role_id": request.role_id})
-        if request.filter_kind is not None:
-            query = query.model_copy(update={"kind": request.filter_kind})
-
-        result = self._repo.query_entries(query)
-        source_entries: list[MemoryEntry] = []
-        for summary in result.items:
-            entry = self._repo.get_by_id(summary.id)
-            if entry is not None:
-                source_entries.append(entry)
-
-        new_ids: list[str] = []
-        superseded_ids: list[str] = []
-
-        now = datetime.now(tz=timezone.utc)
-        for src in source_entries:
-            new_id = generate_memory_id()
-            new_entry = MemoryEntry(
-                id=new_id,
-                tier=request.target_tier,
-                scope=request.target_scope,
-                workspace_id=request.workspace_id,
-                session_id=request.session_id,
-                run_id=None,
-                role_id=request.role_id,
-                kind=src.kind,
-                status=MemoryEntryStatus.ACTIVE,
-                content=src.content.model_copy(),
-                tags=src.tags,
-                confidence_score=src.confidence_score,
-                source=src.source,
-                source_ref=src.source_ref,
-                parent_entry_id=src.id,
-                created_at=now,
-                updated_at=now,
-                expires_at=default_ttl_for_tier(request.target_tier),
-                metadata=src.metadata.copy(),
-            )
-            self._repo.create_entry(entry=new_entry)
-            new_ids.append(new_id)
-
-            # Mark source as superseded
-            updated_src = src.model_copy(
-                update={
-                    "status": MemoryEntryStatus.SUPERSEDED,
-                    "superseded_by_id": new_id,
-                    "updated_at": now,
-                }
-            )
-            self._repo.update_entry(src.id, entry=updated_src)
-            superseded_ids.append(src.id)
-
-        return MemoryConsolidationResult(
-            source_entry_count=result.total_count,
-            consolidated_entry_count=len(new_ids),
-            superseded_entry_ids=tuple(superseded_ids),
-            new_entry_ids=tuple(new_ids),
-        )
 
     async def consolidate_async(
         self, request: MemoryConsolidationRequest
@@ -487,14 +338,6 @@ class MemoryBankService:
     # 6. Forgetting
     # ------------------------------------------------------------------
 
-    def forget_expired(self, now: datetime | None = None) -> int:
-        """Run TTL expiry and confidence decay. Returns count of entries expired."""
-        ttl_expired = self._repo.expire_entries(now)
-        decay_expired = self._repo.apply_confidence_decay(
-            min_confidence=MIN_CONFIDENCE_ACTIVE, now=now
-        )
-        return ttl_expired + decay_expired
-
     async def forget_expired_async(self, now: datetime | None = None) -> int:
         ttl_expired = await self._repo.expire_entries_async(now)
         decay_expired = await self._repo.apply_confidence_decay_async(
@@ -506,30 +349,17 @@ class MemoryBankService:
     # 7. Search (FTS5-backed)
     # ------------------------------------------------------------------
 
-    def search(self, request: MemorySearchRequest) -> MemorySearchResult:
-        """Full-text search over memory entries.
-
-        Uses the FTS5 retrieval store when a ``retrieval_service`` is
-        configured.  Falls back to structural ``LIKE`` matching otherwise.
-        """
-        if self._retrieval_service is not None:
-            return self._search_fts(request)
-        return self._search_fallback(request)
-
     async def search_async(self, request: MemorySearchRequest) -> MemorySearchResult:
         if self._retrieval_service is not None:
-            return self._search_fts(request)
-        return self._search_fallback(request)
+            return await self._search_fts_async(request)
+        return await self._search_fallback_async(request)
 
-    def _search_fts(self, request: MemorySearchRequest) -> MemorySearchResult:
+    async def _search_fts_async(
+        self, request: MemorySearchRequest
+    ) -> MemorySearchResult:
         """Query the FTS5 retrieval index and cross-reference with the memory table."""
-        from relay_teams.retrieval.retrieval_models import (
-            RetrievalQuery,
-            RetrievalScopeKind,
-        )
-
         assert self._retrieval_service is not None
-        fts_hits = self._retrieval_service.search(
+        fts_hits = await self._retrieval_service.search_async(
             query=RetrievalQuery(
                 scope_kind=RetrievalScopeKind.MEMORY,
                 scope_id=request.workspace_id,
@@ -558,7 +388,7 @@ class MemoryBankService:
             limit=request.limit,
             offset=0,
         )
-        result = self._repo.query_entries(query)
+        result = await self._repo.query_entries_async(query)
 
         items: list[MemorySearchHit] = []
         for summary in result.items:
@@ -583,7 +413,9 @@ class MemoryBankService:
             total_count=len(items),
         )
 
-    def _search_fallback(self, request: MemorySearchRequest) -> MemorySearchResult:
+    async def _search_fallback_async(
+        self, request: MemorySearchRequest
+    ) -> MemorySearchResult:
         """Fallback text search when no FTS5 retrieval service is available."""
         query = MemoryQuery(
             workspace_id=request.workspace_id,
@@ -597,7 +429,7 @@ class MemoryBankService:
             limit=request.limit,
             offset=0,
         )
-        result = self._repo.query_entries(query)
+        result = await self._repo.query_entries_async(query)
 
         items: list[MemorySearchHit] = []
         rank = 1
@@ -638,7 +470,7 @@ class MemoryBankService:
     # FTS5 indexing integration
     # ------------------------------------------------------------------
 
-    def _index_entry(self, entry: MemoryEntry) -> None:
+    async def _index_entry_async(self, entry: MemoryEntry) -> None:
         """Index a memory entry into the FTS5 retrieval store.
 
         Silently skips indexing if no retrieval_service is configured or if
@@ -646,12 +478,6 @@ class MemoryBankService:
         """
         if self._retrieval_service is None:
             return
-        from relay_teams.retrieval.retrieval_models import (
-            RetrievalDocument,
-            RetrievalScopeConfig,
-            RetrievalScopeKind,
-        )
-
         if entry.status != MemoryEntryStatus.ACTIVE:
             return
 
@@ -676,7 +502,7 @@ class MemoryBankService:
             keywords=entry.tags,
         )
         try:
-            self._retrieval_service.upsert_documents(
+            await self._retrieval_service.upsert_documents_async(
                 config=config,
                 documents=(doc,),
             )

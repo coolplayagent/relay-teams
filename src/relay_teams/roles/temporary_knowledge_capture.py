@@ -49,7 +49,7 @@ class TemporaryRoleKnowledgeCaptureService:
     ) -> TemporaryKnowledgeCapture | None:
 
         try:
-            record = self._temporary_role_repository.get(
+            record = await self._temporary_role_repository.get_async(
                 run_id=subagent_run_id,
                 role_id=subagent_role_id,
             )
@@ -78,7 +78,7 @@ class TemporaryRoleKnowledgeCaptureService:
             prompt_diff_markdown=diff,
         )
 
-        self._adjustment_engine.propose_adjustment(
+        await self._adjustment_engine.propose_adjustment_async(
             role_id=template_role_id,
             workspace_id=workspace_id,
             current_prompt=original_prompt,

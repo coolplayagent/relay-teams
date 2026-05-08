@@ -251,11 +251,11 @@ class TaskControlHarness:
         """Append an artifact entry. Returns entry count or None if repo unavailable."""
         if self._artifact_repo is None:
             return None
-        artifact = await asyncio.to_thread(self._artifact_repo.get_artifact, task_id)
+        artifact = await self._artifact_repo.get_artifact_async(task_id)
         if artifact is None:
             return None
-        await asyncio.to_thread(self._artifact_repo.append_entry, task_id, entry)
-        updated = await asyncio.to_thread(self._artifact_repo.get_artifact, task_id)
+        await self._artifact_repo.append_entry_async(task_id, entry)
+        updated = await self._artifact_repo.get_artifact_async(task_id)
         return len(updated.entries) if updated else None
 
     async def _maybe_enqueue_retry(self, task: TaskEnvelope) -> None:

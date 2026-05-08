@@ -24,14 +24,24 @@ class RetrievalStore(Protocol):
         *,
         config: RetrievalScopeConfig,
         documents: tuple[RetrievalDocument, ...],
-    ) -> RetrievalStats: ...
+    ) -> RetrievalStats:
+        raise NotImplementedError  # pragma: no cover
 
     def upsert_documents(
         self,
         *,
         config: RetrievalScopeConfig,
         documents: tuple[RetrievalDocument, ...],
-    ) -> RetrievalStats: ...
+    ) -> RetrievalStats:
+        raise NotImplementedError  # pragma: no cover
+
+    async def upsert_documents_async(
+        self,
+        *,
+        config: RetrievalScopeConfig,
+        documents: tuple[RetrievalDocument, ...],
+    ) -> RetrievalStats:
+        raise NotImplementedError  # pragma: no cover
 
     def delete_documents(
         self,
@@ -39,24 +49,35 @@ class RetrievalStore(Protocol):
         scope_kind: RetrievalScopeKind,
         scope_id: str,
         document_ids: tuple[str, ...],
-    ) -> RetrievalStats: ...
+    ) -> RetrievalStats:
+        raise NotImplementedError  # pragma: no cover
 
     def search(
         self,
         *,
         query: RetrievalQuery,
-    ) -> tuple[RetrievalHit, ...]: ...
+    ) -> tuple[RetrievalHit, ...]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def search_async(
+        self,
+        *,
+        query: RetrievalQuery,
+    ) -> tuple[RetrievalHit, ...]:
+        raise NotImplementedError  # pragma: no cover
 
     def rebuild_scope(
         self,
         *,
         scope_kind: RetrievalScopeKind,
         scope_id: str,
-    ) -> RetrievalStats: ...
+    ) -> RetrievalStats:
+        raise NotImplementedError  # pragma: no cover
 
     def stats(
         self,
         *,
         scope_kind: RetrievalScopeKind,
         scope_id: str,
-    ) -> RetrievalStats: ...
+    ) -> RetrievalStats:
+        raise NotImplementedError  # pragma: no cover

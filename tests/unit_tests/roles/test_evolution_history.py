@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from relay_teams.memory.models import (
     MemoryContent,
     MemoryEntry,
@@ -17,6 +19,8 @@ from relay_teams.memory.models import (
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.roles.evolution_history import RoleEvolutionHistoryService
 from relay_teams.roles.prompt_adjustment_engine import PromptAdjustmentRepository
+
+pytestmark = pytest.mark.asyncio
 
 
 def _make_memory_entry(
@@ -90,7 +94,7 @@ def _make_memory_summary(
     )
 
 
-def test_record_event_creates_memory_entry() -> None:
+async def test_record_event_creates_memory_entry() -> None:
     mock_adjustment = MagicMock(spec=PromptAdjustmentRepository)
     mock_bank = MagicMock(spec=MemoryBankService)
 
@@ -98,7 +102,7 @@ def test_record_event_creates_memory_entry() -> None:
         adjustment_repository=mock_adjustment,
         memory_bank_service=mock_bank,
     )
-    event = service.record_event(
+    event = await service.record_event_async(
         role_id="test-role",
         workspace_id="ws-1",
         event_type="prompt_applied",
@@ -114,14 +118,14 @@ def test_record_event_creates_memory_entry() -> None:
     assert event.trigger_source == "self_assessment"
     assert event.decision_id == "pad-1"
 
-    mock_bank.create_entry.assert_called_once()
-    call_args = mock_bank.create_entry.call_args[0][0]
+    mock_bank.create_entry_async.assert_awaited_once()
+    call_args = mock_bank.create_entry_async.call_args[0][0]
     assert call_args.scope == MemoryScope.ROLE
     assert call_args.kind == MemoryEntryKind.INSIGHT
     assert call_args.source == MemorySourceKind.REFLECTION
 
 
-def test_get_timeline_returns_events() -> None:
+async def test_get_timeline_returns_events() -> None:
     mock_adjustment = MagicMock(spec=PromptAdjustmentRepository)
     mock_adjustment.get_latest_applied.return_value = None
     mock_adjustment.list_decisions.return_value = ()
@@ -132,8 +136,8 @@ def test_get_timeline_returns_events() -> None:
         event_type="prompt_applied",
         body="Applied strategy improvement",
     )
-    mock_bank.get_entry.return_value = entry
-    mock_bank.list_entries.return_value = MemoryQueryResult(
+    mock_bank.get_entry_async.return_value = entry
+    mock_bank.list_entries_async.return_value = MemoryQueryResult(
         items=(_make_memory_summary(entry_id="evt-1"),),
         total_count=1,
         offset=0,
@@ -144,7 +148,7 @@ def test_get_timeline_returns_events() -> None:
         adjustment_repository=mock_adjustment,
         memory_bank_service=mock_bank,
     )
-    timeline = service.get_timeline(
+    timeline = await service.get_timeline_async(
         role_id="test-role",
         workspace_id="ws-1",
     )
@@ -155,7 +159,7 @@ def test_get_timeline_returns_events() -> None:
     assert timeline.events[0].summary == "Applied strategy improvement"
 
 
-def test_get_current_state() -> None:
+async def test_get_current_state() -> None:
     from relay_teams.roles.prompt_adjustment_engine import (
         PromptAdjustmentDecision,
         PromptAdjustmentStatus,
@@ -183,8 +187,8 @@ def test_get_current_state() -> None:
         body="Applied V3",
     )
     mock_bank = MagicMock(spec=MemoryBankService)
-    mock_bank.get_entry.return_value = entry
-    mock_bank.list_entries.return_value = MemoryQueryResult(
+    mock_bank.get_entry_async.return_value = entry
+    mock_bank.list_entries_async.return_value = MemoryQueryResult(
         items=(_make_memory_summary(entry_id="evt-1"),),
         total_count=1,
         offset=0,
@@ -195,7 +199,7 @@ def test_get_current_state() -> None:
         adjustment_repository=mock_adjustment,
         memory_bank_service=mock_bank,
     )
-    state = service.get_current_state(
+    state = await service.get_current_state_async(
         role_id="test-role",
         workspace_id="ws-1",
     )
@@ -203,7 +207,7 @@ def test_get_current_state() -> None:
     assert state.lifetime_adjustment_count == 1
 
 
-def test_event_links_decision_id() -> None:
+async def test_event_links_decision_id() -> None:
     mock_adjustment = MagicMock(spec=PromptAdjustmentRepository)
     mock_bank = MagicMock(spec=MemoryBankService)
 
@@ -211,7 +215,7 @@ def test_event_links_decision_id() -> None:
         adjustment_repository=mock_adjustment,
         memory_bank_service=mock_bank,
     )
-    event = service.record_event(
+    event = await service.record_event_async(
         role_id="test-role",
         workspace_id="ws-1",
         event_type="prompt_applied",
@@ -220,7 +224,7 @@ def test_event_links_decision_id() -> None:
     )
     assert event.decision_id == "pad-abc123"
 
-    call_args = mock_bank.create_entry.call_args[0][0]
+    call_args = mock_bank.create_entry_async.call_args[0][0]
     import json
 
     ctx = json.loads(call_args.content.context)

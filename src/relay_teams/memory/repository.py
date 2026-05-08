@@ -173,13 +173,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # Create
     # ------------------------------------------------------------------
 
-    def create_entry(self, *, entry: MemoryEntry) -> MemoryEntry:
-        self._run_write(
-            operation_name="create_memory_entry",
-            operation=lambda: self._insert_entry(entry),
-        )
-        return entry
-
     async def create_entry_async(self, *, entry: MemoryEntry) -> MemoryEntry:
         async def op(conn: aiosqlite.Connection) -> None:
             await self._async_insert_entry(conn, entry)
@@ -189,19 +182,6 @@ class MemoryBankRepository(SharedSqliteRepository):
             operation=op,
         )
         return entry
-
-    def _insert_entry(self, entry: MemoryEntry) -> None:
-        self._conn.execute(
-            """INSERT INTO memory_entries(
-                memory_id, tier, scope, workspace_id, session_id, run_id, role_id,
-                kind, status, content_title, content_body, content_context, content_outcome,
-                tags, confidence_score, source, source_ref,
-                superseded_by_id, parent_entry_id, version,
-                created_at, updated_at, expires_at, last_accessed_at, access_count,
-                metadata_json
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            self._entry_to_params(entry),
-        )
 
     async def _async_insert_entry(
         self, conn: aiosqlite.Connection, entry: MemoryEntry
@@ -223,17 +203,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # Read
     # ------------------------------------------------------------------
 
-    def get_by_id(self, memory_id: str) -> MemoryEntry | None:
-        row = self._run_read(
-            lambda: self._conn.execute(
-                "SELECT * FROM memory_entries WHERE memory_id=?",
-                (memory_id,),
-            ).fetchone()
-        )
-        if row is None:
-            return None
-        return _row_to_entry(row)
-
     async def get_by_id_async(self, memory_id: str) -> MemoryEntry | None:
         async def op(conn: aiosqlite.Connection) -> MemoryEntry | None:
             row = await async_fetchone(
@@ -251,13 +220,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # Update
     # ------------------------------------------------------------------
 
-    def update_entry(self, memory_id: str, *, entry: MemoryEntry) -> MemoryEntry:
-        self._run_write(
-            operation_name="update_memory_entry",
-            operation=lambda: self._do_update_entry(memory_id, entry),
-        )
-        return entry
-
     async def update_entry_async(
         self, memory_id: str, *, entry: MemoryEntry
     ) -> MemoryEntry:
@@ -269,19 +231,6 @@ class MemoryBankRepository(SharedSqliteRepository):
             operation=op,
         )
         return entry
-
-    def _do_update_entry(self, memory_id: str, entry: MemoryEntry) -> None:
-        self._conn.execute(
-            """UPDATE memory_entries SET
-                tier=?, scope=?, workspace_id=?, session_id=?, run_id=?, role_id=?,
-                kind=?, status=?, content_title=?, content_body=?, content_context=?, content_outcome=?,
-                tags=?, confidence_score=?, source=?, source_ref=?,
-                superseded_by_id=?, parent_entry_id=?, version=?,
-                created_at=?, updated_at=?, expires_at=?, last_accessed_at=?, access_count=?,
-                metadata_json=?
-            WHERE memory_id=?""",
-            (*self._entry_to_params(entry)[1:], memory_id),
-        )
 
     async def _async_do_update_entry(
         self,
@@ -306,16 +255,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # Delete
     # ------------------------------------------------------------------
 
-    def delete_entry(self, memory_id: str) -> bool:
-        result = self._run_write(
-            operation_name="delete_memory_entry",
-            operation=lambda: self._conn.execute(
-                "DELETE FROM memory_entries WHERE memory_id=?",
-                (memory_id,),
-            ),
-        )
-        return result.rowcount > 0
-
     async def delete_entry_async(self, memory_id: str) -> bool:
         async def op(conn: aiosqlite.Connection) -> bool:
             cursor = await conn.execute(
@@ -334,32 +273,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
-
-    def query_entries(self, query: MemoryQuery) -> MemoryQueryResult:
-        where_clause, params = self._build_where(query)
-        count_sql = f"SELECT COUNT(*) as cnt FROM memory_entries {where_clause}"
-        data_sql = (
-            f"SELECT * FROM memory_entries {where_clause} "
-            f"ORDER BY updated_at DESC LIMIT ? OFFSET ?"
-        )
-
-        count_row = self._run_read(
-            lambda: self._conn.execute(count_sql, tuple(params)).fetchone()
-        )
-        total_count = int(count_row["cnt"]) if count_row is not None else 0
-
-        rows = self._run_read(
-            lambda: self._conn.execute(
-                data_sql, tuple(params) + (query.limit, query.offset)
-            ).fetchall()
-        )
-        items = tuple(_row_to_summary(row) for row in rows)
-        return MemoryQueryResult(
-            items=items,
-            total_count=total_count,
-            offset=query.offset,
-            limit=query.limit,
-        )
 
     async def query_entries_async(self, query: MemoryQuery) -> MemoryQueryResult:
         where_clause, params = self._build_where(query)
@@ -430,19 +343,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # Expiry sweep
     # ------------------------------------------------------------------
 
-    def expire_entries(self, now: datetime | None = None) -> int:
-        """Mark TTL-expired active entries as EXPIRED. Returns count updated."""
-        now_iso = (now or datetime.now(tz=timezone.utc)).isoformat()
-        result = self._run_write(
-            operation_name="expire_memory_entries",
-            operation=lambda: self._conn.execute(
-                "UPDATE memory_entries SET status='expired', updated_at=? "
-                "WHERE status='active' AND expires_at IS NOT NULL AND expires_at < ?",
-                (now_iso, now_iso),
-            ),
-        )
-        return result.rowcount
-
     async def expire_entries_async(self, now: datetime | None = None) -> int:
         now_iso = (now or datetime.now(tz=timezone.utc)).isoformat()
 
@@ -464,48 +364,6 @@ class MemoryBankRepository(SharedSqliteRepository):
     # ------------------------------------------------------------------
     # Confidence decay
     # ------------------------------------------------------------------
-
-    def apply_confidence_decay(
-        self, *, min_confidence: float = 0.2, now: datetime | None = None
-    ) -> int:
-        """Apply confidence decay and expire below-threshold entries.
-
-        Returns count of entries that dropped below min_confidence.
-        """
-        now = now or datetime.now(tz=timezone.utc)
-        now_iso = now.isoformat()
-
-        affected = self._run_write(
-            operation_name="apply_confidence_decay",
-            operation=lambda: self._do_confidence_decay(now_iso, min_confidence),
-        )
-        return affected
-
-    def _do_confidence_decay(self, now_iso: str, min_confidence: float) -> int:
-        from relay_teams.memory.memory_defaults import (
-            MEDIUM_TERM_DECAY_FACTOR,
-            PERSISTENT_DECAY_FACTOR,
-        )
-
-        # Medium-term decay
-        self._conn.execute(
-            "UPDATE memory_entries SET confidence_score = confidence_score * ?, updated_at=? "
-            "WHERE tier='medium_term' AND status='active'",
-            (MEDIUM_TERM_DECAY_FACTOR, now_iso),
-        )
-        # Persistent decay
-        self._conn.execute(
-            "UPDATE memory_entries SET confidence_score = confidence_score * ?, updated_at=? "
-            "WHERE tier='persistent' AND status='active'",
-            (PERSISTENT_DECAY_FACTOR, now_iso),
-        )
-        # Expire below threshold
-        result = self._conn.execute(
-            "UPDATE memory_entries SET status='expired', updated_at=? "
-            "WHERE status='active' AND confidence_score < ?",
-            (now_iso, min_confidence),
-        )
-        return result.rowcount
 
     async def apply_confidence_decay_async(
         self, *, min_confidence: float = 0.2, now: datetime | None = None
@@ -549,7 +407,7 @@ class MemoryBankRepository(SharedSqliteRepository):
     # Capacity helpers
     # ------------------------------------------------------------------
 
-    def count_entries(
+    async def count_entries_async(
         self,
         *,
         workspace_id: str,
@@ -569,15 +427,18 @@ class MemoryBankRepository(SharedSqliteRepository):
             clauses.append("status = ?")
             params.append(status.value)
         where_sql = "WHERE " + " AND ".join(clauses)
-        row = self._run_read(
-            lambda: self._conn.execute(
+
+        async def op(conn: aiosqlite.Connection) -> int:
+            row = await async_fetchone(
+                conn,
                 f"SELECT COUNT(*) as cnt FROM memory_entries {where_sql}",
                 tuple(params),
-            ).fetchone()
-        )
-        return int(row["cnt"]) if row is not None else 0
+            )
+            return int(row["cnt"]) if row is not None else 0
 
-    def expire_oldest(
+        return await self._run_async_read(op)
+
+    async def expire_oldest_async(
         self,
         *,
         workspace_id: str,
@@ -601,27 +462,28 @@ class MemoryBankRepository(SharedSqliteRepository):
 
         now_iso = datetime.now(tz=timezone.utc).isoformat()
 
-        def op() -> int:
-            ids = self._conn.execute(
+        async def op(conn: aiosqlite.Connection) -> int:
+            ids = await async_fetchall(
+                conn,
                 f"SELECT memory_id FROM memory_entries {where_sql} "
                 f"ORDER BY created_at ASC LIMIT ?",
                 tuple(params) + (count,),
-            ).fetchall()
+            )
             affected = 0
             for row in ids:
-                cursor = self._conn.execute(
+                cursor = await conn.execute(
                     "UPDATE memory_entries SET status='expired', updated_at=? "
                     "WHERE memory_id=?",
                     (now_iso, str(row["memory_id"])),
                 )
                 affected += cursor.rowcount
+                await cursor.close()
             return affected
 
-        result = self._run_write(
-            operation_name="expire_oldest_memory_entries",
+        return await self._run_async_write(
+            operation_name="expire_oldest_memory_entries_async",
             operation=op,
         )
-        return result
 
     # ------------------------------------------------------------------
     # Helpers

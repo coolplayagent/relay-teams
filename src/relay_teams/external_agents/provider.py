@@ -365,7 +365,7 @@ class ExternalAcpSessionManager:
         request: LLMRequest,
     ) -> str:
         prompt_text = self._resolve_external_user_prompt(request)
-        workspace = self._resolve_workspace(request)
+        workspace = await self._resolve_workspace_async(request)
         workspace_path = workspace.resolve_workdir()
 
         # OP-4: native config + skill bridge injection
@@ -413,7 +413,7 @@ class ExternalAcpSessionManager:
         request: LLMRequest,
     ) -> str:
         prompt_text = self._resolve_external_user_prompt(request)
-        workspace = self._resolve_workspace(request)
+        workspace = await self._resolve_workspace_async(request)
         workspace_path = workspace.resolve_workdir()
 
         # OP-4: native config + skill bridge injection
@@ -756,7 +756,7 @@ class ExternalAcpSessionManager:
                 message_id=message_id,
             )
 
-        workspace = self._resolve_workspace(request)
+        workspace = await self._resolve_workspace_async(request)
         transport = build_acp_transport(
             config=runtime_agent,
             on_message=on_message,
@@ -899,7 +899,7 @@ class ExternalAcpSessionManager:
             send_request=handle.transport.send_request,
             send_notification=handle.transport.send_notification,
         )
-        workspace = self._resolve_workspace(request)
+        workspace = await self._resolve_workspace_async(request)
         mcp_servers = _build_mcp_servers_for_role(
             role=role,
             mcp_registry=self._get_mcp_registry(),
@@ -1091,8 +1091,8 @@ class ExternalAcpSessionManager:
                 ),
             )
 
-    def _resolve_workspace(self, request: LLMRequest):
-        return self._workspace_manager.resolve(
+    async def _resolve_workspace_async(self, request: LLMRequest):
+        return await self._workspace_manager.resolve_async(
             session_id=request.session_id,
             role_id=request.role_id,
             instance_id=request.instance_id,

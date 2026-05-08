@@ -248,41 +248,12 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
         )
         return prepared_prompt, history, prepared_system_prompt, cast(object, agent)
 
-    def _coerce_history_to_provider_safe_sequence(
-        self,
-        *,
-        request: LLMRequest,
-        history: Sequence[ModelRequest | ModelResponse],
-    ) -> list[ModelRequest | ModelResponse]:
-        return self._prompt_history_service().coerce_history_to_provider_safe_sequence(
-            request=request,
-            history=history,
-        )
-
     def _first_tool_replayable_history_index(
         self,
         history: Sequence[ModelRequest | ModelResponse],
     ) -> int:
         return self._prompt_history_service().first_tool_replayable_history_index(
             history
-        )
-
-    def _build_history_replay_bridge_message(
-        self,
-        *,
-        request: LLMRequest,
-    ) -> ModelRequest | None:
-        return self._prompt_history_service().build_history_replay_bridge_message(
-            request=request
-        )
-
-    def _build_history_replay_bridge_prompt(
-        self,
-        *,
-        request: LLMRequest,
-    ) -> str:
-        return self._prompt_history_service().build_history_replay_bridge_prompt(
-            request=request
         )
 
     async def _estimate_compaction_budget(
@@ -1014,9 +985,11 @@ class SessionPromptMixin(AgentLlmSessionMixinBase):
             request.role_id,
         )
 
-    def _resolve_tool_approval_policy(self, run_id: str) -> ToolApprovalPolicy:
+    async def _resolve_tool_approval_policy_async(
+        self, run_id: str
+    ) -> ToolApprovalPolicy:
         try:
-            yolo = self._run_intent_repo.get(run_id).yolo
+            yolo = (await self._run_intent_repo.get_async(run_id)).yolo
         except KeyError:
             yolo = False
         return self._tool_approval_policy.with_yolo(yolo)

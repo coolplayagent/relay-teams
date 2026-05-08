@@ -13,6 +13,7 @@ from relay_teams.agents.execution.user_prompts import (
 from relay_teams.logger import get_logger, log_event
 from relay_teams.retrieval import (
     RetrievalDocument,
+    RetrievalHit,
     RetrievalQuery,
     RetrievalScopeConfig,
     RetrievalScopeKind,
@@ -91,24 +92,17 @@ class SkillRoutingService:
         self._top_k = top_k
         self._search_limit = search_limit
 
-    def route(
+    async def route_async(
         self,
         *,
         authorized_skills: tuple[str, ...],
         context: SkillRoutingContext,
     ) -> SkillRoutingResult:
         query_text = build_skill_routing_query_text(context)
-        authorized_count = len(authorized_skills)
-        if authorized_count <= self._top_k:
-            return SkillRoutingResult(
+        if len(authorized_skills) <= self._top_k:
+            return self._passthrough_result(
                 authorized_skills=authorized_skills,
-                visible_skills=authorized_skills,
-                diagnostics=SkillRoutingDiagnostics(
-                    mode=SkillRoutingMode.PASSTHROUGH,
-                    query_text=query_text,
-                    authorized_count=authorized_count,
-                    visible_skills=authorized_skills,
-                ),
+                query_text=query_text,
             )
         if not query_text:
             return self._fallback_result(
@@ -118,7 +112,7 @@ class SkillRoutingService:
             )
 
         try:
-            hits = self._retrieval_service.search(
+            hits = await self._retrieval_service.search_async(
                 query=RetrievalQuery(
                     scope_kind=self._scope_config.scope_kind,
                     scope_id=self._scope_config.scope_id,
@@ -143,6 +137,36 @@ class SkillRoutingService:
                 reason=SkillRoutingFallbackReason.SEARCH_FAILED,
             )
 
+        return self._search_result_from_hits(
+            authorized_skills=authorized_skills,
+            query_text=query_text,
+            hits=hits,
+        )
+
+    @staticmethod
+    def _passthrough_result(
+        *,
+        authorized_skills: tuple[str, ...],
+        query_text: str,
+    ) -> SkillRoutingResult:
+        return SkillRoutingResult(
+            authorized_skills=authorized_skills,
+            visible_skills=authorized_skills,
+            diagnostics=SkillRoutingDiagnostics(
+                mode=SkillRoutingMode.PASSTHROUGH,
+                query_text=query_text,
+                authorized_count=len(authorized_skills),
+                visible_skills=authorized_skills,
+            ),
+        )
+
+    def _search_result_from_hits(
+        self,
+        *,
+        authorized_skills: tuple[str, ...],
+        query_text: str,
+        hits: tuple[RetrievalHit, ...],
+    ) -> SkillRoutingResult:
         authorized_set = set(authorized_skills)
         filtered_hits = tuple(hit for hit in hits if hit.document_id in authorized_set)
         if not filtered_hits:
@@ -172,7 +196,7 @@ class SkillRoutingService:
             diagnostics=SkillRoutingDiagnostics(
                 mode=SkillRoutingMode.SEARCH,
                 query_text=query_text,
-                authorized_count=authorized_count,
+                authorized_count=len(authorized_skills),
                 visible_skills=visible_skills,
                 candidates=candidates,
             ),
@@ -220,7 +244,7 @@ class SkillRuntimeService:
             skill_registry=self._skill_registry
         )
 
-    def prepare_prompt(
+    async def prepare_prompt_async(
         self,
         *,
         role: RoleDefinition,
@@ -235,7 +259,7 @@ class SkillRuntimeService:
             skill_names=role.skills if skill_names is None else skill_names,
             consumer=consumer,
         )
-        routing = self._route_for_authorized_skills(
+        routing = await self._route_for_authorized_skills_async(
             role=role,
             objective=objective,
             shared_state_snapshot=shared_state_snapshot,
@@ -243,6 +267,19 @@ class SkillRuntimeService:
             orchestration_prompt=orchestration_prompt,
             authorized_skills=authorized_skills,
         )
+        return self._build_prompt_result_from_routing(
+            objective=objective,
+            authorized_skills=authorized_skills,
+            routing=routing,
+        )
+
+    def _build_prompt_result_from_routing(
+        self,
+        *,
+        objective: str,
+        authorized_skills: tuple[Skill, ...],
+        routing: SkillRoutingResult,
+    ) -> SkillPromptResult:
         authorized_skill_map = _skill_map_by_name(authorized_skills)
         instruction_entries = self._instruction_entries_for_names(
             skill_names=routing.authorized_skills,
@@ -286,7 +323,7 @@ class SkillRuntimeService:
             routing=routing,
         )
 
-    def route_for_role(
+    async def route_for_role_async(
         self,
         *,
         role: RoleDefinition,
@@ -301,7 +338,7 @@ class SkillRuntimeService:
             skill_names=role.skills if skill_names is None else skill_names,
             consumer=consumer,
         )
-        return self._route_for_authorized_skills(
+        return await self._route_for_authorized_skills_async(
             role=role,
             objective=objective,
             shared_state_snapshot=shared_state_snapshot,
@@ -310,7 +347,7 @@ class SkillRuntimeService:
             authorized_skills=authorized_skills,
         )
 
-    def _route_for_authorized_skills(
+    async def _route_for_authorized_skills_async(
         self,
         *,
         role: RoleDefinition,
@@ -326,13 +363,13 @@ class SkillRuntimeService:
         with trace_span(
             LOGGER,
             component="skills.runtime",
-            operation="route_for_role",
+            operation="route_for_role_async",
             attributes={
                 "role_id": role.role_id,
                 "authorized_count": len(authorized_skill_names),
             },
         ):
-            result = self._routing_service.route(
+            result = await self._routing_service.route_async(
                 authorized_skills=authorized_skill_names,
                 context=SkillRoutingContext(
                     objective=objective.strip(),

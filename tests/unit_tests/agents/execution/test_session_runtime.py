@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from types import SimpleNamespace
+from types import SimpleNamespace, TracebackType
 from typing import cast
 
 import pytest
@@ -21,6 +21,7 @@ from relay_teams.agents.tasks.models import (
     TaskLifecyclePolicy,
     TaskRecord,
     TaskSpec,
+    TaskSpecArtifact,
     VerificationPlan,
 )
 from relay_teams.roles.role_models import RoleDefinition
@@ -46,6 +47,64 @@ from .agent_llm_session_test_support import (
 )
 
 
+async def _none_tool_approval_policy_async(_run_id: str) -> object:
+    return cast(object, None)
+
+
+async def _none_workspace_async(_self: object, **_kwargs: object) -> object:
+    return cast(object, None)
+
+
+class _OpenAIRawStreamWithoutFinish:
+    finish_reason = None
+
+
+class _OpenAIRawStreamWithFinish:
+    finish_reason = "stop"
+
+
+class _ForeignRawStream:
+    finish_reason = None
+
+
+class _SlowStreamContext:
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        await asyncio.sleep(0.05)
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        return None
+
+
+class _ClosingStreamContext:
+    def __init__(self) -> None:
+        self.exited = False
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exited = True
+        return None
+
+
+async def _slow_items() -> Sequence[object]:
+    await asyncio.sleep(0.05)
+    return (object(),)
+
+
 @pytest.mark.asyncio
 async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> None:
     task = TaskEnvelope(
@@ -69,7 +128,7 @@ async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> N
             assert task_id == "task-1"
             return TaskRecord(envelope=task)
 
-        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+        async def get_spec_artifact_async(self, artifact_id: str) -> TaskSpecArtifact:
             raise AssertionError(artifact_id)
 
     class _RoleRegistry:
@@ -100,13 +159,67 @@ async def test_spec_checkpoint_decision_reads_task_spec_from_runtime_repo() -> N
     assert "keep the route stable" in decision.content
 
 
+def test_raise_if_stream_finished_without_reason_validates_provider_streams() -> None:
+    session_runtime_module._raise_if_stream_finished_without_reason(object())
+    session_runtime_module._raise_if_stream_finished_without_reason(
+        SimpleNamespace(_raw_stream_response=_ForeignRawStream())
+    )
+    session_runtime_module._raise_if_stream_finished_without_reason(
+        SimpleNamespace(_raw_stream_response=_OpenAIRawStreamWithFinish())
+    )
+
+    with pytest.raises(httpx.RemoteProtocolError):
+        session_runtime_module._raise_if_stream_finished_without_reason(
+            SimpleNamespace(_raw_stream_response=_OpenAIRawStreamWithoutFinish())
+        )
+
+
+def test_llm_stream_event_timeout_has_no_hard_upper_cap() -> None:
+    assert session_runtime_module._llm_stream_event_timeout_seconds(1.0) == 5.0
+    assert session_runtime_module._llm_stream_event_timeout_seconds(60.0) == 120.0
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_timeout_helpers_raise_read_timeout() -> None:
+    async def slow_generator():
+        _ = await _slow_items()
+        yield object()
+
+    with pytest.raises(httpx.ReadTimeout):
+        async for _item in session_runtime_module._aiter_with_timeout(
+            slow_generator(),
+            timeout_seconds=0.001,
+        ):
+            pass
+
+    with pytest.raises(httpx.ReadTimeout):
+        async with session_runtime_module._llm_stream_context_with_timeout(
+            cast(session_runtime_module.AgentNodeStreamContext, _SlowStreamContext()),
+            timeout_seconds=0.001,
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_context_closes_entered_context() -> None:
+    context = _ClosingStreamContext()
+
+    async with session_runtime_module._llm_stream_context_with_timeout(
+        cast(session_runtime_module.AgentNodeStreamContext, context),
+        timeout_seconds=1.0,
+    ):
+        pass
+
+    assert context.exited is True
+
+
 @pytest.mark.asyncio
 async def test_spec_checkpoint_decision_skips_coordinator_roles() -> None:
     class _TaskRepo:
         async def get_async(self, task_id: str) -> TaskRecord:
             raise AssertionError(task_id)
 
-        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+        async def get_spec_artifact_async(self, artifact_id: str) -> TaskSpecArtifact:
             raise AssertionError(artifact_id)
 
     class _RoleRegistry:
@@ -133,7 +246,7 @@ async def test_spec_checkpoint_decision_ignores_missing_task_record() -> None:
             assert task_id == "missing-task"
             raise KeyError(task_id)
 
-        async def get_spec_artifact_async(self, artifact_id: str) -> object:
+        async def get_spec_artifact_async(self, artifact_id: str) -> TaskSpecArtifact:
             raise AssertionError(artifact_id)
 
     class _RoleRegistry:
@@ -429,7 +542,7 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
     session.__dict__["_workspace_manager"] = type(
         "_WorkspaceManager",
         (),
-        {"resolve": lambda self, **kwargs: cast(object, None)},
+        {"resolve_async": _none_workspace_async},
     )()
     session.__dict__["_media_asset_service"] = cast(object, None)
     session.__dict__["_role_memory_service"] = None
@@ -457,8 +570,8 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
         "_RunEventHub", (), {"publish": lambda self, event: None}
     )()
     session.__dict__["_agent_repo"] = cast(object, None)
-    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
-        object, None
+    session.__dict__["_resolve_tool_approval_policy_async"] = (
+        _none_tool_approval_policy_async
     )
     session.__dict__["_publish_committed_tool_outcome_events_from_messages"] = (
         lambda **kwargs: None
@@ -614,7 +727,7 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     session.__dict__["_workspace_manager"] = type(
         "_WorkspaceManager",
         (),
-        {"resolve": lambda self, **kwargs: cast(object, None)},
+        {"resolve_async": _none_workspace_async},
     )()
     session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
@@ -631,8 +744,8 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
     session.__dict__["_shell_approval_repo"] = None
     session.__dict__["_notification_service"] = None
     session.__dict__["_im_tool_service"] = None
-    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
-        object, None
+    session.__dict__["_resolve_tool_approval_policy_async"] = (
+        _none_tool_approval_policy_async
     )
     session.__dict__["_build_model_api_error_message"] = lambda error: "rate limited"
 
@@ -741,7 +854,7 @@ async def test_generate_async_closes_scoped_transport_cache_on_cancellation() ->
     session.__dict__["_workspace_manager"] = type(
         "_WorkspaceManager",
         (),
-        {"resolve": lambda self, **kwargs: cast(object, None)},
+        {"resolve_async": _none_workspace_async},
     )()
     session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
@@ -758,8 +871,8 @@ async def test_generate_async_closes_scoped_transport_cache_on_cancellation() ->
     session.__dict__["_shell_approval_repo"] = None
     session.__dict__["_notification_service"] = None
     session.__dict__["_im_tool_service"] = None
-    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
-        object, None
+    session.__dict__["_resolve_tool_approval_policy_async"] = (
+        _none_tool_approval_policy_async
     )
     session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: (
         kwargs["history"],
@@ -805,6 +918,8 @@ async def test_generate_async_closes_scoped_transport_cache_on_cancellation() ->
             _build_request(),
         )
 
+    await asyncio.sleep(0)
+
     assert closed_run_ids == ["run-1"]
 
 
@@ -842,7 +957,7 @@ async def test_generate_async_closes_scoped_transport_cache_on_setup_failure() -
     session.__dict__["_workspace_manager"] = type(
         "_WorkspaceManager",
         (),
-        {"resolve": lambda self, **kwargs: cast(object, None)},
+        {"resolve_async": _none_workspace_async},
     )()
     session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
@@ -859,8 +974,8 @@ async def test_generate_async_closes_scoped_transport_cache_on_setup_failure() -
     session.__dict__["_shell_approval_repo"] = None
     session.__dict__["_notification_service"] = None
     session.__dict__["_im_tool_service"] = None
-    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
-        object, None
+    session.__dict__["_resolve_tool_approval_policy_async"] = (
+        _none_tool_approval_policy_async
     )
 
     async def _build_agent_iteration_context(**kwargs: object) -> object:
@@ -883,6 +998,8 @@ async def test_generate_async_closes_scoped_transport_cache_on_setup_failure() -
             session,
             _build_request(),
         )
+
+    await asyncio.sleep(0)
 
     assert closed_run_ids == ["run-1"]
 
@@ -973,7 +1090,7 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
     session.__dict__["_workspace_manager"] = type(
         "_WorkspaceManager",
         (),
-        {"resolve": lambda self, **kwargs: cast(object, None)},
+        {"resolve_async": _none_workspace_async},
     )()
     session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
@@ -990,8 +1107,8 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
     session.__dict__["_shell_approval_repo"] = None
     session.__dict__["_notification_service"] = None
     session.__dict__["_im_tool_service"] = None
-    session.__dict__["_resolve_tool_approval_policy"] = lambda run_id: cast(
-        object, None
+    session.__dict__["_resolve_tool_approval_policy_async"] = (
+        _none_tool_approval_policy_async
     )
     session.__dict__["_build_model_api_error_message"] = lambda error: "rate limited"
     session.__dict__["_persist_user_prompt_if_needed"] = lambda **kwargs: (

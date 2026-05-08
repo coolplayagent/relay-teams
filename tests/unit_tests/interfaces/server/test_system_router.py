@@ -957,7 +957,7 @@ class _FakeWorkspaceManager:
         self.workdir = workdir
         self.resolve_calls: list[dict[str, object]] = []
 
-    def resolve(
+    async def resolve_async(
         self,
         *,
         session_id: str,

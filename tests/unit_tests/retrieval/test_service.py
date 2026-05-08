@@ -14,6 +14,7 @@ from relay_teams.metrics import (
     MetricScope,
     SqliteMetricAggregateStore,
 )
+from relay_teams.metrics.adapters import record_retrieval_rebuild_async
 from relay_teams.metrics.sinks import AggregateStoreSink
 from relay_teams.retrieval import (
     RetrievalBackendKind,
@@ -90,6 +91,14 @@ class _FakeRetrievalStore:
         self._scope_stats[(config.scope_kind, config.scope_id)] = stats
         return stats
 
+    async def upsert_documents_async(
+        self,
+        *,
+        config: RetrievalScopeConfig,
+        documents: tuple[RetrievalDocument, ...],
+    ) -> RetrievalStats:
+        return self.upsert_documents(config=config, documents=documents)
+
     def delete_documents(
         self,
         *,
@@ -116,6 +125,13 @@ class _FakeRetrievalStore:
         if self.raise_on_search:
             raise RuntimeError("search failed")
         return self.search_result
+
+    async def search_async(
+        self,
+        *,
+        query: RetrievalQuery,
+    ) -> tuple[RetrievalHit, ...]:
+        return self.search(query=query)
 
     def rebuild_scope(
         self,
@@ -266,6 +282,73 @@ def test_retrieval_service_records_document_count_gauge(tmp_path: Path) -> None:
     assert any(
         point.metric_name == "relay_teams.retrieval.document_count" and point.value == 2
         for point in points
+    )
+
+
+@pytest.mark.asyncio
+async def test_retrieval_service_records_async_metrics(tmp_path: Path) -> None:
+    metric_store = SqliteMetricAggregateStore(tmp_path / "retrieval-async-metrics.db")
+    recorder = MetricRecorder(
+        registry=MetricRegistry(DEFAULT_DEFINITIONS),
+        sinks=(AggregateStoreSink(metric_store),),
+    )
+    fake_store = _seeded_fake_store()
+    service = RetrievalService(store=fake_store, metric_recorder=recorder)
+
+    await service.upsert_documents_async(
+        config=RetrievalScopeConfig(
+            scope_kind=RetrievalScopeKind.SKILL,
+            scope_id="skills",
+        ),
+        documents=(
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.SKILL,
+                scope_id="skills",
+                document_id="async-doc",
+                title="Async",
+            ),
+        ),
+    )
+    hits = await service.search_async(
+        query=RetrievalQuery(
+            scope_kind=RetrievalScopeKind.SKILL,
+            scope_id="skills",
+            text="routing",
+            limit=5,
+        )
+    )
+    fake_store.raise_on_search = True
+    with pytest.raises(RuntimeError, match="search failed"):
+        await service.search_async(
+            query=RetrievalQuery(
+                scope_kind=RetrievalScopeKind.SKILL,
+                scope_id="skills",
+                text="routing",
+                limit=5,
+            )
+        )
+    await record_retrieval_rebuild_async(
+        recorder,
+        backend=RetrievalBackendKind.SQLITE_FTS5.value,
+        scope_kind=RetrievalScopeKind.SKILL.value,
+        duration_ms=7,
+        success=True,
+    )
+
+    assert [hit.document_id for hit in hits] == ["skill-router"]
+    points = metric_store.query_points(
+        scope=MetricScope.GLOBAL,
+        scope_id="global",
+        time_window_minutes=60,
+    )
+    assert any(
+        point.metric_name == "relay_teams.retrieval.document_count" for point in points
+    )
+    assert any(
+        point.metric_name == "relay_teams.retrieval.search_failures" for point in points
+    )
+    assert any(
+        point.metric_name == "relay_teams.retrieval.rebuilds" for point in points
     )
 
 

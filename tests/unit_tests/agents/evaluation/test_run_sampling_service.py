@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -43,7 +43,7 @@ def _make_run_state(
 
 def _make_memory_bank_service(*, total_count: int = 0) -> MagicMock:
     svc = MagicMock()
-    svc.list_entries = MagicMock(
+    svc.list_entries_async = AsyncMock(
         return_value=MemoryQueryResult(
             items=(),
             total_count=total_count,
@@ -61,13 +61,7 @@ def _make_sampling_service(
     memory_total: int = 0,
 ) -> RunSamplingService:
     event_log = MagicMock()
-    event_log.list_run_states_async = MagicMock(return_value=run_states)
-    # Make the returned value awaitable
-
-    async def _return_states() -> tuple[RunStateRecord, ...]:
-        return run_states
-
-    event_log.list_run_states_async = _return_states
+    event_log.list_run_states_async = AsyncMock(return_value=run_states)
 
     memory_bank_service = _make_memory_bank_service(total_count=memory_total)
     return RunSamplingService(

@@ -568,7 +568,10 @@ async def test_prepare_prompt_context_keeps_persisted_media_urls_for_prompt_dedu
     assert next_history == prepared_history
 
 
-def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> None:
+@pytest.mark.asyncio
+async def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> (
+    None
+):
     session = object.__new__(AgentLlmSession)
     session._run_intent_repo = cast(
         RunIntentRepository,
@@ -604,8 +607,9 @@ def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> 
         ),
     ]
 
-    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
-        session,
+    repaired = await AgentLlmSession._prompt_history_service(
+        session
+    ).coerce_history_to_provider_safe_sequence_async(
         request=_build_request(user_prompt=None),
         history=history,
     )
@@ -619,7 +623,8 @@ def test_coerce_history_to_provider_safe_sequence_drops_orphan_tool_prefix() -> 
     assert repaired[1:] == history[1:]
 
 
-def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_empties_history() -> (
+@pytest.mark.asyncio
+async def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_empties_history() -> (
     None
 ):
     session = object.__new__(AgentLlmSession)
@@ -639,8 +644,9 @@ def test_coerce_history_to_provider_safe_sequence_keeps_bridge_when_prefix_drop_
         )
     ]
 
-    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
-        session,
+    repaired = await AgentLlmSession._prompt_history_service(
+        session
+    ).coerce_history_to_provider_safe_sequence_async(
         request=_build_request(user_prompt=None),
         history=history,
     )
@@ -748,7 +754,8 @@ def test_validate_history_input_capabilities_rejects_unsupported_image() -> None
         )
 
 
-def test_coerce_history_to_provider_safe_sequence_prefers_explicit_user_prompt_over_bridge() -> (
+@pytest.mark.asyncio
+async def test_coerce_history_to_provider_safe_sequence_prefers_explicit_user_prompt_over_bridge() -> (
     None
 ):
     session = object.__new__(AgentLlmSession)
@@ -768,8 +775,9 @@ def test_coerce_history_to_provider_safe_sequence_prefers_explicit_user_prompt_o
         )
     ]
 
-    repaired = AgentLlmSession._coerce_history_to_provider_safe_sequence(
-        session,
+    repaired = await AgentLlmSession._prompt_history_service(
+        session
+    ).coerce_history_to_provider_safe_sequence_async(
         request=_build_request(user_prompt="restart from the latest user request"),
         history=history,
     )

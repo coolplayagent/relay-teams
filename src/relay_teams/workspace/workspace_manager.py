@@ -49,11 +49,51 @@ class WorkspaceManager(BaseModel):
             session_id, role_id
         )
         record = self._resolve_record(workspace_id)
+        return self._build_handle(
+            record=record,
+            session_id=session_id,
+            role_id=role_id,
+            instance_id=instance_id,
+            conversation_id=resolved_conversation_id,
+        )
+
+    async def resolve_async(
+        self,
+        *,
+        session_id: str,
+        role_id: str,
+        instance_id: str | None,
+        profile: object | None = None,
+        workspace_id: str,
+        conversation_id: str | None = None,
+    ) -> WorkspaceHandle:
+        del profile
+        resolved_conversation_id = conversation_id or build_conversation_id(
+            session_id, role_id
+        )
+        record = await self._resolve_record_async(workspace_id)
+        return self._build_handle(
+            record=record,
+            session_id=session_id,
+            role_id=role_id,
+            instance_id=instance_id,
+            conversation_id=resolved_conversation_id,
+        )
+
+    def _build_handle(
+        self,
+        *,
+        record: WorkspaceRecord,
+        session_id: str,
+        role_id: str,
+        instance_id: str | None,
+        conversation_id: str,
+    ) -> WorkspaceHandle:
         ref = WorkspaceRef(
             workspace_id=record.workspace_id,
             session_id=session_id,
             role_id=role_id,
-            conversation_id=resolved_conversation_id,
+            conversation_id=conversation_id,
             default_mount_name=record.default_mount_name,
             mount_names=tuple(mount.mount_name for mount in record.mounts),
             instance_id=instance_id,
@@ -67,10 +107,17 @@ class WorkspaceManager(BaseModel):
 
     def locations_for(self, workspace_id: str) -> WorkspaceLocations:
         record = self._resolve_record(workspace_id)
+        return self._locations_for_record(record)
+
+    async def locations_for_async(self, workspace_id: str) -> WorkspaceLocations:
+        record = await self._resolve_record_async(workspace_id)
+        return self._locations_for_record(record)
+
+    def _locations_for_record(self, record: WorkspaceRecord) -> WorkspaceLocations:
         config_dir = self._resolve_app_config_dir(
             project_root=self._config_root(record)
         )
-        workspace_dir = config_dir / "workspaces" / workspace_id
+        workspace_dir = config_dir / "workspaces" / record.workspace_id
         tmp_root = workspace_dir / "tmp"
         default_remote_root = self._materialize_default_remote_mount(
             record=record,
@@ -121,7 +168,7 @@ class WorkspaceManager(BaseModel):
         return config_dir / "sessions" / workspace_id / session_id
 
     def _resolve_locations(self, *, record: WorkspaceRecord) -> WorkspaceLocations:
-        return self.locations_for(record.workspace_id)
+        return self._locations_for_record(record)
 
     def _build_local_mount_locations(
         self,
@@ -268,6 +315,16 @@ class WorkspaceManager(BaseModel):
     def _resolve_record(self, workspace_id: str) -> WorkspaceRecord:
         if self.workspace_repo is not None and self.workspace_repo.exists(workspace_id):
             return self.workspace_repo.get(workspace_id)
+        return self._default_workspace_record(workspace_id)
+
+    async def _resolve_record_async(self, workspace_id: str) -> WorkspaceRecord:
+        if self.workspace_repo is not None and await self.workspace_repo.exists_async(
+            workspace_id
+        ):
+            return await self.workspace_repo.get_async(workspace_id)
+        return self._default_workspace_record(workspace_id)
+
+    def _default_workspace_record(self, workspace_id: str) -> WorkspaceRecord:
         mount = legacy_workspace_mount_from_profile(
             root_path=self.project_root.resolve(),
             profile=default_workspace_profile(),

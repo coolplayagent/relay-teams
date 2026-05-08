@@ -11,6 +11,7 @@ from pydantic import JsonValue
 
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.logger import get_logger, log_event
+from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.media import MediaAssetService
 from relay_teams.monitors import (
     MonitorActionType,
@@ -155,7 +156,7 @@ class SessionRunService:
         shell_approval_repo: ShellApprovalRepository | None = None,
         user_question_manager: UserQuestionManager | None = None,
         hook_service: HookService | None = None,
-        memory_event_handler: object | None = None,
+        memory_event_handler: MemoryEventHandler | None = None,
     ) -> None:
         self._meta_agent: MetaAgent = meta_agent
         self._provider_factory = provider_factory or (
@@ -536,7 +537,11 @@ class SessionRunService:
         run_id = self._active_run_registry.get_active_run_id(session_id)
         if not run_id:
             return None
-        return run_id, self._runtime_for_run(run_id)
+        runtime = self._runtime_for_run(run_id)
+        if runtime is not None and not runtime.is_recoverable:
+            self._drop_active_run(session_id, run_id)
+            return None
+        return run_id, runtime
 
     async def _active_recoverable_run_async(
         self, session_id: str
@@ -544,7 +549,11 @@ class SessionRunService:
         run_id = self._active_run_registry.get_active_run_id(session_id)
         if not run_id:
             return None
-        return run_id, await self._runtime_for_run_async(run_id)
+        runtime = await self._runtime_for_run_async(run_id)
+        if runtime is not None and not runtime.is_recoverable:
+            self._drop_active_run(session_id, run_id)
+            return None
+        return run_id, runtime
 
     def _remember_active_run(self, session_id: str, run_id: str) -> None:
         self._active_run_registry.remember_active_run(

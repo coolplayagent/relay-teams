@@ -6,6 +6,7 @@ from types import ModuleType
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
 import relay_teams.external_agents.host_tool_bridge as host_tool_bridge_module
 from pydantic_ai.messages import BinaryContent, ToolReturn
 from relay_teams.providers.model_config import (
@@ -34,7 +35,7 @@ class _LegacyToolResult:
 
 
 class _MissingRunIntentRepo:
-    def get(self, _run_id: str) -> object:
+    async def get_async(self, _run_id: str) -> object:
         raise KeyError
 
 
@@ -44,7 +45,7 @@ class _FakeToolApprovalPolicy:
 
 
 class _FakeWorkspaceManager:
-    def resolve(self, **_kwargs: object) -> object:
+    async def resolve_async(self, **_kwargs: object) -> object:
         return object()
 
 
@@ -133,7 +134,8 @@ def test_tool_return_to_fastmcp_result_preserves_scalar_value_with_media_content
     assert tool_result.content[1].data == "cG5nLWJ5dGVz"
 
 
-def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
+@pytest.mark.asyncio
+async def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
     resolved_config = ModelEndpointConfig(
         provider=ProviderType.OPENAI_COMPATIBLE,
         model="qwen3-vl",
@@ -220,7 +222,7 @@ def test_build_tool_deps_uses_resolved_model_capabilities() -> None:
         }
     )
 
-    deps = bridge._build_tool_deps(request=request)
+    deps = await bridge._build_tool_deps_async(request=request)
 
     assert requested == [(role, request)]
     assert deps.model_capabilities == resolved_config.capabilities

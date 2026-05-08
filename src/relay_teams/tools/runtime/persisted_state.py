@@ -511,6 +511,48 @@ def load_or_recover_tool_call_state(
     return current
 
 
+async def load_or_recover_tool_call_state_async(
+    *,
+    shared_store: SharedStateRepository,
+    event_log: EventLog | None,
+    trace_id: str,
+    task_id: str,
+    tool_call_id: str,
+    task_repo: TaskRepository | None = None,
+) -> PersistedToolCallState | None:
+    current = await load_tool_call_state_async(
+        shared_store=shared_store,
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+    )
+    if (
+        current is not None
+        and current.execution_status in _TERMINAL_TOOL_EXECUTION_STATUSES
+        and _state_has_published_tool_result_linkage(current)
+    ):
+        return current
+    if event_log is None:
+        return current
+    recovered = await recover_tool_call_state_from_event_log_async(
+        event_log=event_log,
+        shared_store=shared_store,
+        trace_id=trace_id,
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+        task_repo=task_repo,
+        current_state=current,
+    )
+    if recovered is None:
+        return current
+    if current is None:
+        return recovered
+    if recovered.execution_status in _TERMINAL_TOOL_EXECUTION_STATUSES:
+        return recovered
+    if recovered.result_event_id > current.result_event_id:
+        return recovered
+    return current
+
+
 def _state_has_published_tool_result_linkage(state: PersistedToolCallState) -> bool:
     if state.result_event_id > 0:
         return True
@@ -808,6 +850,226 @@ def recover_tool_call_state_from_event_log(
     )
 
 
+async def recover_tool_call_state_from_event_log_async(
+    *,
+    event_log: EventLog,
+    shared_store: SharedStateRepository,
+    trace_id: str,
+    task_id: str,
+    tool_call_id: str,
+    task_repo: TaskRepository | None = None,
+    current_state: PersistedToolCallState | None = None,
+) -> PersistedToolCallState | None:
+    if current_state is None:
+        recovered = await load_tool_call_state_async(
+            shared_store=shared_store,
+            task_id=task_id,
+            tool_call_id=tool_call_id,
+        )
+        if recovered is not None:
+            return recovered
+
+    state: PersistedToolCallState | None = current_state
+    observed_terminal_event = False
+    tool_args: dict[str, JsonValue] = {}
+    for row in await event_log.list_by_trace_with_ids_async(trace_id):
+        if str(row.get("task_id") or "") != task_id:
+            continue
+        payload = _parse_payload(row.get("payload_json"))
+        if str(payload.get("tool_call_id") or "") != tool_call_id:
+            continue
+        event_type = str(row.get("event_type") or "")
+        if event_type == RunEventType.TOOL_CALL.value:
+            tool_args = _parse_tool_args(payload)
+        raw_result_event_id = (
+            row.get("id") if event_type == RunEventType.TOOL_RESULT.value else None
+        )
+        result_event_id = (
+            raw_result_event_id if isinstance(raw_result_event_id, int) else 0
+        )
+        batch_id = str(payload.get("batch_id") or (state.batch_id if state else ""))
+        batch_index = _batch_index_from_payload(
+            payload, default=state.batch_index if state else -1
+        )
+        raw_batch_size = payload.get("batch_size")
+        batch_size = (
+            raw_batch_size
+            if isinstance(raw_batch_size, int)
+            else (state.batch_size if state else 0)
+        )
+        tool_name = str(payload.get("tool_name") or (state.tool_name if state else ""))
+        run_id = str(payload.get("run_id") or (state.run_id if state else trace_id))
+        session_id = str(
+            payload.get("session_id")
+            or row.get("session_id")
+            or (state.session_id if state else "")
+        )
+        instance_id = str(
+            payload.get("instance_id")
+            or row.get("instance_id")
+            or (state.instance_id if state else "")
+        )
+        role_id = str(payload.get("role_id") or (state.role_id if state else ""))
+        args_preview = (
+            _args_preview_from_value(payload.get("args_preview"))
+            or _args_preview_from_value(payload.get("args"))
+            or (state.args_preview if state else "")
+        )
+        if not tool_name or not instance_id or not role_id:
+            continue
+        if state is None:
+            state = PersistedToolCallState(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                run_id=run_id,
+                session_id=session_id,
+                instance_id=instance_id,
+                role_id=role_id,
+                args_preview=args_preview,
+                run_yolo=False,
+                approval_mode=ToolApprovalMode.UNKNOWN,
+                approval_status=ToolApprovalStatus.NOT_REQUIRED,
+                execution_status=ToolExecutionStatus.READY,
+                batch_id=batch_id,
+                batch_index=batch_index,
+                batch_size=batch_size,
+            )
+        else:
+            state = state.model_copy(
+                update={
+                    "tool_name": tool_name,
+                    "run_id": run_id,
+                    "session_id": session_id,
+                    "instance_id": instance_id,
+                    "role_id": role_id,
+                    "args_preview": args_preview,
+                    "batch_id": batch_id,
+                    "batch_index": batch_index,
+                    "batch_size": batch_size,
+                }
+            )
+
+        if event_type == RunEventType.TOOL_APPROVAL_REQUESTED.value:
+            state = state.model_copy(
+                update={
+                    "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
+                    "approval_status": ToolApprovalStatus.PENDING,
+                    "execution_status": ToolExecutionStatus.WAITING_APPROVAL,
+                }
+            )
+        elif event_type == RunEventType.TOOL_APPROVAL_RESOLVED.value:
+            action = str(payload.get("action") or "").strip().lower()
+            if action in {"approve", "approve_once", "approve_exact", "approve_prefix"}:
+                state = state.model_copy(
+                    update={
+                        "approval_status": ToolApprovalStatus.APPROVE,
+                        "approval_feedback": str(payload.get("feedback") or ""),
+                        "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
+                        "execution_status": ToolExecutionStatus.READY,
+                    }
+                )
+            elif action == "deny":
+                observed_terminal_event = True
+                state = state.model_copy(
+                    update={
+                        "approval_status": ToolApprovalStatus.DENY,
+                        "approval_feedback": str(payload.get("feedback") or ""),
+                        "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
+                        "execution_status": ToolExecutionStatus.FAILED,
+                    }
+                )
+            elif action == "timeout":
+                observed_terminal_event = True
+                state = state.model_copy(
+                    update={
+                        "approval_status": ToolApprovalStatus.TIMEOUT,
+                        "approval_mode": ToolApprovalMode.APPROVAL_FLOW,
+                        "execution_status": ToolExecutionStatus.FAILED,
+                    }
+                )
+        elif event_type == RunEventType.TOOL_RESULT.value:
+            result = payload.get("result")
+            if isinstance(result, dict):
+                observed_terminal_event = True
+                meta = result.get("meta")
+                approval_status = None
+                approval_mode = None
+                run_yolo = None
+                if isinstance(meta, dict):
+                    approval_text = (
+                        str(meta.get("approval_status") or "").strip().lower()
+                    )
+                    if approval_text == ToolApprovalStatus.APPROVE.value:
+                        approval_status = ToolApprovalStatus.APPROVE
+                    elif approval_text == ToolApprovalStatus.DENY.value:
+                        approval_status = ToolApprovalStatus.DENY
+                    elif approval_text == ToolApprovalStatus.TIMEOUT.value:
+                        approval_status = ToolApprovalStatus.TIMEOUT
+                    elif approval_text == ToolApprovalStatus.NOT_REQUIRED.value:
+                        approval_status = ToolApprovalStatus.NOT_REQUIRED
+                    approval_mode = _parse_approval_mode(meta.get("approval_mode"))
+                    if isinstance(meta.get("run_yolo"), bool):
+                        run_yolo = bool(meta["run_yolo"])
+                result_failed = (
+                    payload.get("error") is True or result.get("ok") is False
+                )
+                state = state.model_copy(
+                    update={
+                        "run_yolo": state.run_yolo if run_yolo is None else run_yolo,
+                        "approval_mode": (
+                            state.approval_mode
+                            if approval_mode is None
+                            else approval_mode
+                        ),
+                        "approval_status": approval_status or state.approval_status,
+                        "execution_status": ToolExecutionStatus.FAILED
+                        if result_failed
+                        else ToolExecutionStatus.COMPLETED,
+                        "result_envelope": result,
+                        "result_event_id": result_event_id,
+                    }
+                )
+
+    if state is None:
+        return None
+    if current_state is not None and not observed_terminal_event:
+        return current_state
+    recovered_call_state = dict(state.call_state)
+    if not recovered_call_state:
+        recovered_call_state = await _recover_call_state_async(
+            tool_name=state.tool_name,
+            trace_id=trace_id,
+            task_id=task_id,
+            tool_args=tool_args,
+            shared_store=shared_store,
+            task_repo=task_repo,
+        )
+    return await merge_tool_call_state_async(
+        shared_store=shared_store,
+        task_id=task_id,
+        tool_call_id=tool_call_id,
+        tool_name=state.tool_name,
+        run_id=state.run_id,
+        session_id=state.session_id,
+        instance_id=state.instance_id,
+        role_id=state.role_id,
+        args_preview=state.args_preview,
+        run_yolo=state.run_yolo,
+        approval_mode=state.approval_mode,
+        approval_status=state.approval_status,
+        approval_feedback=state.approval_feedback,
+        execution_status=state.execution_status,
+        result_envelope=state.result_envelope,
+        call_state=recovered_call_state,
+        batch_id=state.batch_id,
+        batch_index=state.batch_index,
+        batch_size=state.batch_size,
+        result_event_id=state.result_event_id,
+        started_at=state.started_at,
+        finished_at=state.finished_at,
+    )
+
+
 def recover_tool_call_batches_from_event_log(
     *,
     event_log: EventLog,
@@ -856,6 +1118,67 @@ def recover_tool_call_batches_from_event_log(
         if not items:
             continue
         recovered[batch_id] = merge_tool_call_batch_state(
+            shared_store=shared_store,
+            task_id=task_id,
+            batch_id=batch_id,
+            run_id=str(payload.get("run_id") or row.get("trace_id") or trace_id),
+            session_id=str(payload.get("session_id") or row.get("session_id") or ""),
+            instance_id=str(payload.get("instance_id") or ""),
+            role_id=str(payload.get("role_id") or ""),
+            status=ToolCallBatchStatus.SEALED,
+            items=items,
+        )
+    return tuple(sorted(recovered.values(), key=lambda state: state.updated_at))
+
+
+async def recover_tool_call_batches_from_event_log_async(
+    *,
+    event_log: EventLog,
+    shared_store: SharedStateRepository,
+    trace_id: str,
+    task_id: str,
+) -> tuple[PersistedToolCallBatchState, ...]:
+    recovered: dict[str, PersistedToolCallBatchState] = {}
+    for row in await event_log.list_by_trace_with_ids_async(trace_id):
+        if str(row.get("task_id") or "") != task_id:
+            continue
+        event_type = str(row.get("event_type") or "")
+        payload = _parse_payload(row.get("payload_json"))
+        batch_id = str(payload.get("batch_id") or "").strip()
+        if not batch_id:
+            continue
+        if event_type == RunEventType.TOOL_CALL.value:
+            item = _batch_item_from_tool_call_payload(payload)
+            if item is None:
+                continue
+            current = recovered.get(batch_id) or await load_tool_call_batch_state_async(
+                shared_store=shared_store,
+                task_id=task_id,
+                batch_id=batch_id,
+            )
+            recovered[batch_id] = await merge_tool_call_batch_state_async(
+                shared_store=shared_store,
+                task_id=task_id,
+                batch_id=batch_id,
+                run_id=str(payload.get("run_id") or row.get("trace_id") or trace_id),
+                session_id=str(
+                    payload.get("session_id") or row.get("session_id") or ""
+                ),
+                instance_id=str(payload.get("instance_id") or ""),
+                role_id=str(payload.get("role_id") or ""),
+                status=ToolCallBatchStatus.OPEN if current is None else current.status,
+                items=_merge_batch_items(
+                    () if current is None else current.items,
+                    (item,),
+                ),
+            )
+            continue
+        if event_type != RunEventType.TOOL_CALL_BATCH_SEALED.value:
+            continue
+        items = _batch_items_from_payload(payload)
+        if not items:
+            continue
+        recovered[batch_id] = await merge_tool_call_batch_state_async(
             shared_store=shared_store,
             task_id=task_id,
             batch_id=batch_id,
@@ -1009,6 +1332,25 @@ def _recover_call_state(
     )
 
 
+async def _recover_call_state_async(
+    *,
+    tool_name: str,
+    trace_id: str,
+    task_id: str,
+    tool_args: dict[str, JsonValue],
+    shared_store: SharedStateRepository,
+    task_repo: TaskRepository | None,
+) -> dict[str, JsonValue]:
+    _ = (task_id, shared_store)
+    if tool_name != "orch_dispatch_task" or task_repo is None:
+        return {}
+    return await _recover_dispatch_task_call_state_async(
+        trace_id=trace_id,
+        tool_args=tool_args,
+        task_repo=task_repo,
+    )
+
+
 def _recover_dispatch_task_call_state(
     *,
     trace_id: str,
@@ -1019,6 +1361,30 @@ def _recover_dispatch_task_call_state(
     if not dispatched_task_id:
         return {}
     record = task_repo.get(dispatched_task_id)
+    if record.envelope.trace_id != trace_id:
+        return {}
+    prompt = str(tool_args.get("prompt") or "")
+    return {
+        "kind": "orch_dispatch_task",
+        "task_id": dispatched_task_id,
+        "prompt": prompt,
+        "role_id": str(tool_args.get("role_id") or record.envelope.role_id or ""),
+        "instance_id": str(record.assigned_instance_id or ""),
+        "execution_started": record.status
+        not in {TaskStatus.CREATED, TaskStatus.ASSIGNED},
+    }
+
+
+async def _recover_dispatch_task_call_state_async(
+    *,
+    trace_id: str,
+    tool_args: dict[str, JsonValue],
+    task_repo: TaskRepository,
+) -> dict[str, JsonValue]:
+    dispatched_task_id = str(tool_args.get("task_id") or "").strip()
+    if not dispatched_task_id:
+        return {}
+    record = await task_repo.get_async(dispatched_task_id)
     if record.envelope.trace_id != trace_id:
         return {}
     prompt = str(tool_args.get("prompt") or "")

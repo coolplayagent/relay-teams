@@ -96,7 +96,9 @@ class RunSamplingService:
                     limit=100,
                 )
                 try:
-                    result = self._memory_bank_service.list_entries(ws_query)
+                    result = await self._memory_bank_service.list_entries_async(
+                        ws_query
+                    )
                     if result.total_count > 0:
                         # Session has classified runs; exclude all runs from it
                         classified_run_ids.update(

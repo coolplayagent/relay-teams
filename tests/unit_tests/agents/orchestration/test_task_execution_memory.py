@@ -13,6 +13,7 @@ from relay_teams.agents.instances.instance_repository import AgentInstanceReposi
 from relay_teams.agents.orchestration.harnesses.execution_harness import (
     ExecutionHarness,
 )
+from relay_teams.agents.orchestration.harnesses.prompt_harness import TaskPromptHarness
 from relay_teams.agents.orchestration.task_execution_service import (
     TaskExecutionService,
 )
@@ -57,6 +58,10 @@ class _FailingSharedStore:
         self.keys.append(mutation.key)
         raise RuntimeError("write failed")
 
+    async def manage_state_async(self, mutation: StateMutation) -> None:
+        self.keys.append(mutation.key)
+        raise RuntimeError("write failed")
+
 
 def _task_envelope(
     *,
@@ -88,7 +93,10 @@ def test_truncate_task_memory_result_limits_long_normalized_results() -> None:
     assert "\n" not in truncated
 
 
-def test_record_memory_if_needed_does_not_fail_completed_task_on_store_error() -> None:
+@pytest.mark.asyncio
+async def test_record_memory_if_needed_does_not_fail_completed_task_on_store_error() -> (
+    None
+):
     shared_store = _FailingSharedStore()
     service = TaskExecutionService.model_construct(
         shared_store=cast(SharedStateRepository, shared_store)
@@ -103,7 +111,7 @@ def test_record_memory_if_needed_does_not_fail_completed_task_on_store_error() -
         verification=VerificationPlan(checklist=("non_empty_response",)),
     )
 
-    service._execution_harness().record_memory_if_needed(
+    await service._execution_harness().record_memory_if_needed_async(
         role_id="writer",
         workspace_id="workspace-1",
         task=task,
@@ -116,7 +124,8 @@ def test_record_memory_if_needed_does_not_fail_completed_task_on_store_error() -
     assert shared_store.keys == ["task_result:task-1"]
 
 
-def test_mark_runtime_idle_after_success_preserves_other_running_lane(
+@pytest.mark.asyncio
+async def test_mark_runtime_idle_after_success_preserves_other_running_lane(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "task_execution_runtime_lane.db"
@@ -170,7 +179,7 @@ def test_mark_runtime_idle_after_success_preserves_other_running_lane(
         )
     )
 
-    service._execution_harness().mark_runtime_idle_after_success(
+    await service._execution_harness().mark_runtime_idle_after_success_async(
         run_id="run-1",
         completed_task_id=completed_task.task_id,
     )
@@ -184,7 +193,8 @@ def test_mark_runtime_idle_after_success_preserves_other_running_lane(
     assert runtime.active_subagent_instance_id == "inst-running"
 
 
-def test_mark_runtime_idle_after_success_restores_paused_lane(
+@pytest.mark.asyncio
+async def test_mark_runtime_idle_after_success_restores_paused_lane(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "task_execution_runtime_paused_lane.db"
@@ -248,7 +258,7 @@ def test_mark_runtime_idle_after_success_restores_paused_lane(
         )
     )
 
-    service._execution_harness().mark_runtime_idle_after_success(
+    await service._execution_harness().mark_runtime_idle_after_success_async(
         run_id="run-1",
         completed_task_id=completed_task.task_id,
     )
@@ -264,7 +274,8 @@ def test_mark_runtime_idle_after_success_restores_paused_lane(
     assert runtime.last_error == "Task stopped by user"
 
 
-def test_mark_runtime_idle_after_success_prefers_subagent_over_coordinator(
+@pytest.mark.asyncio
+async def test_mark_runtime_idle_after_success_prefers_subagent_over_coordinator(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "task_execution_runtime_subagent_priority.db"
@@ -333,7 +344,7 @@ def test_mark_runtime_idle_after_success_prefers_subagent_over_coordinator(
         )
     )
 
-    service._execution_harness().mark_runtime_idle_after_success(
+    await service._execution_harness().mark_runtime_idle_after_success_async(
         run_id="run-1",
         completed_task_id=completed_task.task_id,
     )
@@ -347,7 +358,8 @@ def test_mark_runtime_idle_after_success_prefers_subagent_over_coordinator(
     assert runtime.active_subagent_instance_id == "inst-running-subagent"
 
 
-def test_mark_runtime_after_terminal_failure_promotes_other_running_lane(
+@pytest.mark.asyncio
+async def test_mark_runtime_after_terminal_failure_promotes_other_running_lane(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "task_execution_runtime_failure_lane.db"
@@ -402,7 +414,7 @@ def test_mark_runtime_after_terminal_failure_promotes_other_running_lane(
         )
     )
 
-    service._execution_harness().mark_runtime_after_terminal_task_update(
+    await service._execution_harness().mark_runtime_after_terminal_task_update_async(
         run_id="run-1",
         terminal_task_id=failed_task.task_id,
         status=RunRuntimeStatus.FAILED,
@@ -425,7 +437,8 @@ def test_mark_runtime_after_terminal_failure_promotes_other_running_lane(
     assert runtime.last_error == "model failed"
 
 
-def test_complete_with_assistant_error_persists_failure_state(
+@pytest.mark.asyncio
+async def test_complete_with_assistant_error_persists_failure_state(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "task_execution_assistant_error.db"
@@ -471,7 +484,7 @@ def test_complete_with_assistant_error_persists_failure_state(
         )
     )
 
-    result = service._execution_harness().complete_with_assistant_error(
+    result = await service._execution_harness().complete_with_assistant_error_async(
         task=task,
         instance_id="inst-1",
         role_id="writer",
@@ -573,18 +586,19 @@ async def test_promote_paused_runtime_lane_async_restores_paused_lane(
     assert runtime.last_error == "Task stopped by user"
 
 
-def test_prompt_tool_and_state_compatibility_helpers(
+@pytest.mark.asyncio
+async def test_prompt_tool_and_state_compatibility_helpers(
     tmp_path: Path,
 ) -> None:
     shared_store = SharedStateRepository(tmp_path / "task_execution_state.db")
-    shared_store.manage_state(
+    await shared_store.manage_state_async(
         StateMutation(
             scope=ScopeRef(scope_type=ScopeType.SESSION, scope_id="session-1"),
             key="session-key",
             value_json='"session-value"',
         )
     )
-    shared_store.manage_state(
+    await shared_store.manage_state_async(
         StateMutation(
             scope=ScopeRef(scope_type=ScopeType.ROLE, scope_id="session-1:writer"),
             key="role-key",
@@ -604,7 +618,7 @@ def test_prompt_tool_and_state_compatibility_helpers(
     )
     task = _task_envelope(task_id="task-1")
 
-    snapshot = service._execution_harness().shared_state_snapshot(
+    snapshot = await service._execution_harness().shared_state_snapshot_async(
         session_id="session-1",
         role_id="writer",
         conversation_id="conversation-1",
@@ -618,7 +632,9 @@ def test_prompt_tool_and_state_compatibility_helpers(
         sequential=False,
         parameters_json_schema={"type": "object"},
     )
-    user_prompt, skill_instructions = service._execution_harness().build_user_prompt(
+    user_prompt, skill_instructions = await TaskPromptHarness.model_construct(
+        skill_runtime_service=None
+    ).build_user_prompt_async(
         role=role,
         objective="Draft summary",
         shared_state_snapshot=snapshot,
@@ -726,14 +742,15 @@ def test_resolve_turn_objective_appends_task_contract_sections() -> None:
     assert "- Handoff Required:" in objective
 
 
-def test_completion_guard_wrappers_default_to_no_issue() -> None:
+@pytest.mark.asyncio
+async def test_completion_guard_wrappers_default_to_no_issue() -> None:
     service = TaskExecutionService.model_construct(
         run_intent_repo=None,
         todo_service=None,
         reminder_service=None,
     )
     task = _task_envelope(task_id="task-1", parent_task_id=None)
-    decision = service._execution_harness().evaluate_completion_guard(
+    decision = await service._execution_harness().evaluate_completion_guard_async(
         task=task,
         instance_id="inst-1",
         role_id="writer",
@@ -741,7 +758,7 @@ def test_completion_guard_wrappers_default_to_no_issue() -> None:
         conversation_id="conversation-1",
         output_text="done",
     )
-    thinking = service._execution_harness().thinking_for_run("missing-run")
+    thinking = await service._execution_harness().thinking_for_run_async("missing-run")
 
     assert decision.issue is False
     assert thinking.enabled is False
@@ -787,7 +804,8 @@ class _FakeTodoService:
         self.replaced_async_items = items
 
 
-def test_finalize_subtask_todos_marks_in_progress_as_completed() -> None:
+@pytest.mark.asyncio
+async def test_finalize_subtask_todos_marks_in_progress_as_completed() -> None:
     snapshot = TodoSnapshot(
         run_id="run-1",
         session_id="session-1",
@@ -806,15 +824,16 @@ def test_finalize_subtask_todos_marks_in_progress_as_completed() -> None:
     )
     task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
 
-    harness._finalize_subtask_todos(task, instance_id="inst-1")
+    await harness._finalize_subtask_todos_async(task, instance_id="inst-1")
 
-    assert todo_svc.replaced_items is not None
+    assert todo_svc.replaced_async_items is not None
     # Only IN_PROGRESS items are finalized; PENDING items are left untouched
-    statuses = [item.status for item in todo_svc.replaced_items]
+    statuses = [item.status for item in todo_svc.replaced_async_items]
     assert statuses == [TodoStatus.COMPLETED, TodoStatus.COMPLETED, TodoStatus.PENDING]
 
 
-def test_finalize_subtask_todos_skips_when_all_completed() -> None:
+@pytest.mark.asyncio
+async def test_finalize_subtask_todos_skips_when_all_completed() -> None:
     snapshot = TodoSnapshot(
         run_id="run-1",
         session_id="session-1",
@@ -832,12 +851,13 @@ def test_finalize_subtask_todos_skips_when_all_completed() -> None:
     )
     task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
 
-    harness._finalize_subtask_todos(task, instance_id="inst-1")
+    await harness._finalize_subtask_todos_async(task, instance_id="inst-1")
 
-    assert todo_svc.replaced_items is None
+    assert todo_svc.replaced_async_items is None
 
 
-def test_finalize_subtask_todos_skips_when_only_pending() -> None:
+@pytest.mark.asyncio
+async def test_finalize_subtask_todos_skips_when_only_pending() -> None:
     snapshot = TodoSnapshot(
         run_id="run-1",
         session_id="session-1",
@@ -855,9 +875,9 @@ def test_finalize_subtask_todos_skips_when_only_pending() -> None:
     )
     task = _task_envelope(task_id="sub-1", parent_task_id="task-root")
 
-    harness._finalize_subtask_todos(task, instance_id="inst-1")
+    await harness._finalize_subtask_todos_async(task, instance_id="inst-1")
 
-    assert todo_svc.replaced_items is None
+    assert todo_svc.replaced_async_items is None
 
 
 @pytest.mark.asyncio

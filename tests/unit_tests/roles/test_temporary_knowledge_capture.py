@@ -8,6 +8,7 @@ import pytest
 from relay_teams.roles.prompt_adjustment_engine import SystemPromptAdjustmentEngine
 from relay_teams.roles.temporary_knowledge_capture import (
     TemporaryRoleKnowledgeCaptureService,
+    _extract_additions,
 )
 from relay_teams.roles.temporary_role_models import (
     TemporaryRoleRecord,
@@ -41,7 +42,7 @@ def _make_temp_record(
 async def test_capture_returns_none_for_non_template() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record(template_role_id=None)
+    mock_repo.get_async.return_value = _make_temp_record(template_role_id=None)
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -58,14 +59,14 @@ async def test_capture_returns_none_for_non_template() -> None:
         _session_id="sess-1",
     )
     assert result is None
-    mock_engine.propose_adjustment.assert_not_called()
+    mock_engine.propose_adjustment_async.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_capture_returns_none_for_identical_prompt() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record()
+    mock_repo.get_async.return_value = _make_temp_record()
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -88,7 +89,7 @@ async def test_capture_returns_none_for_identical_prompt() -> None:
 async def test_capture_detects_additions() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record()
+    mock_repo.get_async.return_value = _make_temp_record()
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -114,8 +115,8 @@ async def test_capture_detects_additions() -> None:
     assert result.original_prompt == original
     assert len(result.prompt_diff_markdown) > 0
 
-    mock_engine.propose_adjustment.assert_called_once()
-    call_kwargs = mock_engine.propose_adjustment.call_args.kwargs
+    mock_engine.propose_adjustment_async.assert_awaited_once()
+    call_kwargs = mock_engine.propose_adjustment_async.await_args.kwargs
     assert call_kwargs["role_id"] == "template-1"
     assert call_kwargs["workspace_id"] == "ws-1"
     assert call_kwargs["trigger_source"] == "temporary_role_capture"
@@ -125,7 +126,7 @@ async def test_capture_detects_additions() -> None:
 async def test_capture_ignores_whitespace_only() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record()
+    mock_repo.get_async.return_value = _make_temp_record()
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -168,7 +169,7 @@ async def test_capture_diff_with_removals_and_additions() -> None:
     """Cover _compute_prompt_diff_markdown when original content is replaced."""
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record()
+    mock_repo.get_async.return_value = _make_temp_record()
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -190,7 +191,7 @@ async def test_capture_diff_with_removals_and_additions() -> None:
     assert result is not None
     # The diff should contain both removal and addition lines
     assert "-" in result.prompt_diff_markdown or "+" in result.prompt_diff_markdown
-    mock_engine.propose_adjustment.assert_called_once()
+    mock_engine.propose_adjustment_async.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -198,7 +199,7 @@ async def test_capture_below_min_diff_chars() -> None:
     """Cover the min_diff_chars threshold in _compute_prompt_diff_markdown."""
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record()
+    mock_repo.get_async.return_value = _make_temp_record()
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -224,7 +225,7 @@ async def test_capture_below_min_diff_chars() -> None:
 async def test_capture_keyerror() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.side_effect = KeyError("not found")
+    mock_repo.get_async.side_effect = KeyError("not found")
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -241,14 +242,14 @@ async def test_capture_keyerror() -> None:
         _session_id="sess-1",
     )
     assert result is None
-    mock_engine.propose_adjustment.assert_not_called()
+    mock_engine.propose_adjustment_async.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_capture_non_prefix_effective() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_repo.get.return_value = _make_temp_record()
+    mock_repo.get_async.return_value = _make_temp_record()
     mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
@@ -269,7 +270,7 @@ async def test_capture_non_prefix_effective() -> None:
     )
     assert result is not None
     assert result.prompt_diff_markdown != ""
-    mock_engine.propose_adjustment.assert_called_once()
+    mock_engine.propose_adjustment_async.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -292,8 +293,6 @@ async def test_capture_all_for_session_returns_empty() -> None:
 
 def test_extract_additions_prefix_match() -> None:
     """Cover _extract_additions when effective starts with original."""
-    from relay_teams.roles.temporary_knowledge_capture import _extract_additions
-
     result = _extract_additions(
         "Be helpful\n\nAdditional strategy content here.",
         "Be helpful",
@@ -304,16 +303,12 @@ def test_extract_additions_prefix_match() -> None:
 
 def test_extract_additions_no_prefix() -> None:
     """Cover _extract_additions when effective does NOT start with original."""
-    from relay_teams.roles.temporary_knowledge_capture import _extract_additions
-
     result = _extract_additions("Completely different prompt text.", "Be helpful")
     assert "Completely different prompt text." in result
 
 
 def test_extract_additions_identical() -> None:
     """Cover _extract_additions when effective equals original (returns empty)."""
-    from relay_teams.roles.temporary_knowledge_capture import _extract_additions
-
     result = _extract_additions("Be helpful", "Be helpful")
     assert result == ""
 

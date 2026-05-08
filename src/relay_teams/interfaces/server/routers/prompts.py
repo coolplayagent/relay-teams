@@ -151,10 +151,10 @@ async def preview_prompts(
     workspace: WorkspaceHandle | None = None
     if req.workspace_id is not None:
         try:
-            workspace_service.require_workspace(req.workspace_id)
+            await workspace_service.require_workspace_async(req.workspace_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Workspace not found") from exc
-        workspace = workspace_manager.resolve(
+        workspace = await workspace_manager.resolve_async(
             session_id="prompt-preview",
             role_id=role.role_id,
             instance_id=None,
@@ -194,7 +194,7 @@ async def preview_prompts(
             conversation_context=req.conversation_context,
         )
     )
-    skill_prompt_result = skill_runtime_service.prepare_prompt(
+    skill_prompt_result = await skill_runtime_service.prepare_prompt_async(
         role=role,
         objective=objective,
         shared_state_snapshot=shared_state_snapshot,

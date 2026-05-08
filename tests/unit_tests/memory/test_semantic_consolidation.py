@@ -37,6 +37,8 @@ from relay_teams.providers.provider_contracts import (
     EchoProvider,
 )
 
+pytestmark = pytest.mark.asyncio
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -79,7 +81,7 @@ def _create_entry_request(**overrides: object) -> CreateMemoryEntryRequest:
 
 
 class TestSemanticModeRequiresSourceRunId:
-    def test_semantic_mode_without_source_run_id_raises(self) -> None:
+    async def test_semantic_mode_without_source_run_id_raises(self) -> None:
         with pytest.raises(ValueError, match="source_run_id is required"):
             MemoryConsolidationRequest(
                 workspace_id="ws-1",
@@ -89,7 +91,7 @@ class TestSemanticModeRequiresSourceRunId:
                 source_run_id=None,
             )
 
-    def test_semantic_mode_with_source_run_id_ok(self) -> None:
+    async def test_semantic_mode_with_source_run_id_ok(self) -> None:
         req = MemoryConsolidationRequest(
             workspace_id="ws-1",
             target_tier=MemoryTier.MEDIUM_TERM,
@@ -107,9 +109,11 @@ class TestSemanticModeRequiresSourceRunId:
 
 
 class TestStructuralModeUnchanged:
-    def test_structural_mode_still_works(self, service: MemoryBankService) -> None:
+    async def test_structural_mode_still_works(
+        self, service: MemoryBankService
+    ) -> None:
         # Create a WORKING entry
-        entry = service.create_entry(
+        entry = await service.create_entry_async(
             _create_entry_request(
                 tier=MemoryTier.WORKING,
                 scope=MemoryScope.WORKSPACE,
@@ -126,11 +130,11 @@ class TestStructuralModeUnchanged:
             target_scope=MemoryScope.SESSION,
             consolidation_mode=ConsolidationMode.STRUCTURAL,
         )
-        result = service.consolidate(req)
+        result = await service.consolidate_async(req)
         assert result.consolidated_entry_count >= 0
         assert result.source_entry_count >= 0
 
-    def test_default_mode_is_structural(self) -> None:
+    async def test_default_mode_is_structural(self) -> None:
         req = MemoryConsolidationRequest(
             workspace_id="ws-1",
             target_tier=MemoryTier.MEDIUM_TERM,
@@ -145,7 +149,7 @@ class TestStructuralModeUnchanged:
 
 
 class TestSemanticOutputParsingValidJson:
-    def test_valid_json_parses(self) -> None:
+    async def test_valid_json_parses(self) -> None:
         valid_json = """{
             "extractions": [
                 {
@@ -165,7 +169,7 @@ class TestSemanticOutputParsingValidJson:
         assert output.extractions[0].title == "Use Pydantic v2"
         assert output.extractions[0].confidence_score == 0.9
 
-    def test_json_with_code_fences_parses(self) -> None:
+    async def test_json_with_code_fences_parses(self) -> None:
         fenced = """```json
 {
     "extractions": [
@@ -189,7 +193,7 @@ class TestSemanticOutputParsingValidJson:
 
 
 class TestSemanticOutputParsingInvalidJson:
-    def test_invalid_json_falls_back(self) -> None:
+    async def test_invalid_json_falls_back(self) -> None:
         result = _strip_json_code_fences("not json at all")
         with pytest.raises(ValueError):
             SemanticExtractionOutput.model_validate_json(result)
@@ -201,7 +205,9 @@ class TestSemanticOutputParsingInvalidJson:
 
 
 class TestSemanticCreatesCorrectEntries:
-    def test_semantic_result_fields(self, service_with_llm: MemoryBankService) -> None:
+    async def test_semantic_result_fields(
+        self, service_with_llm: MemoryBankService
+    ) -> None:
         """Test that the semantic consolidation result has correct field values."""
         req = MemoryConsolidationRequest(
             workspace_id="ws-test",
@@ -212,7 +218,7 @@ class TestSemanticCreatesCorrectEntries:
             consolidation_mode=ConsolidationMode.SEMANTIC,
         )
         # With EchoProvider and no messages, it falls back to structural
-        result = service_with_llm.consolidate(req)
+        result = await service_with_llm.consolidate_async(req)
         assert isinstance(result, MemoryConsolidationResult)
         assert result.extraction_tokens_used >= 0
         assert result.extraction_duration_ms >= 0
@@ -224,7 +230,7 @@ class TestSemanticCreatesCorrectEntries:
 
 
 class TestExtractionKindsFilter:
-    def test_extraction_kinds_empty_returns_all(self) -> None:
+    async def test_extraction_kinds_empty_returns_all(self) -> None:
         # Empty kinds means all kinds
         kinds: tuple[MemoryEntryKind, ...] = ()
         prompt = _build_extraction_instructions(kinds)
@@ -232,7 +238,7 @@ class TestExtractionKindsFilter:
         for kind in tuple(MemoryEntryKind):
             assert kind.value in prompt
 
-    def test_extraction_kinds_filters(self) -> None:
+    async def test_extraction_kinds_filters(self) -> None:
         kinds = (MemoryEntryKind.DECISION, MemoryEntryKind.FAILURE_MODE)
         prompt = _build_extraction_instructions(kinds)
         assert "decision" in prompt
@@ -246,7 +252,7 @@ class TestExtractionKindsFilter:
 
 
 class TestMaxExtractedEntries:
-    def test_max_extracted_entries_default(self) -> None:
+    async def test_max_extracted_entries_default(self) -> None:
         req = MemoryConsolidationRequest(
             workspace_id="ws-1",
             target_tier=MemoryTier.MEDIUM_TERM,
@@ -254,7 +260,7 @@ class TestMaxExtractedEntries:
         )
         assert req.max_extracted_entries == 10
 
-    def test_max_extracted_entries_custom(self) -> None:
+    async def test_max_extracted_entries_custom(self) -> None:
         req = MemoryConsolidationRequest(
             workspace_id="ws-1",
             target_tier=MemoryTier.MEDIUM_TERM,
@@ -263,7 +269,7 @@ class TestMaxExtractedEntries:
         )
         assert req.max_extracted_entries == 5
 
-    def test_max_extracted_entries_bounds(self) -> None:
+    async def test_max_extracted_entries_bounds(self) -> None:
         with pytest.raises(ValueError):
             MemoryConsolidationRequest(
                 workspace_id="ws-1",
@@ -286,10 +292,10 @@ class TestMaxExtractedEntries:
 
 
 class TestSupersededMarking:
-    def test_structural_marks_source_superseded(
+    async def test_structural_marks_source_superseded(
         self, service: MemoryBankService
     ) -> None:
-        service.create_entry(
+        await service.create_entry_async(
             _create_entry_request(
                 tier=MemoryTier.WORKING,
                 scope=MemoryScope.WORKSPACE,
@@ -302,9 +308,9 @@ class TestSupersededMarking:
             target_tier=MemoryTier.MEDIUM_TERM,
             target_scope=MemoryScope.SESSION,
         )
-        result = service.consolidate(req)
+        result = await service.consolidate_async(req)
         if result.superseded_entry_ids:
-            superseded = service.get_entry(result.superseded_entry_ids[0])
+            superseded = await service.get_entry_async(result.superseded_entry_ids[0])
             assert superseded is not None
             assert superseded.status == MemoryEntryStatus.SUPERSEDED
             assert superseded.superseded_by_id in result.new_entry_ids
@@ -316,17 +322,17 @@ class TestSupersededMarking:
 
 
 class TestBuildExtractionInstructions:
-    def test_all_kinds_covered(self) -> None:
+    async def test_all_kinds_covered(self) -> None:
         for kind in tuple(MemoryEntryKind):
             instructions = _build_extraction_instructions((kind,))
             assert kind.value in instructions
 
-    def test_empty_kinds_covers_all(self) -> None:
+    async def test_empty_kinds_covers_all(self) -> None:
         instructions = _build_extraction_instructions(())
         for kind in tuple(MemoryEntryKind):
             assert kind.value in instructions
 
-    def test_multiple_kinds(self) -> None:
+    async def test_multiple_kinds(self) -> None:
         result = _build_extraction_instructions(
             (MemoryEntryKind.DECISION, MemoryEntryKind.FACT)
         )
@@ -341,16 +347,16 @@ class TestBuildExtractionInstructions:
 
 
 class TestStripJsonCodeFences:
-    def test_no_fences(self) -> None:
+    async def test_no_fences(self) -> None:
         assert _strip_json_code_fences('{"key": "value"}') == '{"key": "value"}'
 
-    def test_json_fence(self) -> None:
+    async def test_json_fence(self) -> None:
         assert (
             _strip_json_code_fences('```json\n{"key": "value"}\n```')
             == '{"key": "value"}'
         )
 
-    def test_generic_fence(self) -> None:
+    async def test_generic_fence(self) -> None:
         assert (
             _strip_json_code_fences('```\n{"key": "value"}\n```') == '{"key": "value"}'
         )
@@ -362,11 +368,11 @@ class TestStripJsonCodeFences:
 
 
 class TestFormatConversationMessages:
-    def test_empty_messages(self) -> None:
+    async def test_empty_messages(self) -> None:
         result = _format_conversation_messages([])
         assert result == ()
 
-    def test_user_and_assistant_messages(self) -> None:
+    async def test_user_and_assistant_messages(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "user", "message_json": '{"content": "Hello"}'},
             {"role": "assistant", "message_json": '{"content": "Hi there"}'},
@@ -376,7 +382,7 @@ class TestFormatConversationMessages:
         assert "user" in result[0]
         assert "assistant" in result[1]
 
-    def test_string_message_json(self) -> None:
+    async def test_string_message_json(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "system", "message_json": "System initialization"},
         ]
@@ -384,7 +390,7 @@ class TestFormatConversationMessages:
         assert len(result) == 1
         assert "System initialization" in result[0]
 
-    def test_dict_message_json_with_content(self) -> None:
+    async def test_dict_message_json_with_content(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "user", "message_json": {"content": "Hello from dict"}},
         ]
@@ -392,7 +398,7 @@ class TestFormatConversationMessages:
         assert len(result) == 1
         assert "Hello from dict" in result[0]
 
-    def test_dict_message_json_without_content(self) -> None:
+    async def test_dict_message_json_without_content(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "user", "message_json": {"other_key": "value"}},
         ]
@@ -400,7 +406,7 @@ class TestFormatConversationMessages:
         assert len(result) == 1
         assert "" in result[0]
 
-    def test_none_message_json(self) -> None:
+    async def test_none_message_json(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "user"},
         ]
@@ -408,7 +414,7 @@ class TestFormatConversationMessages:
         assert len(result) == 1
         assert "[user]:" in result[0]
 
-    def test_token_truncation(self) -> None:
+    async def test_token_truncation(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "user", "message_json": "a" * 100},
             {"role": "assistant", "message_json": "b" * 100},
@@ -418,7 +424,7 @@ class TestFormatConversationMessages:
         result = _format_conversation_messages(msgs, max_tokens=10)
         assert len(result) < 3
 
-    def test_token_truncation_keeps_latest(self) -> None:
+    async def test_token_truncation_keeps_latest(self) -> None:
         msgs: list[dict[str, object]] = [
             {"role": "user", "message_json": "first"},
             {"role": "assistant", "message_json": "last message content"},
@@ -435,7 +441,7 @@ class TestFormatConversationMessages:
 
 
 class TestSemanticExtractionInputModel:
-    def test_valid_input(self) -> None:
+    async def test_valid_input(self) -> None:
         inp = SemanticExtractionInput(
             conversation_messages=("msg1", "msg2"),
             task_objective="Build a memory system",
@@ -452,7 +458,7 @@ class TestSemanticExtractionInputModel:
 
 
 class TestExtractedMemoryEntryModel:
-    def test_minimal_entry(self) -> None:
+    async def test_minimal_entry(self) -> None:
         entry = _ExtractedMemoryEntry(
             kind=MemoryEntryKind.FACT,
             title="A fact",
@@ -461,7 +467,7 @@ class TestExtractedMemoryEntryModel:
         assert entry.confidence_score == 0.7
         assert entry.tags == ()
 
-    def test_confidence_out_of_bounds(self) -> None:
+    async def test_confidence_out_of_bounds(self) -> None:
         with pytest.raises(ValueError):
             _ExtractedMemoryEntry(
                 kind=MemoryEntryKind.FACT,
@@ -484,7 +490,7 @@ class TestExtractedMemoryEntryModel:
 
 
 class TestMemoryConsolidationResultFields:
-    def test_default_extraction_fields(self) -> None:
+    async def test_default_extraction_fields(self) -> None:
         result = MemoryConsolidationResult(
             source_entry_count=5,
             consolidated_entry_count=3,
@@ -494,7 +500,7 @@ class TestMemoryConsolidationResultFields:
         assert result.extraction_tokens_used == 0
         assert result.extraction_duration_ms == 0
 
-    def test_custom_extraction_fields(self) -> None:
+    async def test_custom_extraction_fields(self) -> None:
         result = MemoryConsolidationResult(
             source_entry_count=5,
             consolidated_entry_count=3,
@@ -521,7 +527,7 @@ class TestConsolidateAsync:
     ) -> None:
         """consolidate_async with STRUCTURAL mode hits
         _consolidate_structural_async."""
-        service.create_entry(
+        await service.create_entry_async(
             _create_entry_request(
                 tier=MemoryTier.WORKING,
                 confidence_score=0.85,
@@ -543,7 +549,7 @@ class TestConsolidateAsync:
     ) -> None:
         """consolidate_async with SEMANTIC + no llm_provider falls back
         to structural."""
-        service.create_entry(
+        await service.create_entry_async(
             _create_entry_request(
                 tier=MemoryTier.WORKING,
                 confidence_score=0.85,
@@ -567,7 +573,7 @@ class TestConsolidateAsync:
     ) -> None:
         """consolidate_async with SEMANTIC + llm_provider but no
         message_repo still falls back to structural."""
-        service_with_llm.create_entry(
+        await service_with_llm.create_entry_async(
             _create_entry_request(
                 tier=MemoryTier.WORKING,
                 confidence_score=0.85,
@@ -592,21 +598,21 @@ class TestConsolidateAsync:
 
 
 class TestEstimateTokens:
-    def test_empty_string(self) -> None:
+    async def test_empty_string(self) -> None:
         assert _estimate_tokens("") == 0
 
-    def test_none_text(self) -> None:
+    async def test_none_text(self) -> None:
         assert _estimate_tokens("") == 0
 
-    def test_short_text(self) -> None:
+    async def test_short_text(self) -> None:
         # 3 chars -> max(1, 3//4) = max(1, 0) = 1
         assert _estimate_tokens("abc") == 1
 
-    def test_longer_text(self) -> None:
+    async def test_longer_text(self) -> None:
         # 16 chars -> 16 // 4 = 4
         assert _estimate_tokens("a" * 16) == 4
 
-    def test_exactly_four_chars(self) -> None:
+    async def test_exactly_four_chars(self) -> None:
         assert _estimate_tokens("abcd") == 1
 
 

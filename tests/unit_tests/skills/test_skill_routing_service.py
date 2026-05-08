@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.sessions.runs.run_models import RuntimePromptConversationContext
@@ -146,7 +148,8 @@ def test_build_skill_routing_query_text_uses_stable_context_fields() -> None:
     assert "AGENTS.md" not in query_text
 
 
-def test_skill_runtime_service_passthrough_when_authorized_count_is_small(
+@pytest.mark.asyncio
+async def test_skill_runtime_service_passthrough_when_authorized_count_is_small(
     tmp_path: Path,
 ) -> None:
     registry = _build_registry(
@@ -163,7 +166,7 @@ def test_skill_runtime_service_passthrough_when_authorized_count_is_small(
     _ = service.rebuild_index()
     role = _build_role(("time", "planner"))
 
-    result = service.prepare_prompt(
+    result = await service.prepare_prompt_async(
         role=role,
         objective="Fix the timestamp bug.",
         shared_state_snapshot=(),
@@ -186,7 +189,8 @@ def test_skill_runtime_service_passthrough_when_authorized_count_is_small(
     )
 
 
-def test_skill_runtime_service_routes_hits_and_caps_visible_skills(
+@pytest.mark.asyncio
+async def test_skill_runtime_service_routes_hits_and_caps_visible_skills(
     tmp_path: Path,
 ) -> None:
     registry = _build_registry(
@@ -222,7 +226,7 @@ def test_skill_runtime_service_routes_hits_and_caps_visible_skills(
         )
     )
 
-    result = service.prepare_prompt(
+    result = await service.prepare_prompt_async(
         role=role,
         objective="Convert all PST timestamps in the report to UTC.",
         shared_state_snapshot=(("ticket", "TZ-12"),),
@@ -244,7 +248,8 @@ def test_skill_runtime_service_routes_hits_and_caps_visible_skills(
     )
 
 
-def test_skill_runtime_service_falls_back_when_search_has_no_hits(
+@pytest.mark.asyncio
+async def test_skill_runtime_service_falls_back_when_search_has_no_hits(
     tmp_path: Path,
 ) -> None:
     registry = _build_registry(
@@ -280,7 +285,7 @@ def test_skill_runtime_service_falls_back_when_search_has_no_hits(
         )
     )
 
-    result = service.prepare_prompt(
+    result = await service.prepare_prompt_async(
         role=role,
         objective="neutrino kaleidoscope harmonic lattice",
         shared_state_snapshot=(),
@@ -295,7 +300,8 @@ def test_skill_runtime_service_falls_back_when_search_has_no_hits(
     assert result.routing.visible_skills == result.routing.authorized_skills
 
 
-def test_skill_runtime_service_uses_user_override_for_duplicate_skill_name(
+@pytest.mark.asyncio
+async def test_skill_runtime_service_uses_user_override_for_duplicate_skill_name(
     tmp_path: Path,
 ) -> None:
     app_skill_dir = tmp_path / ".agent-teams" / "skills" / "time"
@@ -321,7 +327,7 @@ def test_skill_runtime_service_uses_user_override_for_duplicate_skill_name(
     _ = service.rebuild_index()
     role = _build_role(("time",))
 
-    result = service.prepare_prompt(
+    result = await service.prepare_prompt_async(
         role=role,
         objective="Fix the timestamp bug.",
         shared_state_snapshot=(),

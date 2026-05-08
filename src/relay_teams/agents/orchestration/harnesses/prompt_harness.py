@@ -30,7 +30,7 @@ from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.media import MediaAssetService, merge_user_prompt_content
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
-from relay_teams.roles.memory_injection import build_role_with_memory
+from relay_teams.roles.memory_injection import build_role_with_memory_async
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -72,25 +72,6 @@ class TaskPromptHarness(BaseModel):
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
 
-    def topology_for_run(self, run_id: str) -> RunTopologySnapshot | None:
-        if self.run_intent_repo is None:
-            return None
-        try:
-            return self.run_intent_repo.get(run_id).topology
-        except KeyError:
-            return None
-
-    def conversation_context_for_run(
-        self,
-        run_id: str,
-    ) -> RuntimePromptConversationContext | None:
-        if self.run_intent_repo is None:
-            return None
-        try:
-            return self.run_intent_repo.get(run_id).conversation_context
-        except KeyError:
-            return None
-
     async def topology_for_run_async(self, run_id: str) -> RunTopologySnapshot | None:
         if self.run_intent_repo is None:
             return None
@@ -110,14 +91,14 @@ class TaskPromptHarness(BaseModel):
         except KeyError:
             return None
 
-    def role_with_memory(
+    async def role_with_memory_async(
         self,
         *,
         role: RoleDefinition,
         role_id: str,
         workspace_id: str,
     ) -> RoleDefinition:
-        return build_role_with_memory(
+        return await build_role_with_memory_async(
             role_registry=self.role_registry,
             role_memory_service=self.role_memory_service,
             role=role,
@@ -176,7 +157,7 @@ class TaskPromptHarness(BaseModel):
             task_id=task.task_id,
             paths=prompt_sections.local_instruction_paths,
         )
-        user_prompt, skill_instructions = self.build_user_prompt(
+        user_prompt, skill_instructions = await self.build_user_prompt_async(
             role=role,
             objective=objective,
             shared_state_snapshot=shared_state_snapshot,
@@ -219,23 +200,6 @@ class TaskPromptHarness(BaseModel):
             skill_instructions=skill_instructions,
         )
 
-    def shared_state_snapshot(
-        self,
-        *,
-        session_id: str,
-        role_id: str,
-        conversation_id: str,
-    ) -> tuple[tuple[str, str], ...]:
-        scopes = (
-            ScopeRef(scope_type=ScopeType.SESSION, scope_id=session_id),
-            ScopeRef(scope_type=ScopeType.ROLE, scope_id=f"{session_id}:{role_id}"),
-            ScopeRef(scope_type=ScopeType.CONVERSATION, scope_id=conversation_id),
-        )
-        return self.shared_store.snapshot_many(
-            scopes,
-            exclude_key_prefixes=(READ_STATE_PREFIX,),
-        )
-
     async def shared_state_snapshot_async(
         self,
         *,
@@ -251,98 +215,6 @@ class TaskPromptHarness(BaseModel):
         return await self.shared_store.snapshot_many_async(
             scopes,
             exclude_key_prefixes=(READ_STATE_PREFIX,),
-        )
-
-    def ensure_committed_task_prompt(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-        conversation_id: str,
-        instance_id: str,
-        task: TaskEnvelope,
-        user_prompt_text: str,
-        user_prompt_override: str | None,
-    ) -> None:
-        prompt = user_prompt_text.strip()
-        override_prompt = str(user_prompt_override or "").strip()
-        if override_prompt:
-            self.message_repo.append_user_prompt_if_missing(
-                session_id=task.session_id,
-                workspace_id=workspace_id,
-                conversation_id=conversation_id,
-                agent_role_id=role_id,
-                instance_id=instance_id,
-                task_id=task.task_id,
-                trace_id=task.trace_id,
-                content=override_prompt,
-            )
-            return
-
-        task_history = self.message_repo.get_history_for_conversation_task(
-            conversation_id,
-            task.task_id,
-        )
-        if task_history:
-            return
-        if (
-            task.parent_task_id is None
-            and self.run_intent_repo is not None
-            and self.media_asset_service is not None
-        ):
-            try:
-                run_intent = self.run_intent_repo.get(task.trace_id)
-            except KeyError:
-                run_intent = None
-            if run_intent is not None and run_intent.input:
-                provider_content = (
-                    self.media_asset_service.to_persisted_user_prompt_content(
-                        parts=run_intent.input
-                    )
-                )
-                merged_provider_content = self.merge_provider_prompt_content(
-                    provider_content=provider_content,
-                    user_prompt_text=prompt,
-                )
-                self.message_repo.prune_conversation_history_to_safe_boundary(
-                    conversation_id
-                )
-                self.message_repo.append(
-                    session_id=task.session_id,
-                    workspace_id=workspace_id,
-                    conversation_id=conversation_id,
-                    agent_role_id=role_id,
-                    instance_id=instance_id,
-                    task_id=task.task_id,
-                    trace_id=task.trace_id,
-                    messages=[
-                        ModelRequest(
-                            parts=[UserPromptPart(content=merged_provider_content)]
-                        )
-                    ],
-                )
-                return
-        if prompt:
-            self.message_repo.append_user_prompt_if_missing(
-                session_id=task.session_id,
-                workspace_id=workspace_id,
-                conversation_id=conversation_id,
-                agent_role_id=role_id,
-                instance_id=instance_id,
-                task_id=task.task_id,
-                trace_id=task.trace_id,
-                content=prompt,
-            )
-            return
-        self.message_repo.append_user_prompt_if_missing(
-            session_id=task.session_id,
-            workspace_id=workspace_id,
-            conversation_id=conversation_id,
-            agent_role_id=role_id,
-            instance_id=instance_id,
-            task_id=task.task_id,
-            trace_id=task.trace_id,
-            content=task.objective,
         )
 
     async def ensure_committed_task_prompt_async(
@@ -439,7 +311,7 @@ class TaskPromptHarness(BaseModel):
             content=task.objective,
         )
 
-    def build_user_prompt(
+    async def build_user_prompt_async(
         self,
         *,
         role: RoleDefinition,
@@ -459,7 +331,7 @@ class TaskPromptHarness(BaseModel):
             SkillRuntimeService,
             self.skill_runtime_service,
         )
-        prepared_prompt = skill_runtime_service.prepare_prompt(
+        prepared_prompt = await skill_runtime_service.prepare_prompt_async(
             role=role,
             objective=resolved_objective,
             shared_state_snapshot=shared_state_snapshot,

@@ -19,7 +19,9 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 
 class _FakeRoleMemoryService:
-    def build_injected_memory(self, *, role_id: str, workspace_id: str) -> str:
+    async def build_injected_memory_async(
+        self, *, role_id: str, workspace_id: str
+    ) -> str:
         _ = (role_id, workspace_id)
         return ""
 
@@ -103,7 +105,12 @@ async def test_rewrite_reflection_summary_retries_provider_errors(
     )
     monkeypatch.setattr(reflection_module, "Agent", _FakeAgent)
     monkeypatch.setattr(reflection_module, "ModelRequestNode", _FakeModelRequestNode)
-    monkeypatch.setattr(service, "_build_model", lambda: object())
+
+    def build_model(*, cache_scope: str) -> object:
+        _ = cache_scope
+        return object()
+
+    monkeypatch.setattr(service, "_build_model", build_model)
 
     summary = await service._rewrite_reflection_summary(
         role=RoleDefinition(

@@ -18,7 +18,7 @@ class RoleMemoryService:
     def __init__(self, *, repository: RoleMemoryRepository) -> None:
         self._repository = repository
 
-    def build_injected_memory(
+    async def build_injected_memory_async(
         self,
         *,
         role_id: str,
@@ -26,58 +26,59 @@ class RoleMemoryService:
         memory_date: str | None = None,
     ) -> str:
         del memory_date
-        return self.get_reflection_record(
+        record = await self.get_reflection_record_async(
             role_id=role_id,
             workspace_id=workspace_id,
-        ).content_markdown.strip()
+        )
+        return record.content_markdown.strip()
 
-    def get_reflection_record(
+    async def get_reflection_record_async(
         self,
         *,
         role_id: str,
         workspace_id: str,
     ) -> RoleMemoryRecord:
-        return self._repository.read_role_memory(
+        return await self._repository.read_role_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
 
-    def update_reflection_memory(
+    async def update_reflection_memory_async(
         self,
         *,
         role_id: str,
         workspace_id: str,
         content_markdown: str,
     ) -> RoleMemoryRecord:
-        self._repository.write_role_memory(
+        await self._repository.write_role_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
             content_markdown=content_markdown.strip(),
         )
-        return self.get_reflection_record(
+        return await self.get_reflection_record_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
 
-    def delete_reflection_memory(
+    async def delete_reflection_memory_async(
         self,
         *,
         role_id: str,
         workspace_id: str,
     ) -> None:
-        self._repository.delete_role_memory(
+        await self._repository.delete_role_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
 
-    def build_reflection_preview(
+    async def build_reflection_preview_async(
         self,
         *,
         role_id: str,
         workspace_id: str,
         max_chars: int = 180,
     ) -> str:
-        text = self.build_injected_memory(
+        text = await self.build_injected_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
@@ -193,18 +194,6 @@ class RoleMemoryService:
             workspace_id=workspace_id,
         )
 
-    def get_performance_metrics(
-        self,
-        *,
-        role_id: str,
-        workspace_id: str,
-    ) -> RolePerformanceMetrics | None:
-        record = self._repository.read_role_memory(
-            role_id=role_id,
-            workspace_id=workspace_id,
-        )
-        return record.performance
-
     async def get_performance_metrics_async(
         self,
         *,
@@ -217,7 +206,7 @@ class RoleMemoryService:
         )
         return record.performance
 
-    def record_task_result(
+    async def record_task_result_async(
         self,
         *,
         role_id: str,
@@ -230,23 +219,31 @@ class RoleMemoryService:
         memory_date: str | None = None,
     ) -> None:
         del session_id, task_id, transcript_lines, memory_date
-        trimmed_result = result.strip()
-        trimmed_objective = objective.strip()
-        current = self._repository.read_role_memory(
+        record = await self._repository.read_role_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
-        ).content_markdown.strip()
-        durable_entry = f"- {trimmed_objective}: {trimmed_result or '(empty)'}"
+        )
+        current = record.content_markdown.strip()
+        durable_entry = _build_task_result_memory_entry(
+            objective=objective,
+            result=result,
+        )
         if durable_entry in current.splitlines():
             return
         next_text = "\n".join(
             line for line in (current, durable_entry) if line.strip()
         ).strip()
-        self._repository.write_role_memory(
+        await self._repository.write_role_memory_async(
             role_id=role_id,
             workspace_id=workspace_id,
             content_markdown=next_text,
         )
+
+
+def _build_task_result_memory_entry(*, objective: str, result: str) -> str:
+    trimmed_result = result.strip()
+    trimmed_objective = objective.strip()
+    return f"- {trimmed_objective}: {trimmed_result or '(empty)'}"
 
 
 def _compute_report_score(verification_report: VerificationReport) -> float:

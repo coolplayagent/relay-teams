@@ -79,6 +79,38 @@ def test_workspace_manager_uses_worktree_root_for_git_worktree_workspace(
     )
 
 
+@pytest.mark.asyncio
+async def test_workspace_manager_resolve_async_uses_async_repository_path(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "workspace.db"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    service = WorkspaceService(repository=WorkspaceRepository(db_path))
+    _ = service.create_workspace(
+        workspace_id="async-project",
+        root_path=project_root,
+    )
+    manager = WorkspaceManager(
+        project_root=tmp_path,
+        app_config_dir=tmp_path / ".agent-teams",
+        workspace_repo=WorkspaceRepository(db_path),
+    )
+
+    handle = await manager.resolve_async(
+        session_id="session-1",
+        role_id="designer",
+        instance_id="instance-1",
+        workspace_id="async-project",
+    )
+    locations = await manager.locations_for_async("async-project")
+
+    assert handle.ref.workspace_id == "async-project"
+    assert handle.ref.conversation_id == "conv_session_1_designer"
+    assert handle.locations.scope_root == project_root.resolve()
+    assert locations.scope_root == project_root.resolve()
+
+
 def test_workspace_manager_includes_builtin_and_app_skill_roots_in_read_scope(
     tmp_path: Path,
 ) -> None:

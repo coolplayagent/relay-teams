@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+import asyncio
+from collections.abc import AsyncIterator, Iterator
 import json
 import re
 import sys
@@ -113,15 +114,15 @@ def _end_chat_completion() -> None:
         _active_chat_completions = max(0, _active_chat_completions - 1)
 
 
-def stream_chat_completions(
+async def stream_chat_completions(
     *,
     model: str,
     response_spec: dict[str, object],
-) -> Iterator[bytes]:
+) -> AsyncIterator[bytes]:
     try:
         created = int(time.time())
         completion_id = f"chatcmpl-{_chat_completions_calls}"
-        _sleep_ms(response_spec.get("delay_before_ms"))
+        await _sleep_ms_async(response_spec.get("delay_before_ms"))
 
         response_kind = str(response_spec.get("kind") or "")
         if response_kind in {"tool_call", "invalid_tool_call", "tool_calls"}:
@@ -159,8 +160,9 @@ def stream_chat_completions(
                 ],
             }
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-            _maybe_abort_stream(response_spec, emitted_chunk_count=1)
-            _sleep_ms(response_spec.get("delay_between_chunks_ms"))
+            if _should_abort_stream(response_spec, emitted_chunk_count=1):
+                return
+            await _sleep_ms_async(response_spec.get("delay_between_chunks_ms"))
             final_chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
@@ -190,10 +192,11 @@ def stream_chat_completions(
                 "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
             }
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
-            _maybe_abort_stream(response_spec, emitted_chunk_count=index + 1)
-            _sleep_ms(response_spec.get("delay_between_chunks_ms"))
+            if _should_abort_stream(response_spec, emitted_chunk_count=index + 1):
+                return
+            await _sleep_ms_async(response_spec.get("delay_between_chunks_ms"))
 
-        _sleep_ms(response_spec.get("delay_after_content_ms"))
+        await _sleep_ms_async(response_spec.get("delay_after_content_ms"))
         final_chunk = {
             "id": completion_id,
             "object": "chat.completion.chunk",
@@ -2054,24 +2057,35 @@ def _sleep_ms(value: object) -> None:
     time.sleep(milliseconds / 1000)
 
 
+async def _sleep_ms_async(value: object) -> None:
+    milliseconds = _coerce_int(value, default=0)
+    if milliseconds <= 0:
+        return
+    await asyncio.sleep(milliseconds / 1000)
+
+
 def _coerce_int(value: object, *, default: int) -> int:
     if isinstance(value, int):
         return value
     return default
 
 
-def _maybe_abort_stream(
+def _should_abort_stream(
     response_spec: dict[str, object],
     *,
     emitted_chunk_count: int,
-) -> None:
+) -> bool:
     drop_after_chunk_count = response_spec.get("drop_after_chunk_count")
-    if (
+    return (
         isinstance(drop_after_chunk_count, int)
         and drop_after_chunk_count > 0
         and emitted_chunk_count >= drop_after_chunk_count
-    ):
-        raise RuntimeError("Simulated stream interruption")
+    )
+
+
+def _drops_stream(response_spec: dict[str, object]) -> bool:
+    drop_after_chunk_count = response_spec.get("drop_after_chunk_count")
+    return isinstance(drop_after_chunk_count, int) and drop_after_chunk_count > 0
 
 
 def split_text(text: str, *, size: int) -> list[str]:
