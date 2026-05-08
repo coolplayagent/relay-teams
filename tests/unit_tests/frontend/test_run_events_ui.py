@@ -918,6 +918,10 @@ export function getCoordinatorStreamOverlay() {
     return null;
 }
 
+export function getRunTimelineSnapshot() {
+    return null;
+}
+
 export function getOrCreateStreamBlock() {
     return undefined;
 }
