@@ -259,23 +259,12 @@ def test_automation_project_repo_skips_invalid_interval_every_rows(
 
 def test_automation_project_repo_async_methods_use_async_sqlite(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = AutomationProjectRepository(tmp_path / "automation_async.db")
     record = _build_project_record(
         automation_project_id="aut-async",
         name="async-project",
     )
-
-    async def fail_call_sync_async(
-        function: object,
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        raise AssertionError("async repository methods must not call sync wrappers")
-
-    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
 
     async def exercise() -> None:
         created = await repository.create_async(record)
@@ -382,7 +371,6 @@ def test_automation_project_repo_async_get_skips_invalid_rows(
 
 def test_automation_event_repo_async_create_uses_async_sqlite(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = AutomationEventRepository(tmp_path / "automation_event_async.db")
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -395,16 +383,6 @@ def test_automation_event_repo_async_create_uses_async_sqlite(
         occurred_at=now,
         created_at=now,
     )
-
-    async def fail_call_sync_async(
-        function: object,
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        raise AssertionError("async repository methods must not call sync wrappers")
-
-    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
 
     async def exercise() -> None:
         created = await repository.create_event_async(record)
@@ -423,20 +401,9 @@ def test_automation_event_repo_async_create_uses_async_sqlite(
 
 def test_automation_delivery_repo_async_methods_use_async_sqlite(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = AutomationDeliveryRepository(tmp_path / "automation_delivery.db")
     record = _build_delivery_record()
-
-    async def fail_call_sync_async(
-        function: object,
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        raise AssertionError("async repository methods must not call sync wrappers")
-
-    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
 
     async def exercise() -> None:
         created = await repository.create_async(record)
@@ -503,20 +470,9 @@ def test_automation_delivery_repo_async_methods_use_async_sqlite(
 
 def test_automation_delivery_repo_async_error_and_stale_branches(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = AutomationDeliveryRepository(tmp_path / "automation_delivery_edges.db")
     record = _build_delivery_record()
-
-    async def fail_call_sync_async(
-        function: object,
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        raise AssertionError("async repository methods must not call sync wrappers")
-
-    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
 
     async def exercise() -> None:
         _ = await repository.create_async(record)
@@ -567,21 +523,10 @@ def test_automation_delivery_repo_async_error_and_stale_branches(
 
 def test_automation_bound_session_queue_repo_async_methods_use_async_sqlite(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = AutomationBoundSessionQueueRepository(tmp_path / "automation_queue.db")
     first = _build_queue_record("queue-1")
     second = _build_queue_record("queue-2")
-
-    async def fail_call_sync_async(
-        function: object,
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        raise AssertionError("async repository methods must not call sync wrappers")
-
-    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
 
     async def exercise() -> None:
         _ = await repository.create_async(first)
@@ -647,22 +592,11 @@ def test_automation_bound_session_queue_repo_async_methods_use_async_sqlite(
 
 def test_automation_bound_session_queue_repo_async_error_and_stale_branches(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = AutomationBoundSessionQueueRepository(
         tmp_path / "automation_queue_edges.db"
     )
     record = _build_queue_record("queue-edge")
-
-    async def fail_call_sync_async(
-        function: object,
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        raise AssertionError("async repository methods must not call sync wrappers")
-
-    monkeypatch.setattr(repository, "_call_sync_async", fail_call_sync_async)
 
     async def exercise() -> None:
         created = await repository.create_async(record)

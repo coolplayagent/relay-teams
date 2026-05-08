@@ -914,7 +914,7 @@ The following must be updated in `docs/core/api-design.md`:
 | AC-5 | `memory_entries` table is created on first use with all columns and indexes | Integration test: fresh DB, verify schema via `PRAGMA table_info` |
 | AC-6 | CRUD operations (create, read, update, delete) work correctly | Unit test: create entry, read by ID, update content, delete, verify 404 |
 | AC-7 | FTS5 index is kept in sync: upsert on create/update, delete on delete | Integration test: create entry, search finds it; delete entry, search returns empty |
-| AC-8 | Repository uses `aiosqlite` for all async methods, no `_call_sync_async` | Static analysis: grep repository file, no sync bridge calls |
+| AC-8 | Repository uses `aiosqlite` for all async methods, no sync bridge helper | Static analysis: grep repository file, no sync bridge calls |
 
 ### 12.3 Six Operations
 

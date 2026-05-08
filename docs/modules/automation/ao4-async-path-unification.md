@@ -2,11 +2,11 @@
 
 ## Status
 
-Implemented through the final 2026-05-01 AO-4 repository slice. The async
-runtime and server persistence paths no longer call synchronous SQLite methods
-through `_call_sync_async`. The bridge remains only on
-`SharedSqliteRepository` as a compatibility primitive for intentionally
-synchronous callers.
+Implemented through the final 2026-05-01 AO-4 repository slice, with the final
+2026-05-08 cleanup removing the legacy sync-wrapper helper from
+`SharedSqliteRepository`. The async runtime and server persistence paths now use
+native async repository operations instead of bridging through synchronous SQLite
+methods.
 
 ## Context
 
@@ -31,8 +31,7 @@ repository operations unless the boundary is intentionally synchronous.
 
 ## Goals
 
-- Remove runtime `_call_sync_async` callers from `src/relay_teams` outside the
-  base bridge implementation.
+- Remove the legacy sync-wrapper helper from `src/relay_teams` completely.
 - Keep async repository methods on `aiosqlite`, `async_fetchone()`,
   `async_fetchall()`, `_run_async_read()`, and `_run_async_write()`.
 - Preserve existing public API payloads, database schemas, state-machine
@@ -59,11 +58,9 @@ connections. Read methods should use `async_fetchone()` and `async_fetchall()`
 so cursors are closed consistently. Write methods should close cursors before
 returning and reload records when callers expect stored database state.
 
-`_call_sync_async` is owned by `SharedSqliteRepository` only. It must not be used
-by runtime repositories, services, routers, or gateway paths as a shortcut for
-async compatibility. If a sync API still exists for a deliberate boundary, its
-async equivalent must contain its own async SQL implementation rather than
-wrapping the sync method.
+`SharedSqliteRepository` no longer exposes a sync-wrapper helper. If a sync API
+still exists for a deliberate boundary, its async equivalent must contain its own
+async SQL implementation rather than wrapping the sync method.
 
 Claim and queue operations must remain atomic. Each claim updates a row only
 from its eligible pending state, or from a stale in-progress state, and then
@@ -165,9 +162,9 @@ unexpected failures.
 
 | Area | Coverage |
 | --- | --- |
-| Repository-wide bridge guard | `tests/unit_tests/test_async_wrapper_coverage.py` scans `src/relay_teams` and fails if any source file outside `persistence/sqlite_repository.py` references `_call_sync_async`. |
-| Wrapper-free method guard | `tests/unit_tests/test_async_wrapper_coverage.py` checks migrated async methods do not call `_call_sync_async`. |
-| Automation delivery repository | `tests/unit_tests/automation/test_automation_repository.py` monkeypatches `_call_sync_async` to fail and exercises CRUD, listing, claims, cleanup, project lookup, and deletion. |
+| Repository-wide bridge guard | `tests/unit_tests/test_async_wrapper_coverage.py` scans `src/relay_teams` and fails if any source file references the removed sync-wrapper helper. |
+| Wrapper-free method guard | `tests/unit_tests/test_async_wrapper_coverage.py` checks migrated async methods do not call the removed sync-wrapper helper. |
+| Automation delivery repository | `tests/unit_tests/automation/test_automation_repository.py` exercises CRUD, listing, claims, cleanup, project lookup, and deletion through async repository methods. |
 | Bound-session queue repository | `tests/unit_tests/automation/test_automation_repository.py` covers create, update, get, non-terminal counts, readiness, waiting-result listing, claim, cleanup, project lookup, and deletion without sync wrappers. |
 | Session terminal view | `tests/unit_tests/interfaces/server/test_sessions_router.py` covers timeout deferral, request cancellation, deferred result logging, load-shedding via the session-read helper, and success/missing-session behavior. |
 | Service latest-terminal selection | `tests/unit_tests/sessions/test_session_auto_title.py` covers async terminal marker behavior through the service layer. |
@@ -175,8 +172,8 @@ unexpected failures.
 
 ## Operational Invariants
 
-- Runtime async paths must not call sync repository methods through
-  `_call_sync_async`.
+- Runtime async paths must not call sync repository methods through wrapper
+  helpers.
 - Route timeout must not cancel terminal-view persistence.
 - Request cancellation must not leave a background marker failure unobserved.
 - Session-read queue admission must still apply to terminal-view marker work.

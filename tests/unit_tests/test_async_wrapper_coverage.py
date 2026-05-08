@@ -20,6 +20,9 @@ class _WrapperSpec(NamedTuple):
     method_name: str
 
 
+_LEGACY_SYNC_BRIDGE_NAME = "_call_" + "sync_" + "async"
+
+
 def _module_class(*, module: ModuleType, class_name: str) -> type[object]:
     return cast(type[object], getattr(module, class_name))
 
@@ -411,7 +414,7 @@ _SYNC_LIFECYCLE_TARGET_NAMES = frozenset(
 
 
 @pytest.mark.parametrize("spec", _RUNTIME_LIFECYCLE_ASYNC_METHODS)
-def test_runtime_lifecycle_async_methods_do_not_use_call_sync_async(
+def test_runtime_lifecycle_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -419,11 +422,11 @@ def test_runtime_lifecycle_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _BACKGROUND_TASK_REPOSITORY_ASYNC_METHODS)
-def test_background_task_repository_async_methods_do_not_use_call_sync_async(
+def test_background_task_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -431,11 +434,11 @@ def test_background_task_repository_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _RUN_INTENT_REPOSITORY_ASYNC_METHODS)
-def test_run_intent_repository_async_methods_do_not_use_call_sync_async(
+def test_run_intent_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -443,11 +446,11 @@ def test_run_intent_repository_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _AGENT_INSTANCE_REPOSITORY_ASYNC_METHODS)
-def test_agent_instance_repository_async_methods_do_not_use_call_sync_async(
+def test_agent_instance_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -455,11 +458,11 @@ def test_agent_instance_repository_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _SESSION_REPOSITORY_ASYNC_METHODS)
-def test_session_repository_async_methods_do_not_use_call_sync_async(
+def test_session_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -467,11 +470,11 @@ def test_session_repository_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _RUN_EVENT_PUBLISHER_ASYNC_METHODS)
-def test_run_event_publisher_async_methods_do_not_use_call_sync_async(
+def test_run_event_publisher_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -479,11 +482,11 @@ def test_run_event_publisher_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _TEMPORARY_ROLE_REPOSITORY_ASYNC_METHODS)
-def test_temporary_role_repository_async_methods_do_not_use_call_sync_async(
+def test_temporary_role_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -491,11 +494,11 @@ def test_temporary_role_repository_async_methods_do_not_use_call_sync_async(
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize("spec", _AUTOMATION_DELIVERY_REPOSITORY_ASYNC_METHODS)
-def test_automation_delivery_repository_async_methods_do_not_use_call_sync_async(
+def test_automation_delivery_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -503,13 +506,13 @@ def test_automation_delivery_repository_async_methods_do_not_use_call_sync_async
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.parametrize(
     "spec", _AUTOMATION_BOUND_SESSION_QUEUE_REPOSITORY_ASYNC_METHODS
 )
-def test_automation_bound_session_queue_repository_async_methods_do_not_use_call_sync_async(
+def test_automation_bound_session_queue_repository_async_methods_do_not_use_sync_bridge(
     spec: _WrapperSpec,
 ) -> None:
     module = importlib.import_module(spec.module_name)
@@ -517,22 +520,20 @@ def test_automation_bound_session_queue_repository_async_methods_do_not_use_call
     method = getattr(class_object, spec.method_name)
     source = inspect.getsource(method)
 
-    assert "_call_sync_async" not in source
+    assert _LEGACY_SYNC_BRIDGE_NAME not in source
 
 
 @pytest.mark.timeout(5)
-def test_sqlite_sync_bridge_has_no_runtime_callers() -> None:
+def test_source_tree_has_no_legacy_sync_bridge_symbol() -> None:
     project_root = Path(__file__).resolve().parents[2]
     source_root = project_root / "src" / "relay_teams"
-    bridge_owner = source_root / "persistence" / "sqlite_repository.py"
-    callers = [
+    matches = [
         str(path.relative_to(source_root.parent))
         for path in sorted(source_root.rglob("*.py"))
-        if path != bridge_owner
-        and "_call_sync_async" in path.read_text(encoding="utf-8")
+        if _LEGACY_SYNC_BRIDGE_NAME in path.read_text(encoding="utf-8")
     ]
 
-    assert callers == []
+    assert matches == []
 
 
 @pytest.mark.timeout(5)
@@ -1472,15 +1473,6 @@ class _PermissiveAsyncReceiver:
         if inspect.isawaitable(result):
             return await cast(Awaitable[object], result)
         return result
-
-    async def _call_sync_async(
-        self,
-        function: Callable[..., object],
-        /,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
-        return function(*args, **kwargs)
 
     async def execute(self, *args: object, **kwargs: object) -> _PermissiveCursor:
         _ = (args, kwargs)
