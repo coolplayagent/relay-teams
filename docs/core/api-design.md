@@ -2081,6 +2081,12 @@ Response fields:
 
 Returns the latest normalized evidence bundle stored on the task envelope. If verification has not produced evidence yet, the endpoint returns `404`.
 
+During verification, the backend builds an effective verification plan from the
+stored task plan plus any bound `TaskSpec.formal_verification` found on the task
+envelope or rehydrated from `spec_artifact_id`. Spec-derived formal checks are
+deduplicated against explicit `formal_checks`, and the evidence bundle formal
+flags reflect the effective plan.
+
 Response fields:
 - `task_id`
 - `spec_artifact_id`
