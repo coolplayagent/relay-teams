@@ -50,6 +50,9 @@ from relay_teams.agents.orchestration.settings_service import (
     OrchestrationSettingsService,
 )
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
+from relay_teams.agents.orchestration.delegation_planning import (
+    DelegationPlanningService,
+)
 from relay_teams.agents.orchestration.human_gate import GateManager
 from relay_teams.agents.orchestration.llm_semantic_evaluator import (
     LlmSemanticEvaluator,
@@ -777,6 +780,7 @@ class ServerContainer:
         self._provider_factory: Callable[[RoleDefinition, str | None], LLMProvider]
         self.task_execution_service: TaskExecutionService
         self.task_service: TaskOrchestrationService
+        self.delegation_planning_service: DelegationPlanningService
         self._build_runtime_services()
         self.background_task_service.replace_subagent_runtime_dependencies(
             task_execution_service=self.task_execution_service,
@@ -819,6 +823,7 @@ class ServerContainer:
             gate_manager=self.gate_manager,
             run_event_hub=self.run_event_hub,
             semantic_evaluator=semantic_evaluator,
+            planning_service=self.delegation_planning_service,
         )
         self.meta_agent: MetaAgent = MetaAgent(coordinator=coordinator)
         self.run_service: SessionRunService = SessionRunService(
@@ -1263,6 +1268,12 @@ class ServerContainer:
             run_event_hub=self.run_event_hub,
             run_intent_repo=self.run_intent_repo,
         )
+        self.delegation_planning_service = DelegationPlanningService(
+            task_repo=self.task_repo,
+            task_service=self.task_service,
+            role_registry=self.role_registry,
+            runtime_role_resolver=self.runtime_role_resolver,
+        )
 
     def _build_hook_loader(self) -> HookLoader:
         return HookLoader(
@@ -1490,9 +1501,11 @@ class ServerContainer:
         )
         self.meta_agent.coordinator.provider_factory = self._provider_factory
         self.meta_agent.coordinator.task_execution_service = self.task_execution_service
+        self.meta_agent.coordinator.planning_service = self.delegation_planning_service
 
     def _refresh_runtime_dependents(self) -> None:
         self.runtime_role_resolver.replace_role_registry(self.role_registry)
+        self.delegation_planning_service.replace_role_registry(self.role_registry)
         self.session_service.replace_role_registry(self.role_registry)
         self.session_service.replace_subagent_reflection_service(
             self.subagent_reflection_service

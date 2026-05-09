@@ -740,6 +740,11 @@ Response fields:
   - `policy`
     - `max_orchestration_cycles`
     - `max_parallel_delegated_tasks`
+    - `auto_plan_long_tasks`
+    - `planner_role_id`
+    - `coordinator_inline_budget_steps`
+    - `max_temporary_roles_per_run`
+    - `prefer_temporary_roles_for_long_tasks`
   - `graph`, optional DAG template
 
 ### `PUT /system/configs/orchestration`
@@ -751,6 +756,8 @@ Rules:
 - `presets[].role_ids` may contain only normal roles; reserved system roles are rejected.
 - `presets[].policy.max_orchestration_cycles` accepts `0..64`.
 - `presets[].policy.max_parallel_delegated_tasks` accepts `0..16`; `0` disables automatic delegated task execution for simple direct-answer presets.
+- `presets[].policy.planner_role_id` defaults to `DelegationPlanner`; when automatic planning is enabled, this role is executed through the normal delegated task runtime path.
+- `presets[].policy.max_temporary_roles_per_run` accepts `0..16` and bounds automatic DelegationPlanner temporary role proposals.
 - The default preset id must match one existing preset.
 - `MainAgent` and `Coordinator` base role prompts are edited through `/roles/configs/*`, not this config.
 - `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.
@@ -1394,7 +1401,12 @@ Request:
   },
   "orchestration_policy": {
     "max_orchestration_cycles": 8,
-    "max_parallel_delegated_tasks": 4
+    "max_parallel_delegated_tasks": 4,
+    "auto_plan_long_tasks": true,
+    "planner_role_id": "DelegationPlanner",
+    "coordinator_inline_budget_steps": 2,
+    "max_temporary_roles_per_run": 5,
+    "prefer_temporary_roles_for_long_tasks": true
   }
 }
 ```

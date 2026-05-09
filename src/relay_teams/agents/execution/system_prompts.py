@@ -86,6 +86,7 @@ ORCHESTRATION_USAGE_PROMPT = (
     "## Orchestration Rules\n"
     "- Orchestrate delegated work and avoid implementing the task directly.\n"
     "- Delegate only when another role is a better fit than continuing yourself.\n"
+    "- For complex or long-running work, use the built-in DelegationPlanner lane first when available; treat its output as a planning artifact, then create concrete task contracts yourself.\n"
     "- Choose roles by their Description, Tools, MCP Tools, and Skills.\n"
     "- Inspect the current worker pool with `orch_list_available_roles` when selecting or reusing a dispatch target.\n"
     "- If no existing role is a good fit, create a run-scoped role with `orch_create_temporary_role` before dispatch.\n"

@@ -21,6 +21,9 @@ from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraph,
     OrchestrationGraphNode,
 )
+from relay_teams.agents.orchestration.delegation_planning import (
+    DelegationPlanningService,
+)
 from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
 from relay_teams.agents.orchestration.role_contracts import (
     role_contract_precondition_failures,
@@ -209,6 +212,7 @@ class CoordinatorGraph(BaseModel):
     run_event_hub: RunEventHub | None = None
     hook_service: HookService | None = None
     semantic_evaluator: SemanticVerificationEvaluator | None = None
+    planning_service: DelegationPlanningService | None = None
 
     async def run(
         self,
@@ -540,23 +544,29 @@ class CoordinatorGraph(BaseModel):
         coordinator_result = TaskExecutionResult(output=initial_result)
         coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
-            coordinator_result = await self._task_executor(
-                instance_id=coordinator_instance_id,
-                role_id=coordinator_role_id,
-                task=root_task,
+            planned_delegation = await self._run_auto_delegation_planning_async(
+                root_task=root_task,
+                topology=topology,
+                policy=policy,
             )
-            log_event(
-                LOGGER,
-                logging.DEBUG,
-                event="coord.cycle.first_pass.completed",
-                message="Coordinator first pass completed",
-                payload={
-                    "max_orchestration_cycles": policy.max_orchestration_cycles,
-                    "max_parallel_delegated_tasks": (
-                        policy.max_parallel_delegated_tasks
-                    ),
-                },
-            )
+            if not planned_delegation:
+                coordinator_result = await self._task_executor(
+                    instance_id=coordinator_instance_id,
+                    role_id=coordinator_role_id,
+                    task=root_task,
+                )
+                log_event(
+                    LOGGER,
+                    logging.DEBUG,
+                    event="coord.cycle.first_pass.completed",
+                    message="Coordinator first pass completed",
+                    payload={
+                        "max_orchestration_cycles": policy.max_orchestration_cycles,
+                        "max_parallel_delegated_tasks": (
+                            policy.max_parallel_delegated_tasks
+                        ),
+                    },
+                )
 
         if policy.max_orchestration_cycles < 1:
             pending_task_count = await self._pending_delegated_task_count_async(
@@ -672,6 +682,37 @@ class CoordinatorGraph(BaseModel):
             )
 
         return coordinator_result
+
+    async def _run_auto_delegation_planning_async(
+        self,
+        *,
+        root_task: TaskEnvelope,
+        topology: RunTopologySnapshot | None,
+        policy: OrchestrationPolicy,
+    ) -> bool:
+        planning_service = self.planning_service
+        if planning_service is None:
+            return False
+        plan = await planning_service.plan_and_create_tasks_async(
+            root_task=root_task,
+            topology=topology,
+            policy=policy,
+        )
+        if plan is None or not plan.should_decompose or not plan.lanes:
+            return False
+        log_event(
+            LOGGER,
+            logging.INFO,
+            event="coord.planning.completed",
+            message="Coordinator accepted DelegationPlanner delegation plan",
+            payload={
+                "trace_id": root_task.trace_id,
+                "root_task_id": root_task.task_id,
+                "lane_count": len(plan.lanes),
+                "planner_role_id": policy.planner_role_id,
+            },
+        )
+        return True
 
     async def _run_graph_mode(
         self,

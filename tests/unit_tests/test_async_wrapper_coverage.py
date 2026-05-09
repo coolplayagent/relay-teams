@@ -258,6 +258,11 @@ _TEMPORARY_ROLE_REPOSITORY_ASYNC_METHODS: tuple[_WrapperSpec, ...] = (
     _WrapperSpec(
         "relay_teams.roles.temporary_role_repository",
         "TemporaryRoleRepository",
+        "delete_async",
+    ),
+    _WrapperSpec(
+        "relay_teams.roles.temporary_role_repository",
+        "TemporaryRoleRepository",
         "delete_by_run_async",
     ),
 )
