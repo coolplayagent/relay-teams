@@ -221,6 +221,145 @@ def test_app_env_plugin_dirs_change_reloads_plugin_runtime(
     ] == ["quality"]
 
 
+def test_container_app_env_file_watcher_refreshes_runtime_after_external_change(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    key = "APP_ENV_EXTERNAL_RELOAD_TEST"
+    monkeypatch.delenv(key, raising=False)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+    calls: list[str] = []
+
+    def reload_model_config() -> None:
+        calls.append("model")
+
+    def reload_mcp_runtime() -> None:
+        calls.append("mcp")
+
+    def reload_skills_runtime() -> None:
+        calls.append("skills")
+
+    monkeypatch.setattr(
+        container.model_config_service,
+        "reload_model_config",
+        reload_model_config,
+    )
+    monkeypatch.setattr(
+        container,
+        "_reload_mcp_runtime_after_app_env_change",
+        reload_mcp_runtime,
+    )
+    monkeypatch.setattr(
+        container,
+        "_reload_skills_runtime_after_app_env_change",
+        reload_skills_runtime,
+    )
+
+    container.app_env_file_watcher.refresh_snapshot()
+    container.runtime.paths.env_file.write_text(f"{key}=after\n", encoding="utf-8")
+    changed_keys = container.app_env_file_watcher._sync_stable_change(
+        container.app_env_file_watcher._read_stamp()
+    )
+    container._on_app_environment_changed(changed_keys)
+
+    assert calls == ["model", "mcp", "skills"]
+    assert os.environ[key] == "after"
+
+
+def test_app_env_change_callback_does_not_advance_watcher_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    monkeypatch.setattr(
+        container.model_config_service,
+        "reload_model_config",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        container,
+        "_reload_mcp_runtime_after_app_env_change",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        container,
+        "_reload_skills_runtime_after_app_env_change",
+        lambda: None,
+    )
+
+    container.runtime.paths.env_file.write_text("FIRST=value\n", encoding="utf-8")
+    container.app_env_file_watcher.refresh_snapshot()
+    initial_stamp = container.app_env_file_watcher._last_stamp
+
+    container.runtime.paths.env_file.write_text("SECOND=value\n", encoding="utf-8")
+    changed_stamp = container.app_env_file_watcher._read_stamp()
+
+    container._on_app_environment_changed(frozenset(("UNRELATED_APP_ENV",)))
+
+    assert initial_stamp is not None
+    assert changed_stamp != initial_stamp
+    assert container.app_env_file_watcher._last_stamp == initial_stamp
+
+
+def test_app_env_api_save_does_not_duplicate_watcher_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    key = "APP_ENV_API_SAVE_TEST"
+    monkeypatch.delenv(key, raising=False)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+    calls: list[str] = []
+
+    def reload_model_config() -> None:
+        calls.append("model")
+
+    def reload_mcp_runtime() -> None:
+        calls.append("mcp")
+
+    def reload_skills_runtime() -> None:
+        calls.append("skills")
+
+    monkeypatch.setattr(
+        container.model_config_service,
+        "reload_model_config",
+        reload_model_config,
+    )
+    monkeypatch.setattr(
+        container,
+        "_reload_mcp_runtime_after_app_env_change",
+        reload_mcp_runtime,
+    )
+    monkeypatch.setattr(
+        container,
+        "_reload_skills_runtime_after_app_env_change",
+        reload_skills_runtime,
+    )
+
+    container.app_env_file_watcher.refresh_snapshot()
+    container.environment_variable_service.save_environment_variable(
+        scope=EnvironmentVariableScope.APP,
+        key=key,
+        request=EnvironmentVariableSaveRequest(value="from-api"),
+    )
+    changed_keys = container.app_env_file_watcher._sync_stable_change(
+        container.app_env_file_watcher._read_stamp()
+    )
+    if changed_keys:
+        container._on_app_environment_changed(changed_keys)
+
+    assert calls == ["model", "mcp", "skills"]
+
+
 def test_container_injects_fallback_middleware_into_reflection_service(
     monkeypatch,
     tmp_path: Path,
