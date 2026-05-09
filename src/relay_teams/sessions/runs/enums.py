@@ -58,6 +58,7 @@ class RunEventType(str, Enum):
     USER_QUESTION_REQUESTED = "user_question_requested"
     USER_QUESTION_ANSWERED = "user_question_answered"
     NOTIFICATION_REQUESTED = "notification_requested"
+    SUBAGENT_SESSION_STATUS_CHANGED = "subagent_session_status_changed"
     SUBAGENT_STOPPED = "subagent_stopped"
     SUBAGENT_RESUMED = "subagent_resumed"
     RUN_STOPPED = "run_stopped"

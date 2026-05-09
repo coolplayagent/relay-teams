@@ -13,6 +13,7 @@ import {
     showGateCard,
 } from '../../components/agentPanel.js';
 import { markSubagentStatus } from '../../components/subagentRail.js';
+import { updateNormalModeSubagentSessionStatus } from '../../components/subagentSessions.js';
 
 export function handleSubagentGate(payload) {
     showGateCard(payload.instance_id, payload.role_id, {
@@ -29,26 +30,38 @@ export function handleGateResolved(payload, instanceId) {
     sysLog(`Gate resolved: ${payload.action}`, 'log-info');
 }
 
-export function handleSubagentStopped(payload) {
-    markSubagentStatus(payload.instance_id, 'stopped');
+export function handleSubagentStopped(payload, eventMeta = null) {
+    const instanceId = payload.instance_id;
+    const runId = String(
+        eventMeta?.run_id
+        || eventMeta?.trace_id
+        || payload.run_id
+        || state.activeRunId
+        || '',
+    ).trim();
+    markSubagentStatus(instanceId, 'stopped');
+    updateNormalModeSubagentSessionStatus(state.currentSessionId, instanceId, 'stopped');
     state.pausedSubagent = {
-        runId: state.activeRunId,
-        instanceId: payload.instance_id,
+        runId,
+        instanceId,
         roleId: payload.role_id,
         taskId: payload.task_id || null,
     };
-    markPausedSubagent(payload);
+    markPausedSubagent({ ...payload, run_id: runId });
     sysLog(
         `Subagent paused: ${payload.role_id || payload.instance_id}. Send follow-up in subagent panel.`,
         'log-info',
     );
 }
 
-export function handleSubagentResumed(payload) {
-    markSubagentStatus(payload.instance_id, 'running');
-    if (state.pausedSubagent && state.pausedSubagent.instanceId === payload.instance_id) {
+export function handleSubagentResumed(payload, eventMeta = null) {
+    void eventMeta;
+    const instanceId = payload.instance_id;
+    markSubagentStatus(instanceId, 'running');
+    updateNormalModeSubagentSessionStatus(state.currentSessionId, instanceId, 'running');
+    if (state.pausedSubagent && state.pausedSubagent.instanceId === instanceId) {
         state.pausedSubagent = null;
     }
-    clearPausedSubagent(payload.instance_id);
+    clearPausedSubagent(instanceId);
     sysLog(`Subagent resumed: ${payload.role_id || payload.instance_id}`, 'log-info');
 }

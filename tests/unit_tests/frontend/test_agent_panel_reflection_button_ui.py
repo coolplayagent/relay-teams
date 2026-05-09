@@ -215,6 +215,48 @@ console.log(JSON.stringify({ initialTabState, initialPaneState, afterClickTabSta
             assert pane_info["hidden"] is True
 
 
+def test_stop_button_uses_main_scope_for_active_subagent_run(tmp_path: Path) -> None:
+    payload = _run_panel_factory_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { createPanel } = await import('./panelFactory.mjs');
+const { state } = await import('./mockState.mjs');
+const { calls } = await import('./mockApi.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'parent-run-1';
+globalThis.__activeSubagentSession = {
+    sessionId: 'session-1',
+    instanceId: 'inst-1',
+    runId: 'subagent-run-1',
+    status: 'running',
+    runStatus: 'running',
+};
+
+const panel = createPanel('inst-1', 'writer', () => undefined);
+await panel.panelEl.querySelector('.agent-panel-stop').onclick();
+
+globalThis.__activeSubagentSession = null;
+state.activeRunId = 'parent-run-2';
+const parentScopedPanel = createPanel('inst-2', 'writer', () => undefined);
+await parentScopedPanel.panelEl.querySelector('.agent-panel-stop').onclick();
+
+console.log(JSON.stringify({
+    stopRun: calls.stopRun,
+    pausedSubagent: state.pausedSubagent,
+}));
+""".strip(),
+    )
+
+    assert payload["stopRun"] == [
+        ["subagent-run-1", {"scope": "main"}],
+        ["parent-run-2", {"scope": "subagent", "instanceId": "inst-2"}],
+    ]
+    paused_subagent = cast(dict[str, object], payload["pausedSubagent"])
+    assert paused_subagent["runId"] == "parent-run-2"
+    assert paused_subagent["instanceId"] == "inst-2"
+
+
 def _run_panel_factory_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -239,6 +281,7 @@ def _run_panel_factory_script(tmp_path: Path, runner_source: str) -> dict[str, o
         "../../utils/logger.js": "./mockLogger.mjs",
         "./dom.js": "./mockDom.mjs",
         "./history.js": "./mockHistory.mjs",
+        "../subagentSessions.js": "./mockSubagentSessions.mjs",
         "../subagentRail.js": "./mockSubagentRail.mjs",
     }
     source_text = source_path.read_text(encoding="utf-8")
@@ -251,13 +294,15 @@ def _run_panel_factory_script(tmp_path: Path, runner_source: str) -> dict[str, o
 export const calls = {
     updateAgentReflection: [],
     deleteAgentReflection: [],
+    stopRun: [],
 };
 
 export async function injectSubagentMessage() {
     return undefined;
 }
 
-export async function stopRun() {
+export async function stopRun(runId, options = {}) {
+    calls.stopRun.push([runId, options]);
     return undefined;
 }
 
@@ -408,6 +453,22 @@ export const calls = { refreshSubagentRail: 0 };
 
 export async function refreshSubagentRail() {
     calls.refreshSubagentRail += 1;
+    return undefined;
+}
+
+export function markSubagentStatus() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSubagentSessions.mjs").write_text(
+        """
+export function getActiveSubagentSession() {
+    return globalThis.__activeSubagentSession || null;
+}
+
+export function updateNormalModeSubagentSessionStatus() {
     return undefined;
 }
 """.strip(),

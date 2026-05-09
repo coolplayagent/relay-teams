@@ -22,6 +22,9 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRepository,
     RunRuntimeStatus,
 )
+from relay_teams.sessions.runs.subagent_lifecycle import (
+    mark_subagent_resumed_records,
+)
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.events import EventEnvelope, EventType
 from relay_teams.agents.tasks.models import TaskEnvelope
@@ -627,13 +630,6 @@ class RunControlManager:
             )
 
         task_id = self._find_task_for_instance(run_id=run_id, instance_id=instance_id)
-        if task_id:
-            self._require_task_repo().update_status(
-                task_id=task_id,
-                status=TaskStatus.ASSIGNED,
-                assigned_instance_id=instance_id,
-            )
-
         self._require_message_repo().append_user_prompt_if_missing(
             session_id=record.session_id,
             workspace_id=record.workspace_id,
@@ -660,18 +656,19 @@ class RunControlManager:
         self.release_paused_subagent(
             session_id=record.session_id, instance_id=instance_id
         )
-        self._require_agent_repo().mark_status(instance_id, InstanceStatus.IDLE)
-        if self._run_runtime_repo is not None:
-            self._run_runtime_repo.update(
-                run_id,
-                status=RunRuntimeStatus.RUNNING,
-                phase=RunRuntimePhase.SUBAGENT_RUNNING,
-                active_instance_id=instance_id,
-                active_task_id=task_id,
-                active_role_id=record.role_id,
-                active_subagent_instance_id=instance_id,
-                last_error=None,
-            )
+        mark_subagent_resumed_records(
+            update_task_status=self._require_task_repo().update_status,
+            mark_instance_status=self._require_agent_repo().mark_status,
+            update_run_runtime=(
+                self._run_runtime_repo.update
+                if self._run_runtime_repo is not None
+                else None
+            ),
+            run_id=run_id,
+            task_id=task_id,
+            instance_id=instance_id,
+            role_id=record.role_id,
+        )
 
         self._require_run_event_hub().publish(
             RunEvent(

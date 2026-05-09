@@ -709,6 +709,125 @@ def test_build_session_rounds_projects_missing_tool_pairs_from_events(
     assert parts[3]["is_error"] is True
 
 
+def test_build_session_rounds_projects_stopped_spawn_subagent_call_without_result(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_stopped_spawn_subagent_call.db"
+    session_id = "session-1"
+    run_id = "run-1"
+    coordinator_instance_id = "inst-coordinator-1"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="call a subagent then stop",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    agent_repo.upsert_instance(
+        run_id=run_id,
+        trace_id=run_id,
+        session_id=session_id,
+        instance_id=coordinator_instance_id,
+        role_id="Coordinator",
+        workspace_id="default",
+        status=InstanceStatus.STOPPED,
+    )
+    run_runtime_repo.ensure(
+        run_id=run_id,
+        session_id=session_id,
+        root_task_id="task-root",
+    )
+
+    events: list[dict[str, object]] = [
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-05-09T10:00:00+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "spawn_subagent",
+                    "tool_call_id": "call-subagent",
+                    "args": {
+                        "role_id": "Explorer",
+                        "description": "Inspect the issue",
+                        "prompt": "Find the cause.",
+                        "background": False,
+                    },
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.TOOL_CALL.value,
+            "occurred_at": "2026-05-09T10:00:01+00:00",
+            "payload_json": json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_name": "shell",
+                    "tool_call_id": "call-shell",
+                    "args": {"command": "pwd"},
+                    "role_id": "Coordinator",
+                    "instance_id": coordinator_instance_id,
+                }
+            ),
+        },
+        {
+            "trace_id": run_id,
+            "run_id": run_id,
+            "task_id": "task-root",
+            "event_type": RunEventType.RUN_STOPPED.value,
+            "occurred_at": "2026-05-09T10:00:02+00:00",
+            "payload_json": json.dumps({"reason": "stopped_by_user"}),
+        },
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _session_id: [],
+        get_session_events=lambda _session_id: events,
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]], round_item["coordinator_messages"]
+    )
+    parts = [
+        cast(
+            dict[str, object],
+            cast(
+                list[dict[str, object]],
+                cast(dict[str, object], message["message"])["parts"],
+            )[0],
+        )
+        for message in coordinator_messages
+    ]
+
+    assert [part["part_kind"] for part in parts] == ["tool-call"]
+    assert parts[0]["tool_name"] == "spawn_subagent"
+    assert parts[0]["tool_call_id"] == "call-subagent"
+    assert cast(dict[str, object], parts[0]["args"])["role_id"] == "Explorer"
+
+
 def test_build_session_rounds_keeps_event_tool_pairs_scoped_by_run(
     tmp_path: Path,
 ) -> None:

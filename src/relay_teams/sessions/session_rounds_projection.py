@@ -742,6 +742,7 @@ def _project_tool_messages_from_events(
     pending_by_identity: dict[tuple[str, str, str, str], list[tuple[str, int]]] = (
         defaultdict(list)
     )
+    stopped_run_ids = _stopped_run_ids_from_events(session_events)
     sorted_session_events = sorted(
         session_events,
         key=lambda item: str(item.get("occurred_at") or ""),
@@ -800,7 +801,14 @@ def _project_tool_messages_from_events(
         for record_key in tool_call_keys:
             call = calls_by_key.get(record_key)
             result = results_by_key.get(record_key)
-            if call is None or result is None:
+            if call is None:
+                continue
+            if result is None:
+                if _should_project_unmatched_tool_call(
+                    call,
+                    stopped_run_ids=stopped_run_ids,
+                ):
+                    projected_by_run[run_id].append(_event_tool_call_message(call))
                 continue
             call_tool_name = str(call.get("tool_name") or "")
             result_tool_name = str(result.get("tool_name") or "")
@@ -813,6 +821,30 @@ def _project_tool_messages_from_events(
             projected_by_run[run_id].append(_event_tool_call_message(call))
             projected_by_run[run_id].append(_event_tool_result_message(result))
     return dict(projected_by_run)
+
+
+def _stopped_run_ids_from_events(
+    session_events: list[dict[str, object]],
+) -> set[str]:
+    stopped_run_ids: set[str] = set()
+    for event in session_events:
+        if str(event.get("event_type") or "") != RunEventType.RUN_STOPPED.value:
+            continue
+        run_id = str(event.get("trace_id") or event.get("run_id") or "").strip()
+        if run_id:
+            stopped_run_ids.add(run_id)
+    return stopped_run_ids
+
+
+def _should_project_unmatched_tool_call(
+    call: dict[str, object],
+    *,
+    stopped_run_ids: set[str],
+) -> bool:
+    run_id = str(call.get("run_id") or "").strip()
+    if run_id not in stopped_run_ids:
+        return False
+    return str(call.get("tool_name") or "").strip() == "spawn_subagent"
 
 
 def _event_tool_call_message(record: dict[str, object]) -> dict[str, object]:

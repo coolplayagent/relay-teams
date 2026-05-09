@@ -40,8 +40,9 @@ export async function fetchAgentMessages() {
     ];
 }
 
-export async function fetchSessionSubagents() {
-    return [];
+export async function fetchSessionSubagents(sessionId) {
+    globalThis.__fetchSessionSubagentsCalls.push(sessionId);
+    return globalThis.__fetchSessionSubagentsPayload || [];
 }
 """.strip(),
         encoding="utf-8",
@@ -1247,6 +1248,8 @@ export function sysLog() {
         """
 globalThis.__events = [];
 globalThis.__syncCalls = [];
+globalThis.__fetchSessionSubagentsCalls = [];
+globalThis.__fetchSessionSubagentsPayload = [];
 globalThis.CustomEvent = class CustomEvent {
     constructor(type, options = {}) {
         this.type = type;
@@ -1255,9 +1258,16 @@ globalThis.CustomEvent = class CustomEvent {
 };
 
 const {
+    applySubagentSessionStatusEvent,
+    clearNormalModeSubagentParentStopState,
+    getSessionSubagentSessions,
+    markNormalModeSubagentSessionsRunningForParent,
+    markNormalModeSubagentSessionsStoppedForParent,
+    openSubagentSession,
     replaceSessionSubagents,
     updateNormalModeSubagentSessionStatus,
 } = await import("./subagentSessions.mjs");
+const { state } = await import("./mockState.mjs");
 
 replaceSessionSubagents("session-1", [
     {
@@ -1266,6 +1276,9 @@ replaceSessionSubagents("session-1", [
         run_id: "subagent_run_1",
         status: "running",
         run_status: "running",
+        conversation_id: "conversation-1",
+        checkpoint_event_id: 9,
+        last_event_id: 12,
     },
 ], { emitChange: false });
 globalThis.__events = [];
@@ -1278,6 +1291,8 @@ replaceSessionSubagents("session-1", [
         status: "completed",
         run_status: "completed",
         run_phase: "finished",
+        conversation_id: "conversation-1",
+        checkpoint_event_id: 9,
         last_event_id: 12,
     },
 ], { emitChange: true });
@@ -1286,10 +1301,193 @@ globalThis.__events = [];
 
 updateNormalModeSubagentSessionStatus("session-1", "inst-sub-1", "failed");
 updateNormalModeSubagentSessionStatus("session-1", "inst-sub-1", "failed");
+const directEvents = [...globalThis.__events];
+globalThis.__events = [];
+
+replaceSessionSubagents("session-1", [
+    {
+        instance_id: "inst-sub-1",
+        role_id: "Explorer",
+        run_id: "subagent_run_1",
+        status: "running",
+        run_status: "running",
+        conversation_id: "conversation-1",
+        checkpoint_event_id: 9,
+        last_event_id: 12,
+    },
+], { emitChange: false });
+markNormalModeSubagentSessionsStoppedForParent("session-1");
+markNormalModeSubagentSessionsRunningForParent("session-1");
+const parentEvents = [...globalThis.__events];
+globalThis.__events = [];
+
+applySubagentSessionStatusEvent({
+    parent_session_id: "session-1",
+    parent_run_id: "run-1",
+    subagent_run_id: "subagent_run_1",
+    subagent_instance_id: "inst-sub-1",
+    subagent_role_id: "Explorer",
+    title: "Explore",
+    status: "stopped",
+    run_status: "stopped",
+    updated_at: "2026-05-09T00:00:00Z",
+}, { run_id: "run-1", session_id: "session-1" });
+const statusEventRecords = getSessionSubagentSessions("session-1");
+const statusEventEvents = [...globalThis.__events];
+globalThis.__events = [];
+
+markNormalModeSubagentSessionsStoppedForParent("session-2");
+replaceSessionSubagents("session-2", [
+    {
+        instance_id: "inst-sub-2",
+        role_id: "Explorer",
+        run_id: "subagent_run_2",
+        status: "running",
+        run_status: "running",
+    },
+], { emitChange: false });
+const unloadedParentStopRecords = getSessionSubagentSessions("session-2");
+await openSubagentSession("session-2", {
+    instance_id: "inst-sub-3",
+    role_id: "Explorer",
+    run_id: "subagent_run_3",
+    status: "running",
+    run_status: "running",
+});
+const openedDuringParentStop = state.activeSubagentSession;
+markNormalModeSubagentSessionsRunningForParent("session-2");
+const resumedAfterUnloadedParentStopRecords = getSessionSubagentSessions("session-2");
+const openedAfterParentResume = state.activeSubagentSession;
+
+markNormalModeSubagentSessionsStoppedForParent("session-3");
+clearNormalModeSubagentParentStopState("session-3");
+replaceSessionSubagents("session-3", [
+    {
+        instance_id: "inst-sub-4",
+        role_id: "Explorer",
+        run_id: "subagent_run_4",
+        status: "running",
+        run_status: "running",
+    },
+], { emitChange: false });
+const freshRunRecordsAfterClear = getSessionSubagentSessions("session-3");
+
+replaceSessionSubagents("session-4", [
+    {
+        instance_id: "inst-sub-5",
+        role_id: "Explorer",
+        run_id: "subagent_run_5",
+        status: "stopped",
+        run_status: "stopped",
+    },
+], { emitChange: false });
+markNormalModeSubagentSessionsStoppedForParent("session-4");
+markNormalModeSubagentSessionsRunningForParent("session-4");
+const individuallyStoppedRecordsAfterParentResume = getSessionSubagentSessions("session-4");
+
+replaceSessionSubagents("session-5", [
+    {
+        instance_id: "inst-sub-6",
+        role_id: "Explorer",
+        run_id: "subagent_run_6",
+        status: "running",
+        run_status: "running",
+    },
+], { emitChange: false });
+applySubagentSessionStatusEvent({
+    parent_session_id: "session-5",
+    parent_run_id: "run-5",
+    subagent_run_id: "subagent_run_6",
+    subagent_instance_id: "inst-sub-6",
+    subagent_role_id: "Explorer",
+    title: "Explore",
+    status: "stopped",
+    run_status: "stopped",
+    parent_stop_candidate: true,
+    updated_at: "2026-05-09T00:00:00Z",
+}, { run_id: "run-5", session_id: "session-5" });
+markNormalModeSubagentSessionsStoppedForParent("session-5");
+markNormalModeSubagentSessionsRunningForParent("session-5");
+const parentStoppedStatusEventRecordsAfterResume = getSessionSubagentSessions("session-5");
+
+replaceSessionSubagents("session-6", [
+    {
+        instance_id: "inst-sub-7",
+        role_id: "Explorer",
+        run_id: "subagent_run_7",
+        status: "running",
+        run_status: "running",
+    },
+], { emitChange: false });
+applySubagentSessionStatusEvent({
+    parent_session_id: "session-6",
+    parent_run_id: "run-6",
+    subagent_run_id: "subagent_run_7",
+    subagent_instance_id: "inst-sub-7",
+    subagent_role_id: "Explorer",
+    title: "Explore",
+    status: "stopped",
+    run_status: "stopped",
+    parent_stop_candidate: true,
+    updated_at: "2026-05-09T00:00:01Z",
+}, { run_id: "subagent_run_7", session_id: "session-6" });
+markNormalModeSubagentSessionsStoppedForParent("session-6");
+markNormalModeSubagentSessionsRunningForParent("session-6");
+const parentStoppedChildRunStatusEventRecordsAfterResume = getSessionSubagentSessions("session-6");
+
+replaceSessionSubagents("session-7", [
+    {
+        instance_id: "inst-sub-8",
+        role_id: "Explorer",
+        run_id: "subagent_run_8",
+        status: "running",
+        run_status: "running",
+    },
+], { emitChange: false });
+applySubagentSessionStatusEvent({
+    parent_session_id: "session-7",
+    subagent_run_id: "subagent_run_8",
+    subagent_instance_id: "inst-sub-8",
+    subagent_role_id: "Explorer",
+    title: "Explore",
+    status: "stopped",
+    run_status: "stopped",
+    updated_at: "2026-05-09T00:00:02Z",
+}, { run_id: "subagent_run_8", session_id: "session-7" });
+markNormalModeSubagentSessionsStoppedForParent("session-7");
+markNormalModeSubagentSessionsRunningForParent("session-7");
+const independentlyStoppedStatusEventRecordsAfterParentResume = getSessionSubagentSessions("session-7");
+
+replaceSessionSubagents("session-8", [
+    {
+        instance_id: "inst-sub-9",
+        role_id: "Explorer",
+        run_id: "subagent_run_9",
+        status: "running",
+        run_status: "running",
+    },
+], { emitChange: false });
+markNormalModeSubagentSessionsStoppedForParent("session-8");
+markNormalModeSubagentSessionsStoppedForParent("session-8");
+markNormalModeSubagentSessionsRunningForParent("session-8");
+const repeatedParentStopRecordsAfterResume = getSessionSubagentSessions("session-8");
 
 console.log(JSON.stringify({
     replaceEvents,
-    events: globalThis.__events,
+    events: directEvents,
+    parentEvents,
+    statusEventRecords,
+    statusEventEvents,
+    unloadedParentStopRecords,
+    openedDuringParentStop,
+    resumedAfterUnloadedParentStopRecords,
+    openedAfterParentResume,
+    freshRunRecordsAfterClear,
+    individuallyStoppedRecordsAfterParentResume,
+    parentStoppedStatusEventRecordsAfterResume,
+    parentStoppedChildRunStatusEventRecordsAfterResume,
+    independentlyStoppedStatusEventRecordsAfterParentResume,
+    repeatedParentStopRecordsAfterResume,
     syncCalls: globalThis.__syncCalls,
 }));
 """.strip(),
@@ -1333,9 +1531,98 @@ console.log(JSON.stringify({
             },
         },
     ]
+    assert payload["parentEvents"] == [
+        {
+            "type": "agent-teams-subagent-session-status-changed",
+            "detail": {
+                "sessionId": "session-1",
+                "instanceId": "inst-sub-1",
+                "status": "stopped",
+            },
+        },
+        {
+            "type": "agent-teams-subagent-session-status-changed",
+            "detail": {
+                "sessionId": "session-1",
+                "instanceId": "inst-sub-1",
+                "status": "running",
+            },
+        },
+    ]
+    assert payload["statusEventEvents"] == [
+        {
+            "type": "agent-teams-subagent-session-status-changed",
+            "detail": {
+                "sessionId": "session-1",
+                "instanceId": "inst-sub-1",
+                "status": "stopped",
+            },
+        },
+    ]
+    assert payload["statusEventRecords"][0]["status"] == "stopped"
+    assert payload["statusEventRecords"][0]["runStatus"] == "stopped"
+    assert payload["statusEventRecords"][0]["conversationId"] == "conversation-1"
+    assert payload["statusEventRecords"][0]["checkpointEventId"] == 9
+    assert payload["statusEventRecords"][0]["lastEventId"] == 12
+    assert payload["unloadedParentStopRecords"][0]["status"] == "stopped"
+    assert payload["unloadedParentStopRecords"][0]["runStatus"] == "stopped"
+    assert payload["openedDuringParentStop"]["status"] == "stopped"
+    assert payload["openedDuringParentStop"]["runStatus"] == "stopped"
+    assert payload["resumedAfterUnloadedParentStopRecords"][0]["status"] == "running"
+    assert payload["resumedAfterUnloadedParentStopRecords"][0]["runStatus"] == "running"
+    assert payload["openedAfterParentResume"]["status"] == "running"
+    assert payload["openedAfterParentResume"]["runStatus"] == "running"
+    assert payload["freshRunRecordsAfterClear"][0]["status"] == "running"
+    assert payload["freshRunRecordsAfterClear"][0]["runStatus"] == "running"
+    assert (
+        payload["individuallyStoppedRecordsAfterParentResume"][0]["status"] == "stopped"
+    )
+    assert (
+        payload["individuallyStoppedRecordsAfterParentResume"][0]["runStatus"]
+        == "stopped"
+    )
+    assert (
+        payload["parentStoppedStatusEventRecordsAfterResume"][0]["status"] == "running"
+    )
+    assert (
+        payload["parentStoppedStatusEventRecordsAfterResume"][0]["runStatus"]
+        == "running"
+    )
+    assert (
+        payload["parentStoppedChildRunStatusEventRecordsAfterResume"][0]["status"]
+        == "running"
+    )
+    assert (
+        payload["parentStoppedChildRunStatusEventRecordsAfterResume"][0]["runStatus"]
+        == "running"
+    )
+    assert (
+        payload["independentlyStoppedStatusEventRecordsAfterParentResume"][0]["status"]
+        == "stopped"
+    )
+    assert (
+        payload["independentlyStoppedStatusEventRecordsAfterParentResume"][0][
+            "runStatus"
+        ]
+        == "stopped"
+    )
+    assert payload["repeatedParentStopRecordsAfterResume"][0]["status"] == "running"
+    assert payload["repeatedParentStopRecordsAfterResume"][0]["runStatus"] == "running"
+    assert {
+        "sessionId": "session-2",
+        "statuses": ["running"],
+    } in payload["syncCalls"]
+    assert {
+        "sessionId": "session-3",
+        "statuses": ["running"],
+    } in payload["syncCalls"]
+    assert {
+        "sessionId": "session-7",
+        "statuses": ["stopped"],
+    } in payload["syncCalls"]
     assert payload["syncCalls"][-1] == {
-        "sessionId": "session-1",
-        "statuses": ["failed"],
+        "sessionId": "session-8",
+        "statuses": ["running"],
     }
 
 

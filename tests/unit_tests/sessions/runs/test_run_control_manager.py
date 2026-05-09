@@ -901,6 +901,8 @@ def test_resume_subagent_with_message_uses_same_instance_after_restart(
     task_record = task_repo.get("task-1")
     assert task_record.status == TaskStatus.ASSIGNED
     assert task_record.assigned_instance_id == "inst-1"
+    agent_record = agent_repo.get_instance("inst-1")
+    assert agent_record.status == InstanceStatus.RUNNING
     runtime = run_runtime_repo.get("run-1")
     assert runtime is not None
     assert runtime.phase == RunRuntimePhase.SUBAGENT_RUNNING
