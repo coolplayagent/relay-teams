@@ -20,6 +20,7 @@ from relay_teams.agents.tasks.models import (
     FormalVerificationPlan,
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
+    TaskSpec,
     VerificationCheckResult,
     VerificationCommand,
     VerificationEvidenceBundle,
@@ -273,9 +274,16 @@ def verify_task(
         event_type = EventType.VERIFICATION_FAILED
         evidence_bundle = None
     else:
+        verification_plan = _effective_verification_plan(
+            task_repo=task_repo,
+            task_id=task.envelope.task_id,
+            base_plan=task.envelope.verification,
+            spec=task.envelope.spec,
+            spec_artifact_id=task.envelope.spec_artifact_id,
+        )
         plan_run = _run_verification_plan(
             task_id=task.envelope.task_id,
-            plan=task.envelope.verification,
+            plan=verification_plan,
             result=task.result,
             event_bus=event_bus,
             trace_id=task.envelope.trace_id,
@@ -308,7 +316,7 @@ def verify_task(
                 "spec_source_task_id": task.envelope.spec_source_task_id,
                 "formal_verification_required": any(
                     formal_plan.required
-                    for formal_plan in task.envelope.verification.formal_checks
+                    for formal_plan in verification_plan.formal_checks
                 ),
                 "formal_verification_passed": None
                 if not required_formal_checks
@@ -369,6 +377,73 @@ def verify_task(
         latest_task.envelope.model_copy(update={"evidence_bundle": evidence_bundle}),
     )
     return verification
+
+
+def _effective_verification_plan(
+    *,
+    task_repo: TaskRepository,
+    task_id: str,
+    base_plan: VerificationPlan,
+    spec: TaskSpec | None,
+    spec_artifact_id: str | None,
+) -> VerificationPlan:
+    task_spec = _resolve_verification_task_spec(
+        task_repo=task_repo,
+        task_id=task_id,
+        spec=spec,
+        spec_artifact_id=spec_artifact_id,
+    )
+    if task_spec is None or task_spec.formal_verification is None:
+        return base_plan
+    if _formal_plan_exists(
+        formal_checks=base_plan.formal_checks,
+        formal_plan=task_spec.formal_verification,
+    ):
+        return base_plan
+    return base_plan.model_copy(
+        update={
+            "formal_checks": (
+                *base_plan.formal_checks,
+                task_spec.formal_verification,
+            )
+        }
+    )
+
+
+def _resolve_verification_task_spec(
+    *,
+    task_repo: TaskRepository,
+    task_id: str,
+    spec: TaskSpec | None,
+    spec_artifact_id: str | None,
+) -> TaskSpec | None:
+    if spec is not None:
+        return spec
+    if spec_artifact_id is None:
+        return None
+    try:
+        return task_repo.get_spec_artifact(spec_artifact_id).spec
+    except KeyError as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="verification.spec_artifact_missing",
+            message="Task verification could not resolve bound spec artifact.",
+            payload={
+                "task_id": task_id,
+                "spec_artifact_id": spec_artifact_id,
+                "error": str(exc),
+            },
+        )
+        return None
+
+
+def _formal_plan_exists(
+    *,
+    formal_checks: tuple[FormalVerificationPlan, ...],
+    formal_plan: FormalVerificationPlan,
+) -> bool:
+    return any(candidate == formal_plan for candidate in formal_checks)
 
 
 def _run_verification_plan(

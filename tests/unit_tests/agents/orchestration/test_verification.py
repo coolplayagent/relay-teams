@@ -27,6 +27,7 @@ from relay_teams.agents.tasks.models import (
     SemanticEvaluationRequest,
     SemanticEvaluationResult,
     TaskEnvelope,
+    TaskSpec,
     VerificationCheckResult,
     VerificationCommand,
     VerificationEvidenceBundle,
@@ -680,6 +681,232 @@ def test_verify_task_runs_formal_verification_profile(tmp_path: Path) -> None:
         if check.layer == VerificationLayer.FORMAL
     ]
     assert len(formal_checks) == 2
+    assert result.report.evidence_bundle.formal_verification_required is True
+    assert result.report.evidence_bundle.formal_verification_passed is True
+
+
+def test_verify_task_applies_formal_verification_from_task_spec(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_spec_formal.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    proof = workspace / "spec-model.tla"
+    proof.write_text("---- MODULE spec_model ----", encoding="utf-8")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-spec-formal",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return formal evidence from spec",
+        verification=VerificationPlan(),
+        spec=TaskSpec(
+            summary="Formal spec",
+            formal_verification=FormalVerificationPlan(
+                spec_language=FormalVerificationLanguage.TLA_PLUS,
+                tool_profile=FormalVerificationToolProfile.TLC,
+                properties=("Spec invariant holds",),
+                proof_artifacts=(Path("spec-model.tla"),),
+            ),
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    formal_checks = tuple(
+        check
+        for check in result.report.checks
+        if check.layer == VerificationLayer.FORMAL
+    )
+    assert len(formal_checks) == 1
+    assert formal_checks[0].name.endswith(":proof_artifact:spec-model.tla")
+    assert result.report.evidence_bundle.formal_verification_required is True
+    assert result.report.evidence_bundle.formal_verification_passed is True
+
+
+def test_verify_task_rehydrates_formal_verification_from_spec_artifact(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_spec_artifact_formal.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    proof = workspace / "artifact-model.tla"
+    proof.write_text("---- MODULE artifact_model ----", encoding="utf-8")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-artifact-formal",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return formal evidence from artifact",
+        verification=VerificationPlan(),
+        spec=TaskSpec(
+            summary="Artifact spec",
+            formal_verification=FormalVerificationPlan(
+                spec_language=FormalVerificationLanguage.TLA_PLUS,
+                tool_profile=FormalVerificationToolProfile.TLC,
+                properties=("Artifact invariant holds",),
+                proof_artifacts=(Path("artifact-model.tla"),),
+            ),
+        ),
+    )
+    created = task_repo.create(task)
+    artifact_id = created.envelope.spec_artifact_id
+    assert artifact_id is not None
+    artifact_only_envelope = created.envelope.model_copy(
+        update={"spec": None, "spec_artifact_id": artifact_id}
+    )
+    task_repo._conn.execute(
+        "UPDATE tasks SET envelope_json=? WHERE task_id=?",
+        (artifact_only_envelope.model_dump_json(), task.task_id),
+    )
+    task_repo._conn.commit()
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    formal_checks = tuple(
+        check
+        for check in result.report.checks
+        if check.layer == VerificationLayer.FORMAL
+    )
+    assert len(formal_checks) == 1
+    assert formal_checks[0].name.endswith(":proof_artifact:artifact-model.tla")
+    assert result.report.evidence_bundle.spec_artifact_id == artifact_id
+    assert result.report.evidence_bundle.formal_verification_required is True
+    assert result.report.evidence_bundle.formal_verification_passed is True
+
+
+def test_verify_task_does_not_duplicate_spec_formal_verification(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_spec_formal_duplicate.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    proof = workspace / "duplicate-model.tla"
+    proof.write_text("---- MODULE duplicate_model ----", encoding="utf-8")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    formal_plan = FormalVerificationPlan(
+        spec_language=FormalVerificationLanguage.TLA_PLUS,
+        tool_profile=FormalVerificationToolProfile.TLC,
+        properties=("Duplicate invariant holds",),
+        proof_artifacts=(Path("duplicate-model.tla"),),
+    )
+    task = TaskEnvelope(
+        task_id="task-duplicate-formal",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return formal evidence once",
+        verification=VerificationPlan(formal_checks=(formal_plan,)),
+        spec=TaskSpec(summary="Duplicate spec", formal_verification=formal_plan),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    formal_checks = tuple(
+        check
+        for check in result.report.checks
+        if check.layer == VerificationLayer.FORMAL
+    )
+    assert len(formal_checks) == 1
+    assert formal_checks[0].name.endswith(":proof_artifact:duplicate-model.tla")
+
+
+def test_verify_task_preserves_explicit_formal_checks_with_spec_formal_plan(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_spec_formal_merge.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spec_proof = workspace / "spec-proof.tla"
+    explicit_proof = workspace / "explicit-proof.tla"
+    spec_proof.write_text("---- MODULE spec_proof ----", encoding="utf-8")
+    explicit_proof.write_text("---- MODULE explicit_proof ----", encoding="utf-8")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    spec_formal_plan = FormalVerificationPlan(
+        spec_language=FormalVerificationLanguage.TLA_PLUS,
+        tool_profile=FormalVerificationToolProfile.TLC,
+        properties=("Spec proof holds",),
+        proof_artifacts=(Path("spec-proof.tla"),),
+    )
+    explicit_formal_plan = FormalVerificationPlan(
+        spec_language=FormalVerificationLanguage.ALLOY,
+        tool_profile=FormalVerificationToolProfile.ALLOY_ANALYZER,
+        properties=("Explicit proof holds",),
+        proof_artifacts=(Path("explicit-proof.tla"),),
+    )
+    task = TaskEnvelope(
+        task_id="task-merge-formal",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return merged formal evidence",
+        verification=VerificationPlan(formal_checks=(explicit_formal_plan,)),
+        spec=TaskSpec(summary="Spec proof", formal_verification=spec_formal_plan),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        allowed_tools=("shell",),
+        tool_approval_policy=YOLO_TOOL_APPROVAL_POLICY,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is True
+    assert result.report is not None
+    assert result.report.evidence_bundle is not None
+    formal_check_names = tuple(
+        check.name
+        for check in result.report.checks
+        if check.layer == VerificationLayer.FORMAL
+    )
+    assert len(formal_check_names) == 2
+    assert any(
+        name.endswith(":proof_artifact:spec-proof.tla") for name in formal_check_names
+    )
+    assert any(
+        name.endswith(":proof_artifact:explicit-proof.tla")
+        for name in formal_check_names
+    )
     assert result.report.evidence_bundle.formal_verification_required is True
     assert result.report.evidence_bundle.formal_verification_passed is True
 

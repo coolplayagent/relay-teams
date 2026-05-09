@@ -128,6 +128,14 @@ provide an explicit plan:
 - `strictness` mirrors `TaskSpec.strictness`.
 - `formal_checks` includes the optional `TaskSpec.formal_verification` plan.
 
+Verification also re-resolves the bound task spec at validation time. If a task
+has `TaskSpec.formal_verification` on the envelope, or only a bound
+`spec_artifact_id` that can be rehydrated, the formal plan is appended to the
+effective verification plan unless an identical explicit formal check is already
+present. This keeps existing and updated spec-bearing tasks inside the same
+formal proof/replay path even when their stored `VerificationPlan` predates the
+formal spec binding.
+
 Verification output is normalized into `VerificationEvidenceBundle`:
 
 - `items` capture task-result context, file, command, scoped event, and formal
