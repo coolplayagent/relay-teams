@@ -500,6 +500,25 @@ def test_terminal_payload_output_dedupes_hydrated_history_in_browser(
     assert payload["messageCount"] == 1
 
 
+def test_terminal_history_with_tool_history_and_final_output_renders_once_in_browser(
+    browser_page: Page,
+    tmp_path: Path,
+) -> None:
+    page = browser_page
+    _open_harness(page, tmp_path)
+
+    payload = page.evaluate(
+        """
+        () => window.__streamTimelineHarness.renderTerminalHistoryWithToolAndFinalOutput()
+        """
+    )
+
+    assert payload["occurrences"] == 1
+    assert payload["groupCount"] == 1
+    assert payload["messageCount"] == 2
+    assert "terminal projected final answer" in payload["text"]
+
+
 def test_terminal_rounds_collapse_only_when_final_output_is_projected_in_browser(
     browser_page: Page,
     tmp_path: Path,
@@ -1944,6 +1963,70 @@ def _open_harness(page: Page, tmp_path: Path) -> None:
         return {{
           text: container.textContent || '',
           occurrences: countSubstring(container.textContent || '', 'codehub-mr-loop skill'),
+          messageCount: container.querySelectorAll('.message').length,
+        }};
+      }},
+
+      renderTerminalHistoryWithToolAndFinalOutput() {{
+        clearAllStreamState();
+        const runId = 'run-terminal-history-tool-final';
+        const container = makeContainer('terminal-history-tool-final');
+        container.dataset.roundCreatedAt = '2026-04-25T12:00:00Z';
+        renderHistory(container, [
+          {{
+            role: 'assistant',
+            role_id: 'main-role',
+            instance_id: 'primary',
+            created_at: '2026-04-25T12:00:02Z',
+            message: {{
+              parts: [
+                {{
+                  part_kind: 'tool-call',
+                  tool_name: 'shell',
+                  tool_call_id: 'call-history-final',
+                  args: {{ command: 'date' }},
+                }},
+              ],
+            }},
+          }},
+          {{
+            role: 'user',
+            role_id: 'main-role',
+            instance_id: 'primary',
+            created_at: '2026-04-25T12:00:03Z',
+            message: {{
+              parts: [
+                {{
+                  part_kind: 'tool-return',
+                  tool_name: 'shell',
+                  tool_call_id: 'call-history-final',
+                  content: {{ ok: true, output: 'tool completed' }},
+                }},
+              ],
+            }},
+          }},
+          {{
+            role: 'assistant',
+            role_id: 'main-role',
+            instance_id: 'primary',
+            created_at: '2026-04-25T12:00:04Z',
+            reconstructed: true,
+            message: {{
+              parts: [{{ part_kind: 'text', content: 'terminal projected final answer' }}],
+            }},
+          }},
+        ], {{
+          runId,
+          runStatus: 'completed',
+          hasFinalOutput: true,
+          timelineView: 'main',
+          canonicalStreamKey: 'primary',
+          streamOverlayEntry: null,
+        }});
+        return {{
+          text: container.textContent || '',
+          occurrences: countSubstring(container.textContent || '', 'terminal projected final answer'),
+          groupCount: container.querySelectorAll('.tool-group').length,
           messageCount: container.querySelectorAll('.message').length,
         }};
       }},

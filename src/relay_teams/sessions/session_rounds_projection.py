@@ -323,16 +323,14 @@ def build_session_rounds(
                 coordinator_instance_id=coordinator_instance_id,
             ),
         )
-        if not coordinator_messages:
-            reconstructed = _reconstruct_completed_output_message(
-                run_id=run_id,
-                root_task=root_task,
-                coordinator_role_id=coordinator_role_id,
-                role_instance_map=role_instance_by_run.get(run_id, {}),
-                output_event=final_output_by_run.get(run_id),
-            )
-            if reconstructed is not None:
-                coordinator_messages = [reconstructed]
+        coordinator_messages = _append_completed_output_message_if_missing(
+            coordinator_messages,
+            run_id=run_id,
+            root_task=root_task,
+            coordinator_role_id=coordinator_role_id,
+            role_instance_map=role_instance_by_run.get(run_id, {}),
+            output_event=final_output_by_run.get(run_id),
+        )
         created_at = _round_created_at(root_task, run_messages)
         runtime = run_runtime.get(run_id)
         run_started_at = runtime.created_at.isoformat() if runtime is not None else None
@@ -960,6 +958,77 @@ def _message_parts(message: dict[str, object]) -> list[dict[str, object]]:
     if not isinstance(raw_parts, list):
         return []
     return [part for part in raw_parts if isinstance(part, dict)]
+
+
+def _append_completed_output_message_if_missing(
+    coordinator_messages: list[dict[str, object]],
+    *,
+    run_id: str,
+    root_task: object | None,
+    coordinator_role_id: str | None,
+    role_instance_map: dict[str, str],
+    output_event: dict[str, str] | None,
+) -> list[dict[str, object]]:
+    reconstructed = _reconstruct_completed_output_message(
+        run_id=run_id,
+        root_task=root_task,
+        coordinator_role_id=coordinator_role_id,
+        role_instance_map=role_instance_map,
+        output_event=output_event,
+    )
+    if reconstructed is None:
+        return coordinator_messages
+    output = str(output_event.get("output") if output_event is not None else "").strip()
+    if _has_assistant_text_message(coordinator_messages, output):
+        return coordinator_messages
+    return [*coordinator_messages, reconstructed]
+
+
+def _has_assistant_text_message(
+    messages: list[dict[str, object]],
+    expected_text: str,
+) -> bool:
+    normalized_expected = _normalize_projected_text(expected_text)
+    if not normalized_expected:
+        return False
+    for message in messages:
+        if str(message.get("role") or "") != "assistant":
+            continue
+        text_parts = tuple(_message_text_parts(message))
+        if not text_parts:
+            continue
+        if any(
+            _normalize_projected_text(part_text) == normalized_expected
+            for part_text in text_parts
+        ):
+            return True
+        combined = "\n\n".join(
+            part_text.strip() for part_text in text_parts if part_text.strip()
+        )
+        if _normalize_projected_text(combined) == normalized_expected:
+            return True
+    return False
+
+
+def _message_text_parts(message: dict[str, object]) -> list[str]:
+    values: list[str] = []
+    raw_message = message.get("message")
+    if isinstance(raw_message, dict):
+        legacy_content = str(raw_message.get("content") or "").strip()
+        if legacy_content:
+            values.append(legacy_content)
+    for part in _message_parts(message):
+        part_kind = str(part.get("part_kind") or part.get("kind") or "").strip()
+        if part_kind != "text":
+            continue
+        value = str(part.get("content") or part.get("text") or "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _normalize_projected_text(value: str) -> str:
+    return str(value or "").strip()
 
 
 def _project_terminal_final_outputs(
