@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import NamedTuple, Protocol
+
+import httpx
+
+from relay_teams.net import create_runtime_async_http_client
 
 _GRAPHQL_TIMEOUT_SECONDS = 30.0
 _GITHUB_GRAPHQL_QUERY = """
@@ -77,42 +80,13 @@ def fetch_linked_issue_count(
     token: str,
     graphql_url: str,
 ) -> int:
-    request_payload = json.dumps(
-        {
-            "query": _GITHUB_GRAPHQL_QUERY,
-            "variables": {
-                "owner": context.owner,
-                "name": context.repository_name,
-                "number": context.pull_request_number,
-            },
-        }
-    ).encode("utf-8")
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
-    try:
-        req = urllib.request.Request(
-            graphql_url,
-            data=request_payload,
-            headers=headers,
-            method="POST",
+    response_text = asyncio.run(
+        _fetch_linked_issue_count_response_text(
+            context=context,
+            token=token,
+            graphql_url=graphql_url,
         )
-        with urllib.request.urlopen(  # nosec B310: HTTPS-only GitHub GraphQL endpoint
-            req, timeout=_GRAPHQL_TIMEOUT_SECONDS
-        ) as resp:
-            response_text = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace").strip()
-        raise IssueLinkRequirementError(
-            f"GitHub GraphQL request failed with HTTP {exc.code}: {detail}"
-        ) from exc
-    except urllib.error.URLError as exc:
-        raise IssueLinkRequirementError(
-            f"Failed to reach GitHub GraphQL endpoint: {exc}"
-        ) from exc
-
+    )
     payload = json.loads(response_text)
     errors = payload.get("errors")
     if isinstance(errors, list) and errors:
@@ -145,6 +119,50 @@ def fetch_linked_issue_count(
             "GitHub GraphQL response did not include a valid linked issue count"
         )
     return total_count
+
+
+async def _fetch_linked_issue_count_response_text(
+    *,
+    context: PullRequestIssueLinkContext,
+    token: str,
+    graphql_url: str,
+) -> str:
+    request_payload = {
+        "query": _GITHUB_GRAPHQL_QUERY,
+        "variables": {
+            "owner": context.owner,
+            "name": context.repository_name,
+            "number": context.pull_request_number,
+        },
+    }
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    try:
+        async with create_runtime_async_http_client(
+            ssl_verify=True,
+            timeout_seconds=_GRAPHQL_TIMEOUT_SECONDS,
+            connect_timeout_seconds=_GRAPHQL_TIMEOUT_SECONDS,
+        ) as client:
+            response = await client.post(
+                graphql_url,
+                headers=headers,
+                json=request_payload,
+            )
+            response.raise_for_status()
+            return response.text
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text.strip()
+        raise IssueLinkRequirementError(
+            "GitHub GraphQL request failed with HTTP "
+            f"{exc.response.status_code}: {detail}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise IssueLinkRequirementError(
+            f"Failed to reach GitHub GraphQL endpoint: {exc}"
+        ) from exc
 
 
 def ensure_pull_request_links_issue(

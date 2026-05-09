@@ -13,8 +13,8 @@ import typer
 
 from relay_teams.commands.command_cli import build_commands_app
 from relay_teams.env import load_proxy_env_config, sync_proxy_env_to_process_env
-from relay_teams.env.env_cli import env_app
 from relay_teams.agent_runtimes.agent_cli import build_agent_runtimes_app
+from relay_teams.interfaces.cli.env_commands import build_env_app
 from relay_teams.interfaces.cli.gateway_cli import build_gateway_app
 from relay_teams.interfaces.cli.approvals_cli import build_approvals_app
 from relay_teams.interfaces.cli.hooks_cli import build_hooks_app
@@ -307,6 +307,11 @@ memories_app = build_memories_app(
     default_base_url=DEFAULT_BASE_URL,
 )
 commands_app = build_commands_app(
+    request_json=_module_request_json,
+    auto_start_if_needed=_module_auto_start,
+    default_base_url=DEFAULT_BASE_URL,
+)
+env_app = build_env_app(
     request_json=_module_request_json,
     auto_start_if_needed=_module_auto_start,
     default_base_url=DEFAULT_BASE_URL,

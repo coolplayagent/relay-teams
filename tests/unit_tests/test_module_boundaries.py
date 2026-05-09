@@ -102,6 +102,31 @@ def test_package_exports_do_not_use_implicit_lazy_imports() -> None:
     )
 
 
+def test_source_modules_do_not_bypass_net_http_clients() -> None:
+    violations: list[str] = []
+    for path in _iter_python_files(SRC_ROOT):
+        relative_path = path.relative_to(SRC_ROOT)
+        if relative_path.parts[0] == "net":
+            continue
+        source = path.read_text(encoding="utf-8")
+        if not any(token in source for token in _HTTP_CLIENT_SCAN_TOKENS):
+            continue
+        tree = ast.parse(source, filename=str(path))
+        import_aliases = _http_import_aliases(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            call_name = _resolve_call_name(node.func, import_aliases)
+            if call_name in _FORBIDDEN_HTTP_CLIENT_CALLS:
+                violations.append(
+                    f"{path.relative_to(REPO_ROOT)}:{node.lineno} calls {call_name}"
+                )
+    assert not violations, (
+        "source modules must use relay_teams.net HTTP client factories:\n"
+        + "\n".join(sorted(violations))
+    )
+
+
 def _assert_no_forbidden_imports(
     scope: Path,
     is_forbidden: Callable[[str], bool],
@@ -151,6 +176,81 @@ def _imported_modules(path: Path) -> tuple[str, ...]:
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
             modules.append(node.module)
     return tuple(modules)
+
+
+_FORBIDDEN_HTTP_CLIENT_CALLS = {
+    "aiohttp.ClientSession",
+    "httpx.AsyncClient",
+    "httpx.Client",
+    "requests.Session",
+    "requests.delete",
+    "requests.get",
+    "requests.patch",
+    "requests.post",
+    "requests.put",
+    "requests.request",
+    "urllib.request.urlopen",
+    "urllib3.PoolManager",
+    "urllib3.ProxyManager",
+}
+
+_HTTP_CLIENT_SCAN_TOKENS = (
+    "ClientSession",
+    "PoolManager",
+    "ProxyManager",
+    "httpx",
+    "requests",
+    "urlopen",
+    "urllib.request",
+    "urllib3",
+)
+
+
+def _http_import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _is_http_module_or_submodule(alias.name):
+                    if alias.asname is not None:
+                        aliases[alias.asname] = alias.name
+                    else:
+                        aliases[alias.name.split(".")[0]] = alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            if node.module == "urllib":
+                for alias in node.names:
+                    if alias.name == "request":
+                        aliases[alias.asname or alias.name] = "urllib.request"
+                continue
+            if not _is_http_module_or_submodule(node.module):
+                continue
+            for alias in node.names:
+                aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _resolve_call_name(
+    node: ast.expr,
+    import_aliases: dict[str, str],
+) -> str | None:
+    if isinstance(node, ast.Name):
+        return import_aliases.get(node.id, node.id)
+    if isinstance(node, ast.Attribute):
+        parent = _resolve_call_name(node.value, import_aliases)
+        if parent is None:
+            return None
+        return f"{parent}.{node.attr}"
+    return None
+
+
+def _is_http_module_or_submodule(module: str) -> bool:
+    return module in {"aiohttp", "httpx", "requests", "urllib.request", "urllib3"} or (
+        module.startswith("aiohttp.")
+        or module.startswith("httpx.")
+        or module.startswith("requests.")
+        or module.startswith("urllib.request.")
+        or module.startswith("urllib3.")
+    )
 
 
 def _is_net_import(module: str) -> bool:
