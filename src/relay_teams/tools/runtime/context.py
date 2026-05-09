@@ -31,7 +31,7 @@ from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_log import EventLog
-from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager

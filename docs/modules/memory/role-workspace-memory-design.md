@@ -53,9 +53,20 @@ application bootstrap choice, not the workspace model itself.
 
 Memory is no longer part of the workspace module.
 
-It lives under `src/relay_teams/roles/` and uses one database table:
+The current runtime has two durable memory stores during migration:
 
 - `role_memories`
+- `memory_entries`
+
+`memory_entries` is the primary long-term Memory Bank. It stores typed entries
+across three tiers, Working, Medium-term, and Persistent, and supports the six
+memory operations: consolidation, updating, indexing, forgetting, retrieval, and
+condensation.
+
+`role_memories` is the legacy reflection-memory compatibility layer. It stores a
+single bounded markdown summary for older prompt injection, session projection,
+and subagent reflection refresh flows. New long-term memory capabilities should
+target Memory Bank instead of expanding `role_memories`.
 
 Scope rules:
 
@@ -85,9 +96,24 @@ The compaction entry point must depend on a replaceable strategy interface so fu
 Runtime dependencies are split cleanly:
 
 - `workspace`: execution boundary and filesystem access
-- `role_memory`: durable reflection memory access
+- `memory_bank`: structured long-term memory access
+- `role_memory`: legacy durable reflection memory access
 
-Prompt assembly pulls role memory from `roles.memory_service` and shared runtime state from `shared_state`. It no longer loads durable memory through `workspace`.
+Prompt assembly pulls Memory Bank entries through `MemoryBankService`, legacy
+reflection memory through `roles.memory_service`, and shared runtime state from
+`shared_state`. It no longer loads durable memory through `workspace`.
+
+All agent runtime protocols consume the same prepared session prompt. Local,
+ACP, A2A, and CLI runtimes should receive already-injected memory sections and
+already-compacted session history rather than reimplementing memory or context
+compression in protocol adapters.
+
+Prompt memory sections have separate meanings:
+
+- `## Project Memory`: Memory Bank Medium-term and Persistent entries.
+- `## Reflection Memory`: legacy `role_memories` markdown summary.
+- Compaction summary: short-term session history summary from full context
+  compaction, not durable project memory.
 
 ## 7. Removed Pieces
 
@@ -107,5 +133,6 @@ If you are reading older code or earlier design notes, note these incompatible c
 
 - role configs must use `memory_profile`; `workspace_profile` is no longer accepted
 - `memory_profile` only contains `enabled`
-- role durable memory lives in `role_memories`
+- primary long-term memory lives in `memory_entries`
+- legacy reflection memory still lives in `role_memories` until migration is complete
 - `role_daily_memories` has been removed

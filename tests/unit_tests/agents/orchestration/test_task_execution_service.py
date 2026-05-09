@@ -13,6 +13,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, UserPromptPart
 
 from relay_teams.agents.execution.message_repository import MessageRepository
+from relay_teams.agents.execution.system_prompts import PromptBuildInput
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.agents.execution.system_prompts import RuntimePromptSections
 from relay_teams.agent_runtimes.instances.enums import InstanceStatus
@@ -36,6 +37,16 @@ from relay_teams.media import (
 )
 from relay_teams.mcp.mcp_models import McpToolSchema
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.memory.models import (
+    CreateMemoryEntryRequest,
+    MemoryContent,
+    MemoryEntryKind,
+    MemoryScope,
+    MemorySourceKind,
+    MemoryTier,
+)
+from relay_teams.memory.repository import MemoryBankRepository
+from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence import close_live_sqlite_repositories_async
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import ReminderStateRepository
@@ -199,11 +210,11 @@ class _CapturingHookService:
 
 
 class _StaticPromptBuilder(RuntimePromptBuilder):
-    async def build_sections(self, data: object) -> RuntimePromptSections:
-        _ = data
+    async def build_sections(self, data: PromptBuildInput) -> RuntimePromptSections:
+        prompt = data.role.system_prompt
         return RuntimePromptSections(
-            prompt="You are the time role.",
-            base_instructions="You are the time role.",
+            prompt=prompt,
+            base_instructions=prompt,
         )
 
 
@@ -290,6 +301,7 @@ def _build_service(
     db_path: Path,
     provider: object,
     artifact_repo: TaskArtifactRepository | None = None,
+    memory_bank_service: MemoryBankService | None = None,
 ) -> tuple[
     TaskExecutionService,
     TaskRepository,
@@ -334,6 +346,7 @@ def _build_service(
         mcp_registry=McpRegistry(),
         run_intent_repo=RunIntentRepository(db_path),
         artifact_repo=artifact_repo,
+        memory_bank_service=memory_bank_service,
     )
     return service, task_repo, agent_repo, message_repo
 
@@ -487,6 +500,53 @@ async def test_execute_omits_objective_when_task_history_exists(
 
     assert result.output == "ok"
     assert provider.prompts == [None]
+
+
+@pytest.mark.asyncio
+async def test_execute_injects_memory_bank_project_memory(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "task_execution_service_memory_bank.db"
+    memory_bank_service = MemoryBankService(
+        repository=MemoryBankRepository(tmp_path / "memory_bank.db")
+    )
+    _ = await memory_bank_service.create_entry_async(
+        CreateMemoryEntryRequest(
+            tier=MemoryTier.PERSISTENT,
+            scope=MemoryScope.WORKSPACE,
+            workspace_id="default",
+            role_id="time",
+            kind=MemoryEntryKind.CONSTRAINT,
+            content=MemoryContent(
+                title="Runtime memory must follow session context",
+                body="Agent runtime prompts include the shared project memory bank.",
+            ),
+            source=MemorySourceKind.MANUAL,
+        )
+    )
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        provider,
+        memory_bank_service=memory_bank_service,
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert result.output == "ok"
+    assert provider.system_prompts
+    system_prompt = provider.system_prompts[0]
+    assert "## Project Memory" in system_prompt
+    assert "Runtime memory must follow session context" in system_prompt
 
 
 @pytest.mark.asyncio

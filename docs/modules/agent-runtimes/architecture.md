@@ -19,6 +19,36 @@ Every role turn follows the same sequence:
 5. Persist normalized run events, messages, runtime prompt snapshots, tool
    snapshots, status transitions, and final output.
 
+Memory and context-window management are session-runtime concerns, not adapter
+concerns. Before dispatch reaches the local provider, ACP, A2A, or CLI adapter,
+the shared prompt path must prepare the role prompt and history in this order:
+
+```text
+resolve role
+-> inject legacy reflection memory when still available
+-> inject Memory Bank project memory
+-> load session history
+-> prune to a safe tool-call boundary
+-> inject existing compaction summary
+-> compute full prompt budget
+-> microcompact old tool results in the live prompt view
+-> run full rolling-summary compaction when still over budget
+-> repair provider-replayable history
+-> dispatch to runtime adapter
+```
+
+`MemoryBankService` is the long-term memory system for the unified runtime. It
+owns three tiers, Working, Medium-term, and Persistent, and the six memory
+operations: consolidation, updating, indexing, forgetting, retrieval, and
+condensation. `role_memories` remains only a legacy reflection-memory
+compatibility layer during migration.
+
+`ConversationMicrocompactService` and `ConversationCompactionService` are short
+term session context controls. Microcompact changes only the prompt view sent to
+the runtime. Full compaction writes session history markers, hides old messages,
+and injects the rolling summary on later turns. Neither one replaces Memory
+Bank, and Memory Bank does not replace context compaction.
+
 The router selects one adapter:
 
 - local: the existing Relay Teams provider chain

@@ -56,9 +56,6 @@ from relay_teams.sessions.runs.run_runtime_repo import (
     RunRuntimeRecord,
     RunRuntimeStatus,
 )
-from relay_teams.sessions.runs.subagent_lifecycle import (
-    mark_subagent_terminal_records,
-)
 from relay_teams.sessions.session_models import SessionMode
 from relay_teams.workspace import WorkspaceHandle
 from relay_teams.workspace.ids import build_instance_conversation_id
@@ -96,6 +93,135 @@ class BackgroundTaskCompletionSink(Protocol):
         message: str,
     ) -> None:
         pass
+
+
+class _SubagentLifecycleTerminalState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    task_status: TaskStatus
+    instance_status: InstanceStatus
+    run_status: RunRuntimeStatus
+    run_phase: RunRuntimePhase
+    last_error: str | None
+    task_result: str | None
+    task_error: str | None
+
+
+def _terminal_state_for_background_status(
+    status: BackgroundTaskStatus,
+    *,
+    output: str,
+) -> _SubagentLifecycleTerminalState:
+    summarized_output = output.strip()
+    if status == BackgroundTaskStatus.COMPLETED:
+        return _SubagentLifecycleTerminalState(
+            task_status=TaskStatus.COMPLETED,
+            instance_status=InstanceStatus.COMPLETED,
+            run_status=RunRuntimeStatus.COMPLETED,
+            run_phase=RunRuntimePhase.TERMINAL,
+            last_error=None,
+            task_result=summarized_output,
+            task_error=None,
+        )
+    if status == BackgroundTaskStatus.STOPPED:
+        return _SubagentLifecycleTerminalState(
+            task_status=TaskStatus.STOPPED,
+            instance_status=InstanceStatus.STOPPED,
+            run_status=RunRuntimeStatus.STOPPED,
+            run_phase=RunRuntimePhase.IDLE,
+            last_error="Task stopped by user",
+            task_result=None,
+            task_error="Task stopped by user",
+        )
+    return _SubagentLifecycleTerminalState(
+        task_status=TaskStatus.FAILED,
+        instance_status=InstanceStatus.FAILED,
+        run_status=RunRuntimeStatus.FAILED,
+        run_phase=RunRuntimePhase.TERMINAL,
+        last_error=summarized_output or "Task failed",
+        task_result=None,
+        task_error=summarized_output or "Task failed",
+    )
+
+
+def _mark_subagent_terminal_records(
+    *,
+    update_task_status: Callable[..., object] | None,
+    mark_instance_status: Callable[[str, InstanceStatus], object] | None,
+    update_run_runtime: Callable[..., object] | None,
+    subagent_run_id: str,
+    session_id: str,
+    task_id: str | None,
+    instance_id: str | None,
+    status: BackgroundTaskStatus,
+    output: str,
+) -> None:
+    terminal = _terminal_state_for_background_status(status, output=output)
+    if task_id and update_task_status is not None:
+        try:
+            update_task_status(
+                task_id,
+                terminal.task_status,
+                assigned_instance_id=instance_id,
+                result=terminal.task_result,
+                error_message=terminal.task_error,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="background_task_service.task_terminal_update_skipped",
+                message="Failed to synchronize terminal subagent task status",
+                payload={
+                    "subagent_run_id": subagent_run_id,
+                    "session_id": session_id,
+                    "task_id": task_id,
+                    "status": status.value,
+                },
+                exc_info=exc,
+            )
+    if instance_id and mark_instance_status is not None:
+        try:
+            mark_instance_status(instance_id, terminal.instance_status)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="background_task_service.instance_terminal_update_skipped",
+                message="Failed to synchronize terminal subagent instance status",
+                payload={
+                    "subagent_run_id": subagent_run_id,
+                    "session_id": session_id,
+                    "instance_id": instance_id,
+                    "status": status.value,
+                },
+                exc_info=exc,
+            )
+    if update_run_runtime is not None:
+        try:
+            update_run_runtime(
+                subagent_run_id,
+                status=terminal.run_status,
+                phase=terminal.run_phase,
+                active_instance_id=None,
+                active_task_id=None,
+                active_role_id=None,
+                active_subagent_instance_id=None,
+                last_error=terminal.last_error,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="background_task_service.runtime_terminal_update_skipped",
+                message="Failed to synchronize terminal subagent runtime status",
+                payload={
+                    "subagent_run_id": subagent_run_id,
+                    "session_id": session_id,
+                    "status": status.value,
+                },
+                exc_info=exc,
+            )
 
 
 @runtime_checkable
@@ -2111,7 +2237,7 @@ class BackgroundTaskService:
             task_update = self._task_repo.update_status
         if self._agent_repo is not None:
             instance_update = self._agent_repo.mark_status
-        mark_subagent_terminal_records(
+        _mark_subagent_terminal_records(
             update_task_status=task_update,
             mark_instance_status=instance_update,
             update_run_runtime=update_run_runtime,

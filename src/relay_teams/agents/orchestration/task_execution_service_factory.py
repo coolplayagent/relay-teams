@@ -8,6 +8,7 @@ from relay_teams.agents.execution.prompt_instructions import PromptInstructionRe
 from relay_teams.agents.execution.system_prompts import RuntimePromptBuilder
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.media import MediaAssetService
+from relay_teams.memory.service import MemoryBankService
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.provider_contracts import LLMProvider
@@ -64,6 +65,7 @@ def create_task_execution_service(
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
     role_memory_service: RoleMemoryService | None = None,
+    memory_bank_service: MemoryBankService | None = None,
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     hook_service: HookService | None = None,
     todo_service: TodoService | None = None,
@@ -102,6 +104,7 @@ def create_task_execution_service(
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
         role_memory_service=role_memory_service,
+        memory_bank_service=memory_bank_service,
         runtime_role_resolver=runtime_role_resolver,
         run_intent_repo=run_intent_repo,
         media_asset_service=media_asset_service,

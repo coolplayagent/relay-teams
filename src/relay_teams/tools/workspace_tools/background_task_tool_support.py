@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskRecord
 from relay_teams.sessions.runs.background_tasks.projection import (
     build_background_task_result_payload,

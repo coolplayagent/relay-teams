@@ -172,8 +172,26 @@ load conversation history
 -> call model
 ```
 
-对应入口位于 `src/relay_teams/agents/execution/llm_session.py` 中的 `_prepare_prompt_context(...)`。
-真正的每轮迭代重建则统一走 `_build_agent_iteration_context(...)`。
+对应入口位于 `src/relay_teams/agents/execution/session_prompt.py` 中的
+`_prepare_prompt_context(...)`，具体历史准备由
+`src/relay_teams/agents/execution/prompt_history.py` 执行。真正的每轮迭代重建
+统一走 `_build_agent_iteration_context(...)`。
+
+这条链路属于 session runtime，而不是某个 provider 或外部 runtime
+adapter。local provider、ACP、A2A、CLI runtime 都应消费同一份已经准备好的
+prompt/history：
+
+- 长期 memory 在进入历史压缩前完成注入。
+- `microcompact` 和 full compaction 对所有 runtime 一致生效。
+- 协议 adapter 不直接从 message repository 拼接未压缩历史。
+- adapter 只负责协议传输、事件归一化和 host-tool 桥接。
+
+长期 memory 与短期压缩的职责保持分离：
+
+- Memory Bank 负责跨 run/session 的 Working、Medium-term、Persistent 记忆。
+- legacy reflection memory 只是迁移期 markdown summary 兼容层。
+- `microcompact` 只治理当前 prompt view。
+- full compaction 只治理当前 session transcript 和 rolling summary。
 
 ## 6. 关键设计
 

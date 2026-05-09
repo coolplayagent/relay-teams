@@ -197,11 +197,11 @@ from relay_teams.sessions.runs.background_tasks.manager import (
 from relay_teams.sessions.runs.background_tasks.command_runtime import (
     kill_process_tree_by_pid,
 )
-from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
 from relay_teams.sessions.runs.background_tasks.models import BackgroundTaskKind
 from relay_teams.sessions.runs.background_tasks.repository import (
     BackgroundTaskRepository,
 )
+from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.run_state_repo import RunStateRepository
@@ -1248,6 +1248,7 @@ class ServerContainer:
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
+            memory_bank_service=self.memory_bank_service,
             memory_event_handler=self.memory_event_handler,
             runtime_role_resolver=self.runtime_role_resolver,
             hook_service=self.hook_service,
