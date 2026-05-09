@@ -57,6 +57,43 @@ def test_load_merged_env_vars_reads_secret_backed_app_env_values(
     assert merged["OPENAI_API_KEY"] == "secret-key"
 
 
+def test_sync_app_env_to_process_env_reads_secret_backed_values(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".relay-teams"
+    config_dir.mkdir(parents=True)
+    env_file = config_dir / ".env"
+    env_file.write_text("APP_ONLY=one\n", encoding="utf-8")
+    (config_dir / "secrets.json").write_text(
+        (
+            "{\n"
+            '  "version": 1,\n'
+            '  "entries": [\n'
+            "    {\n"
+            '      "namespace": "app_env",\n'
+            '      "owner_id": "app",\n'
+            '      "field_name": "OPENAI_API_KEY",\n'
+            '      "storage": "file",\n'
+            '      "value": "secret-key"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime_env, "_PROCESS_ENV_BASELINE", {})
+    monkeypatch.setattr(runtime_env, "_SYNCED_APP_ENV_KEYS", set())
+    monkeypatch.delenv("APP_ONLY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    synced = runtime_env.sync_app_env_to_process_env(env_file)
+
+    assert synced == {"APP_ONLY": "one", "OPENAI_API_KEY": "secret-key"}
+    assert runtime_env.os.environ["APP_ONLY"] == "one"
+    assert runtime_env.os.environ["OPENAI_API_KEY"] == "secret-key"
+
+
 def test_get_env_var_process_env_has_highest_priority(
     tmp_path: Path,
     monkeypatch,

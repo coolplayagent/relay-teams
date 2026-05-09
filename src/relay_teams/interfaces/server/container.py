@@ -58,6 +58,7 @@ from relay_teams.agents.orchestration.task_orchestration_service import (
     TaskOrchestrationService,
 )
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
+from relay_teams.env.app_env_watcher import AppEnvFileWatcher
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
@@ -377,8 +378,12 @@ class ServerContainer:
         self.environment_variable_service: EnvironmentVariableService = (
             EnvironmentVariableService(
                 app_env_file_path=runtime.paths.env_file,
-                on_app_env_changed=self._on_app_environment_changed,
+                on_app_env_changed=self._on_app_environment_saved,
             )
+        )
+        self.app_env_file_watcher: AppEnvFileWatcher = AppEnvFileWatcher(
+            env_file_path=runtime.paths.env_file,
+            on_changed=self._on_app_environment_changed,
         )
         self.mcp_config_manager: McpConfigManager = McpConfigManager(
             app_config_dir=app_config_dir
@@ -1381,6 +1386,7 @@ class ServerContainer:
 
     async def start(self) -> None:
         self.mcp_discovery_service.start_warmup(self.mcp_registry)
+        self.app_env_file_watcher.start()
         self.mcp_config_file_watcher.start()
         self.run_service.bind_event_loop(asyncio.get_running_loop())
         self.background_task_service.bind_completion_sink(self.run_service)
@@ -1395,6 +1401,7 @@ class ServerContainer:
         return None
 
     async def stop(self) -> None:
+        await self.app_env_file_watcher.stop()
         await self.automation_scheduler_service.stop()
         await self.github_trigger_action_worker.stop()
         await self.automation_bound_session_queue_worker.stop()
@@ -1647,6 +1654,12 @@ class ServerContainer:
         else:
             self.proxy_config_service.reload_proxy_config()
         self._reload_skills_runtime_after_app_env_change()
+
+    def _on_app_environment_saved(self, changed_keys: frozenset[str]) -> None:
+        synced_changed_keys = (
+            self.app_env_file_watcher.sync_current_env_for_handled_change()
+        )
+        self._on_app_environment_changed(changed_keys | synced_changed_keys)
 
     def _ensure_default_workspace(self) -> None:
         if self.workspace_repo.exists("default"):

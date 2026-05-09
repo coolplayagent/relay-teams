@@ -894,6 +894,7 @@ Returns environment variables grouped by `system` and `app` scope.
 `system` is read-only and reflects the effective runtime environment currently visible to the Agent Teams server and newly spawned child processes.
 `app` is editable and is stored across `.env` in the resolved config dir, by default `~/.relay-teams/.env`, and the unified secret store.
 Sensitive-looking app keys such as `*_API_KEY`, `*_TOKEN`, `*_SECRET`, and `*_PASSWORD` are stored in the secret store and excluded from `.env`.
+The server loads app environment values at startup and watches the app `.env` file for external edits, so saved or manually edited app values take effect without restarting the server.
 Each record includes `key`, `value`, `scope`, and `value_kind` (`string` or `expandable`).
 
 ### `PUT /system/configs/environment-variables/{scope}/{key}`
