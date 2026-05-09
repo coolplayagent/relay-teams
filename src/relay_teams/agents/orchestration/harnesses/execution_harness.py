@@ -44,6 +44,7 @@ from relay_teams.hooks import HookService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.media import MediaAssetService
+from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import ReminderDecision
 from relay_teams.reminders.service import SystemReminderService
@@ -113,6 +114,7 @@ class ExecutionHarness(BaseModel):
     mcp_registry: McpRegistry
     run_control_manager: object | None = None
     role_memory_service: RoleMemoryService | None = None
+    memory_bank_service: MemoryBankService | None = None
     memory_event_handler: MemoryEventHandler | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
@@ -142,6 +144,7 @@ class ExecutionHarness(BaseModel):
             tool_harness=self._tool_harness(),
             skill_runtime_service=self.skill_runtime_service,
             role_memory_service=self.role_memory_service,
+            memory_bank_service=self.memory_bank_service,
             runtime_role_resolver=self.runtime_role_resolver,
             run_intent_repo=self.run_intent_repo,
             media_asset_service=self.media_asset_service,
@@ -663,6 +666,7 @@ class ExecutionHarness(BaseModel):
         return await TaskPromptHarness.model_construct(
             role_registry=self.role_registry,
             role_memory_service=self.role_memory_service,
+            memory_bank_service=self.memory_bank_service,
         ).role_with_memory_async(role=role, role_id=role_id, workspace_id=workspace_id)
 
     async def prepare_runtime_snapshot(

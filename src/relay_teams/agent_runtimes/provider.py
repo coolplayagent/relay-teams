@@ -91,7 +91,7 @@ if TYPE_CHECKING:
     from relay_teams.persistence.shared_state_repo import SharedStateRepository
     from relay_teams.roles.memory_service import RoleMemoryService
     from relay_teams.roles.role_registry import RoleRegistry
-    from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+    from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
     from relay_teams.sessions.runs.event_log import EventLog
     from relay_teams.sessions.runs.run_control_manager import RunControlManager
     from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository

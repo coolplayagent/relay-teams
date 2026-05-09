@@ -2,9 +2,9 @@
 
 > **Feature ID**: FE-1
 > **Name**: Cross-Run Memory Bank
-> **Status**: Spec -- Ready for Implementation
+> **Status**: Implemented foundation -- runtime wiring in progress
 > **Created**: 2026-05-04
-> **Updated**: 2026-05-04
+> **Updated**: 2026-05-09
 > **Strictness**: high
 
 ---
@@ -26,8 +26,13 @@ Build a three-tier, six-operation Memory Bank that:
 - Persists structured memory entries across Runs, Sessions, and workspaces
 - Integrates with the existing FTS5 retrieval infrastructure via `RetrievalScopeKind.MEMORY`
 - Automatically consolidates working memory at Run/Task completion via existing hook events
-- Replaces the flat markdown blob with typed, tagged, versioned entries while maintaining backward compatibility with the existing reflection memory injection layer
+- Makes typed, tagged, versioned entries the primary long-term memory path while maintaining backward compatibility with the existing reflection memory injection layer
 - Provides REST API endpoints and CLI commands for memory management
+
+The legacy `role_memories` table remains a migration bridge for reflection
+summaries, session projections, and older subagent refresh flows. New runtime
+memory behavior should use Memory Bank entries in `memory_entries`; new features
+should not add capabilities to the legacy markdown blob.
 
 ### 1.3 Academic Foundation
 

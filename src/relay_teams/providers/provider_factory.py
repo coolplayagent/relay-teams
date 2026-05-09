@@ -56,7 +56,7 @@ from relay_teams.sessions.session_history_marker_repository import (
     SessionHistoryMarkerRepository,
 )
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
-from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
+from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.sessions.runs.user_question_manager import UserQuestionManager
 from relay_teams.sessions.runs.user_question_repository import UserQuestionRepository

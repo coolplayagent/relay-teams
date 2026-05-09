@@ -28,6 +28,7 @@ from relay_teams.agents.execution.user_prompts import (
 from relay_teams.agents.orchestration.harnesses.tool_harness import TaskToolHarness
 from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.media import MediaAssetService, merge_user_prompt_content
+from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.roles.memory_injection import build_role_with_memory_async
@@ -68,6 +69,7 @@ class TaskPromptHarness(BaseModel):
     tool_harness: TaskToolHarness
     skill_runtime_service: object | None = None
     role_memory_service: RoleMemoryService | None = None
+    memory_bank_service: MemoryBankService | None = None
     runtime_role_resolver: RuntimeRoleResolver | None = None
     run_intent_repo: RunIntentRepository | None = None
     media_asset_service: MediaAssetService | None = None
@@ -101,6 +103,7 @@ class TaskPromptHarness(BaseModel):
         return await build_role_with_memory_async(
             role_registry=self.role_registry,
             role_memory_service=self.role_memory_service,
+            memory_bank_service=self.memory_bank_service,
             role=role,
             role_id=role_id,
             workspace_id=workspace_id,
