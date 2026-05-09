@@ -57,6 +57,6 @@ The persisted role field remains `bound_agent_id` in this feature. New internal
 code may use `runtime_id` names at runtime boundaries, but serialization keeps
 the existing field until a separate migration is planned.
 
-The legacy `relay_teams.agents.instances` and
-`relay_teams.agents.orchestration.a2a_*` modules remain as compatibility import
-layers during migration.
+The legacy `relay_teams.agents.instances` module remains as a compatibility
+import layer during migration. A2A bus, model, and tool implementations are
+owned directly by `relay_teams.agent_runtimes`.

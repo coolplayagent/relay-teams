@@ -8,6 +8,7 @@ from relay_teams.agent_runtimes.bus_models import (
     A2aSubscription,
     A2aTopic,
 )
+from relay_teams.agent_runtimes.tools import send_a2a_message, subscribe_a2a_topic
 from relay_teams.agents.orchestration.claim_service import (
     BlockersNotResolvedError,
     ClaimConflictError,
@@ -39,4 +40,6 @@ __all__ = [
     "OrchestrationGraphEdge",
     "OrchestrationGraphNode",
     "OrchestrationPolicy",
+    "send_a2a_message",
+    "subscribe_a2a_topic",
 ]
