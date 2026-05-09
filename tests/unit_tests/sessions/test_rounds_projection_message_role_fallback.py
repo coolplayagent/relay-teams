@@ -22,6 +22,7 @@ from relay_teams.sessions.session_rounds_projection import build_session_rounds
 from relay_teams.sessions.session_rounds_projection import build_session_timeline_rounds
 from relay_teams.sessions.session_rounds_projection import (
     _coordinator_event_tool_messages,
+    _has_assistant_text_message,
     _merge_event_tool_messages,
 )
 from relay_teams.agent_runtimes.instances.instance_repository import (
@@ -62,6 +63,26 @@ def _tool_message(
     }
 
 
+def _assistant_history_message(
+    *,
+    run_id: str,
+    task_id: str,
+    created_at: str,
+    parts: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "conversation_id": "conv-session-1-Coordinator",
+        "agent_role_id": "Coordinator",
+        "instance_id": "inst-coordinator",
+        "task_id": task_id,
+        "trace_id": run_id,
+        "role": "assistant",
+        "role_id": "Coordinator",
+        "created_at": created_at,
+        "message": {"parts": parts},
+    }
+
+
 def test_coordinator_event_tool_messages_supports_instance_fallback() -> None:
     coordinator_message: dict[str, object] = {
         "role_id": "",
@@ -86,6 +107,48 @@ def test_coordinator_event_tool_messages_supports_instance_fallback() -> None:
             coordinator_instance_id=None,
         )
         == []
+    )
+
+
+def test_has_assistant_text_message_handles_non_matching_messages() -> None:
+    messages: list[dict[str, object]] = [
+        {
+            "role": "user",
+            "message": {
+                "parts": [
+                    {
+                        "part_kind": "text",
+                        "content": "terminal final answer",
+                    }
+                ]
+            },
+        },
+        {
+            "role": "assistant",
+            "message": {"parts": [{"part_kind": "tool-call", "tool_name": "shell"}]},
+        },
+    ]
+
+    assert _has_assistant_text_message(messages, "") is False
+    assert _has_assistant_text_message(messages, "terminal final answer") is False
+
+
+def test_has_assistant_text_message_matches_combined_text_parts() -> None:
+    messages: list[dict[str, object]] = [
+        {
+            "role": "assistant",
+            "message": {
+                "parts": [
+                    {"part_kind": "text", "content": "first paragraph"},
+                    {"part_kind": "text", "content": "second paragraph"},
+                ]
+            },
+        }
+    ]
+
+    assert (
+        _has_assistant_text_message(messages, "first paragraph\n\nsecond paragraph")
+        is True
     )
 
 
@@ -1465,6 +1528,226 @@ def test_build_session_rounds_reconstructs_structured_completed_output(
     assert parts[0]["content"] == "structured reconstructed output"
 
 
+def test_build_session_rounds_appends_completed_output_to_existing_history(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_appended_output.db"
+    session_id = "session-1"
+    run_id = "run-with-history"
+    task_id = "task-root-with-history"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="new objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    history_messages = [
+        _assistant_history_message(
+            run_id=run_id,
+            task_id=task_id,
+            created_at="2026-03-25T09:30:00+00:00",
+            parts=[
+                {
+                    "part_kind": "thinking",
+                    "part_index": 0,
+                    "content": "checking files",
+                },
+                {
+                    "part_kind": "tool-call",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"cmd": "date"},
+                },
+            ],
+        )
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _sid: history_messages,
+        get_session_events=lambda _sid: [
+            {
+                "event_type": RunEventType.RUN_COMPLETED.value,
+                "trace_id": run_id,
+                "payload_json": RunResult(
+                    trace_id=run_id,
+                    root_task_id=task_id,
+                    status="completed",
+                    output=content_parts_from_text("terminal final answer"),
+                ).model_dump_json(),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]],
+        round_item["coordinator_messages"],
+    )
+    reconstructed_message = cast(dict[str, object], coordinator_messages[1]["message"])
+    parts = cast(list[dict[str, object]], reconstructed_message["parts"])
+
+    assert round_item["has_final_output"] is True
+    assert len(coordinator_messages) == 2
+    assert coordinator_messages[1]["reconstructed"] is True
+    assert parts[0]["content"] == "terminal final answer"
+
+
+def test_build_session_rounds_dedupes_completed_output_from_existing_history(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_deduped_output.db"
+    session_id = "session-1"
+    run_id = "run-with-persisted-final"
+    task_id = "task-root-with-persisted-final"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="new objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    history_messages = [
+        _assistant_history_message(
+            run_id=run_id,
+            task_id=task_id,
+            created_at="2026-03-25T09:30:00+00:00",
+            parts=[
+                {
+                    "part_kind": "text",
+                    "content": "terminal final answer",
+                }
+            ],
+        )
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _sid: history_messages,
+        get_session_events=lambda _sid: [
+            {
+                "event_type": RunEventType.RUN_COMPLETED.value,
+                "trace_id": run_id,
+                "payload_json": RunResult(
+                    trace_id=run_id,
+                    root_task_id=task_id,
+                    status="completed",
+                    output=content_parts_from_text("terminal final answer"),
+                ).model_dump_json(),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]],
+        round_item["coordinator_messages"],
+    )
+
+    assert round_item["has_final_output"] is True
+    assert len(coordinator_messages) == 1
+    assert "reconstructed" not in coordinator_messages[0]
+
+
+def test_build_session_rounds_dedupes_completed_output_from_legacy_content(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_legacy_content_dedupe.db"
+    session_id = "session-1"
+    run_id = "run-with-legacy-final"
+    task_id = "task-root-with-legacy-final"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="new objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    history_messages = [
+        {
+            "conversation_id": "conv-session-1-Coordinator",
+            "agent_role_id": "Coordinator",
+            "instance_id": "inst-coordinator",
+            "task_id": task_id,
+            "trace_id": run_id,
+            "role": "assistant",
+            "role_id": "Coordinator",
+            "created_at": "2026-03-25T09:30:00+00:00",
+            "message": {"content": "terminal final answer"},
+        }
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _sid: history_messages,
+        get_session_events=lambda _sid: [
+            {
+                "event_type": RunEventType.RUN_COMPLETED.value,
+                "trace_id": run_id,
+                "payload_json": RunResult(
+                    trace_id=run_id,
+                    root_task_id=task_id,
+                    status="completed",
+                    output=content_parts_from_text("terminal final answer"),
+                ).model_dump_json(),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]],
+        round_item["coordinator_messages"],
+    )
+
+    assert round_item["has_final_output"] is True
+    assert len(coordinator_messages) == 1
+    assert "reconstructed" not in coordinator_messages[0]
+
+
 def test_build_session_rounds_projects_failed_assistant_response_output_as_final(
     tmp_path: Path,
 ) -> None:
@@ -1537,6 +1820,82 @@ def test_build_session_rounds_projects_failed_assistant_response_output_as_final
     assert parts[0]["content"] == "failed final output"
 
 
+def test_build_session_rounds_appends_failed_assistant_response_to_history(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_failed_appended_output.db"
+    session_id = "session-1"
+    run_id = "run-failed-with-history"
+    task_id = "task-root-failed-with-history"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id=task_id,
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="new objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+    history_messages = [
+        _assistant_history_message(
+            run_id=run_id,
+            task_id=task_id,
+            created_at="2026-03-25T09:30:00+00:00",
+            parts=[
+                {
+                    "part_kind": "tool-call",
+                    "tool_name": "shell",
+                    "tool_call_id": "call-1",
+                    "args": {"cmd": "date"},
+                }
+            ],
+        )
+    ]
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _sid: history_messages,
+        get_session_events=lambda _sid: [
+            {
+                "event_type": RunEventType.RUN_FAILED.value,
+                "trace_id": run_id,
+                "payload_json": RunResult(
+                    trace_id=run_id,
+                    root_task_id=task_id,
+                    status="failed",
+                    completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+                    output=content_parts_from_text("failed final output"),
+                ).model_dump_json(),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+    coordinator_messages = cast(
+        list[dict[str, object]],
+        round_item["coordinator_messages"],
+    )
+    reconstructed_message = cast(dict[str, object], coordinator_messages[1]["message"])
+    parts = cast(list[dict[str, object]], reconstructed_message["parts"])
+
+    assert round_item["has_final_output"] is True
+    assert len(coordinator_messages) == 2
+    assert coordinator_messages[1]["reconstructed"] is True
+    assert parts[0]["content"] == "failed final output"
+
+
 def test_build_session_rounds_ignores_assistant_error_output_for_final_flag(
     tmp_path: Path,
 ) -> None:
@@ -1582,6 +1941,59 @@ def test_build_session_rounds_ignores_assistant_error_output_for_final_flag(
                     completion_reason=RunCompletionReason.ASSISTANT_ERROR,
                     output=content_parts_from_text("assistant error output"),
                 ).model_dump_json(),
+                "occurred_at": "2026-03-25T09:31:00+00:00",
+            }
+        ],
+    )
+
+    round_item = next(item for item in rounds if item["run_id"] == run_id)
+
+    assert round_item["has_final_output"] is False
+    assert round_item["coordinator_messages"] == []
+
+
+def test_build_session_rounds_ignores_stopped_output_for_final_flag(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "rounds_projection_stopped_output.db"
+    session_id = "session-1"
+    run_id = "run-stopped"
+
+    task_repo = TaskRepository(db_path)
+    agent_repo = AgentInstanceRepository(db_path)
+    run_runtime_repo = RunRuntimeRepository(db_path)
+
+    _ = task_repo.create(
+        TaskEnvelope(
+            task_id="task-root-stopped",
+            session_id=session_id,
+            parent_task_id=None,
+            trace_id=run_id,
+            role_id="Coordinator",
+            objective="new objective",
+            verification=VerificationPlan(checklist=("non_empty_response",)),
+        )
+    )
+
+    rounds = build_session_rounds(
+        session_id=session_id,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        approval_tickets_by_run={},
+        run_runtime_repo=run_runtime_repo,
+        get_session_messages=lambda _sid: [],
+        get_session_events=lambda _sid: [
+            {
+                "event_type": RunEventType.RUN_STOPPED.value,
+                "trace_id": run_id,
+                "payload_json": json.dumps(
+                    {
+                        "trace_id": run_id,
+                        "root_task_id": "task-root-stopped",
+                        "status": "stopped",
+                        "output": "stopped diagnostic output",
+                    }
+                ),
                 "occurred_at": "2026-03-25T09:31:00+00:00",
             }
         ],

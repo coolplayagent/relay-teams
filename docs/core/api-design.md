@@ -1125,7 +1125,7 @@ Notes:
 - Automatic history compaction is logical only. Older messages are marked hidden-from-context for model reads, but remain available to raw/history endpoints.
 - A terminal `run_completed` event with non-empty `output` is a valid final-answer source. The live frontend must render that terminal output when no `text_delta` or `output_delta` has already produced final coordinator content for the run.
 - A terminal `run_failed` event with `completion_reason = "assistant_response"` follows the same final-output rule; other failed terminal outputs remain diagnostic and are not treated as final answers.
-- When legacy destructive clear behavior left a completed run with no persisted coordinator message rows, the round projection may synthesize one assistant text message from the persisted terminal event output.
+- The round projection synthesizes an assistant text message from terminal final output when persisted coordinator history does not already contain that final assistant text. This also covers runs that persisted intermediate tool or thinking history but lost the final answer row.
 
 ### `GET /sessions/{session_id}/rounds/{run_id}`
 
