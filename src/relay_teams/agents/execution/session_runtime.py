@@ -84,6 +84,9 @@ from relay_teams.workspace import build_conversation_id
 LOGGER = get_logger(__name__)
 LLM_REQUEST_LIMIT = 500
 _LLM_CLIENT_CLOSE_TASKS: set[asyncio.Task[None]] = set()
+_ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS: set[asyncio.Task[None]] = set()
+_ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_MIN_TIMEOUT_SECONDS = 1.0
+_ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_MAX_TIMEOUT_SECONDS = 30.0
 StreamItemT = TypeVar("StreamItemT")
 
 
@@ -1689,11 +1692,36 @@ async def _llm_stream_context_with_timeout(
     *,
     timeout_seconds: float,
 ) -> AsyncIterator[AgentNodeStream]:
+    enter_task = asyncio.create_task(context.__aenter__())
+    cleanup_timeout_seconds = _abandoned_llm_stream_context_cleanup_timeout_seconds(
+        timeout_seconds
+    )
     try:
-        stream = await asyncio.wait_for(
-            context.__aenter__(),
+        done, _pending = await asyncio.wait(
+            {enter_task},
             timeout=timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
         )
+    except asyncio.CancelledError:
+        _schedule_abandoned_llm_stream_context_cleanup(
+            context=context,
+            enter_task=enter_task,
+            reason="cancelled_while_opening",
+            cleanup_timeout_seconds=cleanup_timeout_seconds,
+        )
+        raise
+
+    if enter_task not in done:
+        _schedule_abandoned_llm_stream_context_cleanup(
+            context=context,
+            enter_task=enter_task,
+            reason="open_timeout",
+            cleanup_timeout_seconds=cleanup_timeout_seconds,
+        )
+        raise httpx.ReadTimeout("Timed out waiting for the LLM stream to open.")
+
+    try:
+        stream = enter_task.result()
     except TimeoutError as exc:
         raise httpx.ReadTimeout(
             "Timed out waiting for the LLM stream to open."
@@ -1714,6 +1742,267 @@ async def _llm_stream_context_with_timeout(
             raise
     else:
         await context.__aexit__(None, None, None)
+
+
+def _schedule_abandoned_llm_stream_context_cleanup(
+    *,
+    context: AgentNodeStreamContext,
+    enter_task: asyncio.Task[AgentNodeStream],
+    reason: str,
+    cleanup_timeout_seconds: float,
+) -> None:
+    cleanup_task = asyncio.create_task(
+        _cleanup_abandoned_llm_stream_context(
+            context=context,
+            enter_task=enter_task,
+            reason=reason,
+            cleanup_timeout_seconds=cleanup_timeout_seconds,
+        )
+    )
+    _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS.add(cleanup_task)
+
+    def _finish(completed_task: asyncio.Task[None]) -> None:
+        _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS.discard(completed_task)
+        try:
+            completed_task.result()
+        except asyncio.CancelledError:
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="llm.stream_context.cleanup.cancelled",
+                message="Abandoned LLM stream context cleanup was cancelled",
+                payload={"reason": reason},
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.stream_context.cleanup.failed",
+                message="Abandoned LLM stream context cleanup failed",
+                payload={"reason": reason},
+                exc_info=exc,
+            )
+
+    cleanup_task.add_done_callback(_finish)
+
+
+async def _cleanup_abandoned_llm_stream_context(
+    *,
+    context: AgentNodeStreamContext,
+    enter_task: asyncio.Task[AgentNodeStream],
+    reason: str,
+    cleanup_timeout_seconds: float,
+) -> None:
+    if not await _wait_for_abandoned_llm_stream_open(
+        context=context,
+        enter_task=enter_task,
+        reason=reason,
+        cleanup_timeout_seconds=cleanup_timeout_seconds,
+    ):
+        return
+
+    try:
+        enter_task.result()
+    except asyncio.CancelledError:
+        _log_abandoned_llm_stream_open_cancelled(reason=reason)
+        return
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.DEBUG,
+            event="llm.stream_context.open.failed",
+            message="Abandoned LLM stream context open task failed",
+            payload={"reason": reason},
+            exc_info=exc,
+        )
+        return
+
+    await _close_abandoned_llm_stream_context(
+        context=context,
+        reason=reason,
+        cleanup_timeout_seconds=cleanup_timeout_seconds,
+    )
+
+
+async def _wait_for_abandoned_llm_stream_open(
+    *,
+    context: AgentNodeStreamContext,
+    enter_task: asyncio.Task[AgentNodeStream],
+    reason: str,
+    cleanup_timeout_seconds: float,
+) -> bool:
+    try:
+        done, _pending = await asyncio.wait(
+            {enter_task},
+            timeout=cleanup_timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except asyncio.CancelledError:
+        enter_task.cancel()
+        raise
+
+    if enter_task in done:
+        return True
+
+    enter_task.cancel()
+    _observe_abandoned_llm_stream_open_after_cleanup_timeout(
+        context=context,
+        enter_task=enter_task,
+        reason=reason,
+        cleanup_timeout_seconds=cleanup_timeout_seconds,
+    )
+    log_event(
+        LOGGER,
+        logging.WARNING,
+        event="llm.stream_context.open.cleanup_timeout",
+        message="Timed out waiting for abandoned LLM stream context to open",
+        payload={
+            "reason": reason,
+            "timeout_seconds": cleanup_timeout_seconds,
+        },
+    )
+    return False
+
+
+def _observe_abandoned_llm_stream_open_after_cleanup_timeout(
+    *,
+    context: AgentNodeStreamContext,
+    enter_task: asyncio.Task[AgentNodeStream],
+    reason: str,
+    cleanup_timeout_seconds: float,
+) -> None:
+    def _finish(completed_task: asyncio.Task[AgentNodeStream]) -> None:
+        try:
+            completed_task.result()
+        except asyncio.CancelledError:
+            _log_abandoned_llm_stream_open_cancelled(reason=reason)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="llm.stream_context.open.failed_after_cleanup_timeout",
+                message=(
+                    "Abandoned LLM stream context open task failed after cleanup "
+                    "timeout"
+                ),
+                payload={"reason": reason},
+                exc_info=exc,
+            )
+        else:
+            _schedule_abandoned_llm_stream_context_cleanup(
+                context=context,
+                enter_task=completed_task,
+                reason=f"{reason}_open_completed_after_cleanup_timeout",
+                cleanup_timeout_seconds=cleanup_timeout_seconds,
+            )
+
+    enter_task.add_done_callback(_finish)
+
+
+def _log_abandoned_llm_stream_open_cancelled(*, reason: str) -> None:
+    log_event(
+        LOGGER,
+        logging.DEBUG,
+        event="llm.stream_context.open.cancelled",
+        message="Abandoned LLM stream context open task was cancelled",
+        payload={"reason": reason},
+    )
+
+
+async def _close_abandoned_llm_stream_context(
+    *,
+    context: AgentNodeStreamContext,
+    reason: str,
+    cleanup_timeout_seconds: float,
+) -> None:
+    abandonment = asyncio.CancelledError(
+        "LLM stream context was abandoned before it could be consumed."
+    )
+    exit_task = asyncio.create_task(
+        context.__aexit__(
+            type(abandonment),
+            abandonment,
+            abandonment.__traceback__,
+        )
+    )
+    try:
+        done, _pending = await asyncio.wait(
+            {exit_task},
+            timeout=cleanup_timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except asyncio.CancelledError:
+        exit_task.cancel()
+        raise
+
+    if exit_task not in done:
+        exit_task.cancel()
+        _observe_abandoned_llm_stream_exit_after_cleanup_timeout(
+            exit_task=exit_task,
+            reason=reason,
+        )
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.stream_context.exit.cleanup_timeout",
+            message="Timed out closing abandoned LLM stream context",
+            payload={
+                "reason": reason,
+                "timeout_seconds": cleanup_timeout_seconds,
+            },
+        )
+        return
+
+    try:
+        exit_task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="llm.stream_context.exit_failed",
+            message="Failed to close abandoned LLM stream context",
+            payload={"reason": reason},
+            exc_info=exc,
+        )
+
+
+def _observe_abandoned_llm_stream_exit_after_cleanup_timeout(
+    *,
+    exit_task: asyncio.Task[bool | None],
+    reason: str,
+) -> None:
+    def _finish(completed_task: asyncio.Task[bool | None]) -> None:
+        try:
+            completed_task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="llm.stream_context.exit_failed_after_cleanup_timeout",
+                message=(
+                    "Abandoned LLM stream context exit failed after cleanup timeout"
+                ),
+                payload={"reason": reason},
+                exc_info=exc,
+            )
+
+    exit_task.add_done_callback(_finish)
+
+
+def _abandoned_llm_stream_context_cleanup_timeout_seconds(
+    open_timeout_seconds: float,
+) -> float:
+    return min(
+        _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_MAX_TIMEOUT_SECONDS,
+        max(
+            _ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_MIN_TIMEOUT_SECONDS,
+            open_timeout_seconds,
+        ),
+    )
 
 
 def _llm_stream_event_timeout_seconds(connect_timeout_seconds: float) -> float:

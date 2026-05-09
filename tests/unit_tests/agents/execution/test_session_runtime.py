@@ -100,9 +100,264 @@ class _ClosingStreamContext:
         return None
 
 
+class _LateOpeningStreamContext:
+    def __init__(self, *, delay_seconds: float = 0.01) -> None:
+        self._delay_seconds = delay_seconds
+        self.exited = asyncio.Event()
+        self.exit_exc_type: object = None
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        await asyncio.sleep(self._delay_seconds)
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc, traceback)
+        self.exit_exc_type = exc_type
+        self.exited.set()
+        return None
+
+
+class _ControlledOpeningStreamContext:
+    def __init__(self) -> None:
+        self.enter_started = asyncio.Event()
+        self.allow_enter = asyncio.Event()
+        self.exited = asyncio.Event()
+        self.exit_exc_type: object = None
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        self.enter_started.set()
+        await self.allow_enter.wait()
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc, traceback)
+        self.exit_exc_type = exc_type
+        self.exited.set()
+        return None
+
+
+class _LateFailingStreamContext:
+    def __init__(self, *, delay_seconds: float = 0.01) -> None:
+        self._delay_seconds = delay_seconds
+        self.failed = asyncio.Event()
+        self.exited = False
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        await asyncio.sleep(self._delay_seconds)
+        self.failed.set()
+        raise RuntimeError("late stream open failed")
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exited = True
+        return None
+
+
+class _NeverOpeningStreamContext:
+    def __init__(self) -> None:
+        self.enter_started = asyncio.Event()
+        self.enter_cancelled = asyncio.Event()
+        self._enter_complete = asyncio.Event()
+        self.exited = False
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        self.enter_started.set()
+        try:
+            await self._enter_complete.wait()
+        except asyncio.CancelledError:
+            self.enter_cancelled.set()
+            raise
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exited = True
+        return None
+
+
+class _CancellationSuppressingLateOpeningStreamContext:
+    def __init__(self) -> None:
+        self.enter_started = asyncio.Event()
+        self.enter_cancelled = asyncio.Event()
+        self.allow_late_open = asyncio.Event()
+        self.exited = asyncio.Event()
+        self.exit_exc_type: object = None
+        self._enter_complete = asyncio.Event()
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        self.enter_started.set()
+        try:
+            await self._enter_complete.wait()
+        except asyncio.CancelledError:
+            self.enter_cancelled.set()
+            await self.allow_late_open.wait()
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc, traceback)
+        self.exit_exc_type = exc_type
+        self.exited.set()
+        return None
+
+
+class _CancellationSuppressingFailingOpenContext:
+    def __init__(self) -> None:
+        self.enter_started = asyncio.Event()
+        self.enter_cancelled = asyncio.Event()
+        self.failed = asyncio.Event()
+        self._enter_complete = asyncio.Event()
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        self.enter_started.set()
+        try:
+            await self._enter_complete.wait()
+        except asyncio.CancelledError:
+            self.enter_cancelled.set()
+            self.failed.set()
+            raise RuntimeError("stream open failed after cancellation")
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        return None
+
+
+class _ExitCancellingStreamContext:
+    def __init__(self) -> None:
+        self.exit_called = False
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exit_called = True
+        raise asyncio.CancelledError()
+
+
+class _ExitFailingStreamContext:
+    def __init__(self) -> None:
+        self.exit_called = False
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exit_called = True
+        raise RuntimeError("stream exit failed")
+
+
+class _ExitHangingStreamContext:
+    def __init__(self) -> None:
+        self.exit_started = asyncio.Event()
+        self.exit_cancelled = asyncio.Event()
+        self._exit_complete = asyncio.Event()
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exit_started.set()
+        try:
+            await self._exit_complete.wait()
+        except asyncio.CancelledError:
+            self.exit_cancelled.set()
+            raise
+        return None
+
+
+class _ExitCancellationSuppressingFailingStreamContext:
+    def __init__(self) -> None:
+        self.exit_started = asyncio.Event()
+        self.exit_cancelled = asyncio.Event()
+        self.failed = asyncio.Event()
+        self._exit_complete = asyncio.Event()
+
+    async def __aenter__(self) -> session_runtime_module.AgentNodeStream:
+        return cast(session_runtime_module.AgentNodeStream, object())
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None:
+        _ = (exc_type, exc, traceback)
+        self.exit_started.set()
+        try:
+            await self._exit_complete.wait()
+        except asyncio.CancelledError:
+            self.exit_cancelled.set()
+            self.failed.set()
+            raise RuntimeError("stream exit failed after cancellation")
+        return None
+
+
+async def _opened_stream() -> session_runtime_module.AgentNodeStream:
+    return cast(session_runtime_module.AgentNodeStream, object())
+
+
 async def _slow_items() -> Sequence[object]:
     await asyncio.sleep(0.05)
     return (object(),)
+
+
+async def _wait_for_abandoned_stream_context_cleanup() -> None:
+    cleanup_tasks = tuple(
+        session_runtime_module._ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS
+    )
+    if cleanup_tasks:
+        await asyncio.wait_for(
+            asyncio.gather(*cleanup_tasks),
+            timeout=1.0,
+        )
 
 
 @pytest.mark.asyncio
@@ -185,19 +440,440 @@ async def test_llm_stream_timeout_helpers_raise_read_timeout() -> None:
         _ = await _slow_items()
         yield object()
 
+    yielded = False
     with pytest.raises(httpx.ReadTimeout):
         async for _item in session_runtime_module._aiter_with_timeout(
             slow_generator(),
             timeout_seconds=0.001,
         ):
-            pass
+            yielded = True
+    assert yielded is False
 
+    entered = False
     with pytest.raises(httpx.ReadTimeout):
         async with session_runtime_module._llm_stream_context_with_timeout(
             cast(session_runtime_module.AgentNodeStreamContext, _SlowStreamContext()),
             timeout_seconds=0.001,
         ):
-            pass
+            entered = True
+    assert entered is False
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_context_timeout_closes_late_opened_context() -> None:
+    context = _LateOpeningStreamContext()
+    entered = False
+
+    async def open_context() -> None:
+        nonlocal entered
+        async with session_runtime_module._llm_stream_context_with_timeout(
+            cast(session_runtime_module.AgentNodeStreamContext, context),
+            timeout_seconds=0.001,
+        ):
+            entered = True
+
+    task = asyncio.create_task(open_context())
+    await asyncio.wait_for(context.exited.wait(), timeout=1.0)
+    await _wait_for_abandoned_stream_context_cleanup()
+    results = await asyncio.gather(task, return_exceptions=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], httpx.ReadTimeout)
+    assert entered is False
+    assert context.exit_exc_type is asyncio.CancelledError
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_context_cancellation_closes_late_opened_context() -> None:
+    context = _ControlledOpeningStreamContext()
+    entered = False
+
+    async def open_context() -> None:
+        nonlocal entered
+        async with session_runtime_module._llm_stream_context_with_timeout(
+            cast(session_runtime_module.AgentNodeStreamContext, context),
+            timeout_seconds=1.0,
+        ):
+            entered = True
+
+    task = asyncio.create_task(open_context())
+    await asyncio.wait_for(context.enter_started.wait(), timeout=1.0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await task
+
+    context.allow_enter.set()
+    await asyncio.wait_for(context.exited.wait(), timeout=1.0)
+    await _wait_for_abandoned_stream_context_cleanup()
+
+    assert entered is False
+    assert context.exit_exc_type is asyncio.CancelledError
+
+
+@pytest.mark.asyncio
+async def test_llm_stream_context_timeout_observes_late_open_failure() -> None:
+    context = _LateFailingStreamContext()
+    entered = False
+
+    async def open_context() -> None:
+        nonlocal entered
+        async with session_runtime_module._llm_stream_context_with_timeout(
+            cast(session_runtime_module.AgentNodeStreamContext, context),
+            timeout_seconds=0.001,
+        ):
+            entered = True
+
+    task = asyncio.create_task(open_context())
+    await asyncio.wait_for(context.failed.wait(), timeout=1.0)
+    await _wait_for_abandoned_stream_context_cleanup()
+    results = await asyncio.gather(task, return_exceptions=True)
+
+    assert len(results) == 1
+    assert isinstance(results[0], httpx.ReadTimeout)
+    assert entered is False
+    assert context.exited is False
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_finish_logs_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+    cleanup_can_finish = asyncio.Event()
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    async def hanging_cleanup(
+        *,
+        context: session_runtime_module.AgentNodeStreamContext,
+        enter_task: asyncio.Task[session_runtime_module.AgentNodeStream],
+        reason: str,
+        cleanup_timeout_seconds: float,
+    ) -> None:
+        _ = (context, enter_task, reason, cleanup_timeout_seconds)
+        await cleanup_can_finish.wait()
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+    monkeypatch.setattr(
+        session_runtime_module,
+        "_cleanup_abandoned_llm_stream_context",
+        hanging_cleanup,
+    )
+
+    context = _ClosingStreamContext()
+    enter_task = asyncio.create_task(_opened_stream())
+    session_runtime_module._schedule_abandoned_llm_stream_context_cleanup(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_cancelled_cleanup",
+        cleanup_timeout_seconds=1.0,
+    )
+
+    cleanup_tasks = tuple(
+        session_runtime_module._ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS
+    )
+    assert len(cleanup_tasks) == 1
+    cleanup_tasks[0].cancel()
+    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+    _ = await enter_task
+
+    assert "llm.stream_context.cleanup.cancelled" in captured_events
+    assert not session_runtime_module._ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_finish_logs_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    async def failing_cleanup(
+        *,
+        context: session_runtime_module.AgentNodeStreamContext,
+        enter_task: asyncio.Task[session_runtime_module.AgentNodeStream],
+        reason: str,
+        cleanup_timeout_seconds: float,
+    ) -> None:
+        _ = (context, enter_task, reason, cleanup_timeout_seconds)
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+    monkeypatch.setattr(
+        session_runtime_module,
+        "_cleanup_abandoned_llm_stream_context",
+        failing_cleanup,
+    )
+
+    context = _ClosingStreamContext()
+    enter_task = asyncio.create_task(_opened_stream())
+    session_runtime_module._schedule_abandoned_llm_stream_context_cleanup(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_failed_cleanup",
+        cleanup_timeout_seconds=1.0,
+    )
+
+    cleanup_tasks = tuple(
+        session_runtime_module._ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS
+    )
+    await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+    _ = await enter_task
+
+    assert "llm.stream_context.cleanup.failed" in captured_events
+    assert not session_runtime_module._ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_ignores_exit_cancellation() -> None:
+    context = _ExitCancellingStreamContext()
+    enter_task = asyncio.create_task(_opened_stream())
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_exit_cancelled",
+        cleanup_timeout_seconds=1.0,
+    )
+
+    assert context.exit_called is True
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_logs_exit_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+
+    context = _ExitFailingStreamContext()
+    enter_task = asyncio.create_task(_opened_stream())
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_exit_failed",
+        cleanup_timeout_seconds=1.0,
+    )
+
+    assert context.exit_called is True
+    assert captured_events == ["llm.stream_context.exit_failed"]
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_cancels_wedged_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+
+    context = _NeverOpeningStreamContext()
+    enter_task = asyncio.create_task(context.__aenter__())
+    await asyncio.wait_for(context.enter_started.wait(), timeout=1.0)
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_open_cleanup_timeout",
+        cleanup_timeout_seconds=0.001,
+    )
+    await asyncio.wait_for(context.enter_cancelled.wait(), timeout=1.0)
+    await asyncio.gather(enter_task, return_exceptions=True)
+
+    assert context.exited is False
+    assert captured_events == ["llm.stream_context.open.cleanup_timeout"]
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_closes_late_open_after_timeout() -> None:
+    context = _CancellationSuppressingLateOpeningStreamContext()
+    enter_task = asyncio.create_task(context.__aenter__())
+    await asyncio.wait_for(context.enter_started.wait(), timeout=1.0)
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_late_open_after_cleanup_timeout",
+        cleanup_timeout_seconds=0.001,
+    )
+
+    await asyncio.wait_for(context.enter_cancelled.wait(), timeout=1.0)
+    context.allow_late_open.set()
+    await asyncio.wait_for(context.exited.wait(), timeout=1.0)
+    await _wait_for_abandoned_stream_context_cleanup()
+
+    assert context.exit_exc_type is asyncio.CancelledError
+    assert not session_runtime_module._ABANDONED_LLM_STREAM_CONTEXT_CLEANUP_TASKS
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_observes_late_open_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+
+    context = _CancellationSuppressingFailingOpenContext()
+    enter_task = asyncio.create_task(context.__aenter__())
+    await asyncio.wait_for(context.enter_started.wait(), timeout=1.0)
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_late_open_failure_after_cleanup_timeout",
+        cleanup_timeout_seconds=0.001,
+    )
+    await asyncio.wait_for(context.enter_cancelled.wait(), timeout=1.0)
+    await asyncio.wait_for(context.failed.wait(), timeout=1.0)
+    await asyncio.sleep(0)
+
+    assert captured_events == [
+        "llm.stream_context.open.cleanup_timeout",
+        "llm.stream_context.open.failed_after_cleanup_timeout",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_cancels_wedged_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+
+    context = _ExitHangingStreamContext()
+    enter_task = asyncio.create_task(_opened_stream())
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_exit_cleanup_timeout",
+        cleanup_timeout_seconds=0.001,
+    )
+    await asyncio.wait_for(context.exit_started.wait(), timeout=1.0)
+    await asyncio.wait_for(context.exit_cancelled.wait(), timeout=1.0)
+
+    assert captured_events == ["llm.stream_context.exit.cleanup_timeout"]
+
+
+@pytest.mark.asyncio
+async def test_abandoned_stream_cleanup_observes_late_exit_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[str] = []
+
+    def fake_log_event(
+        _logger: object,
+        _level: int,
+        *,
+        event: str,
+        message: str,
+        payload: dict[str, object] | None = None,
+        duration_ms: int | None = None,
+        exc_info: object = None,
+    ) -> None:
+        _ = (message, payload, duration_ms, exc_info)
+        captured_events.append(event)
+
+    monkeypatch.setattr(session_runtime_module, "log_event", fake_log_event)
+
+    context = _ExitCancellationSuppressingFailingStreamContext()
+    enter_task = asyncio.create_task(_opened_stream())
+
+    await session_runtime_module._cleanup_abandoned_llm_stream_context(
+        context=cast(session_runtime_module.AgentNodeStreamContext, context),
+        enter_task=enter_task,
+        reason="test_late_exit_failure_after_cleanup_timeout",
+        cleanup_timeout_seconds=0.001,
+    )
+    await asyncio.wait_for(context.exit_started.wait(), timeout=1.0)
+    await asyncio.wait_for(context.exit_cancelled.wait(), timeout=1.0)
+    await asyncio.wait_for(context.failed.wait(), timeout=1.0)
+    await asyncio.sleep(0)
+
+    assert captured_events == [
+        "llm.stream_context.exit.cleanup_timeout",
+        "llm.stream_context.exit_failed_after_cleanup_timeout",
+    ]
 
 
 @pytest.mark.asyncio
@@ -208,7 +884,7 @@ async def test_llm_stream_context_closes_entered_context() -> None:
         cast(session_runtime_module.AgentNodeStreamContext, context),
         timeout_seconds=1.0,
     ):
-        pass
+        assert context.exited is False
 
     assert context.exited is True
 
