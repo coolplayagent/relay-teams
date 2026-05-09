@@ -5,19 +5,10 @@ from enum import Enum
 import json
 import os
 import shutil
-import subprocess
-import sys
-import time
-from urllib.parse import urlparse
 from typing import TypedDict
 
-import httpx
 import typer
 
-from relay_teams.env.proxy_env import (
-    load_proxy_env_config,
-    sync_proxy_env_to_process_env,
-)
 from relay_teams.env.runtime_env import (
     get_app_env_file_path,
     get_project_env_file_path,
@@ -34,7 +25,6 @@ TABLE_MAX_KEY_WIDTH = 42
 TABLE_MAX_VALUE_WIDTH = 96
 TABLE_MIN_VALUE_WIDTH = 24
 TABLE_FALLBACK_TERMINAL_WIDTH = 120
-DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 
 class EnvOutputFormat(str, Enum):
@@ -47,11 +37,6 @@ class EnvListEntry(TypedDict):
     value: str
     source: str
     masked: bool
-
-
-class ProbeOutputFormat(str, Enum):
-    TABLE = "table"
-    JSON = "json"
 
 
 @env_app.command("list")
@@ -74,82 +59,6 @@ def env_list(
         typer.echo(json.dumps(entries, ensure_ascii=False))
         return
     render_env_table(entries)
-
-
-@env_app.command("proxy-reload")
-def proxy_reload(
-    base_url: str = typer.Option(
-        DEFAULT_BASE_URL,
-        "--base-url",
-        help="Agent Teams server base URL.",
-    ),
-    autostart: bool = typer.Option(
-        True,
-        "--autostart/--no-autostart",
-        help="Auto-start local server when not already running.",
-    ),
-    daemon: bool = typer.Option(
-        False,
-        "--daemon",
-        "-d",
-        help="Run the server as a background process when autostarting.",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Force kill any existing server process before autostarting.",
-    ),
-) -> None:
-    _auto_start_if_needed(base_url, autostart, daemon, force)
-    payload = _request_json(base_url, "POST", "/api/system/configs/proxy:reload")
-    typer.echo(json.dumps(payload, ensure_ascii=False))
-
-
-@env_app.command("probe-web")
-def probe_web(
-    url: str = typer.Argument(..., help="Target http/https URL to probe."),
-    timeout_ms: int | None = typer.Option(
-        None,
-        "--timeout-ms",
-        help="Optional request timeout in milliseconds.",
-    ),
-    output_format: ProbeOutputFormat = typer.Option(
-        ProbeOutputFormat.TABLE,
-        "--format",
-        help="Output format: table or json.",
-        case_sensitive=False,
-    ),
-    base_url: str = typer.Option(
-        DEFAULT_BASE_URL,
-        "--base-url",
-        help="Agent Teams server base URL.",
-    ),
-    autostart: bool = typer.Option(
-        True,
-        "--autostart/--no-autostart",
-        help="Auto-start local server when not already running.",
-    ),
-    daemon: bool = typer.Option(
-        False,
-        "--daemon",
-        "-d",
-        help="Run the server as a background process when autostarting.",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Force kill any existing server process before autostarting.",
-    ),
-) -> None:
-    _auto_start_if_needed(base_url, autostart, daemon, force)
-    payload: dict[str, object] = {"url": url}
-    if timeout_ms is not None:
-        payload["timeout_ms"] = timeout_ms
-    result = _request_json(base_url, "POST", "/api/system/configs/web:probe", payload)
-    if output_format == ProbeOutputFormat.JSON:
-        typer.echo(json.dumps(result, ensure_ascii=False))
-        return
-    _render_probe_table(result)
 
 
 def collect_env_entries(
@@ -256,175 +165,3 @@ def truncate_for_table(value: str, width: int) -> str:
     if len(value) <= width:
         return value
     return f"{value[: width - 3]}..."
-
-
-def _render_probe_table(payload: dict[str, object]) -> None:
-    diagnostics = payload.get("diagnostics", {})
-    redirected = False
-    used_proxy = False
-    if isinstance(diagnostics, dict):
-        redirected = bool(diagnostics.get("redirected", False))
-        used_proxy = bool(diagnostics.get("used_proxy", False))
-
-    rows = [
-        ("OK", str(payload.get("ok", False)).lower()),
-        ("URL", str(payload.get("url", ""))),
-        ("Final URL", str(payload.get("final_url", ""))),
-        ("Method", str(payload.get("used_method", ""))),
-        ("Status", str(payload.get("status_code", ""))),
-        ("Latency(ms)", str(payload.get("latency_ms", ""))),
-        ("Used Proxy", str(used_proxy).lower()),
-        ("Redirected", str(redirected).lower()),
-        ("Error Code", str(payload.get("error_code", ""))),
-        ("Error", str(payload.get("error_message", ""))),
-    ]
-    key_width = max(len("Field"), *(len(row[0]) for row in rows))
-    value_width = max(len("Value"), *(len(row[1]) for row in rows))
-    border = f"+-{'-' * key_width}-+-{'-' * value_width}-+"
-    typer.echo(border)
-    typer.echo(f"| {'Field'.ljust(key_width)} | {'Value'.ljust(value_width)} |")
-    typer.echo(border)
-    for key, value in rows:
-        typer.echo(f"| {key.ljust(key_width)} | {value.ljust(value_width)} |")
-    typer.echo(border)
-
-
-def _request_json(
-    base_url: str,
-    method: str,
-    path: str,
-    payload: dict[str, object] | None = None,
-    timeout_seconds: float = 30.0,
-) -> dict[str, object]:
-    url = f"{base_url.rstrip('/')}{path}"
-    proxy_config = load_proxy_env_config()
-    sync_proxy_env_to_process_env(proxy_config)
-    try:
-        with httpx.Client(timeout=timeout_seconds) as client:
-            if payload is not None:
-                response = client.request(
-                    method,
-                    url,
-                    json=payload,
-                    headers={"Accept": "application/json"},
-                )
-            else:
-                response = client.request(
-                    method,
-                    url,
-                    headers={"Accept": "application/json"},
-                )
-            response.raise_for_status()
-            raw = response.text
-            if not raw:
-                return {}
-            data = response.json()
-            if isinstance(data, dict):
-                return data
-            return {"data": data}
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.text
-        raise RuntimeError(
-            f"HTTP {exc.response.status_code} {method} {path}: {detail}"
-        ) from exc
-    except httpx.TransportError as exc:
-        raise RuntimeError(f"Failed to connect to {base_url}: {exc}") from exc
-
-
-def _is_server_healthy(base_url: str) -> bool:
-    try:
-        response = _request_json(
-            base_url,
-            "GET",
-            "/api/system/health",
-            timeout_seconds=1.5,
-        )
-        return response.get("status") == "ok"
-    except Exception:
-        return False
-
-
-def _auto_start_if_needed(
-    base_url: str,
-    autostart: bool,
-    daemon: bool = False,
-    force: bool = False,
-) -> None:
-    if _is_server_healthy(base_url):
-        return
-    if not autostart:
-        raise RuntimeError(
-            "Agent Teams server is not running and --no-autostart was provided"
-        )
-
-    parsed = urlparse(base_url)
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    if host not in {"127.0.0.1", "localhost"}:
-        raise RuntimeError(
-            f"Refusing to autostart server for non-local base URL: {base_url}"
-        )
-
-    if force:
-        subprocess.run(
-            [sys.executable, "-m", "relay_teams", "server", "stop", "--force"],
-            check=False,
-            timeout=30,
-        )
-
-    _start_server_daemon(host=host, port=port, daemon=daemon)
-    if not _wait_until_healthy(base_url):
-        raise RuntimeError("Failed to start local Agent Teams server")
-
-
-def _start_server_daemon(host: str, port: int, *, daemon: bool = False) -> None:
-    sync_proxy_env_to_process_env(load_proxy_env_config())
-    command = [
-        sys.executable,
-        "-m",
-        "relay_teams",
-        "server",
-        "serve",
-        "--host",
-        host,
-        "--port",
-        str(port),
-    ]
-    if daemon:
-        command.append("--daemon")
-    if sys.platform.startswith("win"):
-        create_new_process_group = int(
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        )
-        detached_process = int(getattr(subprocess, "DETACHED_PROCESS", 0))
-        create_no_window = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        creationflags = create_new_process_group | detached_process | create_no_window
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= int(getattr(subprocess, "STARTF_USESHOWWINDOW", 0))
-        startupinfo.wShowWindow = int(getattr(subprocess, "SW_HIDE", 0))
-        subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            creationflags=creationflags,
-            startupinfo=startupinfo,
-        )
-        return
-
-    subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
-
-def _wait_until_healthy(base_url: str, timeout_seconds: float = 20.0) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if _is_server_healthy(base_url):
-            return True
-        time.sleep(0.25)
-    return False

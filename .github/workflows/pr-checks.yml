@@ -38,19 +38,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev --no-default-groups
+
       - name: Require linked issue for PRs into main
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_API_URL: ${{ github.api_url }}
-        run: python src/relay_teams/release/pull_request_issue_link.py
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Install dev dependencies
-        run: uv sync --extra dev --no-default-groups
+        run: uv run --extra dev python src/relay_teams/release/pull_request_issue_link.py
 
       - name: Unit tests with coverage
         env:
@@ -89,19 +89,19 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Install dev dependencies
+        run: uv sync --extra dev --no-default-groups
+
       - name: Require linked issue for PRs into main
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           GITHUB_API_URL: ${{ github.api_url }}
-        run: python src/relay_teams/release/pull_request_issue_link.py
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Install dev dependencies
-        run: uv sync --extra dev --no-default-groups
+        run: uv run --extra dev python src/relay_teams/release/pull_request_issue_link.py
 
       - name: Ruff lint gate
         run: uv run --extra dev ruff check --no-cache --force-exclude .
