@@ -152,6 +152,16 @@ class RunInjectionManager:
     def drain_system_reminders_at_start(
         self, run_id: str, recipient_instance_id: str
     ) -> tuple[InjectionMessage, ...]:
+        return self._drain_system_reminders(run_id, recipient_instance_id)
+
+    def drain_system_reminders_at_boundary(
+        self, run_id: str, recipient_instance_id: str
+    ) -> tuple[InjectionMessage, ...]:
+        return self._drain_system_reminders(run_id, recipient_instance_id)
+
+    def _drain_system_reminders(
+        self, run_id: str, recipient_instance_id: str
+    ) -> tuple[InjectionMessage, ...]:
         with self._lock:
             queue = self._queues.get(run_id, {}).get(recipient_instance_id, [])
             if not queue:

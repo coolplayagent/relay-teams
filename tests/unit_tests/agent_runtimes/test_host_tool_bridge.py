@@ -16,7 +16,13 @@ from relay_teams.providers.model_config import (
     ProviderType,
 )
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.reminders import render_system_reminder
+from relay_teams.reminders.delivery import SystemReminderDeliveryMode
 from relay_teams.roles.role_models import RoleDefinition
+from relay_teams.sessions.runs.enums import InjectionSource
+from relay_teams.sessions.runs.event_stream import RunEventHub
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.run_models import RunEvent
 
 
 class _PublicTool:
@@ -43,6 +49,27 @@ class _MissingRunIntentRepo:
 class _FakeToolApprovalPolicy:
     def with_yolo(self, _yolo: bool) -> "_FakeToolApprovalPolicy":
         return self
+
+
+class _CapturingRunEventHub:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def publish(self, event: RunEvent) -> int:
+        self.events.append(event)
+        return 0
+
+
+class _FakeMessageRepo:
+    def __init__(self) -> None:
+        self.appended_user_prompts: list[dict[str, object]] = []
+
+    async def append_user_prompt_if_missing_async(
+        self,
+        **kwargs: object,
+    ) -> bool:
+        self.appended_user_prompts.append(kwargs)
+        return True
 
 
 class _FakeWorkspaceManager:
@@ -504,6 +531,171 @@ async def test_run_hosted_tool_invokes_async_args_validator(
         "items": ["one"],
         "flag": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_run_hosted_tool_appends_boundary_system_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = LLMRequest(
+        run_id="run-1",
+        trace_id="trace-1",
+        task_id="task-1",
+        session_id="session-1",
+        workspace_id="workspace-1",
+        conversation_id="conversation-1",
+        instance_id="instance-1",
+        role_id="main-agent",
+        system_prompt="system",
+        user_prompt="hello",
+    )
+    role = RoleDefinition(
+        role_id="main-agent",
+        name="Main Agent",
+        description="Handles ACP prompts",
+        version="1.0.0",
+        system_prompt="You are a helpful assistant.",
+    )
+    function_schema = _FakeFunctionSchema()
+    tool = cast(
+        host_tool_bridge_module.PydanticTool[host_tool_bridge_module.ToolDeps],
+        _FakeRuntimeTool(function_schema),
+    )
+    definition = host_tool_bridge_module.HostedToolDefinition(
+        source="builtin",
+        exposed_name="agent_teams_builtin_sample",
+        raw_name="sample",
+        description="Sample tool",
+        input_schema={},
+        tool=tool,
+    )
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    reminder = render_system_reminder("Inspect the tool failure before continuing.")
+    _ = injection_manager.enqueue(
+        "run-1",
+        "instance-1",
+        InjectionSource.SYSTEM,
+        reminder,
+        visibility="internal",
+        internal_kind="tool_failure",
+        internal_delivery_mode=SystemReminderDeliveryMode.GUIDANCE.value,
+        internal_issue_key="tool_failure:sample:tool_error",
+    )
+    event_hub = _CapturingRunEventHub()
+    message_repo = _FakeMessageRepo()
+    bridge = object.__new__(host_tool_bridge_module.ExternalAcpHostToolBridge)
+    bridge.__dict__.update(
+        {
+            "_active_request": request,
+            "_role": role,
+            "_context_model": cast(host_tool_bridge_module.Model, object()),
+            "_injection_manager": injection_manager,
+            "_run_event_hub": cast(RunEventHub, event_hub),
+            "_message_repo": message_repo,
+        }
+    )
+
+    async def fake_build_tool_deps_async(
+        *,
+        request: LLMRequest,
+    ) -> host_tool_bridge_module.ToolDeps:
+        _ = request
+        return cast(host_tool_bridge_module.ToolDeps, object())
+
+    monkeypatch.setattr(
+        bridge,
+        "_build_tool_deps_async",
+        fake_build_tool_deps_async,
+    )
+
+    result = await bridge.run_hosted_tool(
+        definition=definition,
+        arguments={"value": "input"},
+    )
+
+    assert isinstance(result, ToolReturn)
+    assert result.return_value == {"called": "input"}
+    assert result.content == reminder
+    assert message_repo.appended_user_prompts[0]["content"] == reminder
+    assert "Inspect the tool failure" not in event_hub.events[0].payload_json
+    assert (
+        injection_manager.drain_system_reminders_at_boundary("run-1", "instance-1")
+        == ()
+    )
+
+
+def test_append_system_reminder_content_preserves_existing_tool_return() -> None:
+    result = ToolReturn(
+        return_value={"called": "input"},
+        content="existing output",
+        metadata={"source": "tool"},
+    )
+
+    merged = host_tool_bridge_module._append_system_reminder_content(
+        result,
+        ("Inspect the tool failure before continuing.",),
+    )
+
+    assert isinstance(merged, ToolReturn)
+    assert merged.return_value == {"called": "input"}
+    assert merged.content == (
+        "existing output\n\nInspect the tool failure before continuing."
+    )
+    assert merged.metadata == {"source": "tool"}
+
+
+def test_append_system_reminder_content_handles_empty_tool_return_content() -> None:
+    result = ToolReturn(return_value={"called": "input"}, content="")
+
+    merged = host_tool_bridge_module._append_system_reminder_content(
+        result,
+        ("Inspect the tool failure before continuing.",),
+    )
+
+    assert isinstance(merged, ToolReturn)
+    assert merged.return_value == {"called": "input"}
+    assert merged.content == "Inspect the tool failure before continuing."
+
+
+def test_append_system_reminder_content_handles_missing_tool_return_content() -> None:
+    result = ToolReturn(return_value={"called": "input"}, content=None)
+
+    merged = host_tool_bridge_module._append_system_reminder_content(
+        result,
+        ("Inspect the tool failure before continuing.",),
+    )
+
+    assert isinstance(merged, ToolReturn)
+    assert merged.return_value == {"called": "input"}
+    assert merged.content == "Inspect the tool failure before continuing."
+
+
+def test_append_system_reminder_content_handles_sequence_tool_return_content() -> None:
+    result = ToolReturn(return_value={"called": "input"}, content=("existing output",))
+
+    merged = host_tool_bridge_module._append_system_reminder_content(
+        result,
+        ("Inspect the tool failure before continuing.",),
+    )
+
+    assert isinstance(merged, ToolReturn)
+    assert merged.return_value == {"called": "input"}
+    assert merged.content == (
+        "existing output",
+        "Inspect the tool failure before continuing.",
+    )
+
+
+def test_append_system_reminder_content_returns_original_without_reminder() -> None:
+    result = {"called": "input"}
+
+    merged = host_tool_bridge_module._append_system_reminder_content(
+        result,
+        ("   ",),
+    )
+
+    assert merged is result
 
 
 @pytest.mark.asyncio

@@ -92,6 +92,26 @@ runtime instances inside a Relay Teams run.
 Both live under `agent_runtimes` so orchestration no longer owns a separate A2A
 implementation.
 
+## System Reminder Delivery
+
+External runtimes participate in the same system-reminder delivery contract as
+the built-in provider runtime, but they do not own reminder policy.
+
+`sessions/runs/system_injection.py` owns reminder queue filtering, classifier
+disposition, redacted run events, and conversation-history persistence through
+`SystemInjectionConsumer`. `agent_runtimes.provider` only invokes that consumer
+before composing ACP, A2A, or CLI prompts. This lets queued startup reminders
+become the latest user prompt without teaching each protocol adapter how to
+classify or persist reminder messages.
+
+ACP host tools have one additional boundary. After a hosted Relay Teams tool
+returns, `agent_runtimes.host_tool_bridge` asks the same consumer for any
+boundary reminders addressed to the active runtime instance. If reminders are
+applied, the bridge preserves the original tool return value and appends the
+rendered reminder text to the tool result content. The external ACP agent then
+sees the guidance next to the host tool result, while reminder state, event
+redaction, and history writes remain centralized in sessions/runs.
+
 ## Complexity Guardrails
 
 - Do not introduce another planner or orchestration framework inside

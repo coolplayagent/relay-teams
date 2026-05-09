@@ -65,12 +65,14 @@ from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.enums import RunEventType
 from relay_teams.sessions.runs.event_stream import RunEventHub, publish_run_event_async
+from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_models import RunEvent
+from relay_teams.sessions.runs.system_injection import SystemInjectionConsumer
 from relay_teams.tools.runtime.context import (
     GatewaySessionLookupLike,
     XiaolubanNotifyServiceLike,
 )
-from relay_teams.workspace import WorkspaceManager
+from relay_teams.workspace import WorkspaceManager, build_conversation_id
 
 if TYPE_CHECKING:
     from relay_teams.agents.execution.message_repository import MessageRepository
@@ -91,7 +93,6 @@ if TYPE_CHECKING:
     from relay_teams.roles.role_registry import RoleRegistry
     from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
     from relay_teams.sessions.runs.event_log import EventLog
-    from relay_teams.sessions.runs.injection_queue import RunInjectionManager
     from relay_teams.sessions.runs.run_control_manager import RunControlManager
     from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
     from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
@@ -269,24 +270,38 @@ class AgentRuntimeSessionManager:
         async with lock:
             agent = self._config_service.resolve_runtime_agent(agent_id)
             if agent.protocol == ExternalAgentProtocol.A2A:
+                prompt_start_content = await self._apply_prompt_start_system_reminders(
+                    request
+                )
                 return await self._prompt_a2a(
                     agent=agent,
                     role=role,
                     request=request,
+                    prompt_start_content=prompt_start_content,
                 )
             if agent.protocol == ExternalAgentProtocol.CLI:
+                prompt_start_content = await self._apply_prompt_start_system_reminders(
+                    request
+                )
                 return await self._prompt_cli(
                     agent=agent,
                     role=role,
                     request=request,
+                    prompt_start_content=prompt_start_content,
                 )
+            prompt_start_content = await self._apply_prompt_start_system_reminders(
+                request
+            )
             handle = await self._ensure_conversation(
                 key=key,
                 agent=agent,
                 role=role,
                 request=request,
             )
-            prompt_text = self._resolve_external_user_prompt(request)
+            prompt_text = self._resolve_external_user_prompt(
+                request,
+                prompt_start_content=prompt_start_content,
+            )
             state = _ActivePromptState(request=request)
             handle.active_prompt = state
             handle.host_tool_bridge.bind_active_request(request)
@@ -370,14 +385,41 @@ class AgentRuntimeSessionManager:
                 )
             return output
 
+    async def _apply_prompt_start_system_reminders(
+        self, request: LLMRequest
+    ) -> tuple[str, ...]:
+        if not isinstance(self._injection_manager, RunInjectionManager):
+            return ()
+        consumer = SystemInjectionConsumer(
+            injection_manager=self._injection_manager,
+            run_event_hub=self._run_event_hub,
+            message_repo=self._message_repo,
+        )
+        applied = await consumer.apply_startup_system_reminders_async(
+            session_id=request.session_id,
+            run_id=request.run_id,
+            trace_id=request.trace_id,
+            task_id=request.task_id,
+            instance_id=request.instance_id,
+            role_id=request.role_id,
+            workspace_id=request.workspace_id,
+            conversation_id=_resolved_conversation_id(request),
+            restart_scope="external_prompt_start",
+        )
+        return applied.content
+
     async def _prompt_a2a(
         self,
         *,
         agent: ExternalAgentConfig,
         role: RoleDefinition,
         request: LLMRequest,
+        prompt_start_content: tuple[str, ...],
     ) -> str:
-        prompt_text = self._resolve_external_user_prompt(request)
+        prompt_text = self._resolve_external_user_prompt(
+            request,
+            prompt_start_content=prompt_start_content,
+        )
         workspace = await self._resolve_workspace_async(request)
         workspace_path = workspace.resolve_workdir()
 
@@ -424,8 +466,12 @@ class AgentRuntimeSessionManager:
         agent: ExternalAgentConfig,
         role: RoleDefinition,
         request: LLMRequest,
+        prompt_start_content: tuple[str, ...],
     ) -> str:
-        prompt_text = self._resolve_external_user_prompt(request)
+        prompt_text = self._resolve_external_user_prompt(
+            request,
+            prompt_start_content=prompt_start_content,
+        )
         workspace = await self._resolve_workspace_async(request)
         workspace_path = workspace.resolve_workdir()
 
@@ -1294,10 +1340,20 @@ class AgentRuntimeSessionManager:
             ),
         )
 
-    def _resolve_external_user_prompt(self, request: LLMRequest) -> str:
+    def _resolve_external_user_prompt(
+        self,
+        request: LLMRequest,
+        *,
+        prompt_start_content: tuple[str, ...] = (),
+    ) -> str:
+        prompt_start_text = "\n\n".join(
+            text.strip() for text in prompt_start_content if text.strip()
+        ).strip()
+        if prompt_start_text:
+            return prompt_start_text
         prompt_text = _extract_latest_user_prompt(
             self._message_repo.get_history_for_conversation_task(
-                request.conversation_id,
+                _resolved_conversation_id(request),
                 request.task_id,
             )
         )
@@ -1318,7 +1374,7 @@ class AgentRuntimeSessionManager:
         self._message_repo.append(
             session_id=request.session_id,
             workspace_id=request.workspace_id,
-            conversation_id=request.conversation_id,
+            conversation_id=_resolved_conversation_id(request),
             agent_role_id=request.role_id,
             instance_id=request.instance_id,
             task_id=request.task_id,
@@ -1393,6 +1449,13 @@ class _ActivePromptState:
 
 def _conversation_key(*, session_id: str, role_id: str, agent_id: str) -> str:
     return f"{session_id}:{role_id}:{agent_id}"
+
+
+def _resolved_conversation_id(request: LLMRequest) -> str:
+    return request.conversation_id or build_conversation_id(
+        request.session_id,
+        request.role_id,
+    )
 
 
 def _is_opencode_agent(agent: ExternalAgentConfig) -> bool:
@@ -1941,6 +2004,23 @@ def _compose_external_prompt(
     user_prompt: str,
     include_host_tool_guidance: bool,
 ) -> str:
+    stable_prefix = _compose_external_prompt_stable_prefix(
+        system_prompt=system_prompt,
+        include_host_tool_guidance=include_host_tool_guidance,
+    )
+    return "\n\n".join(
+        (
+            stable_prefix,
+            f"## User Prompt\n{user_prompt.strip()}",
+        )
+    )
+
+
+def _compose_external_prompt_stable_prefix(
+    *,
+    system_prompt: str,
+    include_host_tool_guidance: bool,
+) -> str:
     sections = [
         f"## Role Prompt\n{system_prompt.strip()}",
     ]
@@ -1951,7 +2031,6 @@ def _compose_external_prompt(
             "tasks, approvals, or skills, prefer the `agent_teams_*` host tools "
             "over similarly named native tools."
         )
-    sections.append(f"## User Prompt\n{user_prompt.strip()}")
     return "\n\n".join(section for section in sections if section.strip())
 
 

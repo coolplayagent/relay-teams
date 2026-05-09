@@ -51,15 +51,18 @@ from relay_teams.providers.model_config import (
     SamplingConfig,
 )
 from relay_teams.providers.provider_contracts import LLMRequest
+from relay_teams.reminders import render_system_reminder
+from relay_teams.reminders.delivery import SystemReminderDeliveryMode
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
-from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
+from relay_teams.sessions.runs.run_models import RunEvent
 from relay_teams.sessions.runs.run_runtime_repo import RunRuntimeRepository
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.gateway.im.service import ImToolService
@@ -67,7 +70,8 @@ from relay_teams.tools.registry import ToolRegistry
 from relay_teams.tools.runtime.approval_state import ToolApprovalManager
 from relay_teams.tools.runtime.policy import ToolApprovalPolicy
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
-from relay_teams.workspace import WorkspaceManager
+from relay_teams.media import UserPromptContent
+from relay_teams.workspace import WorkspaceManager, build_conversation_id
 
 _ActivePromptState = provider_module._ActivePromptState
 _annotate_external_computer_tool_result = (
@@ -136,6 +140,25 @@ class _FakeMessageRepo:
 
     def append(self, **kwargs: object) -> None:
         self.append_calls.append(kwargs)
+
+    async def append_user_prompt_if_missing_async(
+        self,
+        *,
+        content: UserPromptContent,
+        **kwargs: object,
+    ) -> bool:
+        self.append_calls.append({"content": content, **kwargs})
+        self._history.append(ModelRequest(parts=[UserPromptPart(content=content)]))
+        return True
+
+
+class _CapturingRunEventHub:
+    def __init__(self) -> None:
+        self.events: list[RunEvent] = []
+
+    def publish(self, event: RunEvent) -> int:
+        self.events.append(event)
+        return 0
 
 
 class _FakeWorkspaceHandle:
@@ -519,23 +542,27 @@ def _build_manager(
     config_dir: Path,
     tool_approval_policy: ToolApprovalPolicy | None = None,
     agent: ExternalAgentConfig | None = None,
+    injection_manager: RunInjectionManager | None = None,
+    message_repo: _FakeMessageRepo | None = None,
+    run_event_hub: RunEventHub | None = None,
     resolve_model_config: (
         Callable[[RoleDefinition, LLMRequest], ModelEndpointConfig | None] | None
     ) = None,
 ) -> AgentRuntimeSessionManager:
+    resolved_message_repo = message_repo or _FakeMessageRepo(prompt_text)
     return AgentRuntimeSessionManager(
         config_dir=config_dir,
         config_service=cast(
             ExternalAgentConfigService, _FakeConfigService(agent or _build_agent())
         ),
         session_repo=cast(ExternalAgentSessionRepository, _FakeSessionRepo()),
-        message_repo=cast(MessageRepository, _FakeMessageRepo(prompt_text)),
-        run_event_hub=RunEventHub(),
+        message_repo=cast(MessageRepository, resolved_message_repo),
+        run_event_hub=run_event_hub or RunEventHub(),
         workspace_manager=cast(WorkspaceManager, _FakeWorkspaceManager(workdir)),
         task_repo=cast(TaskRepository, object()),
         shared_store=cast(SharedStateRepository, object()),
         event_bus=cast(EventLog, object()),
-        injection_manager=cast(RunInjectionManager, object()),
+        injection_manager=injection_manager or cast(RunInjectionManager, object()),
         agent_repo=cast(AgentInstanceRepository, object()),
         approval_ticket_repo=cast(ApprovalTicketRepository, object()),
         user_question_repo=None,
@@ -691,6 +718,112 @@ async def test_external_acp_prompt_includes_system_prompt_and_host_server(
     assert "## User Prompt" in prompt_text
     assert "Summarize the architecture." in prompt_text
     assert bridge.active_request is None
+
+
+def test_external_prompt_keeps_system_reminder_out_of_stable_prefix() -> None:
+    reminder = render_system_reminder("Finish the pending todo first.")
+
+    stable_prefix = provider_module._compose_external_prompt_stable_prefix(
+        system_prompt="Provider system prompt text.",
+        include_host_tool_guidance=True,
+    )
+    prompt_text = provider_module._compose_external_prompt(
+        system_prompt="Provider system prompt text.",
+        user_prompt=reminder,
+        include_host_tool_guidance=True,
+    )
+
+    assert prompt_text.startswith(stable_prefix)
+    assert "Provider system prompt text." in stable_prefix
+    assert "## Host Tools" in stable_prefix
+    assert "## User Prompt" not in stable_prefix
+    assert reminder not in stable_prefix
+    assert prompt_text.endswith(f"## User Prompt\n{reminder}")
+
+
+@pytest.mark.asyncio
+async def test_external_acp_prompt_applies_startup_system_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    transport = _RequestCapturingTransport()
+    captured: dict[str, object] = {}
+    injection_manager = RunInjectionManager()
+    injection_manager.activate("run-1")
+    event_hub = _CapturingRunEventHub()
+    message_repo = _FakeMessageRepo("Original task prompt.")
+    reminder = render_system_reminder("Finish the pending todo first.")
+    second_reminder = render_system_reminder("Review the recent tool failure.")
+    _ = injection_manager.enqueue(
+        "run-1",
+        "instance-1",
+        InjectionSource.SYSTEM,
+        reminder,
+        visibility="internal",
+        internal_kind="incomplete_todos",
+        internal_delivery_mode=SystemReminderDeliveryMode.COMPLETION_GUARD.value,
+        internal_issue_key="incomplete_todos:retry:1",
+    )
+    _ = injection_manager.enqueue(
+        "run-1",
+        "instance-1",
+        InjectionSource.SYSTEM,
+        second_reminder,
+        visibility="internal",
+        internal_kind="tool_failure",
+        internal_delivery_mode=SystemReminderDeliveryMode.GUIDANCE.value,
+        internal_issue_key="tool_failure:sample:tool_error",
+    )
+    manager = _build_manager(
+        prompt_text="Original task prompt.",
+        workdir=tmp_path,
+        config_dir=tmp_path / "config",
+        injection_manager=injection_manager,
+        message_repo=message_repo,
+        run_event_hub=cast(RunEventHub, event_hub),
+    )
+    _install_transport_builder(
+        monkeypatch=monkeypatch,
+        transport=transport,
+        captured=captured,
+    )
+    monkeypatch.setattr(
+        manager,
+        "_create_host_tool_bridge",
+        lambda: _FakeHostToolBridge(has_tools=False),
+    )
+    request = _build_request().model_copy(update={"conversation_id": ""})
+
+    output = await manager.prompt(
+        agent_id="agent-1",
+        role=_build_role(),
+        request=request,
+    )
+
+    prompt_payload = transport.requests[2][1]
+    prompt_parts = cast(list[dict[str, object]], prompt_payload["prompt"])
+    prompt_text = str(prompt_parts[0]["text"])
+    applied_events = [
+        event
+        for event in event_hub.events
+        if event.event_type == RunEventType.INJECTION_APPLIED
+    ]
+    applied_payload = json.loads(applied_events[0].payload_json)
+    conversation_ids = {
+        str(call["conversation_id"]) for call in message_repo.append_calls
+    }
+    assert output == "External agent output."
+    assert reminder in prompt_text
+    assert second_reminder in prompt_text
+    assert prompt_text.startswith("## Role Prompt\nProvider system prompt text.")
+    assert prompt_text.endswith(f"## User Prompt\n{reminder}\n\n{second_reminder}")
+    assert conversation_ids == {build_conversation_id("session-1", "spec_coder")}
+    assert len(applied_events) == 2
+    assert "Finish the pending todo first" not in applied_events[0].payload_json
+    assert "Review the recent tool failure" not in applied_events[1].payload_json
+    assert applied_payload["content_redacted"] is True
+    assert applied_payload["restart_scope"] == "external_prompt_start"
+    assert injection_manager.drain_at_boundary("run-1", "instance-1") == ()
 
 
 @pytest.mark.asyncio

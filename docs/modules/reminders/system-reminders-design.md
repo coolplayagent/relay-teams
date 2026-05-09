@@ -72,8 +72,43 @@ reminder contract:
 - `enqueue_only` wakes an already-active loop at the next safe boundary.
 - `append_and_enqueue` also persists the reminder into conversation history before
   retrying a completion attempt.
+- `SystemInjectionConsumer` drains queued internal system reminders, applies the
+  injection classifier, emits redacted `INJECTION_APPLIED` events, and persists
+  applied reminders into conversation history when a message repository is
+  available.
 
-## 4. V1 Policies
+The consumer is intentionally owned by `sessions/runs` instead of provider or
+external runtime modules. Runtime adapters may choose the safe moment to call it,
+but they do not own reminder policy, marker detection, queue filtering, event
+redaction, or history persistence.
+
+## 4. Delivery Boundaries
+
+Built-in local provider execution and external agent runtimes consume the same
+queued reminder primitive at protocol-safe boundaries.
+
+Local provider execution:
+
+- drains startup reminders before building the next prompt turn
+- drains boundary reminders after tool execution and before the next model step
+- applies final-answer classification so guidance reminders can be discarded once
+  an answer is already ready
+
+External ACP, A2A, and CLI runtimes:
+
+- drain startup reminders before prompt composition so a queued
+  `<system-reminder>` becomes the latest conversation user prompt
+- include every applied startup reminder in the outbound prompt text when more
+  than one reminder is drained at the same prompt boundary
+- keep non-reminder injections queued for the normal user follow-up path
+
+External ACP host tools also drain boundary reminders after the hosted Relay
+Teams tool finishes. The bridge returns the original structured tool result and
+adds the rendered reminder text to the tool result content so the external ACP
+agent sees the guidance immediately after the host tool response. This keeps
+tool execution, reminder policy, and ACP protocol formatting separated.
+
+## 5. V1 Policies
 
 Tool failure:
 
@@ -105,14 +140,14 @@ Context pressure:
 - triggered after compaction is applied
 - reminds the agent that old tool output may no longer be available verbatim
 
-## 5. Public Interfaces
+## 6. Public Interfaces
 
 No new `/api/*`, CLI, SDK, or database schema is introduced.
 
 Reminder state is stored through `SharedStateRepository` with run-scoped keys under
 the session scope. The schema is private to `relay_teams.reminders`.
 
-## 6. Testing
+## 7. Testing
 
 The feature is covered by focused unit tests for:
 
@@ -121,4 +156,7 @@ The feature is covered by focused unit tests for:
 - persisted reminder state recovery
 - service-to-injection behavior
 - shared system injection sink behavior
+- shared system injection consumer behavior
+- external runtime prompt-start reminder delivery
+- external ACP host-tool boundary reminder delivery
 - root task retry when incomplete todos block completion
