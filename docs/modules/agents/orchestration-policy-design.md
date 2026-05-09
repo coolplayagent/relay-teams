@@ -6,12 +6,15 @@ Configurable orchestration policy lets each orchestration preset, and optionally
 each run request, constrain coordinator loops and delegated task concurrency
 without changing role prompts or workflow graph definitions.
 
-The feature has two limits:
+The feature has two hard execution limits and a planning policy:
 
 - `max_orchestration_cycles`: maximum coordinator execution cycles after the
   optional first coordinator pass.
 - `max_parallel_delegated_tasks`: maximum ready delegated task lanes that may
   run concurrently.
+- `auto_plan_long_tasks`: whether the runtime may ask the built-in `DelegationPlanner`
+  to produce a bounded parallel delegation plan before the first coordinator
+  pass.
 
 Both limits are runtime contracts, not prompt-only suggestions. The coordinator
 may expose them to the model, but enforcement stays in the orchestration runtime.
@@ -47,6 +50,11 @@ may expose them to the model, but enforcement stays in the orchestration runtime
 
 - `max_orchestration_cycles`: default `8`, valid range `0..64`.
 - `max_parallel_delegated_tasks`: default `4`, valid range `0..16`.
+- `auto_plan_long_tasks`: default `true`.
+- `planner_role_id`: default `DelegationPlanner`.
+- `coordinator_inline_budget_steps`: default `2`, valid range `0..16`.
+- `max_temporary_roles_per_run`: default `5`, valid range `0..16`.
+- `prefer_temporary_roles_for_long_tasks`: default `true`.
 
 The model is embedded in:
 
@@ -69,6 +77,9 @@ Validation rules:
 - Unknown policy fields are rejected.
 - `max_orchestration_cycles` must be `0..64`.
 - `max_parallel_delegated_tasks` must be `0..16`.
+- `planner_role_id` must be a non-empty role id.
+- `coordinator_inline_budget_steps` must be `0..16`.
+- `max_temporary_roles_per_run` must be `0..16`.
 - Role validation remains unchanged: preset roles must be known non-reserved
   roles, and graph nodes must reference roles listed by the preset.
 
@@ -99,8 +110,8 @@ Resolution rules:
 ## 7. Prompt Visibility
 
 `RuntimePromptBuilder` appends a compact "Orchestration Policy" section whenever
-the prompt input includes a topology. The section lists the resolved cycle and
-parallel delegation limits.
+the prompt input includes a topology. The section lists the resolved cycle,
+parallel delegation, planner, inline budget, and temporary role limits.
 
 This is advisory context for the coordinator. It does not replace the runtime
 checks described below.
@@ -113,15 +124,22 @@ AI mode uses `RunTopologySnapshot.orchestration_policy` as the loop contract.
 
 Flow:
 
-1. The optional first coordinator pass may create delegated tasks.
-2. If `max_orchestration_cycles` is `0`, the coordinator checks whether any
+1. If `auto_plan_long_tasks` is enabled and the root task looks long or
+   spec-heavy, the coordinator creates a delegated `DelegationPlanner` task through the
+   existing task orchestration path.
+2. `DelegationPlanner` returns a structured `DelegationPlan`; the coordinator validates
+   lane bounds, creates or reuses temporary roles through `RuntimeRoleResolver`,
+   and creates lane tasks through `TaskOrchestrationService`.
+3. If planning is disabled, unavailable, unnecessary, or invalid, the optional
+   first coordinator pass may create delegated tasks.
+4. If `max_orchestration_cycles` is `0`, the coordinator checks whether any
    delegated tasks are already `CREATED` or `ASSIGNED`.
-3. If delegated work exists, the root task is marked failed and the run returns
+5. If delegated work exists, the root task is marked failed and the run returns
    an assistant error with code `orchestration_cycles_exhausted`.
-4. Otherwise the coordinator executes at most `max_orchestration_cycles` cycles.
-5. Each cycle runs ready delegated lanes through `_run_pending_delegated_tasks`
+6. Otherwise the coordinator executes at most `max_orchestration_cycles` cycles.
+7. Each cycle runs ready delegated lanes through `_run_pending_delegated_tasks`
    with `max_parallel_tasks=policy.max_parallel_delegated_tasks`.
-6. If ready lanes exist while `max_parallel_delegated_tasks` is `0`, delegated
+8. If ready lanes exist while `max_parallel_delegated_tasks` is `0`, delegated
    execution is blocked, the root task is marked failed, and the run returns an
    assistant error with code `delegated_task_execution_disabled`.
 
@@ -142,6 +160,10 @@ the policy can reduce or disable delegated execution for the whole run. If ready
 graph work exists while the resolved limit is zero, graph execution returns the
 same `delegated_task_execution_disabled` assistant error and fails the root task.
 
+Graph mode does not inject an automatic planner node. Fixed DAG presets remain
+the source of truth for node order. Presets may include `DelegationPlanner` explicitly if
+they need a planning node.
+
 ### 8.3 Explicit Delegated Dispatch
 
 `TaskOrchestrationService` uses the run intent topology to size the per-run
@@ -160,6 +182,13 @@ Policy blocks are logged with structured events:
 - `coord.cycle.blocked`
 - `coord.delegated_tasks.blocked`
 
+Automatic planning emits:
+
+- `coord.planning.tasks_created`
+- `coord.planning.completed`
+- `coord.planning.failed`
+- `coord.planning.role_missing`
+
 The root task must reach a terminal failed state before the coordinator returns
 an assistant error for policy blocks. This keeps run state, task state, and
 resume/monitoring behavior consistent.
@@ -176,6 +205,11 @@ The assistant error payload carries:
 Coverage should stay aligned with the runtime boundary touched by each behavior:
 
 - Policy model defaults, bounds, and prompt rendering.
+- Built-in `DelegationPlanner` role loading and tool boundary.
+- Delegation plan model validation for unique lane ids, known dependencies, and
+  acyclic dependencies.
+- Automatic planning creates a planner task and lane tasks through existing task
+  orchestration services.
 - Settings service preset policy resolution and run override resolution.
 - System config API reads and writes for preset policy.
 - Run creation API and SDK forwarding for per-run policy overrides.

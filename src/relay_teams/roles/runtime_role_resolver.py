@@ -87,6 +87,20 @@ class RuntimeRoleResolver:
         ]
         return tuple(static_roles + temp_roles)
 
+    async def list_temporary_role_ids_async(self, *, run_id: str) -> tuple[str, ...]:
+        return tuple(
+            record.role.role_id
+            for record in await self._temporary_role_repository.list_by_run_async(
+                run_id
+            )
+        )
+
+    async def delete_temporary_role_async(self, *, run_id: str, role_id: str) -> None:
+        await self._temporary_role_repository.delete_async(
+            run_id=run_id,
+            role_id=role_id,
+        )
+
     def create_temporary_role(
         self,
         *,
@@ -116,6 +130,35 @@ class RuntimeRoleResolver:
         )
         return record.role.to_role_definition()
 
+    async def create_temporary_role_async(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        role: TemporaryRoleSpec,
+        source: TemporaryRoleSource = TemporaryRoleSource.META_AGENT_GENERATED,
+    ) -> RoleDefinition:
+        if self._role_registry.is_coordinator_role(role.role_id):
+            raise ValueError(
+                f"Temporary role id conflicts with coordinator role: {role.role_id}"
+            )
+        if self._role_registry.is_main_agent_role(role.role_id):
+            raise ValueError(
+                f"Temporary role id conflicts with main agent role: {role.role_id}"
+            )
+        if role.template_role_id is not None:
+            role = await self._merge_with_template_async(run_id=run_id, role=role)
+        role = self._strip_coordinator_only_tools(role)
+        record = await self._temporary_role_repository.upsert_async(
+            TemporaryRoleRecord(
+                run_id=run_id,
+                session_id=session_id,
+                source=source,
+                role=role,
+            )
+        )
+        return record.role.to_role_definition()
+
     def cleanup_run(self, *, run_id: str) -> None:
         self._temporary_role_repository.delete_by_run(run_id)
 
@@ -129,6 +172,43 @@ class RuntimeRoleResolver:
         if template_role_id is None:
             return role
         template = self.get_effective_role(run_id=run_id, role_id=template_role_id)
+        if self._role_registry.is_coordinator_role(
+            template.role_id
+        ) or is_coordinator_role_definition(template):
+            raise ValueError(
+                "Coordinator role cannot be used as a temporary role template"
+            )
+        return TemporaryRoleSpec(
+            role_id=role.role_id,
+            name=role.name,
+            description=role.description,
+            version=role.version,
+            tools=template.tools if len(role.tools) == 0 else role.tools,
+            mcp_servers=(
+                template.mcp_servers if len(role.mcp_servers) == 0 else role.mcp_servers
+            ),
+            skills=template.skills if len(role.skills) == 0 else role.skills,
+            model_profile=template.model_profile
+            if role.model_profile == "default"
+            else role.model_profile,
+            bound_agent_id=role.bound_agent_id or template.bound_agent_id,
+            execution_surface=role.execution_surface,
+            mode=RoleMode.SUBAGENT,
+            memory_profile=role.memory_profile,
+            system_prompt=role.system_prompt,
+            template_role_id=role.template_role_id,
+        )
+
+    async def _merge_with_template_async(
+        self, *, run_id: str, role: TemporaryRoleSpec
+    ) -> TemporaryRoleSpec:
+        template_role_id = role.template_role_id
+        if template_role_id is None:
+            return role
+        template = await self.get_effective_role_async(
+            run_id=run_id,
+            role_id=template_role_id,
+        )
         if self._role_registry.is_coordinator_role(
             template.role_id
         ) or is_coordinator_role_definition(template):

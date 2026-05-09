@@ -239,6 +239,20 @@ class TemporaryRoleRepository(SharedSqliteRepository):
         )
         return tuple(self._to_record(row) for row in rows)
 
+    async def delete_async(self, *, run_id: str, role_id: str) -> None:
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.execute(
+                "DELETE FROM temporary_roles WHERE run_id=? AND role_id=?",
+                (run_id, role_id),
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="delete_async",
+            operation=lambda _conn: operation(),
+        )
+
     def delete_by_run(self, run_id: str) -> None:
         run_sqlite_write_with_retry(
             conn=self._conn,

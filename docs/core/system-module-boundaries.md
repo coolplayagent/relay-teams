@@ -36,6 +36,10 @@ With the current layout, that means:
 - `reminders/*` owns built-in runtime reminder policy, reminder state, and
   `<system-reminder>` rendering. It consumes typed observations from execution,
   orchestration, and prompt maintenance boundaries.
+- `agents/orchestration/delegation_planning.py` owns automatic DelegationPlanner
+  planning contracts and conversion into task drafts. It must use the existing
+  task orchestration and runtime role resolver paths; it must not call providers
+  directly or write model-visible execution results.
 - `notifications/*` owns outbound notification delivery only.
 - `persistence/*` and module-local `repository.py` files own storage mechanics only;
   they should not perform orchestration decisions.
