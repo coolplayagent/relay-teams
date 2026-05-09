@@ -121,6 +121,141 @@ console.log(JSON.stringify({
     assert payload["viewedCalls"] == ["session-1"]
 
 
+def test_run_stopped_keeps_terminal_run_unviewed_for_resume_context(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunStopped } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+
+handleRunStopped({ run_id: 'run-1', session_id: 'session-1' }, {});
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    viewedCalls: globalThis.__markSessionTerminalRunViewedCalls,
+    stoppedCalls: globalThis.__markNormalModeSubagentSessionsStoppedForParentCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["viewedCalls"] == []
+    assert payload["stoppedCalls"] == ["session-1"]
+
+
+def test_run_started_does_not_reactivate_stopped_subagent_sessions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleRunStarted } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+
+handleRunStarted({ run_id: 'run-1', session_id: 'session-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    clearedCalls: globalThis.__clearNormalModeSubagentParentStopStateCalls,
+    runningCalls: globalThis.__markNormalModeSubagentSessionsRunningForParentCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["clearedCalls"] == ["session-1"]
+    assert payload["runningCalls"] == []
+
+
+def test_run_resumed_reactivates_parent_stopped_subagent_sessions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.activeRunId = 'run-1';
+
+routeEvent('run_resumed', {}, { run_id: 'run-1', session_id: 'session-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    calls: globalThis.__runEventCalls.filter(call => call.name === 'handleRunStarted'),
+}));
+""".strip(),
+    )
+
+    assert payload["calls"] == [
+        {
+            "name": "handleRunStarted",
+            "args": [
+                {"run_id": "run-1", "session_id": "session-1"},
+                {"resumeSubagents": True},
+            ],
+        }
+    ]
+
+
+def test_subagent_session_status_event_routes_to_subagent_session_cache(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('subagent_session_status_changed', {
+    parent_session_id: 'session-1',
+    parent_run_id: 'run-1',
+    subagent_run_id: 'subagent_run_1',
+    subagent_instance_id: 'inst-sub-1',
+    subagent_role_id: 'Explorer',
+    status: 'stopped',
+}, {
+    run_id: 'run-1',
+    session_id: 'session-1',
+    event_id: 'evt-1',
+});
+
+console.log(JSON.stringify({
+    statusEvents: globalThis.__subagentSessionStatusEvents,
+    backgroundEvents: globalThis.__applyBackgroundTaskEventCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["statusEvents"] == [
+        {
+            "payload": {
+                "parent_session_id": "session-1",
+                "parent_run_id": "run-1",
+                "subagent_run_id": "subagent_run_1",
+                "subagent_instance_id": "inst-sub-1",
+                "subagent_role_id": "Explorer",
+                "status": "stopped",
+            },
+            "eventMeta": {
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "event_id": "evt-1",
+            },
+        }
+    ]
+    assert payload["backgroundEvents"] == []
+
+
 def test_terminal_run_event_marks_parent_session_when_subagent_view_is_open(
     tmp_path: Path,
 ) -> None:
@@ -510,6 +645,57 @@ console.log(JSON.stringify({
     assert payload["subagentCalls"] == []
 
 
+def test_route_event_updates_foreground_subagent_background_task_status(
+    tmp_path: Path,
+) -> None:
+    payload = _run_event_router_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { routeEvent } = await import('./eventRouterIndex.mjs');
+
+routeEvent('background_task_stopped', {
+    background_task_id: 'foreground-subagent-1',
+    run_id: 'run-1',
+    session_id: 'session-1',
+    kind: 'subagent',
+    execution_mode: 'foreground',
+    subagent_run_id: 'subagent_run_deadbeef',
+    subagent_instance_id: 'writer-1',
+    subagent_role_id: 'writer',
+    status: 'stopped',
+}, { run_id: 'run-1', trace_id: 'run-1', session_id: 'session-1' });
+
+await Promise.resolve();
+
+console.log(JSON.stringify({
+    recoveryCalls: globalThis.__scheduleRecoveryContinuityRefreshCalls,
+    backgroundCalls: globalThis.__applyBackgroundTaskEventCalls,
+    subagentCalls: globalThis.__normalModeSubagentEvents,
+}));
+""".strip(),
+    )
+
+    assert payload["recoveryCalls"] == []
+    assert payload["backgroundCalls"] == []
+    assert payload["subagentCalls"] == [
+        {
+            "sessionId": "session-1",
+            "payload": {
+                "background_task_id": "foreground-subagent-1",
+                "run_id": "run-1",
+                "session_id": "session-1",
+                "kind": "subagent",
+                "execution_mode": "foreground",
+                "subagent_run_id": "subagent_run_deadbeef",
+                "subagent_instance_id": "writer-1",
+                "subagent_role_id": "writer",
+                "status": "stopped",
+            },
+            "eventType": "background_task_stopped",
+        }
+    ]
+
+
 def test_handle_subagent_run_terminal_finalizes_with_run_id(
     tmp_path: Path,
 ) -> None:
@@ -592,6 +778,89 @@ console.log(JSON.stringify({
         }
     ]
     assert payload["settleCalls"] == ["writer-1"]
+
+
+def test_handle_subagent_run_terminal_resolves_active_child_session_by_run_id(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleSubagentRunTerminal } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+globalThis.__activeSubagentSession = {
+    sessionId: 'session-1',
+    instanceId: 'writer-1',
+    roleId: 'writer',
+    runId: 'subagent_run_deadbeef',
+};
+
+handleSubagentRunTerminal(
+    '',
+    'stopped',
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+    '',
+);
+
+console.log(JSON.stringify({
+    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+    statusByRunCalls: globalThis.__updateNormalModeSubagentSessionStatusByRunIdCalls,
+    settleCalls: globalThis.__settleActiveSubagentSessionAfterTerminalCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["statusCalls"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-1",
+            "status": "stopped",
+        }
+    ]
+    assert payload["statusByRunCalls"] == []
+    assert payload["settleCalls"] == ["writer-1"]
+
+
+def test_handle_subagent_run_active_resolves_active_child_session_by_run_id(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleSubagentRunActive } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+globalThis.__activeSubagentSession = {
+    sessionId: 'session-1',
+    instanceId: 'writer-1',
+    roleId: 'writer',
+    runId: 'subagent_run_deadbeef',
+};
+
+handleSubagentRunActive(
+    '',
+    { run_id: 'subagent_run_deadbeef', trace_id: 'subagent_run_deadbeef' },
+    '',
+);
+
+console.log(JSON.stringify({
+    statusCalls: globalThis.__updateNormalModeSubagentSessionStatusCalls,
+    statusByRunCalls: globalThis.__updateNormalModeSubagentSessionStatusByRunIdCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["statusCalls"] == [
+        {
+            "sessionId": "session-1",
+            "instanceId": "writer-1",
+            "status": "running",
+        }
+    ]
+    assert payload["statusByRunCalls"] == []
 
 
 def test_handle_fallback_logs_escape_profile_labels(tmp_path: Path) -> None:
@@ -842,6 +1111,26 @@ export function getActiveSubagentSessionStreamContainer() {
     return globalThis.__activeSubagentSessionStreamContainer || null;
 }
 
+export function getNormalModeSubagentSessionByRunId(sessionId, runId) {
+    const active = globalThis.__activeSubagentSession || null;
+    if (active && active.sessionId === sessionId && active.runId === runId) {
+        return active;
+    }
+    return null;
+}
+
+export function clearNormalModeSubagentParentStopState(sessionId) {
+    globalThis.__clearNormalModeSubagentParentStopStateCalls.push(sessionId);
+}
+
+export function markNormalModeSubagentSessionsRunningForParent(sessionId) {
+    globalThis.__markNormalModeSubagentSessionsRunningForParentCalls.push(sessionId);
+}
+
+export function markNormalModeSubagentSessionsStoppedForParent(sessionId) {
+    globalThis.__markNormalModeSubagentSessionsStoppedForParentCalls.push(sessionId);
+}
+
 export function rememberNormalModeSubagentSession(sessionId, record) {
     globalThis.__rememberNormalModeSubagentSessionCalls.push({ sessionId, record });
 }
@@ -858,6 +1147,14 @@ export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, sta
     globalThis.__updateNormalModeSubagentSessionStatusCalls.push({
         sessionId,
         instanceId,
+        status,
+    });
+}
+
+export function updateNormalModeSubagentSessionStatusByRunId(sessionId, runId, status) {
+    globalThis.__updateNormalModeSubagentSessionStatusByRunIdCalls.push({
+        sessionId,
+        runId,
         status,
     });
 }
@@ -983,6 +1280,10 @@ globalThis.__openAgentPanelCalls = [];
 globalThis.__rememberNormalModeSubagentSessionCalls = [];
 globalThis.__renderActiveSubagentSessionCalls = [];
 globalThis.__updateNormalModeSubagentSessionStatusCalls = [];
+globalThis.__updateNormalModeSubagentSessionStatusByRunIdCalls = [];
+globalThis.__clearNormalModeSubagentParentStopStateCalls = [];
+globalThis.__markNormalModeSubagentSessionsRunningForParentCalls = [];
+globalThis.__markNormalModeSubagentSessionsStoppedForParentCalls = [];
 globalThis.__finalizeStreamCalls = [];
 globalThis.__reconcileTerminalRunStreamStateCalls = [];
 globalThis.__settleActiveSubagentSessionAfterTerminalCalls = [];
@@ -1077,7 +1378,16 @@ export function applyBackgroundTaskEvent(payload, eventMeta = null, eventType = 
 }
 
 export function isDisplayableBackgroundTaskPayload(payload) {
-    return payload?.execution_mode === 'background' || payload?.kind === 'subagent';
+    const executionMode = String(payload?.execution_mode || payload?.executionMode || '').trim();
+    if (executionMode === 'foreground') {
+        return false;
+    }
+    if (executionMode === 'background') {
+        return true;
+    }
+    const kind = String(payload?.kind || '').trim();
+    const subagentRunId = String(payload?.subagent_run_id || payload?.subagentRunId || '').trim();
+    return kind === 'subagent' || subagentRunId.startsWith('subagent_run_');
 }
 """.strip(),
         encoding="utf-8",
@@ -1093,7 +1403,18 @@ export function scheduleSessionTokenUsageRefresh(options) {
     (tmp_path / "mockSubagentSessions.mjs").write_text(
         """
 export function rememberNormalModeSubagentFromBackgroundTask(sessionId, payload, eventType) {
+    const kind = String(payload?.kind || '').trim();
+    const subagentRunId = String(payload?.subagent_run_id || payload?.subagentRunId || '').trim();
+    if (kind !== 'subagent' && !subagentRunId.startsWith('subagent_run_')) {
+        return false;
+    }
     globalThis.__normalModeSubagentEvents.push({ sessionId, payload, eventType });
+    return true;
+}
+
+export function applySubagentSessionStatusEvent(payload, eventMeta = null) {
+    globalThis.__subagentSessionStatusEvents.push({ payload, eventMeta });
+    return true;
 }
 """.strip(),
         encoding="utf-8",
@@ -1168,6 +1489,7 @@ export function handleRunCompleted(...args) { pushCall('handleRunCompleted', arg
 export function handleRunFailed(...args) { pushCall('handleRunFailed', args); }
 export function handleRunStarted(...args) { pushCall('handleRunStarted', args); }
 export function handleRunStopped(...args) { pushCall('handleRunStopped', args); }
+export function handleSubagentRunActive(...args) { pushCall('handleSubagentRunActive', args); }
 export function handleSubagentRunTerminal(...args) { pushCall('handleSubagentRunTerminal', args); }
 export function handleThinkingDelta(...args) { pushCall('handleThinkingDelta', args); }
 export function handleThinkingFinished(...args) { pushCall('handleThinkingFinished', args); }
@@ -1218,6 +1540,7 @@ globalThis.__scheduleRecoveryContinuityRefreshCalls = [];
 globalThis.__scheduleSessionTokenUsageRefreshCalls = [];
 globalThis.__runEventCalls = [];
 globalThis.__normalModeSubagentEvents = [];
+globalThis.__subagentSessionStatusEvents = [];
 globalThis.__applyBackgroundTaskEventCalls = [];
 
 {runner_source}

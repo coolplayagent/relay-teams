@@ -16,6 +16,11 @@ import { formatMessage, t } from '../../utils/i18n.js';
 import { sysLog } from '../../utils/logger.js';
 import { getDrawer } from './dom.js';
 import { loadAgentHistory } from './history.js';
+import {
+    getActiveSubagentSession,
+    updateNormalModeSubagentSessionStatus,
+} from '../subagentSessions.js';
+import { markSubagentStatus } from '../subagentRail.js';
 
 const REFLECTION_BUTTON_RESET_MS = 2400;
 
@@ -105,10 +110,13 @@ export function createPanel(instanceId, roleId, onClose) {
     const stopBtn = panelEl.querySelector('.agent-panel-stop');
     if (stopBtn) {
         stopBtn.onclick = async () => {
-            if (!state.activeRunId) return;
+            const control = resolveSubagentControlTarget(instanceId);
+            if (!control.runId) return;
             try {
-                await stopRun(state.activeRunId, { scope: 'subagent', instanceId });
-                state.pausedSubagent = { runId: state.activeRunId, instanceId, roleId };
+                await stopRun(control.runId, control.stopOptions);
+                markSubagentStatus(instanceId, 'stopped');
+                updateNormalModeSubagentSessionStatus(state.currentSessionId, instanceId, 'stopped');
+                state.pausedSubagent = { runId: control.runId, instanceId, roleId };
                 sysLog(formatMessage('subagent.log.paused', { agent: roleId || instanceId }), 'log-info');
             } catch (e) {
                 sysLog(formatMessage('subagent.error.pause_failed', { error: e.message }), 'log-error');
@@ -173,20 +181,37 @@ export function createPanel(instanceId, roleId, onClose) {
     bindPanelContextIndicator(panelEl, instanceId);
     async function sendInject() {
         const text = textarea.value.trim();
-        if (!text || !state.activeRunId) return;
-        const shouldResume = !!(
+        const controlRunId = resolveSubagentControlRunId(instanceId);
+        if (!text || !controlRunId) return;
+        const activeSubagent = getActiveSubagentSession();
+        const activeSubagentStatus = String(
+            activeSubagent?.instanceId === instanceId
+                ? activeSubagent?.status || activeSubagent?.runStatus || ''
+                : '',
+        ).trim();
+        const locallyPaused = (
+            state.pausedSubagent?.instanceId === instanceId
+            || ['paused', 'stopped'].includes(activeSubagentStatus)
+        );
+        const snapshotPaused = !!(
             state.currentRecoverySnapshot?.pausedSubagent
-            && state.currentRecoverySnapshot?.activeRun?.run_id === state.activeRunId
+            && state.currentRecoverySnapshot?.activeRun?.run_id === controlRunId
+        );
+        const shouldResume = !!(
+            locallyPaused
+            || snapshotPaused
         );
         textarea.value = '';
         textarea.style.height = 'auto';
         try {
-            await injectSubagentMessage(state.activeRunId, instanceId, text);
+            await injectSubagentMessage(controlRunId, instanceId, text);
+            markSubagentStatus(instanceId, 'running');
+            updateNormalModeSubagentSessionStatus(state.currentSessionId, instanceId, 'running');
             if (state.pausedSubagent && state.pausedSubagent.instanceId === instanceId) {
                 state.pausedSubagent = null;
             }
             if (shouldResume) {
-                await resumeRecoverableRun(state.activeRunId, {
+                await resumeRecoverableRun(controlRunId, {
                     sessionId: state.currentSessionId,
                     reason: 'subagent follow-up',
                     quiet: true,
@@ -220,6 +245,30 @@ export function createPanel(instanceId, roleId, onClose) {
         loadedSessionId: '',
         loadedRunId: '',
     };
+}
+
+function resolveSubagentControlTarget(instanceId) {
+    const safeInstanceId = String(instanceId || '').trim();
+    const activeSubagent = getActiveSubagentSession();
+    const subagentRunId = String(
+        activeSubagent?.instanceId === safeInstanceId
+            ? activeSubagent?.runId || ''
+            : '',
+    ).trim();
+    if (subagentRunId) {
+        return {
+            runId: subagentRunId,
+            stopOptions: { scope: 'main' },
+        };
+    }
+    return {
+        runId: String(state.activeRunId || '').trim(),
+        stopOptions: { scope: 'subagent', instanceId: safeInstanceId },
+    };
+}
+
+function resolveSubagentControlRunId(instanceId) {
+    return resolveSubagentControlTarget(instanceId).runId;
 }
 
 

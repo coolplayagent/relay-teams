@@ -10,6 +10,9 @@ import {
 } from './api.js';
 import { refreshVisibleContextIndicators } from '../components/contextIndicators.js';
 import { renderRuntimeInjectQueue } from '../components/runtimeInjectQueue.js';
+import {
+    markNormalModeSubagentSessionsStoppedForParent,
+} from '../components/subagentSessions.js';
 import { refreshSessionTopologyControls } from '../app/prompt.js';
 import { scheduleSessionsRefresh } from '../components/sidebar.js';
 import { els } from '../utils/dom.js';
@@ -1911,8 +1914,15 @@ async function finalizeStopAndSyncRecovery(runId, sessionId) {
     if (!safeRunId) return;
 
     endStream();
+    applyLocalStoppedSubagentSnapshot(safeSessionId);
     await applyLocalStoppedSnapshot(safeRunId, safeSessionId);
     await syncRecoveryAfterStopRequest(safeRunId, safeSessionId);
+}
+
+function applyLocalStoppedSubagentSnapshot(sessionId) {
+    const safeSessionId = String(sessionId || state.currentSessionId || '').trim();
+    if (!safeSessionId) return;
+    markNormalModeSubagentSessionsStoppedForParent(safeSessionId);
 }
 
 async function applyLocalStoppedSnapshot(runId, sessionId) {

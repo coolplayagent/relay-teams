@@ -109,6 +109,10 @@ export function refreshSessionTopologyControls() {
 export function replaceSessionSubagents() {
     return undefined;
 }
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -370,6 +374,258 @@ console.log(JSON.stringify({
     assert payload["scheduleSessionsRefreshCalls"] == 0
 
 
+def test_stop_request_applies_local_stopped_subagent_snapshot(tmp_path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    source_path = repo_root / "frontend" / "dist" / "js" / "core" / "stream.js"
+    module_under_test_path = tmp_path / "stream.mjs"
+    runner_path = tmp_path / "runner_stop_subagents.mjs"
+
+    source_text = (
+        source_path.read_text(encoding="utf-8")
+        .replace("./api.js", "./mockApi.mjs")
+        .replace("../components/contextIndicators.js", "./mockContextIndicators.mjs")
+        .replace("../app/prompt.js", "./mockPrompt.mjs")
+        .replace("../components/subagentSessions.js", "./mockSubagentSessions.mjs")
+        .replace("../components/sidebar.js", "./mockSidebar.mjs")
+        .replace("../app/recovery.js", "./mockRecovery.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+        .replace("./eventRouter.js", "./mockEventRouter.mjs")
+        .replace("../components/messageRenderer.js", "./mockMessageRenderer.mjs")
+        .replace("../components/runtimeInjectQueue.js", "./mockRuntimeInjectQueue.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("./state.js", "./mockState.mjs")
+    )
+    module_under_test_path.write_text(source_text, encoding="utf-8")
+    _write_stream_runtime_inject_mocks(tmp_path)
+
+    (tmp_path / "mockApi.mjs").write_text(
+        """
+export async function fetchSessionSubagents() {
+    return [];
+}
+
+export async function fetchSessions() {
+    return [];
+}
+
+export async function sendUserPrompt() {
+    throw new Error("not used");
+}
+
+export async function stopRun(runId, options = {}) {
+    globalThis.__stopRunCalls.push({ runId, options });
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockContextIndicators.mjs").write_text(
+        """
+export function refreshVisibleContextIndicators() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockPrompt.mjs").write_text(
+        """
+export function refreshSessionTopologyControls() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSubagentSessions.mjs").write_text(
+        """
+export function markNormalModeSubagentSessionsStoppedForParent(sessionId) {
+    globalThis.__stoppedSubagentParentSessions.push(sessionId);
+    return ["inst-sub-1"];
+}
+
+export function replaceSessionSubagents() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockSidebar.mjs").write_text(
+        """
+export function scheduleSessionsRefresh() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockRecovery.mjs").write_text(
+        """
+export function applyRecoverySnapshot(snapshot) {
+    globalThis.__recoverySnapshots.push(snapshot);
+}
+
+export function scheduleRecoveryContinuityRefresh(options = {}) {
+    globalThis.__recoveryRefreshes.push(options);
+}
+
+export async function hydrateSessionView(sessionId, options = {}) {
+    globalThis.__hydrateSessionViewCalls.push({ sessionId, options });
+    return {
+        activeRun: {
+            run_id: "run-1",
+            status: "stopped",
+            phase: "stopped",
+            is_recoverable: true,
+        },
+    };
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockDom.mjs").write_text(
+        """
+export const els = {
+    sendBtn: { disabled: false, style: {}, setAttribute() {} },
+    promptInput: { disabled: false, dataset: {}, placeholder: "", getAttribute() { return this.placeholder || ""; }, setAttribute(name, value) { this[name] = value; }, focus() {} },
+    yoloToggle: { disabled: false },
+    thinkingModeToggle: { disabled: false },
+    thinkingEffortSelect: { disabled: false },
+    stopBtn: { style: {}, disabled: false },
+};
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockLogger.mjs").write_text(
+        """
+export function errorToPayload(error, extra = {}) {
+    return { error: String(error?.message || error || ''), ...extra };
+}
+
+export function logError() {
+    return undefined;
+}
+
+export function logInfo() {
+    return undefined;
+}
+
+export function logWarn() {
+    return undefined;
+}
+
+export function sysLog() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockEventRouter.mjs").write_text(
+        """
+export function routeEvent() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockMessageRenderer.mjs").write_text(
+        """
+export function clearRunStreamState(runId) {
+    globalThis.__clearedRunStreamStates.push(runId);
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "mockState.mjs").write_text(
+        """
+export const state = {
+    currentSessionId: "session-1",
+    currentSessionMode: "normal",
+    activeSubagentSession: {
+        sessionId: "session-1",
+        instanceId: "inst-sub-1",
+        runId: "subagent_run_1",
+        status: "running",
+        runStatus: "running",
+    },
+    activeEventSource: { close() { globalThis.__activeEventSourceClosed = true; } },
+    activeRunId: "run-1",
+    isGenerating: true,
+    runPrimaryRoleMap: {},
+};
+
+export function getPrimaryRoleId() {
+    return "MainAgent";
+}
+
+export function getPrimaryRoleLabel() {
+    return "Main Agent";
+}
+
+export function getRunPrimaryRoleId() {
+    return "MainAgent";
+}
+
+export function getRunPrimaryRoleLabel() {
+    return "Main Agent";
+}
+
+export function setRunPrimaryRole() {
+    return undefined;
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    runner_path.write_text(
+        """
+globalThis.__stopRunCalls = [];
+globalThis.__stoppedSubagentParentSessions = [];
+globalThis.__recoverySnapshots = [];
+globalThis.__recoveryRefreshes = [];
+globalThis.__hydrateSessionViewCalls = [];
+globalThis.__clearedRunStreamStates = [];
+
+const { requestStopCurrentRun } = await import("./stream.mjs");
+
+const stopped = await requestStopCurrentRun();
+
+console.log(JSON.stringify({
+    stopped,
+    stopRunCalls: globalThis.__stopRunCalls,
+    stoppedSubagentParentSessions: globalThis.__stoppedSubagentParentSessions,
+    recoverySnapshots: globalThis.__recoverySnapshots,
+    recoveryRefreshes: globalThis.__recoveryRefreshes,
+    hydrateSessionViewCalls: globalThis.__hydrateSessionViewCalls,
+    clearedRunStreamStates: globalThis.__clearedRunStreamStates,
+}));
+""".strip(),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        ["node", str(runner_path)],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=3,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Node runner failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+
+    assert payload["stopped"] is True
+    assert payload["stopRunCalls"] == [{"runId": "run-1", "options": {"scope": "main"}}]
+    assert payload["stoppedSubagentParentSessions"] == ["session-1"]
+    assert payload["recoverySnapshots"][0]["active_run"]["status"] == "stopped"
+    assert payload["recoveryRefreshes"][0]["reason"] == "stop-sync"
+    assert payload["hydrateSessionViewCalls"][0]["sessionId"] == "session-1"
+    assert payload["clearedRunStreamStates"] == ["run-1", "run-1"]
+
+
 def test_active_parent_run_keeps_normal_subagent_discovery_polling(
     tmp_path: Path,
 ) -> None:
@@ -446,6 +702,10 @@ export function replaceSessionSubagents(sessionId, payload) {
         sessionId,
         rowCount: Array.isArray(payload) ? payload.length : 0,
     });
+}
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
 }
 """.strip(),
         encoding="utf-8",
@@ -742,6 +1002,10 @@ export async function hydrateSessionView(sessionId, options = {}) {
         """
 export function replaceSessionSubagents() {
     return undefined;
+}
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
 }
 """.strip(),
         encoding="utf-8",
@@ -1088,6 +1352,10 @@ export function refreshSessionTopologyControls() {
         """
 export function replaceSessionSubagents() {
     return undefined;
+}
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
 }
 """.strip(),
         encoding="utf-8",
@@ -1442,6 +1710,10 @@ export function refreshSessionTopologyControls() {
 export function replaceSessionSubagents() {
     return undefined;
 }
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -1769,6 +2041,10 @@ export function refreshSessionTopologyControls() {
 export function replaceSessionSubagents() {
     return undefined;
 }
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -2091,6 +2367,10 @@ export function replaceSessionSubagents(sessionId, payload, options = {}) {
         runId: Array.isArray(payload) ? payload[0]?.run_id || null : null,
         emitChange: options.emitChange === true,
     });
+}
+
+export function markNormalModeSubagentSessionsStoppedForParent() {
+    return [];
 }
 """.strip(),
         encoding="utf-8",

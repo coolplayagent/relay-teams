@@ -246,6 +246,8 @@ for raw_line in sys.stdin:
         raise SystemExit(0)
 """
 
+_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS = 20
+
 
 def _build_cli_agent(
     command: str,
@@ -307,6 +309,7 @@ class _TerminateTimeoutProcess:
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS)
 async def test_probe_cli_agent_initializes_stdio_json_rpc_runtime() -> None:
     result = await probe_cli_agent(
         _build_cli_agent(sys.executable, ("-c", _JSON_RPC_RUNTIME_SCRIPT))
@@ -328,6 +331,7 @@ async def test_probe_cli_agent_reports_missing_command(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS)
 async def test_probe_cli_agent_resolves_relative_command_from_runtime_cwd(
     tmp_path: Path,
 ) -> None:
@@ -350,6 +354,7 @@ async def test_probe_cli_agent_resolves_relative_command_from_runtime_cwd(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS)
 async def test_probe_cli_agent_uses_transport_env_for_command_lookup(
     tmp_path: Path,
 ) -> None:
@@ -373,6 +378,7 @@ async def test_probe_cli_agent_uses_transport_env_for_command_lookup(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS)
 async def test_run_cli_agent_prompt_uses_thread_turn_json_rpc(tmp_path: Path) -> None:
     result = await run_cli_agent_prompt(
         config=_build_cli_agent(sys.executable, ("-c", _JSON_RPC_RUNTIME_SCRIPT)),
@@ -385,6 +391,7 @@ async def test_run_cli_agent_prompt_uses_thread_turn_json_rpc(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS)
 async def test_run_cli_agent_prompt_uses_completed_item_fallback(
     tmp_path: Path,
 ) -> None:
@@ -402,6 +409,7 @@ async def test_run_cli_agent_prompt_uses_completed_item_fallback(
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(_CLI_SUBPROCESS_TEST_TIMEOUT_SECONDS)
 async def test_run_cli_agent_prompt_raises_when_runtime_closes_during_turn(
     tmp_path: Path,
 ) -> None:

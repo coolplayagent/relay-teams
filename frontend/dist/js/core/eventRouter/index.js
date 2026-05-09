@@ -7,7 +7,10 @@ import {
     isDisplayableBackgroundTaskPayload,
     scheduleRecoveryContinuityRefresh,
 } from '../../app/recovery.js';
-import { rememberNormalModeSubagentFromBackgroundTask } from '../../components/subagentSessions.js';
+import {
+    applySubagentSessionStatusEvent,
+    rememberNormalModeSubagentFromBackgroundTask,
+} from '../../components/subagentSessions.js';
 import {
     appendStreamInjectionMarker,
     applyStreamOverlayEvent,
@@ -37,6 +40,7 @@ import {
     handleRunFailed,
     handleRunStopped,
     handleRunStarted,
+    handleSubagentRunActive,
     handleSubagentRunTerminal,
     handleThinkingDelta,
     handleThinkingFinished,
@@ -108,8 +112,15 @@ export function routeEvent(evType, payload, eventMeta) {
             state.taskStatusMap[taskId] = 'completed';
         }
     }
+    if (evType === 'subagent_session_status_changed') {
+        applySubagentSessionStatusEvent(payload, eventMeta);
+        clearSeenRunEventsForTerminal(evType, eventRunId);
+        return;
+    }
     if (isSubagentRun) {
-        if (evType === 'model_step_started') {
+        if (evType === 'run_started' || evType === 'run_resumed') {
+            handleSubagentRunActive(instanceId, eventMeta, roleId);
+        } else if (evType === 'model_step_started') {
             handleModelStepStarted(eventMeta, instanceId, roleId);
         } else if (evType === 'text_delta') {
             handleTextDelta(payload, eventMeta, instanceId, roleId);
@@ -149,7 +160,7 @@ export function routeEvent(evType, payload, eventMeta) {
         handleRunStarted(eventMeta);
         roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'run_resumed') {
-        handleRunStarted(eventMeta);
+        handleRunStarted(eventMeta, { resumeSubagents: true });
         roundsTimeline.syncRoundTodoVisibility?.();
     } else if (evType === 'model_step_started') {
         handleModelStepStarted(eventMeta, instanceId, roleId);
@@ -203,15 +214,13 @@ export function routeEvent(evType, payload, eventMeta) {
     } else if (evType === 'subagent_gate') {
         handleSubagentGate(payload);
     } else if (evType === 'subagent_stopped') {
-        handleSubagentStopped(payload);
+        handleSubagentStopped(payload, eventMeta);
     } else if (evType === 'subagent_resumed') {
-        handleSubagentResumed(payload);
+        handleSubagentResumed(payload, eventMeta);
     } else if (evType === 'gate_resolved') {
         handleGateResolved(payload, instanceId);
     } else if (backgroundTaskEvent) {
-        if (displayableBackgroundTaskEvent) {
-            handleBackgroundTaskEvent(evType, payload, eventMeta);
-        }
+        handleBackgroundTaskEvent(evType, payload, eventMeta);
         return;
     } else if (evType === 'token_usage') {
         scheduleSessionTokenUsageRefresh({ immediate: false });
@@ -309,7 +318,9 @@ function handleBackgroundTaskEvent(evType, payload, eventMeta) {
         return;
     }
     rememberNormalModeSubagentFromBackgroundTask(sessionId, payload, evType);
-    applyBackgroundTaskEvent(payload, eventMeta, evType);
+    if (isDisplayableBackgroundTaskPayload(payload)) {
+        applyBackgroundTaskEvent(payload, eventMeta, evType);
+    }
 }
 
 function isDuplicateRunEvent(runId, eventId) {
@@ -404,6 +415,7 @@ function scheduleContinuityRefreshForEvent(evType) {
         || evType === 'user_question_answered'
         || evType === 'subagent_stopped'
         || evType === 'subagent_resumed'
+        || evType === 'subagent_session_status_changed'
         || evType === 'notification_requested'
         || evType === 'gate_resolved'
     ) {

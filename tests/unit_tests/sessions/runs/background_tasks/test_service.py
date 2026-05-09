@@ -962,6 +962,17 @@ async def test_background_task_service_start_subagent_completes_and_persists_res
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.COMPLETED
     assert runtime.phase == RunRuntimePhase.TERMINAL
+    assert task_repo.status_updates[-1] == {
+        "task_id": updated.subagent_task_id,
+        "status": TaskStatus.COMPLETED,
+        "assigned_instance_id": updated.subagent_instance_id,
+        "result": "analysis complete",
+        "error_message": None,
+    }
+    assert agent_repo.status_updates[-1] == {
+        "instance_id": updated.subagent_instance_id,
+        "status": InstanceStatus.COMPLETED,
+    }
 
 
 @pytest.mark.asyncio
@@ -1011,7 +1022,39 @@ async def test_background_task_service_start_subagent_publishes_start_event_asyn
     assert completed is True
     assert [event.event_type for event in run_event_hub.events] == [
         RunEventType.BACKGROUND_TASK_STARTED,
+        RunEventType.SUBAGENT_SESSION_STATUS_CHANGED,
         RunEventType.BACKGROUND_TASK_COMPLETED,
+        RunEventType.SUBAGENT_SESSION_STATUS_CHANGED,
+    ]
+    status_events = [
+        event
+        for event in run_event_hub.events
+        if event.event_type == RunEventType.SUBAGENT_SESSION_STATUS_CHANGED
+    ]
+    assert [event.run_id for event in status_events] == [
+        started.subagent_run_id,
+        started.subagent_run_id,
+    ]
+    assert [event.trace_id for event in status_events] == [
+        started.subagent_run_id,
+        started.subagent_run_id,
+    ]
+    status_payloads = [json.loads(event.payload_json) for event in status_events]
+    assert [payload["status"] for payload in status_payloads] == [
+        "running",
+        "completed",
+    ]
+    assert [payload["run_id"] for payload in status_payloads] == [
+        started.subagent_run_id,
+        started.subagent_run_id,
+    ]
+    assert [payload["parent_run_id"] for payload in status_payloads] == [
+        "run-1",
+        "run-1",
+    ]
+    assert [payload["parent_stop_candidate"] for payload in status_payloads] == [
+        False,
+        False,
     ]
 
 
@@ -1847,6 +1890,297 @@ async def test_background_task_service_wait_for_subagent_run_reattaches_existing
 
 
 @pytest.mark.asyncio
+async def test_background_task_service_parent_cancel_stops_and_restarts_sync_subagent(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-parent-cancel-restart.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-parent-cancel-restart.db"
+    )
+    gate = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        gate=gate,
+    )
+    run_control_manager = _FakeRunControlManager()
+    run_event_hub = _LoopGuardRunEventHub()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=run_control_manager,
+        run_runtime_repo=runtime_repo,
+        run_event_hub=cast(RunEventHub, run_event_hub),
+    )
+
+    run_task = asyncio.create_task(
+        service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+    )
+    while not run_control_manager.registered_run_ids:
+        await asyncio.sleep(0)
+    subagent_run_id = run_control_manager.registered_run_ids[0]
+
+    _ = run_control_manager.request_run_stop("run-1")
+    run_task.cancel()
+    try:
+        _run_result = await run_task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError(
+            f"Expected subagent run task cancellation, got {_run_result!r}"
+        )
+
+    persisted = repo.list_all()[0]
+    runtime = runtime_repo.get(subagent_run_id)
+    assert persisted.status == BackgroundTaskStatus.STOPPED
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert run_control_manager.unregistered_run_ids == [subagent_run_id]
+    assert (
+        run_event_hub.events[-1].event_type
+        == RunEventType.SUBAGENT_SESSION_STATUS_CHANGED
+    )
+    assert run_event_hub.events[-1].run_id == subagent_run_id
+    stopped_event_payload = json.loads(run_event_hub.events[-1].payload_json)
+    assert stopped_event_payload["run_id"] == subagent_run_id
+    assert stopped_event_payload["parent_run_id"] == "run-1"
+    assert stopped_event_payload["subagent_run_id"] == subagent_run_id
+    assert stopped_event_payload["status"] == BackgroundTaskStatus.STOPPED.value
+    assert stopped_event_payload["parent_stop_candidate"] is True
+
+    wait_task = asyncio.create_task(
+        service.wait_for_subagent_run(
+            parent_run_id="run-1",
+            subagent_run_id=subagent_run_id,
+        )
+    )
+    gate.set()
+    result = await wait_task
+
+    assert result.run_id == subagent_run_id
+    assert result.output == "analysis complete"
+    assert len(executor.calls) == 2
+    assert run_control_manager.registered_run_ids == [
+        subagent_run_id,
+        subagent_run_id,
+    ]
+    assert run_control_manager.unregistered_run_ids == [
+        subagent_run_id,
+        subagent_run_id,
+    ]
+    restarted = repo.get(persisted.background_task_id)
+    assert restarted is not None
+    assert restarted.status == BackgroundTaskStatus.COMPLETED
+    status_events = [
+        event
+        for event in run_event_hub.events
+        if event.event_type == RunEventType.SUBAGENT_SESSION_STATUS_CHANGED
+    ]
+    assert [event.run_id for event in status_events] == [
+        subagent_run_id,
+        subagent_run_id,
+        subagent_run_id,
+        subagent_run_id,
+    ]
+    status_payloads = [json.loads(event.payload_json) for event in status_events]
+    assert [event["status"] for event in status_payloads] == [
+        BackgroundTaskStatus.RUNNING.value,
+        BackgroundTaskStatus.STOPPED.value,
+        BackgroundTaskStatus.RUNNING.value,
+        BackgroundTaskStatus.COMPLETED.value,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_child_stop_does_not_mark_parent_stop_candidate(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-child-stop.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-child-stop.db"
+    )
+    gate = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        gate=gate,
+    )
+    run_control_manager = _FakeRunControlManager()
+    run_event_hub = _LoopGuardRunEventHub()
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=run_control_manager,
+        run_runtime_repo=runtime_repo,
+        run_event_hub=cast(RunEventHub, run_event_hub),
+    )
+
+    run_task = asyncio.create_task(
+        service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id="Crafter",
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+    )
+    while not run_control_manager.registered_run_ids:
+        await asyncio.sleep(0)
+    subagent_run_id = run_control_manager.registered_run_ids[0]
+    while not executor.calls:
+        await asyncio.sleep(0)
+
+    _ = run_control_manager.request_run_stop(subagent_run_id)
+    try:
+        _run_result = await run_task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError(
+            f"Expected stopped subagent run cancellation, got {_run_result!r}"
+        )
+
+    persisted = repo.list_all()[0]
+    runtime = runtime_repo.get(subagent_run_id)
+    assert persisted.status == BackgroundTaskStatus.STOPPED
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert run_control_manager.unregistered_run_ids == [subagent_run_id]
+    status_events = [
+        event
+        for event in run_event_hub.events
+        if event.event_type == RunEventType.SUBAGENT_SESSION_STATUS_CHANGED
+    ]
+    status_payloads = [json.loads(event.payload_json) for event in status_events]
+    assert [event["status"] for event in status_payloads] == [
+        BackgroundTaskStatus.RUNNING.value,
+        BackgroundTaskStatus.STOPPED.value,
+    ]
+    assert status_payloads[-1]["run_id"] == subagent_run_id
+    assert status_payloads[-1]["parent_run_id"] == "run-1"
+    assert status_payloads[-1]["parent_stop_candidate"] is False
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_wait_for_subagent_run_preserves_temp_role_for_stopped_record(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-sync-temp-role-resume.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-sync-temp-role-resume.db"
+    )
+    runtime_role_resolver = RuntimeRoleResolver(
+        role_registry=RoleRegistry(),
+        temporary_role_repository=TemporaryRoleRepository(
+            tmp_path / "temporary-roles-stop-resume.db"
+        ),
+    )
+    gate = asyncio.Event()
+    executor = _FakeTaskExecutionService(
+        result=TaskExecutionResult(
+            output="analysis complete",
+            completion_reason=RunCompletionReason.ASSISTANT_RESPONSE,
+        ),
+        gate=gate,
+        runtime_role_resolver=runtime_role_resolver,
+    )
+    run_control_manager = _FakeRunControlManager()
+    role = RoleDefinition(
+        role_id="skill_team_review_analyst_12345678",
+        name="Analyst",
+        description="Collects evidence.",
+        version="1",
+        mode=RoleMode.SUBAGENT,
+        tools=("read",),
+        system_prompt="Analyze.",
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        task_execution_service=executor,
+        agent_repo=_FakeAgentRepo(),
+        task_repo=_FakeTaskRepo(),
+        run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
+        run_control_manager=run_control_manager,
+        run_runtime_repo=runtime_repo,
+    )
+
+    run_task = asyncio.create_task(
+        service.run_subagent(
+            run_id="run-1",
+            session_id="session-1",
+            workspace_id="workspace-1",
+            subagent_role_id=role.role_id,
+            subagent_role=role,
+            title="Investigate failures",
+            prompt="Inspect the failing tests and summarize the cause.",
+        )
+    )
+    while not run_control_manager.registered_run_ids:
+        await asyncio.sleep(0)
+    subagent_run_id = run_control_manager.registered_run_ids[0]
+
+    run_task.cancel()
+    try:
+        _run_result = await run_task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError(
+            f"Expected subagent run task cancellation, got {_run_result!r}"
+        )
+
+    cloned_role = runtime_role_resolver.get_temporary_role(
+        run_id=subagent_run_id,
+        role_id=role.role_id,
+    )
+    assert cloned_role.role_id == role.role_id
+
+    wait_task = asyncio.create_task(
+        service.wait_for_subagent_run(
+            parent_run_id="run-1",
+            subagent_run_id=subagent_run_id,
+        )
+    )
+    gate.set()
+    result = await wait_task
+
+    assert result.run_id == subagent_run_id
+    with pytest.raises(KeyError, match="Unknown temporary role"):
+        runtime_role_resolver.get_temporary_role(
+            run_id=subagent_run_id,
+            role_id=role.role_id,
+        )
+
+
+@pytest.mark.asyncio
 async def test_background_task_service_wait_for_subagent_run_recovers_persisted_sync_result(
     tmp_path: Path,
 ) -> None:
@@ -2328,20 +2662,40 @@ async def test_background_task_service_stop_for_run_stops_subagent(
     runtime_repo = RunRuntimeRepository(
         tmp_path / "background-task-service-subagent-stop.db"
     )
+    runtime_role_resolver = RuntimeRoleResolver(
+        role_registry=RoleRegistry(),
+        temporary_role_repository=TemporaryRoleRepository(
+            tmp_path / "temporary-roles-background-stop.db"
+        ),
+    )
     gate = asyncio.Event()
     executor = _FakeTaskExecutionService(
         result=TaskExecutionResult(output="should not finish"),
         gate=gate,
+        runtime_role_resolver=runtime_role_resolver,
+    )
+    run_event_hub = _LoopGuardRunEventHub()
+    hook_service = _CapturingHookService()
+    role = RoleDefinition(
+        role_id="skill_team_review_analyst_12345678",
+        name="Analyst",
+        description="Collects evidence.",
+        version="1",
+        mode=RoleMode.SUBAGENT,
+        tools=("read",),
+        system_prompt="Analyze.",
     )
     service = BackgroundTaskService(
         background_task_manager=None,
         repository=repo,
+        run_event_hub=cast(RunEventHub, run_event_hub),
         task_execution_service=executor,
         agent_repo=_FakeAgentRepo(),
         task_repo=_FakeTaskRepo(),
         run_intent_repo=_FakeRunIntentRepo(_parent_intent()),
         run_control_manager=_FakeRunControlManager(),
         run_runtime_repo=runtime_repo,
+        hook_service=cast(HookService, hook_service),
     )
 
     started = await service.start_subagent(
@@ -2352,9 +2706,15 @@ async def test_background_task_service_stop_for_run_stops_subagent(
         tool_call_id="call-1",
         workspace_id="workspace-1",
         cwd=Path("C:/workspace"),
-        subagent_role_id="Crafter",
+        subagent_role_id=role.role_id,
+        subagent_role=role,
         title="Investigate failures",
         prompt="Inspect the failing tests and summarize the cause.",
+    )
+    assert started.subagent_run_id is not None
+    _ = runtime_role_resolver.get_temporary_role(
+        run_id=started.subagent_run_id,
+        role_id=role.role_id,
     )
     stopped = await service.stop_for_run(
         run_id="run-1",
@@ -2370,6 +2730,85 @@ async def test_background_task_service_stop_for_run_stops_subagent(
     assert runtime is not None
     assert runtime.status == RunRuntimeStatus.STOPPED
     assert runtime.phase == RunRuntimePhase.IDLE
+    assert hook_service.cleared == [started.subagent_run_id]
+    status_payloads = [
+        json.loads(event.payload_json)
+        for event in run_event_hub.events
+        if event.event_type == RunEventType.SUBAGENT_SESSION_STATUS_CHANGED
+    ]
+    assert status_payloads[-1]["parent_stop_candidate"] is False
+    with pytest.raises(KeyError, match="Unknown temporary role"):
+        runtime_role_resolver.get_temporary_role(
+            run_id=started.subagent_run_id,
+            role_id=role.role_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_background_task_service_stop_for_run_synchronizes_persisted_subagent_without_runtime(
+    tmp_path: Path,
+) -> None:
+    repo = BackgroundTaskRepository(
+        tmp_path / "background-task-service-subagent-persisted-stop.db"
+    )
+    runtime_repo = RunRuntimeRepository(
+        tmp_path / "background-task-service-subagent-persisted-stop.db"
+    )
+    agent_repo = _FakeAgentRepo()
+    task_repo = _FakeTaskRepo()
+    record = repo.upsert(
+        _build_record(
+            background_task_id="background-subagent-1",
+            status=BackgroundTaskStatus.RUNNING,
+        ).model_copy(
+            update={
+                "kind": BackgroundTaskKind.SUBAGENT,
+                "title": "Investigate failures",
+                "input_text": "Inspect the failing tests.",
+                "command": "subagent:Crafter",
+                "subagent_role_id": "Crafter",
+                "subagent_run_id": "subagent_run_persisted",
+                "subagent_task_id": "task-subagent-1",
+                "subagent_instance_id": "inst-subagent-1",
+            }
+        )
+    )
+    _ = runtime_repo.ensure(
+        run_id="subagent_run_persisted",
+        session_id="session-1",
+        root_task_id="task-subagent-1",
+        status=RunRuntimeStatus.RUNNING,
+        phase=RunRuntimePhase.SUBAGENT_RUNNING,
+    )
+    service = BackgroundTaskService(
+        background_task_manager=None,
+        repository=repo,
+        agent_repo=agent_repo,
+        task_repo=task_repo,
+        run_control_manager=_FakeRunControlManager(),
+        run_runtime_repo=runtime_repo,
+    )
+
+    stopped = await service.stop_for_run(
+        run_id=record.run_id,
+        background_task_id=record.background_task_id,
+    )
+
+    runtime = runtime_repo.get("subagent_run_persisted")
+    assert stopped.status == BackgroundTaskStatus.STOPPED
+    assert runtime is not None
+    assert runtime.status == RunRuntimeStatus.STOPPED
+    assert task_repo.status_updates[-1] == {
+        "task_id": "task-subagent-1",
+        "status": TaskStatus.STOPPED,
+        "assigned_instance_id": "inst-subagent-1",
+        "result": None,
+        "error_message": "Task stopped by user",
+    }
+    assert agent_repo.status_updates[-1] == {
+        "instance_id": "inst-subagent-1",
+        "status": InstanceStatus.STOPPED,
+    }
 
 
 @pytest.mark.asyncio

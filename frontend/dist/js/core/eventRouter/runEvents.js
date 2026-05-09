@@ -27,12 +27,17 @@ import {
     rememberLiveSubagent,
 } from '../../components/subagentRail.js';
 import {
+    clearNormalModeSubagentParentStopState,
     getActiveSubagentSession,
     getActiveSubagentSessionStreamContainer,
+    getNormalModeSubagentSessionByRunId,
+    markNormalModeSubagentSessionsRunningForParent,
+    markNormalModeSubagentSessionsStoppedForParent,
     rememberNormalModeSubagentSession,
     renderActiveSubagentSession,
     settleActiveSubagentSessionAfterTerminal,
     updateNormalModeSubagentSessionStatus,
+    updateNormalModeSubagentSessionStatusByRunId,
 } from '../../components/subagentSessions.js';
 import { els } from '../../utils/dom.js';
 import { sysLog } from '../../utils/logger.js';
@@ -62,9 +67,14 @@ import { markSessionTerminalRunViewed } from '../api.js';
 const TERMINAL_VIEW_RETRY_DELAY_MS = 250;
 const TERMINAL_VIEW_MAX_ATTEMPTS = 3;
 
-export function handleRunStarted(eventMeta) {
+export function handleRunStarted(eventMeta, { resumeSubagents = false } = {}) {
     sysLog(`Run started (trace: ${eventMeta?.trace_id})`);
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId;
+    if (resumeSubagents) {
+        markNormalModeSubagentSessionsRunningForParent(state.currentSessionId);
+    } else {
+        clearNormalModeSubagentParentStopState(state.currentSessionId);
+    }
     if (runId) {
         markRunStreamConnected(runId, { phase: 'running' });
     }
@@ -431,22 +441,45 @@ export function handleModelStepFinished(eventMeta, instanceId, roleIdOverride = 
 }
 
 export function handleSubagentRunTerminal(instanceId, status, eventMeta = null, roleIdOverride = '') {
-    const safeInstanceId = String(instanceId || '').trim();
-    if (!safeInstanceId) {
+    const runId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
+    const safeInstanceId = resolveNormalModeSubagentInstanceId(instanceId, runId);
+    if (!safeInstanceId && !runId) {
         return;
     }
     const roleId = String(roleIdOverride || state.instanceRoleMap?.[safeInstanceId] || '').trim();
-    const runId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
-    finalizeStream(safeInstanceId, roleId, { runId });
+    if (safeInstanceId) {
+        finalizeStream(safeInstanceId, roleId, { runId });
+    }
     reconcileTerminalRunStreamState(runId);
-    updateNormalModeSubagentSessionStatus(state.currentSessionId, safeInstanceId, status);
-    markSubagentStatus(safeInstanceId, status);
+    updateNormalModeSubagentRunStatus(runId, safeInstanceId, status);
+    if (safeInstanceId) {
+        markSubagentStatus(safeInstanceId, status);
+    }
     if (getActiveSubagentSession()?.instanceId === safeInstanceId) {
         settleActiveSubagentSessionAfterTerminal(safeInstanceId);
     }
     if (state.activeAgentInstanceId === safeInstanceId) {
         state.activeAgentInstanceId = null;
         state.activeAgentRoleId = null;
+    }
+}
+
+export function handleSubagentRunActive(instanceId, eventMeta = null, roleIdOverride = '') {
+    const runId = String(eventMeta?.run_id || eventMeta?.trace_id || '').trim();
+    const safeInstanceId = resolveNormalModeSubagentInstanceId(instanceId, runId);
+    const roleId = String(roleIdOverride || state.instanceRoleMap?.[safeInstanceId] || '').trim();
+    if (safeInstanceId && roleId) {
+        rememberNormalModeSubagentSession(state.currentSessionId, {
+            instance_id: safeInstanceId,
+            role_id: roleId,
+            run_id: runId,
+            status: 'running',
+        });
+    } else {
+        updateNormalModeSubagentRunStatus(runId, safeInstanceId, 'running');
+    }
+    if (safeInstanceId) {
+        markSubagentStatus(safeInstanceId, 'running');
     }
 }
 
@@ -491,6 +524,7 @@ export function handleRunStopped(eventMeta, payload) {
     sysLog(`Run stopped: ${payload?.reason || 'stopped_by_user'}`, 'log-info');
     const runId = eventMeta?.run_id || eventMeta?.trace_id || state.activeRunId || '';
     clearLlmRetryStatus(runId);
+    markNormalModeSubagentSessionsStoppedForParent(state.currentSessionId);
     if (state.activeAgentInstanceId) {
         markSubagentStatus(state.activeAgentInstanceId, 'stopped');
     }
@@ -519,7 +553,6 @@ export function handleRunStopped(eventMeta, payload) {
     finalizeStream('primary', getRunPrimaryRoleId(runId), { runId });
     reconcileTerminalRunStreamState(runId);
     clearRunPrimaryRole(runId);
-    markCurrentSessionTerminalViewed(eventMeta);
 }
 
 export function handleRunFailed(eventMeta, payload) {
@@ -763,6 +796,24 @@ function isNormalModeSubagentRun(runId, roleId) {
         && safeRoleId
         && !isRunPrimaryRoleId(safeRoleId, safeRunId)
     );
+}
+
+function resolveNormalModeSubagentInstanceId(instanceId, runId) {
+    const safeInstanceId = String(instanceId || '').trim();
+    if (safeInstanceId) {
+        return safeInstanceId;
+    }
+    const match = getNormalModeSubagentSessionByRunId(state.currentSessionId, runId);
+    return String(match?.instanceId || '').trim();
+}
+
+function updateNormalModeSubagentRunStatus(runId, instanceId, status) {
+    const safeInstanceId = String(instanceId || '').trim();
+    if (safeInstanceId) {
+        updateNormalModeSubagentSessionStatus(state.currentSessionId, safeInstanceId, status);
+        return;
+    }
+    updateNormalModeSubagentSessionStatusByRunId(state.currentSessionId, runId, status);
 }
 
 function escapeLogLabel(value) {

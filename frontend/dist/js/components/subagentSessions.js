@@ -21,10 +21,15 @@ const loadingSessionIds = new Set();
 const loadingPromisesBySessionId = new Map();
 const expandedParentSessionIds = new Set();
 const terminalRefreshTimers = new Map();
+const statusRefreshTimers = new Map();
+const recentParentStopCandidateTimestampsBySession = new Map();
 const queuedSubagentSessionLoads = [];
+const parentStoppedSessionIds = new Set();
+const parentStoppedSubagentInstanceIdsBySession = new Map();
 let activeSubagentRenderSequence = 0;
 let activeSubagentRenderController = null;
 let subagentSessionsChangedFrame = 0;
+const RECENT_PARENT_STOP_CANDIDATE_WINDOW_MS = 5000;
 let pendingSubagentSessionsChangedDetail = null;
 let activeSubagentSessionLoadCount = 0;
 const MAX_PARALLEL_SUBAGENT_SESSION_LOADS = 2;
@@ -50,6 +55,33 @@ export function getActiveSubagentSession() {
     return state.activeSubagentSession && typeof state.activeSubagentSession === 'object'
         ? state.activeSubagentSession
         : null;
+}
+
+export function getNormalModeSubagentSessionByRunId(sessionId, runId) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return null;
+    }
+    const active = getActiveSubagentSession();
+    if (
+        active
+        && active.runId === safeRunId
+        && (!safeSessionId || active.sessionId === safeSessionId)
+    ) {
+        return active;
+    }
+    const sessionIds = safeSessionId
+        ? [safeSessionId]
+        : Array.from(subagentSessionsBySessionId.keys());
+    for (const currentSessionId of sessionIds) {
+        const match = getSessionSubagentSessions(currentSessionId)
+            .find(item => item.runId === safeRunId);
+        if (match) {
+            return match;
+        }
+    }
+    return null;
 }
 
 export function isActiveSubagentSession(sessionId, instanceId) {
@@ -248,14 +280,17 @@ export function replaceSessionSubagents(
     if (!safeSessionId) {
         return [];
     }
-    const normalized = normalizeSubagentSessions(payload, safeSessionId);
+    const normalized = normalizeSubagentSessions(payload, safeSessionId)
+        .map(item => coerceParentStoppedSubagentSession(item));
     applySessionSubagentRecords(safeSessionId, normalized, { emitChange });
     return getSessionSubagentSessions(safeSessionId);
 }
 
 export function rememberNormalModeSubagentSession(sessionId, record) {
     const safeSessionId = String(sessionId || '').trim();
-    const normalized = normalizeSubagentSession(record, safeSessionId);
+    const normalized = coerceParentStoppedSubagentSession(
+        normalizeSubagentSession(record, safeSessionId),
+    );
     if (!safeSessionId || normalized === null) {
         return false;
     }
@@ -270,11 +305,11 @@ export function rememberNormalModeSubagentFromBackgroundTask(sessionId, payload,
     if (!safeSessionId || !isSubagentBackgroundTask(payload)) {
         return false;
     }
-    const normalized = normalizeSubagentSession({
+    const normalized = coerceParentStoppedSubagentSession(normalizeSubagentSession({
         ...payload,
         status: backgroundTaskStatusForEvent(payload, eventType),
         updated_at: payload?.updated_at || payload?.updatedAt || new Date().toISOString(),
-    }, safeSessionId);
+    }, safeSessionId));
     if (normalized === null) {
         return false;
     }
@@ -290,13 +325,14 @@ export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, sta
     if (!safeSessionId || !safeInstanceId) {
         return;
     }
+    const normalizedStatus = normalizeSubagentRunStatus(status);
     const current = getSessionSubagentSessions(safeSessionId);
     let changed = false;
     let nextStatus = '';
     const next = current.map(item => (
         item.instanceId === safeInstanceId
             ? (() => {
-                nextStatus = String(status || item.status || 'idle');
+                nextStatus = normalizedStatus || item.status || 'idle';
                 if (item.status === nextStatus && item.runStatus === nextStatus) {
                     return item;
                 }
@@ -309,11 +345,141 @@ export function updateNormalModeSubagentSessionStatus(sessionId, instanceId, sta
             })()
             : item
     ));
+    const active = getActiveSubagentSession();
+    if (
+        active
+        && active.sessionId === safeSessionId
+        && active.instanceId === safeInstanceId
+        && (active.status !== normalizedStatus || active.runStatus !== normalizedStatus)
+    ) {
+        state.activeSubagentSession = {
+            ...active,
+            status: normalizedStatus,
+            runStatus: normalizedStatus,
+        };
+        syncSubagentSessionViewChrome(state.activeSubagentSession);
+    }
     if (!changed) {
+        if (active && active.sessionId === safeSessionId && active.instanceId === safeInstanceId) {
+            emitSubagentSessionStatusChanged(safeSessionId, safeInstanceId, normalizedStatus);
+        }
         return;
     }
     applySessionSubagentRecords(safeSessionId, next, { emitChange: false });
-    emitSubagentSessionStatusChanged(safeSessionId, safeInstanceId, nextStatus);
+    emitSubagentSessionStatusChanged(safeSessionId, safeInstanceId, nextStatus || normalizedStatus);
+}
+
+export function updateNormalModeSubagentSessionStatusByRunId(sessionId, runId, status) {
+    const safeRunId = String(runId || '').trim();
+    if (!safeRunId) {
+        return false;
+    }
+    const match = getNormalModeSubagentSessionByRunId(sessionId, safeRunId);
+    if (!match) {
+        return false;
+    }
+    updateNormalModeSubagentSessionStatus(
+        match.sessionId || sessionId,
+        match.instanceId,
+        status,
+    );
+    return true;
+}
+
+export function applySubagentSessionStatusEvent(payload, eventMeta = null) {
+    const safeSessionId = String(
+        payload?.parent_session_id
+        || payload?.parentSessionId
+        || payload?.session_id
+        || payload?.sessionId
+        || eventMeta?.session_id
+        || eventMeta?.sessionId
+        || state.currentSessionId
+        || '',
+    ).trim();
+    if (!safeSessionId || !payload || typeof payload !== 'object') {
+        return false;
+    }
+    const normalized = coerceParentStoppedSubagentSession(normalizeSubagentSession({
+        ...payload,
+        session_id: safeSessionId,
+        run_id: payload.subagent_run_id || payload.subagentRunId || payload.run_id || payload.runId,
+        status: payload.status || payload.run_status || payload.runStatus || 'idle',
+        run_status: payload.run_status || payload.runStatus || payload.status || 'idle',
+        updated_at: payload.updated_at || payload.updatedAt || new Date().toISOString(),
+    }, safeSessionId));
+    if (normalized === null) {
+        return false;
+    }
+    const current = getSessionSubagentSessions(safeSessionId);
+    const nextRecord = mergeSubagentSessionStatusRecord(current, normalized, payload);
+    const next = upsertSubagentSessionRecord(current, nextRecord);
+    applySessionSubagentRecords(safeSessionId, next, { emitChange: false });
+    emitSubagentSessionStatusChanged(
+        safeSessionId,
+        nextRecord.instanceId,
+        nextRecord.status,
+    );
+    updateRecentParentStopCandidateFromStatusEvent(
+        safeSessionId,
+        nextRecord,
+        payload,
+        eventMeta,
+    );
+    scheduleSubagentSessionStatusRefresh(safeSessionId);
+    return true;
+}
+
+export function markNormalModeSubagentSessionsStoppedForParent(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return [];
+    }
+    parentStoppedSessionIds.add(safeSessionId);
+    const recentlyStopped = collectRecentParentStopCandidateInstanceIds(safeSessionId);
+    const changed = updateNormalModeSubagentSessionsMatching(
+        safeSessionId,
+        item => isRunningSubagentSessionStatus(item.status),
+        'stopped',
+    );
+    const stoppedByParent = new Set([
+        ...(parentStoppedSubagentInstanceIdsBySession.get(safeSessionId) || []),
+        ...recentlyStopped,
+        ...changed,
+    ]);
+    parentStoppedSubagentInstanceIdsBySession.set(safeSessionId, stoppedByParent);
+    return Array.from(stoppedByParent);
+}
+
+export function clearNormalModeSubagentParentStopState(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    parentStoppedSessionIds.delete(safeSessionId);
+    parentStoppedSubagentInstanceIdsBySession.delete(safeSessionId);
+    recentParentStopCandidateTimestampsBySession.delete(safeSessionId);
+}
+
+export function markNormalModeSubagentSessionsRunningForParent(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return [];
+    }
+    const stoppedByParent = parentStoppedSubagentInstanceIdsBySession.get(safeSessionId);
+    const changed = updateNormalModeSubagentSessionsMatching(
+        safeSessionId,
+        item => (
+            isStoppedSubagentSessionStatus(item.status)
+            && (
+                stoppedByParent === undefined
+                || stoppedByParent.has(item.instanceId)
+            )
+        ),
+        'running',
+    );
+    clearNormalModeSubagentParentStopState(safeSessionId);
+    return changed;
 }
 
 export function removeSessionSubagent(sessionId, instanceId) {
@@ -340,9 +506,73 @@ export function removeSessionSubagent(sessionId, instanceId) {
     return removed;
 }
 
+function updateNormalModeSubagentSessionsMatching(sessionId, predicate, status) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId || typeof predicate !== 'function') {
+        return [];
+    }
+    const normalizedStatus = normalizeSubagentRunStatus(status);
+    const current = getSessionSubagentSessions(safeSessionId);
+    const changedInstanceIds = [];
+    const next = current.map(item => {
+        if (!predicate(item)) {
+            return item;
+        }
+        if (item.status === normalizedStatus && item.runStatus === normalizedStatus) {
+            return item;
+        }
+        changedInstanceIds.push(item.instanceId);
+        return {
+            ...item,
+            status: normalizedStatus,
+            runStatus: normalizedStatus,
+        };
+    });
+    const active = getActiveSubagentSession();
+    const activeShouldChange = !!(
+        active
+        && active.sessionId === safeSessionId
+        && predicate(active)
+        && (active.status !== normalizedStatus || active.runStatus !== normalizedStatus)
+    );
+    if (
+        activeShouldChange
+        || (
+            active
+            && active.sessionId === safeSessionId
+            && changedInstanceIds.includes(active.instanceId)
+        )
+    ) {
+        state.activeSubagentSession = {
+            ...active,
+            status: normalizedStatus,
+            runStatus: normalizedStatus,
+        };
+        syncSubagentSessionViewChrome(state.activeSubagentSession);
+    }
+    if (changedInstanceIds.length === 0) {
+        if (activeShouldChange) {
+            emitSubagentSessionStatusChanged(safeSessionId, active.instanceId, normalizedStatus);
+            return [active.instanceId];
+        }
+        return [];
+    }
+    applySessionSubagentRecords(safeSessionId, next, { emitChange: false });
+    changedInstanceIds.forEach(instanceId => {
+        emitSubagentSessionStatusChanged(safeSessionId, instanceId, normalizedStatus);
+    });
+    if (activeShouldChange && !changedInstanceIds.includes(active.instanceId)) {
+        emitSubagentSessionStatusChanged(safeSessionId, active.instanceId, normalizedStatus);
+        changedInstanceIds.push(active.instanceId);
+    }
+    return changedInstanceIds;
+}
+
 export async function openSubagentSession(sessionId, record) {
     const safeSessionId = String(sessionId || '').trim();
-    const normalized = normalizeSubagentSession(record, safeSessionId);
+    const normalized = coerceParentStoppedSubagentSession(
+        normalizeSubagentSession(record, safeSessionId),
+    );
     if (!safeSessionId || normalized === null) {
         return;
     }
@@ -514,6 +744,116 @@ function normalizeSubagentSessions(payload, sessionId) {
         .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
 }
 
+function coerceParentStoppedSubagentSession(record) {
+    if (!record || typeof record !== 'object') {
+        return record;
+    }
+    const safeSessionId = String(record.sessionId || record.session_id || '').trim();
+    if (!parentStoppedSessionIds.has(safeSessionId)) {
+        return record;
+    }
+    if (
+        !isRunningSubagentSessionStatus(record.status)
+        && !isRunningSubagentSessionStatus(record.runStatus || record.run_status)
+    ) {
+        return record;
+    }
+    rememberParentStoppedSubagentInstance(safeSessionId, record.instanceId || record.instance_id);
+    return {
+        ...record,
+        status: 'stopped',
+        runStatus: 'stopped',
+    };
+}
+
+function rememberParentStoppedSubagentInstance(sessionId, instanceId) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeInstanceId = String(instanceId || '').trim();
+    if (!safeSessionId || !safeInstanceId) {
+        return;
+    }
+    const current = parentStoppedSubagentInstanceIdsBySession.get(safeSessionId) || new Set();
+    current.add(safeInstanceId);
+    parentStoppedSubagentInstanceIdsBySession.set(safeSessionId, current);
+}
+
+function rememberRecentParentStopCandidate(sessionId, instanceId, status) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeInstanceId = String(instanceId || '').trim();
+    if (!safeSessionId || !safeInstanceId) {
+        return;
+    }
+    const normalizedStatus = normalizeSubagentRunStatus(status);
+    const current = recentParentStopCandidateTimestampsBySession.get(safeSessionId) || new Map();
+    if (isStoppedSubagentSessionStatus(normalizedStatus)) {
+        current.set(safeInstanceId, Date.now());
+        recentParentStopCandidateTimestampsBySession.set(safeSessionId, current);
+        return;
+    }
+    if (current.delete(safeInstanceId) && current.size === 0) {
+        recentParentStopCandidateTimestampsBySession.delete(safeSessionId);
+    }
+}
+
+function updateRecentParentStopCandidateFromStatusEvent(sessionId, record, payload, eventMeta) {
+    const safeSessionId = String(sessionId || '').trim();
+    const safeInstanceId = String(record?.instanceId || '').trim();
+    if (!safeSessionId || !safeInstanceId) {
+        return;
+    }
+    if (shouldTrackParentStopCandidate(record, payload, eventMeta)) {
+        rememberRecentParentStopCandidate(safeSessionId, safeInstanceId, record.status);
+        return;
+    }
+    rememberRecentParentStopCandidate(safeSessionId, safeInstanceId, '');
+}
+
+function shouldTrackParentStopCandidate(record, payload, eventMeta) {
+    if (!isStoppedSubagentSessionStatus(record?.status)) {
+        return false;
+    }
+    if (!(payload?.parent_stop_candidate || payload?.parentStopCandidate)) {
+        return false;
+    }
+    const eventRunId = String(
+        payload?.parent_run_id
+        || payload?.parentRunId
+        || eventMeta?.run_id
+        || eventMeta?.trace_id
+        || '',
+    ).trim();
+    const subagentRunId = String(
+        record?.runId
+        || payload?.subagent_run_id
+        || payload?.subagentRunId
+        || payload?.run_id
+        || payload?.runId
+        || '',
+    ).trim();
+    return !!(eventRunId && subagentRunId && eventRunId !== subagentRunId);
+}
+
+function collectRecentParentStopCandidateInstanceIds(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    const current = recentParentStopCandidateTimestampsBySession.get(safeSessionId);
+    if (!current) {
+        return [];
+    }
+    const cutoff = Date.now() - RECENT_PARENT_STOP_CANDIDATE_WINDOW_MS;
+    const recent = [];
+    for (const [instanceId, timestamp] of current.entries()) {
+        if (timestamp >= cutoff) {
+            recent.push(instanceId);
+            continue;
+        }
+        current.delete(instanceId);
+    }
+    if (current.size === 0) {
+        recentParentStopCandidateTimestampsBySession.delete(safeSessionId);
+    }
+    return recent;
+}
+
 function normalizeSubagentSession(record, sessionId) {
     if (!record || typeof record !== 'object') {
         return null;
@@ -601,6 +941,18 @@ function normalizeSubagentRunStatus(status) {
     return safeStatus;
 }
 
+function isRunningSubagentSessionStatus(status) {
+    return ['running', 'queued', 'starting', 'pending'].includes(
+        normalizeSubagentRunStatus(status),
+    );
+}
+
+function isStoppedSubagentSessionStatus(status) {
+    return ['stopped', 'cancelled', 'canceled'].includes(
+        normalizeSubagentRunStatus(status),
+    );
+}
+
 function upsertSubagentSessionRecord(current, nextRecord) {
     const next = [...current];
     const index = next.findIndex(item => item.instanceId === nextRecord.instanceId);
@@ -614,6 +966,36 @@ function upsertSubagentSessionRecord(current, nextRecord) {
     }
     next.sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
     return next;
+}
+
+function mergeSubagentSessionStatusRecord(current, normalized, payload) {
+    const existing = current.find(item => (
+        item.instanceId === normalized.instanceId
+        || (normalized.runId && item.runId === normalized.runId)
+    ));
+    if (!existing) {
+        return normalized;
+    }
+    return {
+        ...existing,
+        ...normalized,
+        conversationId: hasSubagentSessionPayloadField(payload, 'conversation_id', 'conversationId')
+            ? normalized.conversationId
+            : existing.conversationId,
+        checkpointEventId: hasSubagentSessionPayloadField(payload, 'checkpoint_event_id', 'checkpointEventId')
+            ? normalized.checkpointEventId
+            : existing.checkpointEventId,
+        lastEventId: hasSubagentSessionPayloadField(payload, 'last_event_id', 'lastEventId')
+            ? normalized.lastEventId
+            : existing.lastEventId,
+    };
+}
+
+function hasSubagentSessionPayloadField(payload, ...keys) {
+    if (!payload || typeof payload !== 'object') {
+        return false;
+    }
+    return keys.some(key => Object.prototype.hasOwnProperty.call(payload, key));
 }
 
 function shortInstanceId(instanceId) {
@@ -659,6 +1041,31 @@ function cancelTerminalRefreshForInstance(instanceId) {
         clearTimeout(timerId);
     }
     terminalRefreshTimers.delete(safeInstanceId);
+}
+
+function scheduleSubagentSessionStatusRefresh(sessionId) {
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safeSessionId) {
+        return;
+    }
+    const existing = statusRefreshTimers.get(safeSessionId);
+    if (existing) {
+        clearTimeout(existing);
+    }
+    const timerId = setTimeout(() => {
+        statusRefreshTimers.delete(safeSessionId);
+        void ensureSessionSubagents(safeSessionId, {
+            force: true,
+            emitLoadingEvents: false,
+        }).then(() => {
+            emitSubagentSessionsChanged({
+                forceRefresh: false,
+                reason: 'status',
+                sessionId: safeSessionId,
+            });
+        });
+    }, 500);
+    statusRefreshTimers.set(safeSessionId, timerId);
 }
 
 function isStillActiveSubagentRender(active, requestId) {

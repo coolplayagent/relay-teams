@@ -2398,7 +2398,13 @@ def _api_path(integration_env: IntegrationEnvironment, url: str) -> str:
 def _open_web_settings_panel(
     page: Page, integration_env: IntegrationEnvironment
 ) -> None:
-    page.locator("#settings-btn").click()
+    settings_btn = page.locator("#settings-btn")
+    expect(settings_btn).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    page.wait_for_function(
+        "() => typeof document.getElementById('settings-btn')?.onclick === 'function'",
+        timeout=_WAIT_TIMEOUT_MS,
+    )
+    settings_btn.click()
     expect(page.locator("#settings-modal")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
     with page.expect_response(
         lambda response: (
