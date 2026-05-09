@@ -51,6 +51,7 @@ from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.sessions.runs.event_stream import RunEventHub
 from relay_teams.sessions.runs.injection_queue import RunInjectionManager
+from relay_teams.sessions.runs.system_injection import SystemInjectionConsumer
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
 from relay_teams.sessions.runs.background_tasks import BackgroundTaskService
 from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
@@ -531,10 +532,38 @@ class ExternalAcpHostToolBridge:
             )
             if inspect.isawaitable(validation_result):
                 _ = await validation_result
-        return await tool.function_schema.call(
+        result = await tool.function_schema.call(
             dict(validated_arguments),
             ctx,
         )
+        reminder_content = await self._apply_tool_boundary_system_reminders(request)
+        return _append_system_reminder_content(result, reminder_content)
+
+    async def _apply_tool_boundary_system_reminders(
+        self,
+        request: LLMRequest,
+    ) -> tuple[str, ...]:
+        injection_manager = getattr(self, "_injection_manager", None)
+        if not isinstance(injection_manager, RunInjectionManager):
+            return ()
+        consumer = SystemInjectionConsumer(
+            injection_manager=injection_manager,
+            run_event_hub=self._run_event_hub,
+            message_repo=self._message_repo,
+        )
+        applied = await consumer.apply_boundary_system_reminders_async(
+            session_id=request.session_id,
+            run_id=request.run_id,
+            trace_id=request.trace_id,
+            task_id=request.task_id,
+            instance_id=request.instance_id,
+            role_id=request.role_id,
+            workspace_id=request.workspace_id,
+            conversation_id=request.conversation_id
+            or build_conversation_id(request.session_id, request.role_id),
+            restart_scope="external_host_tool_boundary",
+        )
+        return applied.content
 
     async def _build_tool_deps_async(self, *, request: LLMRequest) -> ToolDeps:
         resolved_conversation_id = request.conversation_id or build_conversation_id(
@@ -620,6 +649,38 @@ class ExternalAcpHostToolBridge:
         if model_config is None:
             return ModelCapabilities()
         return model_config.capabilities
+
+
+def _append_system_reminder_content(
+    result: object,
+    reminder_content: tuple[str, ...],
+) -> object:
+    reminder_text = "\n\n".join(
+        text for text in reminder_content if text.strip()
+    ).strip()
+    if not reminder_text:
+        return result
+    if isinstance(result, ToolReturn):
+        return ToolReturn(
+            return_value=result.return_value,
+            content=_merge_tool_return_content(result.content, reminder_text),
+            metadata=result.metadata,
+        )
+    return ToolReturn(return_value=result, content=reminder_text)
+
+
+def _merge_tool_return_content(
+    content: str | Sequence[UserContent] | None,
+    reminder_text: str,
+) -> str | tuple[UserContent, ...]:
+    if content is None:
+        return reminder_text
+    if isinstance(content, str):
+        existing = content.rstrip()
+        if not existing:
+            return reminder_text
+        return f"{existing}\n\n{reminder_text}"
+    return *content, reminder_text
 
 
 class _HostedFastMcpTool(FastMcpTool):

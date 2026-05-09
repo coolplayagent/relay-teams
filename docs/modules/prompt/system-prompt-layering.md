@@ -41,6 +41,10 @@
 这些消息进入会话历史或注入队列，由模型在下一次安全边界看到。这样可以避免为了短期
 运行时状态重写稳定 system prompt，同时保留完整的时间线可观测性。
 
+外部 ACP runtime 会把 role prompt 和 host-tool guidance 组装成 prompt 文本的稳定前缀，
+再把当前任务消息放在 `## User Prompt` 后面。启动边界消费到的 `<system-reminder>` 只会
+成为 `## User Prompt` 内容，不得插入 `## Role Prompt` 或 host-tool guidance 之间。
+
 ## 稳定前缀规则
 
 为了保护 KV cache，下面内容不得因为 workspace、SSH profile、日期或 run 状态改变而移动或重写：
