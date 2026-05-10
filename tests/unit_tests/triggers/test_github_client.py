@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 import json
 
 import httpx
 import pytest
 
 from relay_teams.env.proxy_env import ProxyEnvConfig
-from relay_teams.triggers.github_client import GitHubApiClient
+from relay_teams.triggers.github_client import GitHubApiClient, GitHubApiError
 import relay_teams.triggers.github_client as github_client_module
 
 
@@ -215,3 +216,208 @@ async def test_repository_and_issue_methods_use_async_http_client(monkeypatch) -
             },
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_repository_pull_request_methods_use_async_http_client(
+    monkeypatch,
+) -> None:
+    requests: list[tuple[str, str, dict[str, str]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = {str(key): str(value) for key, value in request.url.params.items()}
+        requests.append((request.method, request.url.path, params))
+        if request.url.path.endswith("/pulls/42"):
+            return httpx.Response(200, json={"number": 42, "merged": True})
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(
+                200,
+                json=[
+                    {"number": 1, "updated_at": "2026-05-10T09:30:00Z"},
+                    {"number": 2, "updated_at": "2026-05-10T08:00:00Z"},
+                    {"number": 3, "updated_at": ""},
+                    {"number": 4, "updated_at": "not-a-date"},
+                    {"number": 5, "updated_at": "2026-05-10T10:00:00"},
+                ],
+            )
+        return httpx.Response(404, json={"message": "not found"})
+
+    monkeypatch.setattr(
+        github_client_module,
+        "create_async_http_client",
+        lambda **_kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = GitHubApiClient(get_proxy_config=ProxyEnvConfig)
+
+    pull_request = await client.get_repository_pull_request(
+        token="ghp_test",
+        owner="coolplayagent",
+        repo="relay-teams",
+        pull_request_number=42,
+    )
+    pull_requests = await client.list_repository_pull_requests(
+        token="ghp_test",
+        owner="coolplayagent",
+        repo="relay-teams",
+        updated_since=datetime(2026, 5, 10, 9, 0, tzinfo=UTC),
+    )
+
+    assert pull_request["number"] == 42
+    assert [item["number"] for item in pull_requests] == [1, 3, 4, 5]
+    assert requests[0] == (
+        "GET",
+        "/repos/coolplayagent/relay-teams/pulls/42",
+        {},
+    )
+    assert requests[1][0:2] == (
+        "GET",
+        "/repos/coolplayagent/relay-teams/pulls",
+    )
+    assert requests[1][2]["state"] == "all"
+    assert requests[1][2]["sort"] == "updated"
+
+
+@pytest.mark.asyncio
+async def test_repository_issues_paginate_and_include_since(monkeypatch) -> None:
+    requests: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = {str(key): str(value) for key, value in request.url.params.items()}
+        requests.append(params)
+        if params["page"] == "1":
+            return httpx.Response(
+                200,
+                json=[{"number": number} for number in range(1, 101)],
+            )
+        return httpx.Response(200, json=[{"number": 101}, "ignored"])
+
+    monkeypatch.setattr(
+        github_client_module,
+        "create_async_http_client",
+        lambda **_kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = GitHubApiClient(get_proxy_config=ProxyEnvConfig)
+
+    issues = await client.list_repository_issues(
+        token="ghp_test",
+        owner="coolplayagent",
+        repo="relay-teams",
+        state="open",
+        updated_since=datetime(2026, 5, 10, 9, 0, tzinfo=UTC),
+    )
+
+    assert len(issues) == 101
+    assert [params["page"] for params in requests] == ["1", "2"]
+    assert all(params["state"] == "open" for params in requests)
+    assert all(params["sort"] == "updated" for params in requests)
+    assert all("since" in params for params in requests)
+
+
+@pytest.mark.asyncio
+async def test_repository_pull_requests_paginate_until_older_update(
+    monkeypatch,
+) -> None:
+    requests: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = {str(key): str(value) for key, value in request.url.params.items()}
+        requests.append(params)
+        if params["page"] == "1":
+            return httpx.Response(
+                200,
+                json=[
+                    {"number": number, "updated_at": "2026-05-10T10:00:00Z"}
+                    for number in range(1, 101)
+                ],
+            )
+        return httpx.Response(
+            200,
+            json=[
+                {"number": 101, "updated_at": "2026-05-10T08:00:00Z"},
+                {"number": 102, "updated_at": "2026-05-10T10:30:00Z"},
+            ],
+        )
+
+    monkeypatch.setattr(
+        github_client_module,
+        "create_async_http_client",
+        lambda **_kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = GitHubApiClient(get_proxy_config=ProxyEnvConfig)
+
+    pull_requests = await client.list_repository_pull_requests(
+        token="ghp_test",
+        owner="coolplayagent",
+        repo="relay-teams",
+        updated_since=datetime(2026, 5, 10, 9, 0, tzinfo=UTC),
+    )
+
+    assert len(pull_requests) == 101
+    assert pull_requests[-1]["number"] == 102
+    assert [params["page"] for params in requests] == ["1", "2"]
+
+
+@pytest.mark.asyncio
+async def test_issue_timeline_events_paginate(monkeypatch) -> None:
+    requests: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = {str(key): str(value) for key, value in request.url.params.items()}
+        requests.append(params)
+        if params["page"] == "1":
+            return httpx.Response(
+                200,
+                json=[{"event": "cross-referenced"} for _index in range(100)],
+            )
+        return httpx.Response(200, json=[{"event": "connected"}, "ignored"])
+
+    monkeypatch.setattr(
+        github_client_module,
+        "create_async_http_client",
+        lambda **_kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = GitHubApiClient(get_proxy_config=ProxyEnvConfig)
+
+    events = await client.list_issue_timeline_events(
+        token="ghp_test",
+        owner="coolplayagent",
+        repo="relay-teams",
+        issue_number=707,
+    )
+
+    assert len(events) == 101
+    assert [params["page"] for params in requests] == ["1", "2"]
+    assert all(params["per_page"] == "100" for params in requests)
+
+
+@pytest.mark.asyncio
+async def test_list_endpoints_reject_unexpected_payloads(monkeypatch) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": True})
+
+    monkeypatch.setattr(
+        github_client_module,
+        "create_async_http_client",
+        lambda **_kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = GitHubApiClient(get_proxy_config=ProxyEnvConfig)
+
+    with pytest.raises(GitHubApiError, match="Unexpected issues response"):
+        await client.list_repository_issues(
+            token="ghp_test",
+            owner="coolplayagent",
+            repo="relay-teams",
+        )
+    with pytest.raises(GitHubApiError, match="Unexpected pull requests response"):
+        await client.list_repository_pull_requests(
+            token="ghp_test",
+            owner="coolplayagent",
+            repo="relay-teams",
+        )
+    with pytest.raises(GitHubApiError, match="Unexpected issue timeline response"):
+        await client.list_issue_timeline_events(
+            token="ghp_test",
+            owner="coolplayagent",
+            repo="relay-teams",
+            issue_number=707,
+        )

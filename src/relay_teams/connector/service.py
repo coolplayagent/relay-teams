@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -103,6 +103,7 @@ class ConnectorService:
         wechat_gateway_service: WeChatGatewayServiceLike,
         xiaoluban_gateway_service: XiaolubanGatewayServiceLike,
         xiaoluban_im_listener_service: XiaolubanImListenerServiceLike,
+        get_shared_github_token: Callable[[], str | None] | None = None,
     ) -> None:
         self._github_trigger_service = github_trigger_service
         self._github_connectivity_probe_service = github_connectivity_probe_service
@@ -112,6 +113,7 @@ class ConnectorService:
         self._wechat_gateway_service = wechat_gateway_service
         self._xiaoluban_gateway_service = xiaoluban_gateway_service
         self._xiaoluban_im_listener_service = xiaoluban_im_listener_service
+        self._get_shared_github_token = get_shared_github_token or (lambda: None)
 
     async def list_connectors(self) -> ConnectorListResponse:
         github_accounts = await self._github_trigger_service.list_accounts_async()
@@ -144,8 +146,8 @@ class ConnectorService:
             return await self._test_xiaoluban()
         raise KeyError(f"Unknown connector_id: {connector_id}")
 
-    @staticmethod
     def _github_item(
+        self,
         accounts: Sequence[GitHubTriggerAccountRecord],
     ) -> ConnectorItem:
         enabled = tuple(
@@ -155,21 +157,25 @@ class ConnectorService:
         )
         last_error = _first_error(account.last_error for account in accounts)
         configured = tuple(account for account in enabled if account.token_configured)
+        shared_token_configured = self._get_shared_github_token() is not None
         return ConnectorItem(
             connector_id="github",
             provider=ConnectorProvider.GITHUB,
             category=ConnectorCategory.DEVELOPMENT,
             display_name="GitHub",
             description="Connect GitHub repositories, issues, pull requests, and Actions events.",
-            status=_aggregate_status(
+            status=_github_status(
                 account_count=len(accounts),
                 enabled_count=len(enabled),
                 configured_count=len(configured),
+                shared_token_configured=shared_token_configured,
                 last_error=last_error,
             ),
             auth_type=ConnectorAuthType.API_TOKEN,
             account_count=len(accounts),
-            enabled_count=len(enabled),
+            enabled_count=len(enabled)
+            if len(accounts) > 0
+            else int(shared_token_configured),
             last_activity_at=_latest(account.updated_at for account in accounts),
             last_error=last_error,
             capabilities=("repositories", "issues", "pull_requests", "actions"),
@@ -328,6 +334,7 @@ class ConnectorService:
     async def _test_github(self) -> ConnectorTestResult:
         accounts = await self._github_trigger_service.list_accounts_async()
         item = self._github_item(accounts)
+        shared_token_configured = self._get_shared_github_token() is not None
         token, missing_configured_token = await self._resolve_github_probe_token(
             accounts
         )
@@ -363,10 +370,15 @@ class ConnectorService:
         checks = (
             ConnectorHealthCheck(
                 name="account_configured",
-                ok=item.account_count > 0 and item.enabled_count > 0,
+                ok=(item.account_count > 0 and item.enabled_count > 0)
+                or shared_token_configured,
                 message="GitHub trigger account is enabled."
-                if item.enabled_count > 0
-                else "No enabled GitHub trigger account.",
+                if item.account_count > 0 and item.enabled_count > 0
+                else (
+                    "Shared GitHub token is configured."
+                    if shared_token_configured
+                    else "No enabled GitHub trigger account."
+                ),
             ),
             ConnectorHealthCheck(
                 name="github_connectivity",
@@ -393,6 +405,7 @@ class ConnectorService:
         self,
         accounts: Sequence[GitHubTriggerAccountRecord],
     ) -> tuple[str | None, bool]:
+        has_missing_configured_token = False
         for account in accounts:
             if account.status != GitHubTriggerAccountStatus.ENABLED:
                 continue
@@ -403,8 +416,11 @@ class ConnectorService:
             )
             if token:
                 return token, False
-            return None, True
-        return None, False
+            has_missing_configured_token = True
+        shared_token = self._get_shared_github_token()
+        if shared_token:
+            return shared_token, False
+        return None, has_missing_configured_token
 
     async def _test_feishu(self) -> ConnectorTestResult:
         accounts = await self._feishu_gateway_service.list_accounts_async()
@@ -629,6 +645,33 @@ def _aggregate_status(
     if enabled_count == 0:
         return ConnectorStatus.DISABLED
     if configured_count == 0:
+        return ConnectorStatus.NEEDS_CONFIG
+    return ConnectorStatus.CONNECTED
+
+
+def _github_status(
+    *,
+    account_count: int,
+    enabled_count: int,
+    configured_count: int,
+    shared_token_configured: bool,
+    last_error: str | None,
+) -> ConnectorStatus:
+    if str(last_error or "").strip():
+        return ConnectorStatus.ERROR
+    if account_count == 0:
+        return (
+            ConnectorStatus.CONNECTED
+            if shared_token_configured
+            else ConnectorStatus.NEEDS_CONFIG
+        )
+    if enabled_count == 0:
+        return (
+            ConnectorStatus.CONNECTED
+            if shared_token_configured
+            else ConnectorStatus.DISABLED
+        )
+    if configured_count == 0 and not shared_token_configured:
         return ConnectorStatus.NEEDS_CONFIG
     return ConnectorStatus.CONNECTED
 

@@ -2618,8 +2618,14 @@ export async function runAutomationProject() {
     )
 
     assert payload["firstChildClassName"] == "home-feature-section"
-    assert payload["featureCount"] == 4
-    assert payload["featureIds"] == ["skills", "automation", "gateway", "memory"]
+    assert payload["featureCount"] == 5
+    assert payload["featureIds"] == [
+        "skills",
+        "automation",
+        "gateway",
+        "boards",
+        "memory",
+    ]
     assert payload["workspaceCardCount"] == 1
 
 
@@ -2632,6 +2638,7 @@ def test_projects_sidebar_uses_distinct_feature_icon_variants() -> None:
     assert "home-feature-icon-svg-skills" in sidebar_source
     assert "home-feature-icon-svg-automation" in sidebar_source
     assert "home-feature-icon-svg-gateway" in sidebar_source
+    assert "home-feature-icon-svg-boards" in sidebar_source
     assert "home-feature-icon-svg-memory" in sidebar_source
 
 
@@ -2654,6 +2661,7 @@ featureItems[0]?.onclick?.();
 featureItems[1]?.onclick?.();
 featureItems[2]?.onclick?.();
 featureItems[3]?.onclick?.();
+featureItems[4]?.onclick?.();
 await flushTasks();
 await flushTasks();
 
@@ -2661,6 +2669,7 @@ console.log(JSON.stringify({
     openedSkillsFeatureCount: globalThis.__openedSkillsFeatureCount || 0,
     openedAutomationProjectIds: globalThis.__openedAutomationProjectIds,
     openedGatewayFeatureCount: globalThis.__openedGatewayFeatureCount || 0,
+    openedBoardsFeatureCount: globalThis.__openedBoardsFeatureCount || 0,
     openedMemoryFeatureCount: globalThis.__openedMemoryFeatureCount || 0,
     fetchWorkspacesCalls: globalThis.__fetchWorkspacesCalls || 0,
     fetchSessionsCalls: globalThis.__fetchSessionsCalls || 0,
@@ -2745,6 +2754,7 @@ export async function enableAutomationProject() {
     assert payload["openedSkillsFeatureCount"] == 1
     assert payload["openedAutomationProjectIds"] == [""]
     assert payload["openedGatewayFeatureCount"] == 1
+    assert payload["openedBoardsFeatureCount"] == 1
     assert payload["openedMemoryFeatureCount"] == 1
     assert payload["fetchWorkspacesCalls"] == 1
     assert payload["fetchSessionsCalls"] == 1
@@ -5043,6 +5053,11 @@ export async function openImFeatureView() {
 
 export async function openSkillsFeatureView() {
     globalThis.__openedSkillsFeatureCount = (globalThis.__openedSkillsFeatureCount || 0) + 1;
+    state.currentMainView = "project";
+}
+
+export async function openBoardsFeatureView() {
+    globalThis.__openedBoardsFeatureCount = (globalThis.__openedBoardsFeatureCount || 0) + 1;
     state.currentMainView = "project";
 }
 

@@ -116,9 +116,18 @@ def _run_sync_awaitable_none(result: None | Awaitable[None]) -> None:
 
 
 class EventLogLike(Protocol):
-    def list_by_trace_with_ids(
-        self, trace_id: str
-    ) -> tuple[dict[str, JsonValue], ...]: ...
+    def list_by_trace_with_ids(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
+        raise NotImplementedError
+
+
+class BoardTodoMergeServiceLike(Protocol):
+    def mark_github_pull_request_merged(
+        self,
+        *,
+        repository_full_name: str,
+        pull_request_number: int,
+    ) -> None:
+        raise NotImplementedError
 
 
 class GitHubTriggerService:
@@ -153,6 +162,13 @@ class GitHubTriggerService:
         self._get_github_config = (
             (lambda: GitHubConfig()) if get_github_config is None else get_github_config
         )
+        self._board_todo_service: BoardTodoMergeServiceLike | None = None
+
+    def replace_board_todo_service(
+        self,
+        service: BoardTodoMergeServiceLike | None,
+    ) -> None:
+        self._board_todo_service = service
 
     def list_accounts(self) -> tuple[GitHubTriggerAccountRecord, ...]:
         return tuple(
@@ -857,6 +873,7 @@ class GitHubTriggerService:
                 "ingest_status": updated.ingest_status.value,
                 "dispatch_count": 0,
             }
+        self._update_board_todo_for_merged_pull_request(delivery)
         self._emit_monitor_event_for_delivery(delivery)
         dispatches = self._evaluate_delivery(
             delivery=delivery,
@@ -872,6 +889,35 @@ class GitHubTriggerService:
             ),
             "dispatch_count": len(dispatches),
         }
+
+    def _update_board_todo_for_merged_pull_request(
+        self,
+        delivery: TriggerDeliveryRecord,
+    ) -> None:
+        if self._board_todo_service is None:
+            return
+        if delivery.event_name != "pull_request" or delivery.event_action != "closed":
+            return
+        if delivery.normalized_payload.get("merged") is not True:
+            return
+        repository_full_name = delivery.normalized_payload.get("repository_full_name")
+        raw_pull_request_number = delivery.normalized_payload.get("pull_request_number")
+        pull_request_number = _parse_int(str(raw_pull_request_number))
+        if not isinstance(repository_full_name, str) or pull_request_number is None:
+            return
+        try:
+            self._board_todo_service.mark_github_pull_request_merged(
+                repository_full_name=repository_full_name,
+                pull_request_number=pull_request_number,
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="board_todo.github_pr_merged_update_failed",
+                message="Failed to update board todo item for merged pull request",
+                exc_info=exc,
+            )
 
     def process_pending_actions(self) -> bool:
         progress = False
@@ -2151,6 +2197,8 @@ def _normalize_github_payload(
             normalized["body"] = pull_request.get("body")
             normalized["html_url"] = pull_request.get("html_url")
             normalized["draft_pr"] = pull_request.get("draft")
+            normalized["merged"] = pull_request.get("merged")
+            normalized["merged_at"] = pull_request.get("merged_at")
             normalized["base_branch"] = _nested_text(pull_request, "base", "ref")
             normalized["head_branch"] = _nested_text(pull_request, "head", "ref")
             normalized["head_sha"] = _nested_text(pull_request, "head", "sha")

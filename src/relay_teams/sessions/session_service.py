@@ -6,9 +6,10 @@ import shutil
 import uuid
 from collections.abc import AsyncIterator, Callable, Mapping
 from time import monotonic
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from relay_teams.agent_runtimes.instances.models import AgentRuntimeRecord
+from relay_teams.logger import get_logger
 from relay_teams.media import ContentPart
 from relay_teams.media import content_parts_to_text
 from relay_teams.media import user_prompt_content_to_text
@@ -127,6 +128,12 @@ _LEGACY_COORDINATOR_IDENTIFIERS = (
 _MAIN_AGENT_IDENTIFIERS = ("mainagent", "main agent", "main_agent")
 _AUTO_SESSION_TITLE_MAX_CHARS = 120
 _LIST_SESSIONS_CACHE_TTL_SECONDS = 0.5
+LOGGER = get_logger(__name__)
+
+
+class BoardTodoSessionLifecycleService(Protocol):
+    def mark_session_deleted(self, *, session_id: str) -> None:
+        raise NotImplementedError
 
 
 def _legacy_coordinator_identifiers() -> tuple[str, ...]:
@@ -213,6 +220,7 @@ class SessionService:
         self._media_asset_service = media_asset_service
         self._run_intent_repo = run_intent_repo
         self._get_runtime = get_runtime
+        self._board_todo_service: BoardTodoSessionLifecycleService | None = None
         self._list_sessions_cache: tuple[float, tuple[SessionRecord, ...]] | None = None
 
     def _invalidate_list_sessions_cache(self) -> None:
@@ -220,6 +228,12 @@ class SessionService:
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
         self._role_registry = role_registry
+
+    def replace_board_todo_service(
+        self,
+        board_todo_service: BoardTodoSessionLifecycleService | None,
+    ) -> None:
+        self._board_todo_service = board_todo_service
 
     def create_session(
         self,
@@ -816,6 +830,15 @@ class SessionService:
         self._token_usage_repo.delete_by_session(session_id)
         if self._metrics_store is not None:
             self._metrics_store.delete_by_session(session_id)
+        if self._board_todo_service is not None:
+            try:
+                self._board_todo_service.mark_session_deleted(session_id=session_id)
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to update board todo items after deleting session %s: %s",
+                    session_id,
+                    exc,
+                )
         if self._workspace_manager is not None:
             session_dir = self._workspace_manager.session_artifact_dir(
                 workspace_id=session.workspace_id,

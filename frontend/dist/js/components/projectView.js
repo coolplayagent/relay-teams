@@ -89,6 +89,7 @@ import {
     renderConnectorConfigModalMarkup,
     renderConnectorsCardPageMarkup,
 } from './connectors/connectorCards.js';
+import { mountBoardTodoBoard, unmountBoardTodoBoard } from './boards/todoBoard.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
@@ -129,6 +130,7 @@ const FEATURE_VIEW_IDS = Object.freeze({
     skills: 'skills',
     automation: 'automation',
     gateway: 'connectors',
+    boards: 'boards',
 });
 const FEATURE_LOADING_DELAY_MS = 120;
 const FEATURE_CLAWHUB_FIELD_IDS = Object.freeze({
@@ -2725,6 +2727,7 @@ function renderFeatureEmptyState(title, copy, action = '') {
 
 function openFeatureShell(featureId) {
     cacheProjectViewState();
+    resetFeatureSurface();
     currentProjectViewMode = 'feature';
     currentFeatureViewId = featureId;
     state.currentFeatureViewId = featureId;
@@ -2800,6 +2803,7 @@ function clearFeatureLoadingTimer() {
 }
 
 function renderFeaturePendingState(featureId, title, loadingSummary, request) {
+    els.projectViewContent?.classList?.remove('is-boards-feature');
     renderToolbar(null, {
         title,
         mode: 'feature',
@@ -2834,6 +2838,9 @@ function getFeatureLoadingSummary(featureId) {
     }
     if (featureId === FEATURE_VIEW_IDS.gateway) {
         return t('feature.gateway.loading');
+    }
+    if (featureId === FEATURE_VIEW_IDS.boards) {
+        return t('feature.boards.loading');
     }
     return t('feature.loading');
 }
@@ -4037,6 +4044,8 @@ export function initializeProjectView() {
                     }
                 } else if (currentFeatureViewId === FEATURE_VIEW_IDS.gateway) {
                     void openImFeatureView();
+                } else if (currentFeatureViewId === FEATURE_VIEW_IDS.boards) {
+                    void openBoardsFeatureView();
                 }
                 return;
             }
@@ -4067,6 +4076,7 @@ function syncActionLabels() {
 }
 
 export async function openWorkspaceProjectView(workspace) {
+    els.projectViewContent?.classList?.remove('is-boards-feature');
     const orderedWorkspace = normalizeWorkspaceRecordMountOrder(workspace);
     const workspaceId = String(orderedWorkspace?.workspace_id || '').trim();
     if (!workspaceId) {
@@ -4255,6 +4265,57 @@ export async function openImFeatureView() {
     }
 }
 
+export async function openBoardsFeatureView() {
+    const preferredWorkspaceId = resolveBoardsFeaturePreferredWorkspaceId();
+    const request = beginFeatureRequest(FEATURE_VIEW_IDS.boards);
+    renderFeaturePendingState(
+        FEATURE_VIEW_IDS.boards,
+        t('feature.boards.title'),
+        getFeatureLoadingSummary(FEATURE_VIEW_IDS.boards),
+        request,
+    );
+    try {
+        if (!isCurrentFeatureRequest(FEATURE_VIEW_IDS.boards, request.token)) {
+            return;
+        }
+        renderBoardsFeatureView({ preferredWorkspaceId });
+    } catch (error) {
+        if (isAbortError(error) || !isCurrentFeatureRequest(FEATURE_VIEW_IDS.boards, request.token)) {
+            return;
+        }
+        renderFeatureErrorState(t('feature.boards.title'), error);
+        sysLog(`Failed to load boards feature: ${error?.message || error}`, 'log-error');
+    } finally {
+        finishFeatureRequest(request.controller);
+    }
+}
+
+function resolveBoardsFeaturePreferredWorkspaceId() {
+    const projectWorkspaceId = String(state.currentProjectViewWorkspaceId || '').trim();
+    if (projectWorkspaceId && !projectWorkspaceId.startsWith('feature:')) {
+        return projectWorkspaceId;
+    }
+    return String(
+        state.pendingNewSessionWorkspaceId
+        || state.currentWorkspaceId
+        || '',
+    ).trim();
+}
+
+function renderBoardsFeatureView({ preferredWorkspaceId = '' } = {}) {
+    hideProjectViewToolbar();
+    if (!els.projectViewContent) {
+        return;
+    }
+    els.projectViewContent.classList?.add('is-boards-feature');
+    els.projectViewContent.innerHTML = `
+        <section class="boards-feature-page" aria-label="${escapeHtml(t('feature.boards.title'))}">
+            <div id="board-todo-root"></div>
+        </section>
+    `;
+    mountBoardTodoBoard({ preferredWorkspaceId });
+}
+
 export async function refreshProjectView() {
     if (currentProjectViewMode === 'feature') {
         if (currentFeatureViewId === FEATURE_VIEW_IDS.skills) {
@@ -4271,6 +4332,10 @@ export async function refreshProjectView() {
         }
         if (currentFeatureViewId === FEATURE_VIEW_IDS.gateway) {
             await openImFeatureView();
+            return;
+        }
+        if (currentFeatureViewId === FEATURE_VIEW_IDS.boards) {
+            await openBoardsFeatureView();
             return;
         }
     }
@@ -4290,6 +4355,7 @@ export async function refreshProjectView() {
 export function hideProjectView() {
     abortCurrentFeatureRequest();
     currentFeatureRequestToken += 1;
+    resetFeatureSurface();
     cacheProjectViewState();
     currentWorkspace = null;
     currentAutomationProject = null;
@@ -4319,6 +4385,7 @@ export function prepareExternalFeatureView(featureId) {
     }
     abortCurrentFeatureRequest();
     currentFeatureRequestToken += 1;
+    resetFeatureSurface();
     cacheProjectViewState();
     currentWorkspace = null;
     currentAutomationProject = null;
@@ -7576,6 +7643,21 @@ function hideProjectViewToolbar() {
     }
     if (els.projectViewToolbarActions) {
         els.projectViewToolbarActions.innerHTML = '';
+    }
+    els.projectViewReloadBtn = null;
+    els.projectViewCloseBtn = null;
+}
+
+function resetFeatureSurface({ clearContent = true } = {}) {
+    unmountBoardTodoBoard();
+    els.projectViewContent?.classList?.remove('is-boards-feature');
+    const toolbar = getProjectViewToolbarElement();
+    toolbar?.classList?.remove('is-hidden');
+    if (els.projectViewToolbarActions) {
+        els.projectViewToolbarActions.innerHTML = '';
+    }
+    if (clearContent && els.projectViewContent) {
+        els.projectViewContent.innerHTML = '';
     }
     els.projectViewReloadBtn = null;
     els.projectViewCloseBtn = null;

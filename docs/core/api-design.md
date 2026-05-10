@@ -4121,6 +4121,53 @@ Response: `StateMapResponse`
 - `task_status_to_board`: mapping from TaskStatus name to BoardTaskState name
 - `board_state_to_task_status`: mapping from BoardTaskState name to tuple of TaskStatus names
 
+### Workspace TODO Board
+
+Workspace TODO board APIs are owned by the boards domain and are independent from
+external tracker state. Open GitHub issues and manual TODOs are board sources;
+pull requests are linked review/completion evidence. Board columns are Agent
+Teams state.
+
+- `GET /api/boards/todos?workspace_id=...&include_archived=false` returns a full `BoardTodoBoardResponse`.
+- `GET /api/boards/todos:changes?workspace_id=...&include_archived=false&after_revision=...` returns a `BoardTodoDeltaResponse`.
+- `POST /api/boards/todos:sync` performs a force-full GitHub sync and returns a full board response.
+- `POST /api/boards/todos:sync-changes` performs an incremental GitHub issue/PR sync when a workspace cursor exists and returns a delta response. `force_full=true` performs the same open-issue reconciliation as `/api/boards/todos:sync`.
+- `POST /api/boards/todos` creates a manual local TODO.
+- `POST /api/boards/todos/{todo_id}:start` creates a dedicated session/run and moves the item to `in_progress`.
+- `POST /api/boards/todos/{todo_id}:request-changes` creates a new run in the bound session and moves the item back to `in_progress`.
+- `POST /api/boards/todos/{todo_id}:archive` soft-deletes the item into `archived`.
+- `POST /api/boards/todos/{todo_id}:restore` restores an archived item to `todo`.
+- `POST /api/boards/todos/{todo_id}:link-pr` links an issue/manual item to a pull request.
+
+`BoardTodoItem.status` is one of `todo`, `in_progress`, `review`, `done`, or
+`archived`. Run completion moves bound items to `review`; linked GitHub pull
+request merges move non-archived items to `done`. If the bound session is
+deleted, non-archived and non-`done` items return to `todo` and clear stale
+session/run references.
+
+`BoardTodoItem.updated_at` is the local board row update time used for
+revision/delta bookkeeping and status-machine mutations. GitHub issue items also
+include `source_updated_at`, copied from GitHub issue `updated_at`; UI time
+sorting uses `source_updated_at || updated_at` so issue ordering follows GitHub
+activity rather than local sync/write time. Manual TODOs leave
+`source_updated_at` unset.
+
+`BoardTodoBoardResponse` includes the current `revision`. Delta responses include
+`changed_items`, `removed_todo_ids`, `status_counts`, diagnostics, `synced_at`,
+and the latest `revision`. Active-view deltas report newly archived rows as
+`removed_todo_ids`; archived-view deltas return them as changed items.
+
+GitHub issues are the only GitHub TODO source. Pull requests are linked review
+evidence and are not imported as standalone TODO cards. Closed GitHub issues are
+not imported as new TODOs; existing active issue items observed as closed are
+archived unless they already have a merged linked PR, in which case they move to
+`done`. Full GitHub sync treats the current GitHub open issue set as the active
+truth and archives previously active GitHub issue items that are no longer open,
+with status reason `GitHub issue no longer open`. If GitHub later reports the
+same issue as open, sync restores items archived by GitHub closed/non-open
+reconciliation to `todo`; manually archived rows still require explicit
+`restore`.
+
 Domain module: `src/relay_teams/boards/`
 
 Router: `src/relay_teams/interfaces/server/routers/boards.py`

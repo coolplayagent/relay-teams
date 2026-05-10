@@ -5,7 +5,7 @@ import asyncio
 import logging
 from concurrent.futures import Future as ThreadFuture
 from json import dumps
-from typing import Awaitable, Callable, Coroutine, TypeVar
+from typing import Awaitable, Callable, Coroutine, Protocol, TypeVar
 
 from pydantic import JsonValue
 
@@ -108,6 +108,11 @@ logger = get_logger(__name__)
 _T = TypeVar("_T")
 
 
+class BoardTodoLifecycleServiceLike(Protocol):
+    async def mark_run_completed_async(self, *, run_id: str) -> None:
+        raise NotImplementedError
+
+
 def _is_run_already_running_conflict(*, run_id: str, error: RuntimeError) -> bool:
     return str(error) == f"Run {run_id} is already running"
 
@@ -194,6 +199,7 @@ class SessionRunService:
         self._user_question_manager: UserQuestionManager | None = user_question_manager
         self._hook_service = hook_service
         self._memory_event_handler = memory_event_handler
+        self._board_todo_service: BoardTodoLifecycleServiceLike | None = None
         self._event_publisher = RunEventPublisher(
             run_event_hub=self._run_event_hub,
             get_runtime=lambda run_id: self._runtime_for_run(run_id),
@@ -238,6 +244,7 @@ class SessionRunService:
             ),
             memory_event_handler=self._memory_event_handler,
         )
+
         self._terminal_results = RunTerminalResultService(
             session_repo=self._session_repo,
             get_runtime=lambda run_id: self._runtime_for_run(run_id),
@@ -385,6 +392,12 @@ class SessionRunService:
                 )
             ),
         )
+
+    def replace_board_todo_service(
+        self,
+        service: BoardTodoLifecycleServiceLike | None,
+    ) -> None:
+        self._board_todo_service = service
 
     def replace_runtime_dependencies(
         self,
@@ -1343,6 +1356,19 @@ class SessionRunService:
                 output_text=output_text,
                 root_task_id=result.root_task_id,
             )
+            if not failed and self._board_todo_service is not None:
+                try:
+                    await self._board_todo_service.mark_run_completed_async(
+                        run_id=run_id
+                    )
+                except Exception as exc:
+                    log_event(
+                        logger,
+                        logging.WARNING,
+                        event="board_todo.run_completion_update_failed",
+                        message="Failed to update board todo item after run completion",
+                        exc_info=exc,
+                    )
         except RecoverableRunPauseError as exc:
             payload = exc.payload
             paused_payload = self._recovery_service.build_run_paused_payload(payload)

@@ -161,6 +161,35 @@ async def test_empty_accounts_need_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shared_github_token_marks_connector_connected_without_account() -> None:
+    service = _build_service(shared_github_token="ghp_shared")
+
+    response = await service.list_connectors()
+    github = next(item for item in response.items if item.connector_id == "github")
+
+    assert github.status == ConnectorStatus.CONNECTED
+    assert github.account_count == 0
+    assert github.enabled_count == 1
+    assert response.summary.connected == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_github_token_marks_connector_connected_with_disabled_account() -> (
+    None
+):
+    service = _build_service(
+        github_accounts=(_github_account(status=GitHubTriggerAccountStatus.DISABLED),),
+        shared_github_token="ghp_shared",
+    )
+
+    response = await service.list_connectors()
+    github = next(item for item in response.items if item.connector_id == "github")
+
+    assert github.status == ConnectorStatus.CONNECTED
+    assert response.summary.connected == 1
+
+
+@pytest.mark.asyncio
 async def test_disabled_accounts_are_reported_disabled() -> None:
     service = _build_service(
         github_accounts=(_github_account(status=GitHubTriggerAccountStatus.DISABLED),),
@@ -246,6 +275,41 @@ async def test_github_test_uses_enabled_trigger_account_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_github_test_uses_shared_token_without_trigger_account() -> None:
+    probe_service = _ProbeService()
+    service = _build_service(
+        shared_github_token="ghp_shared",
+        github_probe_service=probe_service,
+    )
+
+    result = await service.test_connector("github")
+
+    assert result.ok is True
+    assert probe_service.last_request is not None
+    assert probe_service.last_request.token == "ghp_shared"
+    assert {check.name: check.ok for check in result.checks}["account_configured"]
+
+
+@pytest.mark.asyncio
+async def test_github_test_falls_back_to_shared_token_when_account_secret_missing() -> (
+    None
+):
+    probe_service = _ProbeService()
+    service = _build_service(
+        github_accounts=(_github_account(account_id="gh_missing"),),
+        github_tokens={},
+        shared_github_token="ghp_shared",
+        github_probe_service=probe_service,
+    )
+
+    result = await service.test_connector("github")
+
+    assert result.ok is True
+    assert probe_service.last_request is not None
+    assert probe_service.last_request.token == "ghp_shared"
+
+
+@pytest.mark.asyncio
 async def test_github_test_fails_when_configured_account_token_is_missing() -> None:
     probe_service = _ProbeService()
     service = _build_service(
@@ -277,6 +341,7 @@ def _build_service(
     wechat_accounts: tuple[WeChatAccountRecord, ...] = (),
     xiaoluban_accounts: tuple[XiaolubanAccountRecord, ...] = (),
     feishu_running_ids: tuple[str, ...] = (),
+    shared_github_token: str | None = None,
 ) -> ConnectorService:
     resolved_github_tokens = (
         {
@@ -296,6 +361,7 @@ def _build_service(
         wechat_gateway_service=_WeChatService(wechat_accounts),
         xiaoluban_gateway_service=_XiaolubanService(xiaoluban_accounts),
         xiaoluban_im_listener_service=_XiaolubanListenerService(),
+        get_shared_github_token=lambda: shared_github_token,
     )
 
 
