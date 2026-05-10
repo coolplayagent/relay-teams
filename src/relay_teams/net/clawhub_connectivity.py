@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timezone
 import os
+from os import pathsep
 from pathlib import Path
 from time import perf_counter
 import subprocess
@@ -462,7 +463,7 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     path_parts = [str(directory)]
     if existing_path:
         path_parts.append(existing_path)
-    return ":".join(path_parts)
+    return pathsep.join(path_parts)
 
 
 def _read_clawhub_version(

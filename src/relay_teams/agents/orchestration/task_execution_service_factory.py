@@ -11,6 +11,7 @@ from relay_teams.media import MediaAssetService
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.providers.provider_contracts import LLMProvider
 from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
@@ -62,6 +63,7 @@ def create_task_execution_service(
     skill_runtime_service: SkillRuntimeService | None,
     mcp_registry: McpRegistry,
     mcp_discovery_service: McpDiscoveryService | None,
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
     role_memory_service: RoleMemoryService | None = None,
@@ -95,12 +97,14 @@ def create_task_execution_service(
             hook_service=hook_service,
             run_event_hub=run_event_hub,
             mcp_discovery_service=mcp_discovery_service,
+            runtime_mcp_schema_loader=runtime_mcp_schema_loader,
         ),
         provider_factory=provider_factory,
         tool_registry=tool_registry,
         skill_registry=skill_registry,
         skill_runtime_service=skill_runtime_service,
         mcp_registry=mcp_registry,
+        runtime_mcp_schema_loader=runtime_mcp_schema_loader,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
         role_memory_service=role_memory_service,

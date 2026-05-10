@@ -13,6 +13,7 @@ from relay_teams.interfaces.server.deps import (
     get_mcp_discovery_service,
     get_mcp_registry,
     get_role_registry,
+    get_runtime_mcp_schema_loader,
     get_skill_registry,
     get_skill_runtime_service,
     get_tool_registry,
@@ -21,8 +22,14 @@ from relay_teams.interfaces.server.deps import (
 )
 from relay_teams.interfaces.server.routers import prompts
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
-from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from relay_teams.mcp.mcp_models import (
+    McpConfigScope,
+    McpServerSpec,
+    McpToolInfo,
+    McpToolSchema,
+)
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.skills.skill_models import SkillInstructionEntry
@@ -271,6 +278,21 @@ class _FakeMcpRegistry(McpRegistry):
             McpToolInfo(name="docs_search_docs", description="Search docs"),
         )
 
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        assert name == "docs"
+        return (
+            McpToolSchema(
+                name="docs_read_file",
+                description="Read a file",
+                input_schema={"type": "object"},
+            ),
+            McpToolSchema(
+                name="docs_search_docs",
+                description="Search docs",
+                input_schema={"type": "object"},
+            ),
+        )
+
 
 def _build_mcp_discovery_service() -> McpDiscoveryService:
     service = McpDiscoveryService(_FakeMcpRegistry())
@@ -282,6 +304,10 @@ def _build_mcp_discovery_service() -> McpDiscoveryService:
         ),
     )
     return service
+
+
+def _build_runtime_mcp_schema_loader() -> RuntimeMcpSchemaLoader:
+    return RuntimeMcpSchemaLoader(_FakeMcpRegistry())
 
 
 def _create_client(
@@ -299,6 +325,9 @@ def _create_client(
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
     app.dependency_overrides[get_mcp_discovery_service] = _build_mcp_discovery_service
+    app.dependency_overrides[get_runtime_mcp_schema_loader] = (
+        _build_runtime_mcp_schema_loader
+    )
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
     app.dependency_overrides[get_skill_runtime_service] = lambda: (
         resolved_skill_runtime_service
@@ -306,7 +335,7 @@ def _create_client(
     app.dependency_overrides[get_workspace_service] = lambda: _FakeWorkspaceService(
         {"preview-workspace"}
     )
-    app.dependency_overrides[get_workspace_manager] = lambda: _FakeWorkspaceManager()
+    app.dependency_overrides[get_workspace_manager] = _FakeWorkspaceManager
     return TestClient(app)
 
 
@@ -425,6 +454,9 @@ def test_prompts_preview_uses_workspace_execution_root_when_workspace_is_provide
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
     app.dependency_overrides[get_mcp_discovery_service] = _build_mcp_discovery_service
+    app.dependency_overrides[get_runtime_mcp_schema_loader] = (
+        _build_runtime_mcp_schema_loader
+    )
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
     app.dependency_overrides[get_skill_runtime_service] = _FakeSkillRuntimeService
     app.dependency_overrides[get_workspace_service] = lambda: workspace_service
@@ -474,6 +506,9 @@ def test_prompts_preview_includes_project_instruction_files(tmp_path: Path) -> N
     app.dependency_overrides[get_tool_registry] = _build_tool_registry
     app.dependency_overrides[get_mcp_registry] = _FakeMcpRegistry
     app.dependency_overrides[get_mcp_discovery_service] = _build_mcp_discovery_service
+    app.dependency_overrides[get_runtime_mcp_schema_loader] = (
+        _build_runtime_mcp_schema_loader
+    )
     app.dependency_overrides[get_skill_registry] = _FakeSkillRegistry
     app.dependency_overrides[get_skill_runtime_service] = _FakeSkillRuntimeService
     app.dependency_overrides[get_workspace_service] = lambda: workspace_service

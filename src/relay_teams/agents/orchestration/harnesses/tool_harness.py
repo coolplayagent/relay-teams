@@ -18,6 +18,7 @@ from relay_teams.agent_runtimes.instances.models import (
 from relay_teams.agents.tasks.models import TaskEnvelope
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_tools import runtime_tools_for_role
@@ -34,6 +35,7 @@ class TaskToolHarness(BaseModel):
     tool_registry: object
     skill_registry: object
     mcp_registry: McpRegistry
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None
 
     async def build_runtime_tools_snapshot(
         self,
@@ -110,19 +112,20 @@ class TaskToolHarness(BaseModel):
                     local_tools.append(entry)
 
         mcp_tools: list[RuntimeToolSnapshotEntry] = []
-        for server_name in self.mcp_registry.resolve_server_names(
+        resolved_server_names = self.mcp_registry.resolve_server_names(
             role.mcp_servers,
             strict=False,
             consumer=(
                 "agents.orchestration.harnesses.tool_harness"
                 ".build_runtime_tools_snapshot"
             ),
-        ):
-            try:
-                server_tool_schemas = await self.mcp_registry.list_tool_schemas(
-                    server_name
-                )
-            except Exception as exc:
+        )
+        loader = self.runtime_mcp_schema_loader or RuntimeMcpSchemaLoader(
+            self.mcp_registry
+        )
+        schema_load = await loader.load_many(resolved_server_names)
+        for result in schema_load.results:
+            if not result.ok:
                 log_event(
                     LOGGER,
                     logging.WARNING,
@@ -131,11 +134,13 @@ class TaskToolHarness(BaseModel):
                         "Failed to inspect MCP tools for runtime snapshot; "
                         "continuing without this MCP server"
                     ),
-                    payload={"server_name": server_name},
-                    exc_info=exc,
+                    payload={
+                        "server_name": result.server_name,
+                        "error": result.error or "",
+                    },
                 )
                 continue
-            for tool in server_tool_schemas:
+            for tool in result.schemas:
                 mcp_tools.append(
                     self.tool_entry_from_definition(
                         source="mcp",
@@ -145,7 +150,7 @@ class TaskToolHarness(BaseModel):
                         strict=None,
                         sequential=False,
                         parameters_json_schema=tool.input_schema,
-                        server_name=server_name,
+                        server_name=result.server_name,
                     )
                 )
 

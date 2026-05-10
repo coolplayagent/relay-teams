@@ -21,8 +21,14 @@ from relay_teams.agents.execution.user_prompts import (
 from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookEventName
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
-from relay_teams.mcp.mcp_models import McpConfigScope, McpServerSpec, McpToolInfo
+from relay_teams.mcp.mcp_models import (
+    McpConfigScope,
+    McpServerSpec,
+    McpToolInfo,
+    McpToolSchema,
+)
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.secrets import AppSecretStore
 from relay_teams.roles.role_models import RoleDefinition, RoleMode
 from relay_teams.roles.role_contracts import (
@@ -222,10 +228,30 @@ class _FakeMcpRegistry(McpRegistry):
         assert name == "docs"
         return (McpToolInfo(name="docs_search", description="Search docs"),)
 
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        assert name == "docs"
+        return (
+            McpToolSchema(
+                name="docs_search",
+                description="Search docs",
+                input_schema={"type": "object"},
+            ),
+        )
+
 
 class _NoRealtimeMcpRegistry(_FakeMcpRegistry):
     async def list_tools(self, name: str) -> tuple[McpToolInfo, ...]:
         raise AssertionError("prompt building should not connect to MCP servers")
+
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        raise AssertionError("prompt building should not connect to MCP servers")
+
+
+class _SlowSchemaMcpRegistry(_FakeMcpRegistry):
+    async def list_tool_schemas(self, name: str) -> tuple[McpToolSchema, ...]:
+        assert name == "docs"
+        await asyncio.sleep(1)
+        return ()
 
 
 def _ready_fake_mcp_discovery(registry: McpRegistry) -> McpDiscoveryService:
@@ -539,6 +565,38 @@ def test_runtime_system_prompt_lists_mcp_tools_live_without_discovery_service() 
     )
 
     assert "- MCP Tools: docs_search" in prompt
+
+
+def test_runtime_system_prompt_skips_slow_live_mcp_without_discovery_service() -> None:
+    registry = _coordinator_registry()
+    mcp_registry = _SlowSchemaMcpRegistry()
+
+    prompt = asyncio.run(
+        system_prompts.build_runtime_system_prompt(
+            system_prompts.RuntimePromptBuildInput(
+                role=_role("Coordinator"),
+                task=_task(),
+                topology=RunTopologySnapshot(
+                    session_mode=SessionMode.ORCHESTRATION,
+                    main_agent_role_id="MainAgent",
+                    normal_root_role_id="MainAgent",
+                    coordinator_role_id="Coordinator",
+                    orchestration_preset_id="default",
+                    orchestration_prompt="Delegate by capability and finalize yourself.",
+                    allowed_role_ids=("writer_agent",),
+                ),
+                shared_state_snapshot=(),
+            ),
+            role_registry=registry,
+            mcp_registry=mcp_registry,
+            runtime_mcp_schema_loader=RuntimeMcpSchemaLoader(
+                mcp_registry,
+                server_timeout_seconds=0.01,
+            ),
+        )
+    )
+
+    assert "- MCP Tools: none" in prompt
 
 
 def test_runtime_system_prompt_includes_run_temporary_roles_in_available_roles(

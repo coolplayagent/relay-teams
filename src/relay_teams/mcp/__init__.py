@@ -9,6 +9,7 @@ from relay_teams.mcp.mcp_models import (
     McpServerToolsSummary,
     McpToolInfo,
 )
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 
 __all__ = [
     "McpConfigScope",
@@ -17,4 +18,5 @@ __all__ = [
     "McpServerSummary",
     "McpServerToolsSummary",
     "McpToolInfo",
+    "RuntimeMcpSchemaLoader",
 ]

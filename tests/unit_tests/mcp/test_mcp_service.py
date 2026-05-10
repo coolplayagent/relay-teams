@@ -20,10 +20,12 @@ from relay_teams.mcp.mcp_models import (
     McpServerUpdateRequest,
     McpServerSpec,
     McpToolInfo,
+    McpToolSchema,
 )
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry, build_mcp_server
 from relay_teams.mcp.mcp_service import McpService
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.trace import get_trace_context
 
 
@@ -231,11 +233,17 @@ async def test_list_server_tools_without_discovery_service_lists_live_tools(
         )
     )
 
-    async def fake_list_tools(name: str) -> tuple[McpToolInfo, ...]:
+    async def fake_list_tool_schemas(name: str) -> tuple[McpToolSchema, ...]:
         assert name == "filesystem"
-        return (McpToolInfo(name="filesystem_read_file", description="Read a file"),)
+        return (
+            McpToolSchema(
+                name="filesystem_read_file",
+                description="Read a file",
+                input_schema={"type": "object"},
+            ),
+        )
 
-    monkeypatch.setattr(registry, "list_tools", fake_list_tools)
+    monkeypatch.setattr(registry, "list_tool_schemas", fake_list_tool_schemas)
     service = McpService(registry=registry)
 
     summary = await service.list_server_tools("filesystem")
@@ -243,6 +251,75 @@ async def test_list_server_tools_without_discovery_service_lists_live_tools(
     assert summary.server == "filesystem"
     assert summary.status == McpDiscoveryStatus.READY
     assert [tool.name for tool in summary.tools] == ["filesystem_read_file"]
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_uses_runtime_schema_loader_cache(monkeypatch) -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+    calls = 0
+
+    async def fake_list_tool_schemas(name: str) -> tuple[McpToolSchema, ...]:
+        nonlocal calls
+        assert name == "filesystem"
+        calls += 1
+        return (
+            McpToolSchema(
+                name="filesystem_read_file",
+                description="Read a file",
+                input_schema={"type": "object"},
+            ),
+        )
+
+    monkeypatch.setattr(registry, "list_tool_schemas", fake_list_tool_schemas)
+    loader = RuntimeMcpSchemaLoader(registry, cache_ttl_seconds=60.0)
+    service = McpService(registry=registry, runtime_schema_loader=loader)
+
+    first = await service.list_server_tools("filesystem")
+    second = await service.list_server_tools("filesystem")
+
+    assert first.status == McpDiscoveryStatus.READY
+    assert second.status == McpDiscoveryStatus.READY
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_list_server_tools_returns_failed_summary_during_loader_cooldown(
+    monkeypatch,
+) -> None:
+    registry = McpRegistry(
+        (
+            McpServerSpec(
+                name="filesystem",
+                config={"mcpServers": {"filesystem": {"command": "npx"}}},
+                server_config={"command": "npx"},
+                source=McpConfigScope.APP,
+            ),
+        )
+    )
+
+    async def fake_list_tool_schemas(_name: str) -> tuple[McpToolSchema, ...]:
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(registry, "list_tool_schemas", fake_list_tool_schemas)
+    loader = RuntimeMcpSchemaLoader(registry, failure_ttl_seconds=60.0)
+    service = McpService(registry=registry, runtime_schema_loader=loader)
+
+    first = await service.list_server_tools("filesystem")
+    second = await service.list_server_tools("filesystem")
+
+    assert first.status == McpDiscoveryStatus.FAILED
+    assert second.status == McpDiscoveryStatus.FAILED
+    assert "filesystem" in (second.error or "")
+    assert "cooldown" in (second.error or "")
 
 
 @pytest.mark.asyncio

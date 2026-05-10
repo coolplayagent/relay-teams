@@ -2266,7 +2266,7 @@ def test_resolve_command_cwd_returns_none_when_no_cwd_and_no_workspace() -> None
 def test_resolve_command_cwd_resolves_custom_cwd() -> None:
     cmd = VerificationCommand(command=("echo", "hi"), cwd=Path("subdir"))
     result = verification_module._resolve_command_cwd(cmd, workspace_root=Path("/ws"))
-    assert result == Path("/ws/subdir")
+    assert result == Path("/ws/subdir").resolve()
 
 
 def test_wrap_cross_evaluation_evaluator_returns_none_when_no_evaluator() -> None:

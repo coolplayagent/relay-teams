@@ -43,6 +43,7 @@ from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.hooks import HookService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.media import MediaAssetService
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
@@ -112,6 +113,7 @@ class ExecutionHarness(BaseModel):
     skill_registry: object
     skill_runtime_service: object | None = None
     mcp_registry: McpRegistry
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None
     run_control_manager: object | None = None
     role_memory_service: RoleMemoryService | None = None
     memory_bank_service: MemoryBankService | None = None
@@ -132,6 +134,7 @@ class ExecutionHarness(BaseModel):
             tool_registry=self.tool_registry,
             skill_registry=self.skill_registry,
             mcp_registry=self.mcp_registry,
+            runtime_mcp_schema_loader=self.runtime_mcp_schema_loader,
         )
 
     def _prompt_harness(self) -> TaskPromptHarness:

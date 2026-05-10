@@ -53,6 +53,7 @@ from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
 from relay_teams.hooks import HookService
 from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.media import MediaAssetService
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
@@ -129,6 +130,7 @@ class TaskExecutionService(BaseModel):
     skill_registry: object
     skill_runtime_service: object | None = None
     mcp_registry: McpRegistry
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None
     injection_manager: RunInjectionManager | None = None
     run_control_manager: RunControlManager | None = None
     role_memory_service: RoleMemoryService | None = None
@@ -163,6 +165,11 @@ class TaskExecutionService(BaseModel):
             skill_registry=getattr(self, "skill_registry", None),
             skill_runtime_service=getattr(self, "skill_runtime_service", None),
             mcp_registry=getattr(self, "mcp_registry", None),
+            runtime_mcp_schema_loader=getattr(
+                self,
+                "runtime_mcp_schema_loader",
+                None,
+            ),
             run_control_manager=getattr(self, "run_control_manager", None),
             role_memory_service=getattr(self, "role_memory_service", None),
             memory_bank_service=getattr(self, "memory_bank_service", None),

@@ -110,6 +110,7 @@ from relay_teams.mcp.mcp_config_watcher import McpConfigFileWatcher
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.mcp.mcp_service import McpService
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.metrics import (
     AggregateStoreSink,
     DEFAULT_DEFINITIONS,
@@ -420,12 +421,14 @@ class ServerContainer:
         self.mcp_discovery_service: McpDiscoveryService = McpDiscoveryService(
             self.mcp_registry
         )
+        self.runtime_mcp_schema_loader = RuntimeMcpSchemaLoader(self.mcp_registry)
         self.mcp_service: McpService = McpService(
             registry=self.mcp_registry,
             config_manager=self.mcp_config_manager,
             on_registry_changed=self.replace_mcp_registry,
             extra_specs=self._plugin_mcp_specs,
             discovery_service=self.mcp_discovery_service,
+            runtime_schema_loader=self.runtime_mcp_schema_loader,
         )
         self.command_registry: CommandRegistry = CommandRegistry(
             app_config_dir=app_config_dir,
@@ -812,6 +815,7 @@ class ServerContainer:
                 role_registry=self.role_registry,
                 mcp_registry=self.mcp_registry,
                 mcp_discovery_service=self.mcp_discovery_service,
+                runtime_mcp_schema_loader=self.runtime_mcp_schema_loader,
                 instruction_resolver=PromptInstructionResolver(
                     app_config_dir=runtime.paths.config_dir,
                     instructions=runtime.prompt_instructions.instructions,
@@ -1260,6 +1264,7 @@ class ServerContainer:
             skill_runtime_service=self.skill_runtime_service,
             mcp_registry=self.mcp_registry,
             mcp_discovery_service=self.mcp_discovery_service,
+            runtime_mcp_schema_loader=self.runtime_mcp_schema_loader,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
             role_memory_service=self.role_memory_service,
@@ -1497,6 +1502,7 @@ class ServerContainer:
 
     def replace_mcp_registry(self, mcp_registry: McpRegistry) -> None:
         self.mcp_registry = mcp_registry
+        self.runtime_mcp_schema_loader.replace_registry(mcp_registry)
         self.mcp_service.replace_registry(mcp_registry)
         self._refresh_coordinator_runtime()
 
@@ -1507,6 +1513,7 @@ class ServerContainer:
             role_registry=self.role_registry,
             mcp_registry=self.mcp_registry,
             mcp_discovery_service=self.mcp_discovery_service,
+            runtime_mcp_schema_loader=self.runtime_mcp_schema_loader,
             instruction_resolver=PromptInstructionResolver(
                 app_config_dir=self.runtime.paths.config_dir,
                 instructions=self.runtime.prompt_instructions.instructions,

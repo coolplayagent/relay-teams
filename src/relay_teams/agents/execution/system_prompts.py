@@ -36,6 +36,7 @@ from relay_teams.logger import get_logger, log_event
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_models import McpDiscoveryStatus
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_contracts import build_role_contract_prompt
 from relay_teams.roles.role_registry import (
@@ -605,6 +606,7 @@ async def build_runtime_system_prompt(
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry | None = None,
     mcp_discovery_service: McpDiscoveryService | None = None,
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
     hook_service: RuntimePromptHookService | None = None,
     run_event_hub: RunEventHub | None = None,
@@ -615,6 +617,7 @@ async def build_runtime_system_prompt(
         runtime_role_resolver=runtime_role_resolver,
         mcp_registry=mcp_registry,
         mcp_discovery_service=mcp_discovery_service,
+        runtime_mcp_schema_loader=runtime_mcp_schema_loader,
         instruction_resolver=instruction_resolver,
         hook_service=hook_service,
         run_event_hub=run_event_hub,
@@ -629,6 +632,7 @@ async def build_runtime_system_prompt_result(
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry | None = None,
     mcp_discovery_service: McpDiscoveryService | None = None,
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None,
     instruction_resolver: PromptInstructionResolver | None = None,
     hook_service: RuntimePromptHookService | None = None,
     run_event_hub: RunEventHub | None = None,
@@ -709,6 +713,7 @@ async def build_runtime_system_prompt_result(
         runtime_role_resolver=runtime_role_resolver,
         mcp_registry=mcp_registry,
         mcp_discovery_service=mcp_discovery_service,
+        runtime_mcp_schema_loader=runtime_mcp_schema_loader,
         run_id=data.task.trace_id if data.task is not None else None,
         allowed_role_ids=topology.allowed_role_ids if topology is not None else (),
     )
@@ -742,6 +747,7 @@ async def build_available_roles_prompt(
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     mcp_registry: McpRegistry,
     mcp_discovery_service: McpDiscoveryService | None = None,
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None,
     run_id: str | None = None,
     allowed_role_ids: tuple[str, ...] = (),
 ) -> str:
@@ -779,6 +785,7 @@ async def build_available_roles_prompt(
                 ),
                 mcp_registry=mcp_registry,
                 mcp_discovery_service=mcp_discovery_service,
+                runtime_mcp_schema_loader=runtime_mcp_schema_loader,
             )
             for role in roles
         ]
@@ -960,11 +967,13 @@ async def _build_available_role_block(
     role_source: str,
     mcp_registry: McpRegistry,
     mcp_discovery_service: McpDiscoveryService | None,
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None,
 ) -> str:
     mcp_tools = await _list_role_mcp_tools(
         role=role,
         mcp_registry=mcp_registry,
         mcp_discovery_service=mcp_discovery_service,
+        runtime_mcp_schema_loader=runtime_mcp_schema_loader,
     )
     runtime_tools = runtime_tools_for_role(
         role_registry=role_registry,
@@ -988,6 +997,7 @@ async def _list_role_mcp_tools(
     role: RoleDefinition,
     mcp_registry: McpRegistry,
     mcp_discovery_service: McpDiscoveryService | None,
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None,
 ) -> tuple[str, ...]:
     resolved_server_names = mcp_registry.resolve_server_names(
         role.mcp_servers,
@@ -997,16 +1007,13 @@ async def _list_role_mcp_tools(
     if not resolved_server_names:
         return ()
     if mcp_discovery_service is None:
-        live_tool_groups = await asyncio.gather(
-            *(
-                mcp_registry.list_tools(server_name)
-                for server_name in resolved_server_names
-            )
-        )
+        loader = runtime_mcp_schema_loader or RuntimeMcpSchemaLoader(mcp_registry)
+        schema_load = await loader.load_many(resolved_server_names)
         return tuple(
-            tool_name
-            for tool_group in live_tool_groups
-            for tool_name in _tool_names(tool_group)
+            schema.name
+            for result in schema_load.results
+            if result.ok
+            for schema in result.schemas
         )
     return tuple(
         tool_name
@@ -1151,6 +1158,7 @@ class RuntimePromptBuilder(BaseModel):
     runtime_role_resolver: RuntimeRoleResolver | None = None
     mcp_registry: McpRegistry | None = None
     mcp_discovery_service: McpDiscoveryService | None = None
+    runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None
     instruction_resolver: PromptInstructionResolver | None = None
     hook_service: RuntimePromptHookService | None = None
     run_event_hub: RunEventHub | None = None
@@ -1169,6 +1177,7 @@ class RuntimePromptBuilder(BaseModel):
             runtime_role_resolver=self.runtime_role_resolver,
             mcp_registry=self.mcp_registry,
             mcp_discovery_service=self.mcp_discovery_service,
+            runtime_mcp_schema_loader=self.runtime_mcp_schema_loader,
             instruction_resolver=self.instruction_resolver,
             hook_service=self.hook_service,
             run_event_hub=self.run_event_hub,

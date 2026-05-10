@@ -44,12 +44,31 @@ _ensure_installed_mcp_package()
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    _configure_windows_asyncio_policy()
     config.addinivalue_line(
         "markers",
         "asyncio: mark a test function to run in an asyncio event loop",
     )
 
 
+def _configure_windows_asyncio_policy() -> None:
+    if sys.platform != "win32":
+        return
+    from asyncio import WindowsProactorEventLoopPolicy
+
+    asyncio.set_event_loop_policy(WindowsProactorEventLoopPolicy())
+
+
+@pytest.fixture
+def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:
+    if sys.platform != "win32":
+        return asyncio.get_event_loop_policy()
+    from asyncio import WindowsProactorEventLoopPolicy
+
+    return WindowsProactorEventLoopPolicy()
+
+
+@pytest.hookimpl(tryfirst=True)
 def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
     marker = pyfuncitem.get_closest_marker("asyncio")
     if marker is None:
@@ -68,6 +87,7 @@ def pytest_pyfunc_call(pyfuncitem: pytest.Function) -> bool | None:
         finally:
             await _close_live_sqlite_repos_in_current_loop()
 
+    _configure_windows_asyncio_policy()
     asyncio.run(_run_test_with_sqlite_cleanup())
     return True
 

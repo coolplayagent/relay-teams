@@ -17,7 +17,11 @@ from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
 def repo() -> Generator[AgentWakeupRepository, None, None]:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test_wakeups.db"
-        yield AgentWakeupRepository(db_path)
+        repository = AgentWakeupRepository(db_path)
+        try:
+            yield repository
+        finally:
+            repository.close()
 
 
 def _make_entry(**overrides: object) -> AgentWakeupEntry:
@@ -120,12 +124,19 @@ class TestAgentWakeupRepository:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test_reopen.db"
             repo1 = AgentWakeupRepository(db_path)
-            entry = _make_entry()
-            await repo1.enqueue_async(entry)
+            repo2: AgentWakeupRepository | None = None
+            try:
+                entry = _make_entry()
+                await repo1.enqueue_async(entry)
+                await repo1.close_async()
 
-            repo2 = AgentWakeupRepository(db_path)
-            count = await repo2.count_pending_async()
-            assert count == 1
+                repo2 = AgentWakeupRepository(db_path)
+                count = await repo2.count_pending_async()
+                assert count == 1
+            finally:
+                if repo2 is not None:
+                    await repo2.close_async()
+                await repo1.close_async()
 
     @pytest.mark.asyncio
     async def test_claim_next_pending_returns_none_when_empty(
