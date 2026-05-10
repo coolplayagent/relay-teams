@@ -3,12 +3,14 @@
  * Renders the main workspace snapshot for a selected project.
  */
 import {
+    createDiscordGatewayAccount,
     createAutomationProject,
     createXiaolubanGatewayAccount,
     createGitHubRepoSubscription,
     createGitHubTriggerAccount,
     createGitHubTriggerRule,
     createTrigger,
+    deleteDiscordGatewayAccount,
     deleteAutomationProject,
     deleteXiaolubanGatewayAccount,
     deleteGitHubRepoSubscription,
@@ -17,6 +19,7 @@ import {
     deleteTrigger,
     deleteWeChatGatewayAccount,
     disableAutomationProject,
+    disableDiscordGatewayAccount,
     disableXiaolubanGatewayAccount,
     disableGitHubRepoSubscription,
     disableGitHubTriggerAccount,
@@ -27,6 +30,7 @@ import {
     enableGitHubTriggerAccount,
     enableGitHubTriggerRule,
     enableTrigger,
+    enableDiscordGatewayAccount,
     enableXiaolubanGatewayAccount,
     enableWeChatGatewayAccount,
     enableAutomationProject,
@@ -44,6 +48,7 @@ import {
     fetchRoleConfigOptions,
     fetchSshProfiles,
     fetchTriggers,
+    fetchDiscordGatewayAccounts,
     fetchXiaolubanGatewayImForwardingCommand,
     fetchXiaolubanGatewayAccounts,
     fetchWeChatGatewayAccounts,
@@ -62,6 +67,7 @@ import {
     updateGitHubTriggerAccount,
     updateGitHubTriggerRule,
     updateTrigger,
+    updateDiscordGatewayAccount,
     updateXiaolubanGatewayAccount,
     updateWeChatGatewayAccount,
     waitWeChatGatewayLogin,
@@ -148,6 +154,7 @@ const FEATURE_GITHUB_FIELD_IDS = Object.freeze({
     webhookStatusId: 'feature-github-webhook-probe-status',
 });
 const FEISHU_PLATFORM = 'feishu';
+const DISCORD_PLATFORM = 'discord';
 const XIAOLUBAN_PLATFORM = 'xiaoluban';
 const WECHAT_PLATFORM = 'wechat';
 const XIAOLUBAN_NO_WORKSPACES_VALUE = '__no_xiaoluban_notification_workspaces__';
@@ -220,6 +227,7 @@ function createInitialGatewayFeatureState() {
         feishuEditingTriggerId: '',
         feishuDraft: null,
         xiaolubanAccounts: [],
+        discordAccounts: [],
         wechatAccounts: [],
         connectorsResponse: null,
         connectorSearch: '',
@@ -1963,6 +1971,35 @@ function normalizeWeChatAccounts(payload) {
         .filter(account => account.account_id);
 }
 
+function normalizeDiscordAccounts(payload) {
+    const rows = Array.isArray(payload) ? payload : [];
+    return rows
+        .map(account => ({
+            account_id: String(account?.account_id || '').trim(),
+            display_name: String(account?.display_name || account?.account_id || '').trim(),
+            application_id: String(account?.application_id || '').trim(),
+            status: String(account?.status || 'disabled').trim() || 'disabled',
+            allowed_channel_ids: Array.isArray(account?.allowed_channel_ids)
+                ? account.allowed_channel_ids.map(value => String(value || '').trim()).filter(Boolean)
+                : [],
+            allow_channel_messages: account?.allow_channel_messages === true,
+            workspace_id: String(account?.workspace_id || '').trim(),
+            session_mode: String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE,
+            normal_root_role_id: String(account?.normal_root_role_id || '').trim(),
+            orchestration_preset_id: String(account?.orchestration_preset_id || '').trim(),
+            yolo: account?.yolo !== false,
+            thinking: account?.thinking && typeof account.thinking === 'object'
+                ? { ...account.thinking }
+                : { enabled: false, effort: null },
+            secret_status: account?.secret_status && typeof account.secret_status === 'object'
+                ? { ...account.secret_status }
+                : { bot_token_configured: false },
+            running: account?.running === true,
+            last_error: String(account?.last_error || '').trim(),
+        }))
+        .filter(account => account.account_id);
+}
+
 function normalizeXiaolubanAccounts(payload) {
     const rows = Array.isArray(payload) ? payload : [];
     return rows
@@ -2025,10 +2062,12 @@ function normalizeOrchestrationPresets(payload) {
 
 function resolveGatewayFeatureSummary(featureState) {
     const feishuCount = Array.isArray(featureState?.feishuTriggers) ? featureState.feishuTriggers.length : 0;
+    const discordCount = Array.isArray(featureState?.discordAccounts) ? featureState.discordAccounts.length : 0;
     const xiaolubanCount = Array.isArray(featureState?.xiaolubanAccounts) ? featureState.xiaolubanAccounts.length : 0;
     const wechatCount = Array.isArray(featureState?.wechatAccounts) ? featureState.wechatAccounts.length : 0;
     return formatMessage('feature.gateway.summary', {
         feishu: feishuCount,
+        discord: discordCount,
         xiaoluban: xiaolubanCount,
         wechat: wechatCount,
     });
@@ -2154,6 +2193,27 @@ function normalizeXiaolubanReceiversForDisplay(account) {
 function normalizeXiaolubanTokenFormValue(value) {
     const token = String(value || '').trim();
     return token === '************' ? '' : token;
+}
+
+function normalizeDelimitedIdentifierList(value) {
+    const rawItems = Array.isArray(value)
+        ? value.flatMap(item => splitXiaolubanReceivers(String(item || '')))
+        : splitXiaolubanReceivers(String(value || ''));
+    const seen = new Set();
+    const identifiers = [];
+    rawItems.forEach(item => {
+        const normalized = String(item || '').trim();
+        if (!normalized || seen.has(normalized)) {
+            return;
+        }
+        seen.add(normalized);
+        identifiers.push(normalized);
+    });
+    return identifiers;
+}
+
+function normalizeDiscordAllowedChannelsForDisplay(account) {
+    return normalizeDelimitedIdentifierList(account?.allowed_channel_ids || []).join('\n');
 }
 
 function normalizeXiaolubanForwardingCommand(value) {
@@ -3298,6 +3358,187 @@ async function requestWeChatAccountInput(account) {
     };
 }
 
+async function requestDiscordAccountInput(account) {
+    const isEditing = String(account?.account_id || '').trim().length > 0;
+    const workspaces = resolveWorkspaceOptionValues(currentGatewayFeatureState.workspaces);
+    if (workspaces.length === 0) {
+        throw new Error(t('settings.gateway.missing_workspace'));
+    }
+    const roles = resolveRoleOptionsForForms(currentGatewayFeatureState.normalRoles);
+    const presets = resolvePresetOptionsForForms(currentGatewayFeatureState.orchestrationPresets);
+    const sessionMode = String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const thinkingEnabled = account?.thinking?.enabled === true;
+    const tokenConfigured = account?.secret_status?.bot_token_configured === true;
+    const values = await showFormDialog({
+        title: isEditing
+            ? t('settings.gateway.discord_account_editor')
+            : t('feature.gateway.add_discord'),
+        message: String(account?.account_id || '').trim(),
+        tone: 'info',
+        confirmLabel: t('settings.action.save'),
+        cancelLabel: t('settings.action.cancel'),
+        fields: [
+            {
+                id: 'display_name',
+                label: t('settings.gateway.display_name'),
+                value: String(account?.display_name || '').trim(),
+            },
+            {
+                id: 'bot_token',
+                label: t('settings.gateway.discord_bot_token'),
+                type: 'password',
+                value: isEditing && tokenConfigured ? '************' : '',
+                maskedValue: isEditing && tokenConfigured ? '************' : '',
+                placeholder: isEditing && tokenConfigured
+                    ? t('settings.gateway.discord_token_edit_placeholder')
+                    : 'Bot token',
+                description: isEditing && tokenConfigured
+                    ? t('settings.gateway.discord_token_edit_copy')
+                    : t('settings.gateway.discord_token_copy'),
+                allowEmptyReveal: isEditing && tokenConfigured,
+                showLabel: t('feedback.show_sensitive'),
+                hideLabel: t('feedback.hide_sensitive'),
+            },
+            {
+                id: 'application_id',
+                label: t('settings.gateway.discord_application_id'),
+                value: String(account?.application_id || '').trim(),
+                placeholder: '123456789012345678',
+                description: t('settings.gateway.discord_application_id_copy'),
+            },
+            {
+                id: 'workspace_id',
+                label: t('settings.triggers.workspace'),
+                type: 'select',
+                value: String(account?.workspace_id || workspaces[0]?.value || '').trim(),
+                options: workspaces,
+            },
+            {
+                id: 'session_mode',
+                label: t('settings.triggers.mode'),
+                type: 'select',
+                value: sessionMode,
+                options: [
+                    { value: 'normal', label: t('composer.mode_normal'), description: '' },
+                    { value: 'orchestration', label: t('composer.mode_orchestration'), description: '' },
+                ],
+            },
+            {
+                id: 'normal_root_role_id',
+                label: t('settings.triggers.normal_root_role_id'),
+                type: 'select',
+                value: String(account?.normal_root_role_id || '').trim(),
+                options: roles,
+                visibleWhen: { field: 'session_mode', equals: 'normal' },
+            },
+            {
+                id: 'orchestration_preset_id',
+                label: t('settings.triggers.orchestration_preset_id'),
+                type: 'select',
+                value: String(account?.orchestration_preset_id || '').trim(),
+                options: presets,
+                visibleWhen: { field: 'session_mode', equals: 'orchestration' },
+            },
+            {
+                id: 'allowed_channel_ids',
+                label: t('settings.gateway.discord_allowed_channels'),
+                type: 'textarea',
+                value: normalizeDiscordAllowedChannelsForDisplay(account),
+                placeholder: t('settings.gateway.discord_allowed_channels_placeholder'),
+                description: t('settings.gateway.discord_allowed_channels_copy'),
+                rows: 2,
+                compact: true,
+            },
+            {
+                id: 'allow_channel_messages',
+                label: t('settings.gateway.discord_allow_channel_messages'),
+                type: 'checkbox',
+                value: account?.allow_channel_messages === true,
+                description: t('settings.gateway.discord_allow_channel_messages_copy'),
+            },
+            {
+                id: 'yolo',
+                label: t('settings.triggers.yolo'),
+                type: 'checkbox',
+                value: account?.yolo !== false,
+                description: '',
+            },
+            {
+                id: 'thinking_enabled',
+                label: t('settings.triggers.thinking_enabled'),
+                type: 'checkbox',
+                value: thinkingEnabled,
+                description: '',
+            },
+            {
+                id: 'thinking_effort',
+                label: t('settings.triggers.thinking_effort'),
+                type: 'select',
+                value: String(account?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
+                options: THINKING_EFFORT_OPTIONS.map(option => ({ value: option, label: option, description: '' })),
+                visibleWhen: { field: 'thinking_enabled', equals: true },
+            },
+            ...(!isEditing
+                ? [
+                    {
+                        id: 'enabled',
+                        label: t('settings.triggers.option_enabled'),
+                        type: 'checkbox',
+                        value: true,
+                        description: '',
+                    },
+                ]
+                : []),
+        ],
+    });
+    if (!values || typeof values !== 'object') {
+        return null;
+    }
+    const displayName = String(values.display_name || '').trim();
+    const workspaceId = String(values.workspace_id || '').trim();
+    const nextSessionMode = String(values.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const orchestrationPresetId = String(values.orchestration_preset_id || '').trim();
+    const botToken = normalizeXiaolubanTokenFormValue(values.bot_token);
+    if (!displayName) {
+        throw new Error(t('settings.gateway.missing_display_name'));
+    }
+    if (!isEditing && !botToken) {
+        throw new Error(t('settings.gateway.discord_missing_token'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('settings.gateway.missing_workspace'));
+    }
+    if (nextSessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.gateway.missing_orchestration_preset_id'));
+    }
+    const payload = {
+        display_name: displayName,
+        application_id: String(values.application_id || '').trim() || null,
+        allowed_channel_ids: normalizeDelimitedIdentifierList(values.allowed_channel_ids),
+        allow_channel_messages: values.allow_channel_messages === true,
+        workspace_id: workspaceId,
+        session_mode: nextSessionMode,
+        yolo: values.yolo !== false,
+        thinking: {
+            enabled: values.thinking_enabled === true,
+            effort: values.thinking_enabled === true
+                ? (String(values.thinking_effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT)
+                : null,
+        },
+        normal_root_role_id: nextSessionMode === 'normal'
+            ? (String(values.normal_root_role_id || '').trim() || null)
+            : null,
+        orchestration_preset_id: nextSessionMode === 'orchestration' ? orchestrationPresetId : null,
+    };
+    if (!isEditing) {
+        payload.enabled = values.enabled !== false;
+    }
+    if (botToken) {
+        payload.bot_token = botToken;
+    }
+    return payload;
+}
+
 async function requestXiaolubanAccountInput(account, submitHandler = null) {
     const isEditing = String(account?.account_id || '').trim().length > 0;
     const xiaolubanExtraApi = await loadXiaolubanExtraGatewayApi();
@@ -3755,11 +3996,12 @@ export async function openImFeatureView() {
         request,
     );
     try {
-        const [connectorsResponse, triggers, xiaolubanAccounts, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+        const [connectorsResponse, triggers, xiaolubanAccounts, wechatAccounts, discordAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
             fetchConnectors({ signal: request.signal }),
             fetchTriggers({ signal: request.signal }),
             fetchXiaolubanGatewayAccounts({ signal: request.signal }),
             fetchWeChatGatewayAccounts({ signal: request.signal }),
+            fetchDiscordGatewayAccounts({ signal: request.signal }),
             fetchWorkspaces({ signal: request.signal }),
             fetchRoleConfigOptions({ signal: request.signal }),
             fetchOrchestrationConfig({ signal: request.signal }),
@@ -3775,6 +4017,7 @@ export async function openImFeatureView() {
             connectorsResponse,
             xiaolubanAccounts: normalizeXiaolubanAccounts(xiaolubanAccounts),
             wechatAccounts: normalizeWeChatAccounts(wechatAccounts),
+            discordAccounts: normalizeDiscordAccounts(discordAccounts),
             workspaces: normalizeGatewayWorkspaces(workspaces),
             normalRoles: normalizeRoleOptions(roleOptions),
             orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
@@ -5049,6 +5292,59 @@ function renderGatewayWeChatRecords(accounts) {
     `;
 }
 
+function renderGatewayDiscordRecords(accounts) {
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+        return `
+            <div class="feature-panel-body">
+                ${renderFeatureEmptyState(
+                    t('settings.gateway.discord_none'),
+                    t('settings.gateway.discord_none_copy'),
+                )}
+            </div>
+        `;
+    }
+    return `
+        <div class="role-records trigger-records gateway-records">
+            ${accounts.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const status = String(account?.status || 'disabled').trim() || 'disabled';
+                const statusLabel = account?.running === true
+                    ? t('settings.gateway.status_running')
+                    : t(`automation.status.${status}`);
+                const tokenConfigured = account?.secret_status?.bot_token_configured === true;
+                const allowedChannelIds = Array.isArray(account?.allowed_channel_ids)
+                    ? account.allowed_channel_ids.map(value => String(value || '').trim()).filter(Boolean)
+                    : [];
+                const applicationId = String(account?.application_id || '').trim();
+                return `
+                    <div class="role-record gateway-feature-record" data-feature-discord-record="${escapeHtml(accountId)}">
+                        <div class="role-record-main">
+                            <div class="role-record-title-row trigger-record-title-row">
+                                <div class="role-record-title">${escapeHtml(String(account?.display_name || accountId))}</div>
+                                <div class="profile-card-chips role-record-chips">
+                                    <span class="profile-card-chip">${escapeHtml(statusLabel)}</span>
+                                    <span class="profile-card-chip">${escapeHtml(tokenConfigured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'))}</span>
+                                    <span class="profile-card-chip">${escapeHtml(formatMessage('settings.gateway.discord_allowed_channel_count', { count: allowedChannelIds.length }))}</span>
+                                </div>
+                            </div>
+                            <div class="role-record-meta trigger-record-meta">
+                                ${account?.workspace_id ? `<span>${escapeHtml(String(account.workspace_id))}</span>` : ''}
+                                ${applicationId ? `<span>${escapeHtml(applicationId)}</span>` : ''}
+                                ${account?.last_error ? `<span>${escapeHtml(`${t('settings.gateway.last_error')}: ${String(account.last_error)}`)}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="role-record-actions trigger-record-actions">
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-discord-toggle="${escapeHtml(accountId)}">${escapeHtml(status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-discord-edit="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.edit'))}</button>
+                            <button class="settings-inline-action settings-list-action" type="button" data-feature-discord-delete="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.delete'))}</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
 function renderGatewayXiaolubanRecords(accounts) {
     if (!Array.isArray(accounts) || accounts.length === 0) {
         return `
@@ -5295,6 +5591,11 @@ function renderConnectorAccountManagement(item) {
             renderConnectorWeChatAccountList(currentGatewayFeatureState.wechatAccounts),
         );
     }
+    if (provider === DISCORD_PLATFORM) {
+        return renderConnectorAccountManagementSection(
+            renderConnectorDiscordAccountList(currentGatewayFeatureState.discordAccounts),
+        );
+    }
     if (provider === XIAOLUBAN_PLATFORM) {
         return renderConnectorAccountManagementSection(
             renderConnectorXiaolubanAccountList(currentGatewayFeatureState.xiaolubanAccounts),
@@ -5377,6 +5678,54 @@ function renderConnectorWeChatAccountList(accounts) {
                         },
                         { attr: 'data-feature-wechat-edit', label: t('settings.action.edit') },
                         { attr: 'data-feature-wechat-delete', label: t('settings.action.delete') },
+                    ],
+                });
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderConnectorDiscordAccountList(accounts) {
+    const rows = Array.isArray(accounts) ? accounts : [];
+    if (rows.length === 0) {
+        return renderConnectorAccountEmptyState();
+    }
+    return `
+        <div class="connectors-account-list">
+            ${rows.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const status = String(account?.status || 'disabled').trim() || 'disabled';
+                const statusLabel = account?.running === true
+                    ? t('settings.gateway.status_running')
+                    : t(`automation.status.${status}`);
+                const tokenConfigured = account?.secret_status?.bot_token_configured === true;
+                const allowedChannelIds = Array.isArray(account?.allowed_channel_ids)
+                    ? account.allowed_channel_ids.map(value => String(value || '').trim()).filter(Boolean)
+                    : [];
+                const applicationId = String(account?.application_id || '').trim();
+                const lastError = account?.last_error
+                    ? `${t('settings.gateway.last_error')}: ${String(account.last_error)}`
+                    : '';
+                return renderConnectorAccountRow({
+                    id: accountId,
+                    title: String(account?.display_name || accountId),
+                    chips: [
+                        statusLabel,
+                        tokenConfigured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'),
+                        formatMessage('settings.gateway.discord_allowed_channel_count', { count: allowedChannelIds.length }),
+                    ],
+                    meta: [
+                        account?.workspace_id ? String(account.workspace_id) : '',
+                        applicationId,
+                        lastError,
+                    ],
+                    actions: [
+                        {
+                            attr: 'data-feature-discord-toggle',
+                            label: status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'),
+                        },
+                        { attr: 'data-feature-discord-edit', label: t('settings.action.edit') },
+                        { attr: 'data-feature-discord-delete', label: t('settings.action.delete') },
                     ],
                 });
             }).join('')}
@@ -5617,6 +5966,12 @@ function bindGatewayRecordHandlers(root = els.projectViewContent) {
         });
     });
     root.querySelectorAll('[data-feature-feishu-edit]').forEach(button => {
+    root.querySelectorAll('[data-feature-gateway-add-discord]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleCreateDiscordFeatureAccount();
+        });
+    });
+    root.querySelectorAll('[data-feature-feishu-edit]').forEach(button => {
         button.addEventListener('click', () => {
             void handleEditFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-edit'));
         });
@@ -5661,6 +6016,21 @@ function bindGatewayRecordHandlers(root = els.projectViewContent) {
             void handleDeleteWeChatFeatureAccount(button.getAttribute('data-feature-wechat-delete'));
         });
     });
+    root.querySelectorAll('[data-feature-discord-edit]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleEditDiscordFeatureAccount(button.getAttribute('data-feature-discord-edit'));
+        });
+    });
+    root.querySelectorAll('[data-feature-discord-toggle]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleToggleDiscordFeatureAccount(button.getAttribute('data-feature-discord-toggle'));
+        });
+    });
+    root.querySelectorAll('[data-feature-discord-delete]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleDeleteDiscordFeatureAccount(button.getAttribute('data-feature-discord-delete'));
+        });
+    });
 }
 
 async function handleConnectConnectorFromModal(provider) {
@@ -5680,6 +6050,10 @@ async function handleConnectConnectorFromModal(provider) {
     }
     if (normalizedProvider === WECHAT_PLATFORM) {
         await handleStartWeChatFeatureLogin();
+        return;
+    }
+    if (normalizedProvider === DISCORD_PLATFORM) {
+        await handleCreateDiscordFeatureAccount();
         return;
     }
     if (normalizedProvider === XIAOLUBAN_PLATFORM) {
@@ -6350,6 +6724,54 @@ async function handleEditWeChatFeatureAccount(accountId) {
     }
 }
 
+async function handleCreateDiscordFeatureAccount() {
+    try {
+        const payload = await requestDiscordAccountInput(null);
+        if (!payload) {
+            return;
+        }
+        await createDiscordGatewayAccount(payload);
+        showToast({
+            title: t('settings.gateway.discord_saved_title'),
+            message: t('settings.gateway.discord_saved_message'),
+            tone: 'success',
+        });
+        await openImFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.gateway.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function handleEditDiscordFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.discordAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    try {
+        const payload = await requestDiscordAccountInput(account);
+        if (!payload) {
+            return;
+        }
+        await updateDiscordGatewayAccount(account.account_id, payload);
+        showToast({
+            title: t('settings.gateway.discord_saved_title'),
+            message: t('settings.gateway.discord_saved_message'),
+            tone: 'success',
+        });
+        await openImFeatureView();
+    } catch (error) {
+        showToast({
+            title: t('settings.gateway.save_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
 async function handleCreateXiaolubanFeatureAccount() {
     try {
         const result = await requestXiaolubanAccountInput(
@@ -6444,6 +6866,45 @@ async function handleDeleteXiaolubanFeatureAccount(accountId) {
     showToast({
         title: t('settings.gateway.deleted'),
         message: t('settings.gateway.xiaoluban_deleted_message'),
+        tone: 'success',
+    });
+    await openImFeatureView();
+}
+
+async function handleToggleDiscordFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.discordAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    if (String(account?.status || '').trim() === 'enabled') {
+        await disableDiscordGatewayAccount(account.account_id);
+    } else {
+        await enableDiscordGatewayAccount(account.account_id);
+    }
+    await openImFeatureView();
+}
+
+async function handleDeleteDiscordFeatureAccount(accountId) {
+    const account = currentGatewayFeatureState.discordAccounts.find(item => item.account_id === String(accountId || '').trim());
+    if (!account) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.gateway.delete_confirm_title'),
+        message: formatMessage('settings.gateway.delete_confirm_message', {
+            name: String(account?.display_name || account?.account_id || ''),
+        }),
+        tone: 'danger',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    await deleteDiscordGatewayAccount(account.account_id);
+    showToast({
+        title: t('settings.gateway.discord_deleted_title'),
+        message: t('settings.gateway.discord_deleted_message'),
         tone: 'success',
     });
     await openImFeatureView();

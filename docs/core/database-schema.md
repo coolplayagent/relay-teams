@@ -11,7 +11,7 @@
 
 - SQLite tables do not currently enforce identifier-text `CHECK` constraints. The application layer rejects identifier and reference inputs that are blank, whitespace-only, or the explicit strings `"None"` and `"null"`.
 - Optional identifier fields still allow real `NULL` at the API and model layer.
-- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `run_todos`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, `wechat_accounts`, and `task_spec_artifacts`.
+- Repository read paths tolerate previously persisted dirty rows for identifier-heavy tables such as `sessions`, `workspaces`, `external_session_bindings`, `session_history_markers`, `run_runtime`, `background_tasks`, `run_todos`, `monitor_subscriptions`, `monitor_triggers`, `approval_tickets`, `gateway_sessions`, `feishu_gateway_accounts`, `wechat_accounts`, `discord_accounts`, and `task_spec_artifacts`.
 - When those readers encounter invalid persisted identifiers or timestamps, they log a warning and skip the bad row or treat the row as missing instead of failing the whole `/api/*` request.
 
 ---
@@ -707,7 +707,7 @@ CREATE INDEX IF NOT EXISTS idx_gateway_sessions_internal_session
 Purpose: persistent mapping between an external gateway channel session and the internal Agent Teams session/run state used by the runtime.
 
 Notes:
-- `channel_type` identifies the transport-facing gateway implementation and currently includes `acp_stdio`, `wechat`, and `xiaoluban`.
+- `channel_type` identifies the transport-facing gateway implementation and currently includes `acp_stdio`, `discord`, `wechat`, and `xiaoluban`.
 - `external_session_id` is the channel-visible session key; `internal_session_id` remains the core runtime session source of truth.
 - `cwd` stores the resolved absolute workspace root last provided by the gateway channel. For ACP stdio, `session/new.cwd` creates or reuses that workspace, and `session/load.cwd` may rebind the internal session to a different workspace when no active or recoverable run is attached.
 - `capabilities_json` stores channel-scoped capability negotiation data.
@@ -794,7 +794,92 @@ Notes:
 
 ---
 
-### 2.10.4 `xiaoluban_accounts`
+### 2.10.4 `discord_accounts`
+
+```sql
+CREATE TABLE IF NOT EXISTS discord_accounts (
+    account_id              TEXT PRIMARY KEY,
+    display_name            TEXT NOT NULL,
+    status                  TEXT NOT NULL,
+    bot_user_id             TEXT,
+    application_id          TEXT,
+    allowed_channel_ids_json TEXT NOT NULL,
+    allow_channel_messages  INTEGER NOT NULL,
+    workspace_id            TEXT NOT NULL,
+    session_mode            TEXT NOT NULL,
+    normal_root_role_id     TEXT,
+    orchestration_preset_id TEXT,
+    yolo                    INTEGER NOT NULL,
+    thinking_json           TEXT NOT NULL,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
+);
+```
+
+Purpose: persisted Discord bot account configuration and runtime/session targeting config.
+
+Notes:
+- Discord bot tokens are stored in the unified secret store and resolved by `account_id`; they are not stored in this table.
+- `account_id` is the Discord bot user id returned by Discord's current-user API.
+- `allowed_channel_ids_json` stores guild channel ids that may send non-mention messages when `allow_channel_messages = 1`.
+- Direct messages and guild mentions are accepted independently of `allowed_channel_ids_json`.
+- `workspace_id`, `session_mode`, `normal_root_role_id`, and `orchestration_preset_id` define the runtime preset applied to new or resolved gateway sessions for that account.
+- runtime status fields such as `running`, `last_error`, and timestamps for last inbound/outbound activity are computed in memory and returned by the API, not persisted in this table.
+
+`status` values:
+- `enabled`
+- `disabled`
+
+### 2.10.5 `discord_inbound_queue`
+
+```sql
+CREATE TABLE IF NOT EXISTS discord_inbound_queue (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    inbound_queue_id    TEXT NOT NULL UNIQUE,
+    account_id          TEXT NOT NULL,
+    message_key         TEXT NOT NULL,
+    gateway_session_id  TEXT NOT NULL,
+    session_id          TEXT NOT NULL,
+    peer_user_id        TEXT NOT NULL,
+    channel_id          TEXT NOT NULL,
+    guild_id            TEXT,
+    thread_id           TEXT,
+    reply_to_message_id TEXT,
+    text                TEXT NOT NULL,
+    status              TEXT NOT NULL,
+    run_id              TEXT,
+    last_error          TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    completed_at        TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_discord_inbound_queue_message
+    ON discord_inbound_queue(account_id, channel_id, message_key);
+
+CREATE INDEX IF NOT EXISTS idx_discord_inbound_queue_session
+    ON discord_inbound_queue(session_id, id ASC);
+
+CREATE INDEX IF NOT EXISTS idx_discord_inbound_queue_status
+    ON discord_inbound_queue(status, id ASC);
+```
+
+Purpose: persists accepted Discord inbound messages before they enter the shared
+gateway session ingress path so same-session traffic queues deterministically and
+survives process restarts.
+
+Notes:
+- `message_key` is normally `mid:{discord_message_id}`.
+- `channel_id` stores the reply channel. For thread messages this is the thread id; `thread_id` also stores the source thread id.
+- `gateway_session_id` points back to the Discord gateway session row.
+- `status` flows through `queued`, `starting`, `waiting_result`, then `completed` or `failed`.
+- `run_id` is populated only after the shared gateway ingress path successfully starts.
+- queued Discord messages never auto-attach to an already active session run.
+- `last_error` captures terminal start/reply failures for that inbound item.
+
+---
+
+### 2.10.6 `xiaoluban_accounts`
 
 ```sql
 CREATE TABLE IF NOT EXISTS xiaoluban_accounts (
@@ -855,6 +940,8 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 - `account_id`: Feishu gateway account retrieval across `feishu_gateway_accounts`.
 - `account_id`: WeChat gateway account retrieval across `wechat_accounts`,
   `wechat_inbound_queue`.
+- `account_id`: Discord gateway account retrieval across `discord_accounts`,
+  `discord_inbound_queue`.
 - `account_id`: Xiaoluban gateway account retrieval across `xiaoluban_accounts`.
 
 ---
@@ -877,6 +964,7 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 - `relay_teams.automation`: `automation_execution_events`.
 - `relay_teams.gateway`: `gateway_sessions`.
 - `relay_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
+- `relay_teams.gateway.discord`: `discord_accounts`, `discord_inbound_queue`.
 - `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
 - `relay_teams.connector`: no SQLite tables. Connector status is derived from
   `triggers` GitHub rows and the existing gateway account tables.

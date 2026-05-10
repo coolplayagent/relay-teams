@@ -3479,6 +3479,101 @@ Notes:
 - Delivery continues after a single target fails; the operation raises only when all target sends fail.
 - Existing rows with only the legacy `notification_receiver` column are read as one group receiver and still notify the token owner.
 
+### `GET /gateway/discord/accounts`
+
+Lists all persisted Discord gateway accounts.
+
+Each record includes:
+- `account_id`
+- `display_name`
+- `status`: `enabled` or `disabled`
+- `bot_user_id`
+- `application_id`
+- `allowed_channel_ids`
+- `allow_channel_messages`
+- `workspace_id`
+- `session_mode`
+- `normal_root_role_id`
+- `orchestration_preset_id`
+- `yolo`
+- `thinking`
+- `secret_status.bot_token_configured`
+- runtime status fields: `running`, `last_error`, `last_event_at`, `last_inbound_at`, `last_outbound_at`
+- `created_at`
+- `updated_at`
+
+### `POST /gateway/discord/accounts`
+
+Creates a Discord gateway account and stores its bot token in the unified secret store.
+The backend validates the token by calling Discord's current-user API and uses the
+returned bot user id as `account_id`.
+
+Request fields:
+- `display_name`
+- `bot_token`
+- `application_id`
+- `enabled`
+- `allowed_channel_ids`
+- `allow_channel_messages`
+- `workspace_id`
+- `session_mode`
+- `normal_root_role_id`
+- `orchestration_preset_id`
+- `yolo`
+- `thinking`
+
+Rules:
+- `bot_token` is required on create.
+- Unknown fields return `422`.
+- `session_mode = "orchestration"` requires `orchestration_preset_id` or a configured default orchestration preset.
+- `allowed_channel_ids` controls guild channel messages only; direct messages and bot mentions have separate acceptance rules.
+
+### `PATCH /gateway/discord/accounts/{account_id}`
+
+Updates mutable Discord account settings.
+
+Mutable fields:
+- `display_name`
+- `bot_token`
+- `application_id`
+- `enabled`
+- `allowed_channel_ids`
+- `allow_channel_messages`
+- `workspace_id`
+- `session_mode`
+- `normal_root_role_id`
+- `orchestration_preset_id`
+- `yolo`
+- `thinking`
+
+Notes:
+- Updating `bot_token` must resolve to the same Discord bot user id as the existing account.
+- The request body must include at least one field.
+- Saving account settings immediately reloads Discord gateway workers.
+
+### `POST /gateway/discord/accounts/{account_id}:enable`
+
+Enables one Discord account and reloads gateway workers.
+
+### `POST /gateway/discord/accounts/{account_id}:disable`
+
+Disables one Discord account and reloads gateway workers.
+
+### `DELETE /gateway/discord/accounts/{account_id}`
+
+Deletes one Discord account and removes its stored bot token from the unified secret store.
+
+### `POST /gateway/discord/reload`
+
+Reloads all Discord gateway workers against the current persisted account set.
+
+Discord behavior:
+- Discord is managed as a long-lived conversational gateway, not as a trigger.
+- Accepted direct messages, bot mentions, and configured channel messages are persisted into a local inbound queue before run start.
+- Guild messages that only mention the bot and contain no task text are ignored.
+- Inbound Discord messages use the shared gateway session ingress path, so busy sessions queue later messages instead of auto-attaching them to the active run.
+- Final run output is sent back through Discord REST to the source channel or thread.
+
 ### `GET /gateway/wechat/accounts`
 
 Lists all persisted WeChat gateway accounts.

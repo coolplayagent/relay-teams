@@ -132,6 +132,7 @@
 
 - `currentGatewayFeatureState`
 - Feishu trigger draft。
+- Discord accounts。
 - Xiaoluban accounts。
 - WeChat accounts 和 login session。
 - workspace、normal roles、orchestration presets。
@@ -139,6 +140,7 @@
 用户可见区域：
 
 - Feishu 触发器列表和编辑器。
+- Discord gateway accounts。
 - Xiaoluban gateway accounts。
 - WeChat gateway accounts 和登录流程。
 - workspace/role/preset 选择。
@@ -160,6 +162,13 @@ Xiaoluban 表现：
 - IM 配置和回调 URL 相关错误提示。
 - token reveal 或连接测试。
 
+Discord 表现：
+
+- bot token 配置，编辑时默认保留现有 token。
+- application id、允许频道列表、允许频道普通消息开关。
+- workspace、session mode、normal role/orchestration preset。
+- enable/disable/delete。
+
 WeChat 表现：
 
 - 登录启动、等待登录结果。
@@ -176,6 +185,7 @@ WeChat 表现：
 关键交互：
 
 - 创建、更新、启停、删除 Feishu trigger。
+- 创建、更新、启停、删除 Discord account。
 - 创建、更新、启停、删除 Xiaoluban account。
 - 启动 WeChat 登录并轮询登录结果。
 - 更新 gateway 的目标 workspace、session mode、role/preset。
@@ -183,6 +193,7 @@ WeChat 表现：
 依赖 API：
 
 - Feishu trigger：`fetchTriggers`、`createTrigger`、`updateTrigger`、`deleteTrigger`、`enableTrigger`、`disableTrigger`。
+- Discord：`fetchDiscordGatewayAccounts`、`createDiscordGatewayAccount`、`updateDiscordGatewayAccount`、`enableDiscordGatewayAccount`、`disableDiscordGatewayAccount`、`deleteDiscordGatewayAccount`、`reloadDiscordGateway`。
 - Xiaoluban：`fetchXiaolubanGatewayAccounts`、`prepareXiaolubanGatewayAccount`、`createXiaolubanGatewayAccount`、`updateXiaolubanGatewayAccount`、`enableXiaolubanGatewayAccount`、`disableXiaolubanGatewayAccount`、`deleteXiaolubanGatewayAccount`、`fetchXiaolubanGatewayImForwardingCommand`。
 - WeChat：`fetchWeChatGatewayAccounts`、`startWeChatGatewayLogin`、`waitWeChatGatewayLogin`、`updateWeChatGatewayAccount`、`enableWeChatGatewayAccount`、`disableWeChatGatewayAccount`、`deleteWeChatGatewayAccount`、`reloadWeChatGateway`。
 - 配置依赖：`fetchWorkspaces`、`fetchRoleConfigOptions`、`fetchOrchestrationConfig`。

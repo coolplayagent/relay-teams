@@ -14,6 +14,13 @@
   - `connector/`: connector aggregation facade and API contracts for built-in platform connection status
   - `env/`: runtime env loading, proxy support, web connectivity, and env CLI
   - `hooks/`: runtime hook models, loader, matcher, service, executors, state, and event integration
+  - `gateway/`: IM and protocol gateway runtime
+    - `gateway/discord/`: Discord bot account models, repository, Gateway worker, inbound queue, client, service, and secret store
+    - `gateway/feishu/`: Feishu gateway accounts, long-connection runtime, and message pool
+    - `gateway/im/`: shared IM context resolution, commands, and `im_send` delivery service
+    - `gateway/wechat/`: WeChat account login, workers, queue, client, and service
+    - `gateway/xiaoluban/`: Xiaoluban notification delivery and IM forwarding
+    - `gateway_session_service.py` and `session_ingress_service.py`: shared external-session mapping and busy-session run handoff
   - `interfaces/`: external interfaces
     - `interfaces/cli/`: Typer commands for server, prompts, approvals, triggers, memory, hooks, and skills
     - `interfaces/server/`: FastAPI app, DI container, config services, and `/api/*` routers
@@ -43,6 +50,7 @@
 
 - `tests/unit_tests/`: mirrors `src/relay_teams/` by module
 - `tests/unit_tests/boards/`: board models, adapters, controlled tools, and dispatcher behavior
+- `tests/unit_tests/gateway/`: gateway session mapping, provider services, IM forwarding, queues, and frontend-facing gateway behavior
 - `tests/unit_tests/hooks/`: hook loader, executors, and runtime behavior
 - `tests/unit_tests/plugins/`: plugin manifest loading, namespacing, component source wiring, and runtime integration
 - `tests/integration_tests/api/`: HTTP/SSE integration flows

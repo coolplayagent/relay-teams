@@ -7,8 +7,8 @@ Agent Teams supports Feishu app bot integration for:
 - inbound IM trigger delivery through the Feishu SDK long connection
 - outbound notifications back to the originating Feishu chat
 
-The settings UI now groups Feishu and WeChat under a shared Gateway section, and the
-backend ownership is also unified under `relay_teams.gateway`.
+The IM Gateway UI groups Feishu, Discord, WeChat, and Xiaoluban under one feature
+view, and the backend ownership is unified under `relay_teams.gateway`.
 
 Inbound and outbound Feishu handling use Feishu's official Python SDK (`lark-oapi`).
 Inbound delivery uses SDK long connection mode, so no public callback URL or reverse
@@ -241,5 +241,4 @@ Feishu notifications are only sent when the run/session already has Feishu chat
 context. Outbound delivery is bot-aware: the dispatcher uses the `feishu_trigger_id`
 stored on the session metadata to resolve the correct Feishu bot credentials.
 
-Related diagrams: the shared IM message flow document is not currently
-present in this repository.
+Related architecture: [IM Gateway Architecture](../modules/gateway/im-gateway-architecture.md).

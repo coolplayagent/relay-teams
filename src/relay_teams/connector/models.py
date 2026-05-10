@@ -11,6 +11,7 @@ from relay_teams.validation import RequiredIdentifierStr
 
 class ConnectorProvider(str, Enum):
     GITHUB = "github"
+    DISCORD = "discord"
     FEISHU = "feishu"
     WECHAT = "wechat"
     XIAOLUBAN = "xiaoluban"

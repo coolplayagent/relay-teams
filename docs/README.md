@@ -22,6 +22,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Async path unification](modules/automation/async-path-unification-spec.md)
 - [CLI commands](modules/cli/commands.md)
 - [Frontend](modules/frontend/README.md)
+- [IM Gateway architecture](modules/gateway/im-gateway-architecture.md)
 - [Runtime hooks](modules/hooks/relay-teams-runtime-hooks-design.md)
 - [Logger](modules/logger/logger-desensitize-design.md)
 - [MCP and ACP](modules/mcp-acp/)
