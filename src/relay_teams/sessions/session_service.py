@@ -2275,11 +2275,12 @@ class SessionService:
             raise KeyError(instance_id)
         return agent
 
-    def _agent_projection(self, record: AgentRuntimeRecord) -> dict[str, object]:
+    @staticmethod
+    def _agent_projection(record: AgentRuntimeRecord) -> dict[str, object]:
         return record.model_dump(mode="json")
 
+    @staticmethod
     async def _agent_projection_async(
-        self,
         record: AgentRuntimeRecord,
     ) -> dict[str, object]:
         return record.model_dump(mode="json")
