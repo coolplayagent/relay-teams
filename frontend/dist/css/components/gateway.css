@@ -343,10 +343,16 @@
     max-height: min(82vh, 720px) !important;
 }
 
-.gateway-feature-modal .gateway-feishu-modal-content {
+.gateway-feature-modal .gateway-feishu-modal-content,
+.gateway-feature-modal .gateway-discord-modal-content {
     width: min(80vw, 1120px) !important;
     max-width: none !important;
     max-height: min(88vh, 960px) !important;
+}
+
+.gateway-feature-modal .gateway-discord-modal-content {
+    width: min(1120px, 96vw) !important;
+    max-height: min(92vh, 900px) !important;
 }
 
 .gateway-feature-modal-header {
@@ -389,41 +395,187 @@
     height: 0;
 }
 
-.gateway-feishu-modal-content .gateway-feature-modal-body {
+.gateway-feishu-modal-content .gateway-feature-modal-body,
+.gateway-discord-modal-content .gateway-feature-modal-body {
     padding-top: 0.85rem;
     padding-bottom: 1rem;
 }
 
-.gateway-feishu-modal-content .gateway-feishu-editor {
+.gateway-feishu-modal-content .gateway-feishu-editor,
+.gateway-discord-modal-content .gateway-discord-editor {
     border-top: none;
     padding-top: 0;
 }
 
-.gateway-feishu-modal-content .role-editor-panel {
+.gateway-feishu-modal-content .role-editor-panel,
+.gateway-discord-modal-content .role-editor-panel {
     border: none;
     border-radius: 0;
     box-shadow: none;
     background: transparent;
 }
 
-.gateway-feishu-modal-content .role-editor-form {
+.gateway-feishu-modal-content .role-editor-form,
+.gateway-discord-modal-content .role-editor-form {
     gap: 0.8rem;
 }
 
-.gateway-feishu-modal-content .role-editor-sections {
+.gateway-feishu-modal-content .role-editor-sections,
+.gateway-discord-modal-content .role-editor-sections {
     gap: 0.8rem;
 }
 
-.gateway-feishu-modal-content .role-editor-section {
+.gateway-discord-modal-content .role-editor-sections {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+}
+
+.gateway-discord-modal-content .role-editor-section:nth-child(3) {
+    grid-column: 1 / -1;
+}
+
+.gateway-feishu-modal-content .role-editor-section,
+.gateway-discord-modal-content .role-editor-section {
     padding: 0.8rem 0.9rem;
     border-radius: 14px;
     border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent);
     background: color-mix(in srgb, var(--bg-surface-muted) 56%, var(--bg-surface));
 }
 
-.gateway-feishu-modal-content .gateway-editor-actions {
+.gateway-feishu-modal-content .role-editor-section,
+.gateway-discord-modal-content .role-editor-section {
+    padding: 0.72rem 0.86rem;
+}
+
+.gateway-feishu-modal-content .role-editor-section h5,
+.gateway-discord-modal-content .role-editor-section h5 {
+    margin-bottom: 0.56rem;
+}
+
+.gateway-feishu-modal-content .form-group,
+.gateway-discord-modal-content .form-group {
+    margin-bottom: 0;
+}
+
+.gateway-feishu-section-stack,
+.gateway-feishu-field-grid,
+.gateway-discord-section-stack,
+.gateway-discord-field-grid {
+    display: grid;
+    gap: 0.64rem;
+    align-items: start;
+}
+
+.gateway-feishu-field-grid,
+.gateway-discord-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.gateway-secret-input-row {
+    align-items: center;
+}
+
+.gateway-secret-input-row input {
+    min-width: 0;
+}
+
+.gateway-discord-modal-content .web-provider-link-card.gateway-discord-token-link {
+    min-height: 0;
+    padding: 0.72rem 0.82rem;
+    border-radius: 10px;
+    background: var(--bg-surface);
+    box-shadow: none;
+    transform: none;
+}
+
+.gateway-discord-modal-content .web-provider-link-card.gateway-discord-token-link:hover {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent);
+    transform: none;
+}
+
+.gateway-discord-modal-content .gateway-discord-token-link .web-provider-link-badge {
+    border-radius: 7px;
+    letter-spacing: 0;
+}
+
+.gateway-discord-channel-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.42rem;
+    min-width: 0;
+}
+
+.gateway-discord-channel-card > label {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.gateway-discord-channel-input-shell {
+    border: 1px solid color-mix(in srgb, var(--border-color) 84%, transparent);
+    border-radius: 10px;
+    background: var(--bg-surface);
+    overflow: hidden;
+}
+
+.gateway-discord-channel-input-shell:focus-within {
+    border-color: color-mix(in srgb, var(--accent-primary) 74%, var(--border-color));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
+.gateway-discord-channel-input-shell textarea {
+    width: 100%;
+    min-height: 84px;
+    padding: 0.68rem 0.76rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 0.84rem;
+    line-height: 1.5;
+    resize: vertical;
+}
+
+.gateway-discord-channel-input-shell textarea:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.gateway-discord-channel-footer {
+    display: grid;
+    gap: 0.18rem;
+    color: var(--text-secondary);
+    font-size: 0.76rem;
+    line-height: 1.4;
+}
+
+.gateway-field-help {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.gateway-editor-submit-error {
+    color: var(--danger);
+    font-size: 0.83rem;
+    line-height: 1.45;
+}
+
+.gateway-feishu-modal-content .gateway-editor-actions,
+.gateway-discord-modal-content .gateway-editor-actions {
     padding: 0.95rem 0 0;
     border-top: none;
+}
+
+.gateway-feishu-modal-content .gateway-editor-actions,
+.gateway-discord-modal-content .gateway-editor-actions {
+    position: sticky;
+    z-index: 2;
+    bottom: 0;
+    background: var(--bg-surface);
 }
 
 .automation-editor-modal .automation-editor-modal-content {
@@ -681,8 +833,18 @@
 
     .gateway-field-grid-2,
     .gateway-field-grid-3,
-    .gateway-toggle-grid {
+    .gateway-toggle-grid,
+    .gateway-feishu-field-grid,
+    .gateway-discord-field-grid {
         grid-template-columns: 1fr;
+    }
+
+    .gateway-discord-modal-content .role-editor-sections {
+        grid-template-columns: 1fr;
+    }
+
+    .gateway-discord-modal-content .role-editor-section:nth-child(3) {
+        grid-column: auto;
     }
 
     .automation-editor-grid-1,
@@ -701,7 +863,8 @@
     }
 
     .gateway-feature-modal .gateway-feature-modal-content,
-    .gateway-feature-modal .gateway-feishu-modal-content {
+    .gateway-feature-modal .gateway-feishu-modal-content,
+    .gateway-feature-modal .gateway-discord-modal-content {
         width: min(96vw, 1120px) !important;
         max-height: min(92vh, 960px) !important;
     }

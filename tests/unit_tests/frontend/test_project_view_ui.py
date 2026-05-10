@@ -5121,6 +5121,9 @@ export async function updateAutomationProject() {
     assert 'id="feishu-trigger-name-input"' in str(payload["modalHtml"])
     assert 'id="feishu-app-id-input"' in str(payload["modalHtml"])
     assert 'id="feishu-app-secret-input"' in str(payload["modalHtml"])
+    assert 'id="toggle-feishu-app-secret-btn"' in str(payload["modalHtml"])
+    assert "gateway-feishu-section-stack" in str(payload["modalHtml"])
+    assert 'id="feishu-trigger-enabled-input"' not in str(payload["modalHtml"])
     assert 'id="feishu-trigger-name-input"' not in str(payload["contentHtml"])
 
 
@@ -5807,21 +5810,6 @@ import {
 } from "./projectView.mjs";
 import { els, flushTasks } from "./mockDom.mjs";
 
-globalThis.__showFormDialogResult = {
-    display_name: "Discord Bot",
-    bot_token: "discord-token",
-    application_id: "app-1",
-    workspace_id: "workspace-1",
-    session_mode: "normal",
-    normal_root_role_id: "role-1",
-    allowed_channel_ids: "chan-1\\nchan-2,chan-1",
-    allow_channel_messages: true,
-    yolo: false,
-    thinking_enabled: true,
-    thinking_effort: "high",
-    enabled: true,
-};
-
 initializeProjectView();
 await openImFeatureView();
 await flushTasks();
@@ -5831,16 +5819,32 @@ document.querySelector("[data-feature-gateway-add-discord]")?.onclick?.();
 await flushTasks();
 await flushTasks();
 
-const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
-const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+const modalHtmlBeforeSave = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+const defaultDisplayName = document.getElementById("discord-display-name-input").value;
+document.getElementById("discord-display-name-input").value = "Discord Bot";
+document.getElementById("discord-bot-token-input").value = "discord-token";
+document.getElementById("discord-application-id-input").value = "app-1";
+document.getElementById("discord-workspace-id-input").value = "workspace-1";
+document.getElementById("discord-session-mode-input").value = "normal";
+document.getElementById("discord-normal-root-role-id-input").value = "role-1";
+document.getElementById("discord-allowed-channel-ids-input").value = "chan-1\\nchan-2,chan-1";
+document.getElementById("discord-allow-channel-messages-input").checked = true;
+document.getElementById("discord-yolo-input").checked = false;
+document.getElementById("discord-thinking-enabled-input").checked = true;
+document.getElementById("discord-thinking-effort-input").value = "high";
+document.getElementById("discord-enabled-input").checked = true;
+document.querySelector("[data-feature-discord-save]")?.onclick?.();
+await flushTasks();
+await flushTasks();
 
 console.log(JSON.stringify({
     title: els.projectViewTitle.textContent,
     summary: els.projectViewSummary.textContent,
     contentHtml: els.projectViewContent.innerHTML,
+    modalHtmlBeforeSave,
+    defaultDisplayName,
     createdPayload: globalThis.__createdDiscordAccountPayload || null,
-    fieldIds: fields.map(field => field.id),
-    allowedChannelsField: fields.find(field => field.id === "allowed_channel_ids") || null,
+    showFormDialogCalls: globalThis.__showFormDialogCalls || [],
     toastCalls: globalThis.__toastCalls || [],
 }));
 """.strip(),
@@ -5891,6 +5895,21 @@ export async function createDiscordGatewayAccount(payload) {
     assert payload["summary"] == ""
     assert "connectors-page" in str(payload["contentHtml"])
     assert "data-feature-gateway-add-discord" in str(payload["contentHtml"])
+    assert payload["showFormDialogCalls"] == []
+    modal_html = str(payload["modalHtmlBeforeSave"])
+    assert payload["defaultDisplayName"] == "Discord Bot"
+    assert "gateway-discord-modal-content" in modal_html
+    assert "gateway-discord-token-link" in modal_html
+    assert 'id="toggle-discord-bot-token-btn"' in modal_html
+    assert "https://discord.com/developers/applications" in modal_html
+    assert "gateway-discord-channel-card" in modal_html
+    assert "gateway-toggle-grid" in modal_html
+    assert 'id="discord-yolo-input"' in modal_html
+    assert 'id="discord-thinking-enabled-input"' in modal_html
+    assert 'id="discord-thinking-effort-input"' in modal_html
+    assert modal_html.index("Discord Routing") < modal_html.index(
+        "Session Configuration"
+    )
     assert payload["createdPayload"] == {
         "display_name": "Discord Bot",
         "application_id": "app-1",
@@ -5908,24 +5927,6 @@ export async function createDiscordGatewayAccount(payload) {
         "enabled": True,
         "bot_token": "discord-token",
     }
-    assert payload["fieldIds"] == [
-        "display_name",
-        "bot_token",
-        "application_id",
-        "workspace_id",
-        "session_mode",
-        "normal_root_role_id",
-        "orchestration_preset_id",
-        "allowed_channel_ids",
-        "allow_channel_messages",
-        "yolo",
-        "thinking_enabled",
-        "thinking_effort",
-        "enabled",
-    ]
-    allowed_channels_field = cast(dict[str, object], payload["allowedChannelsField"])
-    assert allowed_channels_field["compact"] is True
-    assert allowed_channels_field["rows"] == 2
     toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
     assert toast_calls[-1]["message"] == "Discord account saved."
 
@@ -7646,8 +7647,13 @@ export const state = {
         "settings.gateway.discord_none": "No Discord accounts",
         "settings.gateway.discord_none_copy": "Add a Discord bot account.",
         "settings.gateway.discord_account_editor": "Discord Account",
+        "settings.gateway.discord_detail_copy": "Configure Discord.",
+        "settings.gateway.discord_default_display_name": "Discord Bot",
         "settings.gateway.discord_bot_token": "Bot Token",
         "settings.gateway.discord_token_copy": "Paste the Discord bot token.",
+        "settings.gateway.discord_token_source": "Token Source",
+        "settings.gateway.discord_developer_portal": "Discord Developer Portal",
+        "settings.gateway.discord_developer_portal_help": "Open Applications > Bot to copy the token.",
         "settings.gateway.discord_token_edit_placeholder": "Bot token saved, re-enter to update",
         "settings.gateway.discord_token_edit_copy": "A bot token is saved. Leave the masked value as-is to keep it.",
         "settings.gateway.discord_missing_token": "Bot token is required.",
@@ -7656,9 +7662,11 @@ export const state = {
         "settings.gateway.discord_allowed_channels": "Allowed Channels",
         "settings.gateway.discord_allowed_channels_placeholder": "Channel IDs",
         "settings.gateway.discord_allowed_channels_copy": "Only these guild channels are accepted.",
+        "settings.gateway.discord_allowed_channels_hint": "Line breaks or commas are accepted.",
         "settings.gateway.discord_allow_channel_messages": "Allow channel messages",
         "settings.gateway.discord_allow_channel_messages_copy": "Accept non-mention messages from allowlisted channels.",
         "settings.gateway.discord_allowed_channel_count": "{count} channels",
+        "settings.gateway.discord_routing": "Discord Routing",
         "settings.gateway.xiaoluban_account_editor": "Xiaoluban Account",
         "settings.gateway.xiaoluban_title": "Xiaoluban",
         "settings.gateway.xiaoluban_none": "No Xiaoluban accounts",

@@ -226,6 +226,9 @@ function createInitialGatewayFeatureState() {
         feishuTriggers: [],
         feishuEditingTriggerId: '',
         feishuDraft: null,
+        discordEditingAccountId: '',
+        discordDraft: null,
+        discordDialogResolve: null,
         xiaolubanAccounts: [],
         discordAccounts: [],
         wechatAccounts: [],
@@ -377,6 +380,34 @@ function createFeishuTriggerDraft(trigger = null) {
     };
 }
 
+function createDiscordAccountDraft(account = null) {
+    const firstWorkspaceId = String(currentGatewayFeatureState.workspaces[0]?.workspace_id || '').trim();
+    const firstRoleId = String(currentGatewayFeatureState.normalRoles[0]?.role_id || '').trim();
+    const thinking = account?.thinking && typeof account.thinking === 'object' ? account.thinking : {};
+    const defaultDisplayName = t('settings.gateway.discord_default_display_name');
+    return {
+        account_id: String(account?.account_id || '').trim(),
+        display_name: String(account?.display_name || defaultDisplayName).trim(),
+        bot_token: '',
+        application_id: String(account?.application_id || '').trim(),
+        workspace_id: String(account?.workspace_id || firstWorkspaceId).trim(),
+        session_mode: String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE,
+        normal_root_role_id: String(account?.normal_root_role_id || firstRoleId).trim(),
+        orchestration_preset_id: String(account?.orchestration_preset_id || '').trim(),
+        allowed_channel_ids: normalizeDiscordAllowedChannelsForDisplay(account),
+        allow_channel_messages: account?.allow_channel_messages === true,
+        yolo: account?.yolo !== false,
+        thinking: {
+            enabled: thinking?.enabled === true,
+            effort: String(thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
+        },
+        enabled: String(account?.status || 'enabled').trim() !== 'disabled',
+        secret_status: account?.secret_status && typeof account.secret_status === 'object'
+            ? account.secret_status
+            : {},
+    };
+}
+
 function resolveSessionMode(targetConfig) {
     return String(targetConfig?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
 }
@@ -456,6 +487,84 @@ function readEditorValue(id) {
 function readEditorChecked(id, fallback = false) {
     const element = lookupDocumentElement(id);
     return typeof element?.checked === 'boolean' ? element.checked : fallback;
+}
+
+function renderGatewaySecretToggleButton(inputId, buttonId) {
+    const showLabel = t('feedback.show_sensitive');
+    const hideLabel = t('feedback.hide_sensitive');
+    return `
+        <button class="secure-input-btn gateway-secret-toggle-btn" id="${escapeHtml(buttonId)}" type="button" title="${escapeHtml(showLabel)}" aria-label="${escapeHtml(showLabel)}" data-gateway-secret-toggle data-gateway-secret-input="${escapeHtml(inputId)}" data-gateway-secret-show-label="${escapeHtml(showLabel)}" data-gateway-secret-hide-label="${escapeHtml(hideLabel)}" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" class="icon-sm" aria-hidden="true">
+                <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"></circle>
+            </svg>
+        </button>
+    `;
+}
+
+function chainElementHandler(element, eventName, handler) {
+    if (!element || typeof handler !== 'function') {
+        return;
+    }
+    const property = `on${eventName}`;
+    const previousHandler = typeof element[property] === 'function' ? element[property] : null;
+    element[property] = event => {
+        if (previousHandler) {
+            previousHandler.call(element, event);
+        }
+        handler(event);
+    };
+}
+
+function updateGatewaySecretToggle(input, button) {
+    if (!input || !button) {
+        return;
+    }
+    const hasValue = String(input.value || '').trim().length > 0;
+    if (!hasValue) {
+        input.type = 'password';
+    }
+    const revealed = input.type === 'text';
+    const showLabel = button.getAttribute?.('data-gateway-secret-show-label') || t('feedback.show_sensitive');
+    const hideLabel = button.getAttribute?.('data-gateway-secret-hide-label') || t('feedback.hide_sensitive');
+    const nextLabel = revealed ? hideLabel : showLabel;
+    if (button.style) {
+        button.style.display = hasValue ? 'inline-flex' : 'none';
+    }
+    button.className = revealed
+        ? 'secure-input-btn gateway-secret-toggle-btn is-active'
+        : 'secure-input-btn gateway-secret-toggle-btn';
+    button.title = nextLabel;
+    if (typeof button.setAttribute === 'function') {
+        button.setAttribute('aria-label', nextLabel);
+    } else {
+        button.ariaLabel = nextLabel;
+    }
+}
+
+function bindGatewaySecretToggles(root) {
+    root?.querySelectorAll?.('[data-gateway-secret-toggle]').forEach(button => {
+        const inputId = String(button.getAttribute?.('data-gateway-secret-input') || '').trim();
+        const input = inputId ? lookupDocumentElement(inputId) : null;
+        if (!input) {
+            return;
+        }
+        chainElementHandler(input, 'input', () => {
+            updateGatewaySecretToggle(input, button);
+        });
+        chainElementHandler(button, 'click', () => {
+            if (!String(input.value || '').trim()) {
+                updateGatewaySecretToggle(input, button);
+                return;
+            }
+            input.type = input.type === 'text' ? 'password' : 'text';
+            updateGatewaySecretToggle(input, button);
+            if (typeof input.focus === 'function') {
+                input.focus();
+            }
+        });
+        updateGatewaySecretToggle(input, button);
+    });
 }
 
 function syncFeishuDraftFromEditor() {
@@ -573,93 +682,100 @@ function renderFeishuEditor() {
                     <div class="role-editor-sections">
                         <section class="role-editor-section">
                             <h5>${escapeHtml(t('settings.triggers.bot_configuration'))}</h5>
-                            <div class="gateway-field-grid gateway-field-grid-2">
-                                <div class="form-group">
-                                    <label for="feishu-trigger-name-input">${escapeHtml(t('settings.triggers.trigger_name'))}</label>
-                                    <input id="feishu-trigger-name-input" value="${escapeHtml(String(draft.name || ''))}">
+                            <div class="gateway-feishu-section-stack">
+                                <div class="gateway-feishu-field-grid">
+                                    <div class="form-group">
+                                        <label for="feishu-trigger-name-input">${escapeHtml(t('settings.triggers.trigger_name'))}</label>
+                                        <input id="feishu-trigger-name-input" value="${escapeHtml(String(draft.name || ''))}">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="feishu-display-name-input">${escapeHtml(t('settings.triggers.display_name'))}</label>
+                                        <input id="feishu-display-name-input" value="${escapeHtml(String(draft.display_name || ''))}">
+                                    </div>
                                 </div>
-                                <div class="form-group">
-                                    <label for="feishu-display-name-input">${escapeHtml(t('settings.triggers.display_name'))}</label>
-                                    <input id="feishu-display-name-input" value="${escapeHtml(String(draft.display_name || ''))}">
-                                </div>
-                            </div>
-                            <div class="gateway-field-grid gateway-field-grid-3 gateway-field-grid-compact">
-                                <div class="form-group">
-                                    <label for="feishu-app-name-input">${escapeHtml(t('settings.triggers.feishu_app_name'))}</label>
-                                    <input id="feishu-app-name-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_name_placeholder'))}" value="${escapeHtml(String(draft.source_config?.app_name || ''))}">
-                                </div>
-                                <div class="form-group">
-                                    <label for="feishu-app-id-input">${escapeHtml(t('settings.triggers.feishu_app_id'))}</label>
-                                    <input id="feishu-app-id-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_id_placeholder'))}" value="${escapeHtml(String(draft.source_config?.app_id || ''))}">
+                                <div class="gateway-feishu-field-grid">
+                                    <div class="form-group">
+                                        <label for="feishu-app-name-input">${escapeHtml(t('settings.triggers.feishu_app_name'))}</label>
+                                        <input id="feishu-app-name-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_name_placeholder'))}" value="${escapeHtml(String(draft.source_config?.app_name || ''))}">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="feishu-app-id-input">${escapeHtml(t('settings.triggers.feishu_app_id'))}</label>
+                                        <input id="feishu-app-id-input" placeholder="${escapeHtml(t('settings.triggers.feishu_app_id_placeholder'))}" value="${escapeHtml(String(draft.source_config?.app_id || ''))}">
+                                    </div>
                                 </div>
                                 <div class="form-group">
                                     <label for="feishu-app-secret-input">${escapeHtml(t('settings.triggers.feishu_app_secret'))}</label>
-                                    <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus?.app_secret_configured ? t('settings.triggers.secret_keep_placeholder') : t('settings.triggers.feishu_app_secret_placeholder'))}" value="">
+                                    <div class="secure-input-row gateway-secret-input-row">
+                                        <input id="feishu-app-secret-input" type="password" placeholder="${escapeHtml(secretStatus?.app_secret_configured ? t('settings.triggers.secret_keep_placeholder') : t('settings.triggers.feishu_app_secret_placeholder'))}" value="" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                                        ${renderGatewaySecretToggleButton('feishu-app-secret-input', 'toggle-feishu-app-secret-btn')}
+                                    </div>
                                 </div>
                             </div>
                         </section>
                         <section class="role-editor-section">
                             <h5>${escapeHtml(t('settings.triggers.session_configuration'))}</h5>
-                            <div class="gateway-session-core-grid">
-                                <div class="form-group">
-                                    <label for="feishu-trigger-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
-                                    <select id="feishu-trigger-workspace-id-input">
-                                        ${renderGatewayWorkspaceOptions(String(draft.target_config?.workspace_id || '').trim())}
-                                    </select>
+                            <div class="gateway-feishu-section-stack">
+                                <div class="gateway-feishu-field-grid">
+                                    <div class="form-group">
+                                        <label for="feishu-trigger-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
+                                        <select id="feishu-trigger-workspace-id-input">
+                                            ${renderGatewayWorkspaceOptions(String(draft.target_config?.workspace_id || '').trim())}
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="feishu-trigger-rule-input">${escapeHtml(t('settings.triggers.rule'))}</label>
+                                        <select id="feishu-trigger-rule-input">
+                                            <option value="mention_only"${resolveRule(draft.source_config) === 'mention_only' ? ' selected' : ''}>mention_only</option>
+                                            <option value="all_messages"${resolveRule(draft.source_config) === 'all_messages' ? ' selected' : ''}>all_messages</option>
+                                        </select>
+                                    </div>
                                 </div>
-                                <div class="form-group">
-                                    <label for="feishu-trigger-rule-input">${escapeHtml(t('settings.triggers.rule'))}</label>
-                                    <select id="feishu-trigger-rule-input">
-                                        <option value="mention_only"${resolveRule(draft.source_config) === 'mention_only' ? ' selected' : ''}>mention_only</option>
-                                        <option value="all_messages"${resolveRule(draft.source_config) === 'all_messages' ? ' selected' : ''}>all_messages</option>
-                                    </select>
+                                <div class="gateway-feishu-field-grid">
+                                    <div class="form-group gateway-session-mode-field">
+                                        <label for="feishu-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
+                                        <select id="feishu-session-mode-input">
+                                            <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
+                                            <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group gateway-session-mode-detail" id="feishu-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
+                                        <label for="feishu-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
+                                        <select id="feishu-normal-root-role-id-input">
+                                            ${renderGatewayRoleOptions(resolveNormalRootRoleId(draft.target_config))}
+                                        </select>
+                                    </div>
+                                    <div class="form-group gateway-session-mode-detail" id="feishu-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
+                                        <label for="feishu-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
+                                        <select id="feishu-orchestration-preset-id-input">
+                                            ${renderGatewayPresetOptions(resolveOrchestrationPresetId(draft.target_config))}
+                                        </select>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="gateway-session-mode-row">
-                                <div class="form-group gateway-session-mode-field">
-                                    <label for="feishu-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
-                                    <select id="feishu-session-mode-input">
-                                        <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
-                                        <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
-                                    </select>
-                                </div>
-                                <div class="form-group gateway-session-mode-detail" id="feishu-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
-                                    <label for="feishu-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
-                                    <select id="feishu-normal-root-role-id-input">
-                                        ${renderGatewayRoleOptions(resolveNormalRootRoleId(draft.target_config))}
-                                    </select>
-                                </div>
-                                <div class="form-group gateway-session-mode-detail" id="feishu-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
-                                    <label for="feishu-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
-                                    <select id="feishu-orchestration-preset-id-input">
-                                        ${renderGatewayPresetOptions(resolveOrchestrationPresetId(draft.target_config))}
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="gateway-toggle-grid">
-                                <div class="gateway-setting-panel">
-                                    <label class="gateway-setting-toggle-row" for="feishu-trigger-yolo-input">
+                                <div class="gateway-toggle-grid">
+                                    <div class="gateway-setting-panel">
+                                        <label class="gateway-setting-toggle-row" for="feishu-trigger-yolo-input">
                                             <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.yolo'))}</span>
                                             <input id="feishu-trigger-yolo-input" type="checkbox"${resolveYolo(draft.target_config) ? ' checked' : ''}>
                                             <span class="gateway-editor-toggle-switch" aria-hidden="true">
                                                 <span class="gateway-editor-toggle-thumb"></span>
                                             </span>
-                                    </label>
-                                </div>
-                                <div class="gateway-setting-panel gateway-thinking-panel${thinkingEnabled ? ' is-expanded' : ''}" id="feishu-thinking-panel">
-                                    <label class="gateway-setting-toggle-row" for="feishu-trigger-thinking-enabled-input">
+                                        </label>
+                                    </div>
+                                    <div class="gateway-setting-panel gateway-thinking-panel${thinkingEnabled ? ' is-expanded' : ''}" id="feishu-thinking-panel">
+                                        <label class="gateway-setting-toggle-row" for="feishu-trigger-thinking-enabled-input">
                                             <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.thinking_enabled'))}</span>
                                             <input id="feishu-trigger-thinking-enabled-input" type="checkbox"${thinkingEnabled ? ' checked' : ''}>
                                             <span class="gateway-editor-toggle-switch" aria-hidden="true">
                                                 <span class="gateway-editor-toggle-thumb"></span>
                                             </span>
-                                    </label>
+                                        </label>
                                         <div class="gateway-thinking-panel-body" id="feishu-thinking-effort-field"${thinkingEnabled ? '' : ' style="display:none;"'}>
                                             <label class="gateway-thinking-panel-label" for="feishu-thinking-effort-input">${escapeHtml(t('settings.triggers.thinking_effort'))}</label>
                                             <select id="feishu-thinking-effort-input">
                                                 ${THINKING_EFFORT_OPTIONS.map(effort => `<option value="${effort}"${resolveThinkingEffort(draft.target_config) === effort ? ' selected' : ''}>${effort}</option>`).join('')}
                                             </select>
                                         </div>
+                                    </div>
                                 </div>
                             </div>
                         </section>
@@ -745,6 +861,274 @@ function syncFeishuThinkingEffortVisibility() {
         } else {
             thinkingPanel.classList.remove('is-expanded');
         }
+    }
+}
+
+function renderDiscordEditor() {
+    const draft = currentGatewayFeatureState.discordDraft;
+    if (!draft) {
+        return '';
+    }
+    const sessionMode = String(draft.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const thinkingEnabled = draft.thinking?.enabled === true;
+    const isEditing = String(draft.account_id || '').trim().length > 0;
+    const tokenConfigured = draft.secret_status?.bot_token_configured === true;
+    const tokenPlaceholder = isEditing && tokenConfigured
+        ? t('settings.gateway.discord_token_edit_placeholder')
+        : 'Bot token';
+    const developerPortalUrl = 'https://discord.com/developers/applications';
+    return `
+        <div class="gateway-discord-editor">
+            <div class="role-editor-panel">
+                <div class="role-editor-form">
+                    <div class="role-editor-sections">
+                        <section class="role-editor-section">
+                            <h5>${escapeHtml(t('settings.triggers.bot_configuration'))}</h5>
+                            <div class="gateway-discord-section-stack">
+                                <div class="gateway-discord-field-grid">
+                                    <div class="form-group">
+                                        <label for="discord-display-name-input">${escapeHtml(t('settings.gateway.display_name'))}</label>
+                                        <input id="discord-display-name-input" value="${escapeHtml(String(draft.display_name || ''))}">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="discord-application-id-input">${escapeHtml(t('settings.gateway.discord_application_id'))}</label>
+                                        <input id="discord-application-id-input" placeholder="123456789012345678" value="${escapeHtml(String(draft.application_id || ''))}">
+                                        <p class="gateway-field-help">${escapeHtml(t('settings.gateway.discord_application_id_copy'))}</p>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="discord-bot-token-input">${escapeHtml(t('settings.gateway.discord_bot_token'))}</label>
+                                    <div class="secure-input-row gateway-secret-input-row">
+                                        <input id="discord-bot-token-input" type="password" placeholder="${escapeHtml(tokenPlaceholder)}" value="" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false">
+                                        ${renderGatewaySecretToggleButton('discord-bot-token-input', 'toggle-discord-bot-token-btn')}
+                                    </div>
+                                    <p class="gateway-field-help">${escapeHtml(isEditing && tokenConfigured ? t('settings.gateway.discord_token_edit_copy') : t('settings.gateway.discord_token_copy'))}</p>
+                                </div>
+                                <a class="web-provider-link-card gateway-discord-token-link" href="${escapeHtml(developerPortalUrl)}" target="_blank" rel="noreferrer noopener" title="${escapeHtml(developerPortalUrl)}" aria-label="${escapeHtml(developerPortalUrl)}">
+                                    <span class="web-provider-link-copy">
+                                        <span class="web-provider-link-badge">${escapeHtml(t('settings.gateway.discord_token_source'))}</span>
+                                        <span class="web-provider-link-url">${escapeHtml(t('settings.gateway.discord_developer_portal'))}</span>
+                                        <span class="settings-token-source-note">${escapeHtml(t('settings.gateway.discord_developer_portal_help'))}</span>
+                                    </span>
+                                    <span class="web-provider-link-arrow" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" fill="none" class="icon-sm">
+                                            <path d="M7 17L17 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                            <path d="M9 7h8v8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+                                        </svg>
+                                    </span>
+                                </a>
+                            </div>
+                        </section>
+                        <section class="role-editor-section gateway-discord-routing-section">
+                            <h5>${escapeHtml(t('settings.gateway.discord_routing'))}</h5>
+                            <div class="gateway-discord-section-stack">
+                                <div class="gateway-discord-channel-card">
+                                    <label for="discord-allowed-channel-ids-input">${escapeHtml(t('settings.gateway.discord_allowed_channels'))}</label>
+                                    <div class="gateway-discord-channel-input-shell">
+                                        <textarea id="discord-allowed-channel-ids-input" rows="3" placeholder="${escapeHtml(t('settings.gateway.discord_allowed_channels_placeholder'))}" autocapitalize="off" autocorrect="off" spellcheck="false">${escapeHtml(String(draft.allowed_channel_ids || ''))}</textarea>
+                                    </div>
+                                    <div class="gateway-discord-channel-footer">
+                                        <span>${escapeHtml(t('settings.gateway.discord_allowed_channels_copy'))}</span>
+                                        <span>${escapeHtml(t('settings.gateway.discord_allowed_channels_hint'))}</span>
+                                    </div>
+                                </div>
+                                <div class="gateway-toggle-grid">
+                                    <div class="gateway-setting-panel">
+                                        <label class="gateway-setting-toggle-row" for="discord-allow-channel-messages-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.gateway.discord_allow_channel_messages'))}</span>
+                                            <input id="discord-allow-channel-messages-input" type="checkbox"${draft.allow_channel_messages === true ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    ${isEditing ? '' : `
+                                        <div class="gateway-setting-panel">
+                                            <label class="gateway-setting-toggle-row" for="discord-enabled-input">
+                                                <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.option_enabled'))}</span>
+                                                <input id="discord-enabled-input" type="checkbox"${draft.enabled !== false ? ' checked' : ''}>
+                                                <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                    <span class="gateway-editor-toggle-thumb"></span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    `}
+                                </div>
+                            </div>
+                        </section>
+                        <section class="role-editor-section">
+                            <h5>${escapeHtml(t('settings.triggers.session_configuration'))}</h5>
+                            <div class="gateway-discord-section-stack">
+                                <div class="form-group">
+                                    <label for="discord-workspace-id-input">${escapeHtml(t('settings.triggers.workspace'))}</label>
+                                    <select id="discord-workspace-id-input">
+                                        ${renderGatewayWorkspaceOptions(String(draft.workspace_id || '').trim())}
+                                    </select>
+                                </div>
+                                <div class="gateway-discord-field-grid">
+                                    <div class="form-group gateway-session-mode-field">
+                                        <label for="discord-session-mode-input">${escapeHtml(t('settings.triggers.mode'))}</label>
+                                        <select id="discord-session-mode-input">
+                                            <option value="normal"${sessionMode === 'normal' ? ' selected' : ''}>${escapeHtml(t('composer.mode_normal'))}</option>
+                                            <option value="orchestration"${sessionMode === 'orchestration' ? ' selected' : ''}>${escapeHtml(t('composer.mode_orchestration'))}</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group gateway-session-mode-detail" id="discord-normal-role-field"${sessionMode === 'normal' ? '' : ' style="display:none;"'}>
+                                        <label for="discord-normal-root-role-id-input">${escapeHtml(t('settings.triggers.normal_root_role_id'))}</label>
+                                        <select id="discord-normal-root-role-id-input">
+                                            ${renderGatewayRoleOptions(String(draft.normal_root_role_id || '').trim())}
+                                        </select>
+                                    </div>
+                                    <div class="form-group gateway-session-mode-detail" id="discord-preset-field"${sessionMode === 'orchestration' ? '' : ' style="display:none;"'}>
+                                        <label for="discord-orchestration-preset-id-input">${escapeHtml(t('settings.triggers.orchestration_preset_id'))}</label>
+                                        <select id="discord-orchestration-preset-id-input">
+                                            ${renderGatewayPresetOptions(String(draft.orchestration_preset_id || '').trim())}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="gateway-toggle-grid">
+                                    <div class="gateway-setting-panel">
+                                        <label class="gateway-setting-toggle-row" for="discord-yolo-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.yolo'))}</span>
+                                            <input id="discord-yolo-input" type="checkbox"${draft.yolo !== false ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                        </label>
+                                    </div>
+                                    <div class="gateway-setting-panel gateway-thinking-panel${thinkingEnabled ? ' is-expanded' : ''}" id="discord-thinking-panel">
+                                        <label class="gateway-setting-toggle-row" for="discord-thinking-enabled-input">
+                                            <span class="gateway-setting-toggle-copy">${escapeHtml(t('settings.triggers.thinking_enabled'))}</span>
+                                            <input id="discord-thinking-enabled-input" type="checkbox"${thinkingEnabled ? ' checked' : ''}>
+                                            <span class="gateway-editor-toggle-switch" aria-hidden="true">
+                                                <span class="gateway-editor-toggle-thumb"></span>
+                                            </span>
+                                        </label>
+                                        <div class="gateway-thinking-panel-body" id="discord-thinking-effort-field"${thinkingEnabled ? '' : ' style="display:none;"'}>
+                                            <label class="gateway-thinking-panel-label" for="discord-thinking-effort-input">${escapeHtml(t('settings.triggers.thinking_effort'))}</label>
+                                            <select id="discord-thinking-effort-input">
+                                                ${THINKING_EFFORT_OPTIONS.map(effort => `<option value="${effort}"${String(draft.thinking?.effort || DEFAULT_THINKING_EFFORT) === effort ? ' selected' : ''}>${effort}</option>`).join('')}
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+                    </div>
+                    <div class="gateway-editor-submit-error" id="discord-editor-submit-error" hidden></div>
+                    <div class="gateway-editor-actions">
+                        <button class="secondary-btn gateway-editor-action-btn gateway-editor-cancel-btn" type="button" data-feature-discord-cancel>${escapeHtml(t('settings.action.cancel'))}</button>
+                        <button class="primary-btn gateway-editor-action-btn gateway-editor-save-btn" type="button" data-feature-discord-save>${escapeHtml(t('settings.action.save'))}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function syncDiscordSessionFieldVisibility() {
+    const mode = readEditorValue('discord-session-mode-input') || String(currentGatewayFeatureState.discordDraft?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
+    const normalField = lookupDocumentElement('discord-normal-role-field');
+    const presetField = lookupDocumentElement('discord-preset-field');
+    if (normalField?.style) {
+        normalField.style.display = mode === 'normal' ? '' : 'none';
+    }
+    if (presetField?.style) {
+        presetField.style.display = mode === 'orchestration' ? '' : 'none';
+    }
+}
+
+function syncDiscordThinkingEffortVisibility() {
+    const enabled = readEditorChecked('discord-thinking-enabled-input', currentGatewayFeatureState.discordDraft?.thinking?.enabled === true);
+    const effortField = lookupDocumentElement('discord-thinking-effort-field');
+    const thinkingPanel = lookupDocumentElement('discord-thinking-panel');
+    if (effortField?.style) {
+        effortField.style.display = enabled ? '' : 'none';
+    }
+    if (thinkingPanel?.classList) {
+        if (enabled) {
+            thinkingPanel.classList.add('is-expanded');
+        } else {
+            thinkingPanel.classList.remove('is-expanded');
+        }
+    }
+}
+
+function bindDiscordEditorInputs() {
+    if (!currentGatewayFeatureState.discordDraft) {
+        return;
+    }
+    const sessionModeInput = lookupDocumentElement('discord-session-mode-input');
+    if (sessionModeInput) {
+        sessionModeInput.onchange = syncDiscordSessionFieldVisibility;
+    }
+    const thinkingEnabledInput = lookupDocumentElement('discord-thinking-enabled-input');
+    if (thinkingEnabledInput) {
+        thinkingEnabledInput.onchange = syncDiscordThinkingEffortVisibility;
+    }
+    syncDiscordSessionFieldVisibility();
+    syncDiscordThinkingEffortVisibility();
+}
+
+function buildDiscordAccountPayloadFromEditor(draft) {
+    const isEditing = String(draft?.account_id || '').trim().length > 0;
+    const displayName = readEditorValue('discord-display-name-input');
+    const workspaceId = readEditorValue('discord-workspace-id-input');
+    const nextSessionMode = readEditorValue('discord-session-mode-input') || DEFAULT_SESSION_MODE;
+    const orchestrationPresetId = readEditorValue('discord-orchestration-preset-id-input');
+    const botToken = normalizeXiaolubanTokenFormValue(readEditorValue('discord-bot-token-input'));
+    const thinkingEnabled = readEditorChecked('discord-thinking-enabled-input', draft?.thinking?.enabled === true);
+    if (!displayName) {
+        throw new Error(t('settings.gateway.missing_display_name'));
+    }
+    if (!isEditing && !botToken) {
+        throw new Error(t('settings.gateway.discord_missing_token'));
+    }
+    if (!workspaceId) {
+        throw new Error(t('settings.gateway.missing_workspace'));
+    }
+    if (nextSessionMode === 'orchestration' && !orchestrationPresetId) {
+        throw new Error(t('settings.gateway.missing_orchestration_preset_id'));
+    }
+    const payload = {
+        display_name: displayName,
+        application_id: readEditorValue('discord-application-id-input') || null,
+        allowed_channel_ids: normalizeDelimitedIdentifierList(readEditorValue('discord-allowed-channel-ids-input')),
+        allow_channel_messages: readEditorChecked('discord-allow-channel-messages-input', draft?.allow_channel_messages === true),
+        workspace_id: workspaceId,
+        session_mode: nextSessionMode,
+        yolo: readEditorChecked('discord-yolo-input', draft?.yolo !== false),
+        thinking: {
+            enabled: thinkingEnabled,
+            effort: thinkingEnabled
+                ? (readEditorValue('discord-thinking-effort-input') || DEFAULT_THINKING_EFFORT)
+                : null,
+        },
+        normal_root_role_id: nextSessionMode === 'normal'
+            ? (readEditorValue('discord-normal-root-role-id-input') || null)
+            : null,
+        orchestration_preset_id: nextSessionMode === 'orchestration' ? orchestrationPresetId : null,
+    };
+    if (!isEditing) {
+        payload.enabled = readEditorChecked('discord-enabled-input', draft?.enabled !== false);
+    }
+    if (botToken) {
+        payload.bot_token = botToken;
+    }
+    return payload;
+}
+
+function setDiscordEditorError(message) {
+    const errorNode = lookupDocumentElement('discord-editor-submit-error');
+    if (!errorNode) {
+        return;
+    }
+    errorNode.textContent = String(message || '').trim();
+    if (errorNode.style) {
+        errorNode.style.display = message ? '' : 'none';
+    }
+    if (typeof errorNode.hidden === 'boolean') {
+        errorNode.hidden = !message;
     }
 }
 
@@ -3359,184 +3743,21 @@ async function requestWeChatAccountInput(account) {
 }
 
 async function requestDiscordAccountInput(account) {
-    const isEditing = String(account?.account_id || '').trim().length > 0;
-    const workspaces = resolveWorkspaceOptionValues(currentGatewayFeatureState.workspaces);
-    if (workspaces.length === 0) {
+    if (currentGatewayFeatureState.workspaces.length === 0) {
         throw new Error(t('settings.gateway.missing_workspace'));
     }
-    const roles = resolveRoleOptionsForForms(currentGatewayFeatureState.normalRoles);
-    const presets = resolvePresetOptionsForForms(currentGatewayFeatureState.orchestrationPresets);
-    const sessionMode = String(account?.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
-    const thinkingEnabled = account?.thinking?.enabled === true;
-    const tokenConfigured = account?.secret_status?.bot_token_configured === true;
-    const values = await showFormDialog({
-        title: isEditing
-            ? t('settings.gateway.discord_account_editor')
-            : t('feature.gateway.add_discord'),
-        message: String(account?.account_id || '').trim(),
-        tone: 'info',
-        confirmLabel: t('settings.action.save'),
-        cancelLabel: t('settings.action.cancel'),
-        fields: [
-            {
-                id: 'display_name',
-                label: t('settings.gateway.display_name'),
-                value: String(account?.display_name || '').trim(),
-            },
-            {
-                id: 'bot_token',
-                label: t('settings.gateway.discord_bot_token'),
-                type: 'password',
-                value: isEditing && tokenConfigured ? '************' : '',
-                maskedValue: isEditing && tokenConfigured ? '************' : '',
-                placeholder: isEditing && tokenConfigured
-                    ? t('settings.gateway.discord_token_edit_placeholder')
-                    : 'Bot token',
-                description: isEditing && tokenConfigured
-                    ? t('settings.gateway.discord_token_edit_copy')
-                    : t('settings.gateway.discord_token_copy'),
-                allowEmptyReveal: isEditing && tokenConfigured,
-                showLabel: t('feedback.show_sensitive'),
-                hideLabel: t('feedback.hide_sensitive'),
-            },
-            {
-                id: 'application_id',
-                label: t('settings.gateway.discord_application_id'),
-                value: String(account?.application_id || '').trim(),
-                placeholder: '123456789012345678',
-                description: t('settings.gateway.discord_application_id_copy'),
-            },
-            {
-                id: 'workspace_id',
-                label: t('settings.triggers.workspace'),
-                type: 'select',
-                value: String(account?.workspace_id || workspaces[0]?.value || '').trim(),
-                options: workspaces,
-            },
-            {
-                id: 'session_mode',
-                label: t('settings.triggers.mode'),
-                type: 'select',
-                value: sessionMode,
-                options: [
-                    { value: 'normal', label: t('composer.mode_normal'), description: '' },
-                    { value: 'orchestration', label: t('composer.mode_orchestration'), description: '' },
-                ],
-            },
-            {
-                id: 'normal_root_role_id',
-                label: t('settings.triggers.normal_root_role_id'),
-                type: 'select',
-                value: String(account?.normal_root_role_id || '').trim(),
-                options: roles,
-                visibleWhen: { field: 'session_mode', equals: 'normal' },
-            },
-            {
-                id: 'orchestration_preset_id',
-                label: t('settings.triggers.orchestration_preset_id'),
-                type: 'select',
-                value: String(account?.orchestration_preset_id || '').trim(),
-                options: presets,
-                visibleWhen: { field: 'session_mode', equals: 'orchestration' },
-            },
-            {
-                id: 'allowed_channel_ids',
-                label: t('settings.gateway.discord_allowed_channels'),
-                type: 'textarea',
-                value: normalizeDiscordAllowedChannelsForDisplay(account),
-                placeholder: t('settings.gateway.discord_allowed_channels_placeholder'),
-                description: t('settings.gateway.discord_allowed_channels_copy'),
-                rows: 2,
-                compact: true,
-            },
-            {
-                id: 'allow_channel_messages',
-                label: t('settings.gateway.discord_allow_channel_messages'),
-                type: 'checkbox',
-                value: account?.allow_channel_messages === true,
-                description: t('settings.gateway.discord_allow_channel_messages_copy'),
-            },
-            {
-                id: 'yolo',
-                label: t('settings.triggers.yolo'),
-                type: 'checkbox',
-                value: account?.yolo !== false,
-                description: '',
-            },
-            {
-                id: 'thinking_enabled',
-                label: t('settings.triggers.thinking_enabled'),
-                type: 'checkbox',
-                value: thinkingEnabled,
-                description: '',
-            },
-            {
-                id: 'thinking_effort',
-                label: t('settings.triggers.thinking_effort'),
-                type: 'select',
-                value: String(account?.thinking?.effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT,
-                options: THINKING_EFFORT_OPTIONS.map(option => ({ value: option, label: option, description: '' })),
-                visibleWhen: { field: 'thinking_enabled', equals: true },
-            },
-            ...(!isEditing
-                ? [
-                    {
-                        id: 'enabled',
-                        label: t('settings.triggers.option_enabled'),
-                        type: 'checkbox',
-                        value: true,
-                        description: '',
-                    },
-                ]
-                : []),
-        ],
+    if (typeof currentGatewayFeatureState.discordDialogResolve === 'function') {
+        currentGatewayFeatureState.discordDialogResolve(null);
+    }
+    return await new Promise(resolve => {
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            discordEditingAccountId: String(account?.account_id || '').trim(),
+            discordDraft: createDiscordAccountDraft(account),
+            discordDialogResolve: resolve,
+        };
+        renderGatewayFeatureModal();
     });
-    if (!values || typeof values !== 'object') {
-        return null;
-    }
-    const displayName = String(values.display_name || '').trim();
-    const workspaceId = String(values.workspace_id || '').trim();
-    const nextSessionMode = String(values.session_mode || DEFAULT_SESSION_MODE).trim() || DEFAULT_SESSION_MODE;
-    const orchestrationPresetId = String(values.orchestration_preset_id || '').trim();
-    const botToken = normalizeXiaolubanTokenFormValue(values.bot_token);
-    if (!displayName) {
-        throw new Error(t('settings.gateway.missing_display_name'));
-    }
-    if (!isEditing && !botToken) {
-        throw new Error(t('settings.gateway.discord_missing_token'));
-    }
-    if (!workspaceId) {
-        throw new Error(t('settings.gateway.missing_workspace'));
-    }
-    if (nextSessionMode === 'orchestration' && !orchestrationPresetId) {
-        throw new Error(t('settings.gateway.missing_orchestration_preset_id'));
-    }
-    const payload = {
-        display_name: displayName,
-        application_id: String(values.application_id || '').trim() || null,
-        allowed_channel_ids: normalizeDelimitedIdentifierList(values.allowed_channel_ids),
-        allow_channel_messages: values.allow_channel_messages === true,
-        workspace_id: workspaceId,
-        session_mode: nextSessionMode,
-        yolo: values.yolo !== false,
-        thinking: {
-            enabled: values.thinking_enabled === true,
-            effort: values.thinking_enabled === true
-                ? (String(values.thinking_effort || DEFAULT_THINKING_EFFORT).trim() || DEFAULT_THINKING_EFFORT)
-                : null,
-        },
-        normal_root_role_id: nextSessionMode === 'normal'
-            ? (String(values.normal_root_role_id || '').trim() || null)
-            : null,
-        orchestration_preset_id: nextSessionMode === 'orchestration' ? orchestrationPresetId : null,
-    };
-    if (!isEditing) {
-        payload.enabled = values.enabled !== false;
-    }
-    if (botToken) {
-        payload.bot_token = botToken;
-    }
-    return payload;
 }
 
 async function requestXiaolubanAccountInput(account, submitHandler = null) {
@@ -5459,6 +5680,32 @@ function renderGatewayFeishuModal() {
     `;
 }
 
+function renderGatewayDiscordModal() {
+    const draft = currentGatewayFeatureState.discordDraft;
+    if (!draft) {
+        return '';
+    }
+    const isEditing = String(draft.account_id || '').trim().length > 0;
+    return `
+        <div class="modal gateway-feature-modal" data-feature-gateway-modal>
+            <div class="modal-content gateway-feature-modal-content gateway-discord-modal-content" role="dialog" aria-modal="true" aria-labelledby="gateway-feature-modal-title">
+                <div class="modal-header gateway-feature-modal-header">
+                    <div class="gateway-feature-modal-heading">
+                        <h3 id="gateway-feature-modal-title">${escapeHtml(isEditing ? t('settings.gateway.discord_account_editor') : t('feature.gateway.add_discord'))}</h3>
+                        <p>${escapeHtml(t('settings.gateway.discord_detail_copy'))}</p>
+                    </div>
+                    <button class="icon-btn" type="button" aria-label="${escapeHtml(t('settings.action.cancel'))}" data-feature-gateway-modal-close>
+                        <span aria-hidden="true">&times;</span>
+                    </button>
+                </div>
+                <div class="gateway-feature-modal-body">
+                    ${renderDiscordEditor()}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function renderGatewayWeChatConnectModal() {
     if (currentGatewayFeatureState.wechatModalOpen !== true) {
         return '';
@@ -5518,6 +5765,8 @@ function renderGatewayFeatureModal() {
     let content = '';
     if (currentGatewayFeatureState.feishuDraft) {
         content = renderGatewayFeishuModal();
+    } else if (currentGatewayFeatureState.discordDraft) {
+        content = renderGatewayDiscordModal();
     } else if (currentGatewayFeatureState.wechatModalOpen) {
         content = renderGatewayWeChatConnectModal();
     } else {
@@ -5530,6 +5779,10 @@ function renderGatewayFeatureModal() {
     bindConnectorConfigModalHandlers(root);
     root.querySelectorAll('[data-feature-gateway-modal-close]').forEach(button => {
         button.addEventListener('click', () => {
+            if (currentGatewayFeatureState.discordDraft) {
+                handleCancelDiscordFeatureAccount();
+                return;
+            }
             handleCancelFeishuFeatureTrigger();
         });
     });
@@ -5541,6 +5794,16 @@ function renderGatewayFeatureModal() {
     root.querySelectorAll('[data-feature-feishu-cancel]').forEach(button => {
         button.addEventListener('click', () => {
             handleCancelFeishuFeatureTrigger();
+        });
+    });
+    root.querySelectorAll('[data-feature-discord-save]').forEach(button => {
+        button.addEventListener('click', () => {
+            handleSaveDiscordFeatureAccount();
+        });
+    });
+    root.querySelectorAll('[data-feature-discord-cancel]').forEach(button => {
+        button.addEventListener('click', () => {
+            handleCancelDiscordFeatureAccount();
         });
     });
     root.querySelectorAll('[data-feature-wechat-modal-close]').forEach(button => {
@@ -5555,6 +5818,8 @@ function renderGatewayFeatureModal() {
     });
     bindGatewayRecordHandlers(root);
     bindFeishuEditorInputs();
+    bindDiscordEditorInputs();
+    bindGatewaySecretToggles(root);
 }
 
 function getCurrentConnectorModalItem() {
@@ -6720,6 +6985,36 @@ async function handleEditWeChatFeatureAccount(accountId) {
             message: String(error?.message || error || ''),
             tone: 'danger',
         });
+    }
+}
+
+function resolveDiscordFeatureDialog(payload) {
+    const resolve = currentGatewayFeatureState.discordDialogResolve;
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        discordEditingAccountId: '',
+        discordDraft: null,
+        discordDialogResolve: null,
+    };
+    renderGatewayFeatureModal();
+    if (typeof resolve === 'function') {
+        resolve(payload);
+    }
+}
+
+function handleCancelDiscordFeatureAccount() {
+    resolveDiscordFeatureDialog(null);
+}
+
+function handleSaveDiscordFeatureAccount() {
+    try {
+        const payload = buildDiscordAccountPayloadFromEditor(
+            currentGatewayFeatureState.discordDraft,
+        );
+        setDiscordEditorError('');
+        resolveDiscordFeatureDialog(payload);
+    } catch (error) {
+        setDiscordEditorError(readErrorDetail(error));
     }
 }
 
