@@ -714,7 +714,7 @@ class DiscordGatewayService:
                         account_id=account_id,
                         occurred_at=datetime.now(tz=timezone.utc),
                     )
-                    return
+                    continue
                 if event.event_type not in _TERMINAL_EVENT_TYPES:
                     continue
                 text = self._terminal_text(event)
@@ -762,8 +762,8 @@ class DiscordGatewayService:
             ):
                 return
 
-    @staticmethod
     def _handle_reply_future(
+        self,
         *,
         account_id: str,
         gateway_session_id: str,
@@ -774,6 +774,16 @@ class DiscordGatewayService:
         try:
             future.result()
         except FutureCancelledError as exc:
+            error_message = f"Discord reply task was cancelled for run {run_id}."
+            self._watched_runs.discard(run_id)
+            self._run_or_schedule(
+                self._record_reply_failure(
+                    account_id=account_id,
+                    gateway_session_id=gateway_session_id,
+                    run_id=run_id,
+                    error_message=error_message,
+                )
+            )
             log_event(
                 LOGGER,
                 logging.WARNING,
