@@ -873,6 +873,8 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 - `relay_teams.gateway`: `gateway_sessions`.
 - `relay_teams.gateway.wechat`: `wechat_accounts`, `wechat_inbound_queue`.
 - `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
+- `relay_teams.connector`: no SQLite tables. Connector status is derived from
+  `triggers` GitHub rows and the existing gateway account tables.
 - `relay_teams.roles`: `role_memories`.
 - `relay_teams.memory`: `memory_entries`.
 - Role document files: role Markdown front matter stores `RoleDefinition`

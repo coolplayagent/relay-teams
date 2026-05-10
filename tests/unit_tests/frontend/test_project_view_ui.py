@@ -4793,10 +4793,50 @@ console.log(JSON.stringify({
 """.strip(),
     )
 
-    assert payload["title"] == "IM Gateway"
-    assert payload["currentFeatureViewId"] == "gateway"
+    assert payload["title"] == ""
+    assert payload["currentFeatureViewId"] == "connectors"
     assert "Delayed automation" not in str(payload["contentHtml"])
+    assert "connectors-page" in str(payload["contentHtml"])
     assert payload["logs"] == []
+
+
+def test_project_view_keeps_connector_search_focused_while_typing(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+const searchInput = document.querySelector("[data-connectors-search]");
+searchInput.value = "微";
+searchInput.selectionStart = 1;
+searchInput.selectionEnd = 1;
+searchInput.oninput?.();
+await flushTasks();
+
+console.log(JSON.stringify({
+    activeIsSearch: globalThis.__activeElement?.getAttribute?.("data-connectors-search") !== null,
+    activeValue: globalThis.__activeElement?.value || "",
+    selectionStart: globalThis.__activeElement?.selectionStart,
+    selectionEnd: globalThis.__activeElement?.selectionEnd,
+}));
+""".strip(),
+    )
+
+    assert payload["activeIsSearch"] is True
+    assert payload["activeValue"] == "微"
+    assert payload["selectionStart"] == 1
+    assert payload["selectionEnd"] == 1
 
 
 def test_project_view_delays_feature_loading_state_and_uses_feature_copy(
@@ -5074,13 +5114,365 @@ export async function updateAutomationProject() {
 """.strip(),
     )
 
-    assert payload["title"] == "IM Gateway"
+    assert payload["title"] == ""
+    assert "connectors-page" in str(payload["contentHtml"])
     assert payload["showFormDialogCalls"] == []
     assert "data-feature-gateway-modal" in str(payload["modalHtml"])
     assert 'id="feishu-trigger-name-input"' in str(payload["modalHtml"])
     assert 'id="feishu-app-id-input"' in str(payload["modalHtml"])
     assert 'id="feishu-app-secret-input"' in str(payload["modalHtml"])
     assert 'id="feishu-trigger-name-input"' not in str(payload["contentHtml"])
+
+
+def test_project_view_manages_existing_feishu_connector_from_card(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+const managementHtml = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+document.querySelector("[data-feature-feishu-edit]")?.onclick?.();
+await flushTasks();
+
+console.log(JSON.stringify({
+    managementHtml,
+    modalHtml: globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n"),
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 1, needs_config: 0, disabled: 0, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "feishu",
+                provider: "feishu",
+                category: "im",
+                display_name: "Feishu",
+                description: "Feishu",
+                status: "connected",
+                auth_type: "api_key",
+                account_count: 1,
+                enabled_count: 1,
+                capabilities: ["messages"],
+            },
+        ],
+    };
+}
+
+export async function fetchTriggers() {
+    return [
+            {
+                trigger_id: "trg_feishu_1",
+                name: "Existing Feishu",
+                status: "enabled",
+                tenant_key: "tenant-1",
+                chat_id: "oc_123",
+                callback_url: "http://localhost:9000/callback",
+                source_config: { provider: "feishu", app_id: "cli_existing" },
+                secret_status: { app_secret_configured: true },
+            },
+    ];
+}
+""".strip(),
+    )
+
+    assert "Existing Feishu" in str(payload["managementHtml"])
+    assert "Connect Feishu" in str(payload["managementHtml"])
+    assert "data-feature-gateway-add-feishu" not in str(payload["managementHtml"])
+    assert "Test connection" not in str(payload["managementHtml"])
+    assert 'id="feishu-trigger-name-input"' in str(payload["modalHtml"])
+    assert "Existing Feishu" in str(payload["modalHtml"])
+
+
+def test_project_view_adds_feishu_connector_from_empty_card(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+
+console.log(JSON.stringify({
+    modalHtml: globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n"),
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 0, needs_config: 1, disabled: 0, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "feishu",
+                provider: "feishu",
+                category: "im",
+                display_name: "Feishu",
+                description: "Feishu",
+                status: "needs_config",
+                auth_type: "api_key",
+                account_count: 0,
+                enabled_count: 0,
+                capabilities: ["messages"],
+            },
+        ],
+    };
+}
+
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "default", root_path: "/work/default" }];
+}
+""".strip(),
+    )
+
+    assert 'id="feishu-trigger-name-input"' in str(payload["modalHtml"])
+
+
+def test_project_view_enables_disabled_wechat_connector_from_management_modal(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+const managementHtml = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+document.querySelector("[data-feature-wechat-toggle]")?.onclick?.();
+await flushTasks();
+
+console.log(JSON.stringify({
+    managementHtml,
+    enabledAccountId: globalThis.__enabledWeChatAccountId || "",
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 0, needs_config: 0, disabled: 1, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "wechat",
+                provider: "wechat",
+                category: "im",
+                display_name: "WeChat",
+                description: "WeChat",
+                status: "disabled",
+                auth_type: "qr_login",
+                account_count: 1,
+                enabled_count: 0,
+                capabilities: ["direct_messages"],
+            },
+        ],
+    };
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [
+        {
+            account_id: "wechat_disabled",
+            display_name: "Disabled WeChat",
+            status: "disabled",
+            workspace_id: "workspace-1",
+        },
+    ];
+}
+
+export async function enableWeChatGatewayAccount(accountId) {
+    globalThis.__enabledWeChatAccountId = accountId;
+    return { account_id: accountId, status: "enabled" };
+}
+""".strip(),
+    )
+
+    assert payload["enabledAccountId"] == "wechat_disabled"
+    assert "Disabled WeChat" in str(payload["managementHtml"])
+    assert "Connect WeChat" in str(payload["managementHtml"])
+    assert "data-feature-gateway-connect-wechat" not in str(payload["managementHtml"])
+    assert "Test connection" not in str(payload["managementHtml"])
+
+
+def test_project_view_manages_existing_xiaoluban_connector_from_card(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = null;
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+const managementHtml = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+globalThis.__bodyChildren[0]?.querySelector("[data-feature-xiaoluban-edit]")?.onclick?.();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    managementHtml,
+    fieldIds: fields.map(field => field.id),
+    displayNameValue: String((fields.find(field => field.id === "display_name") || {}).value || ""),
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 1, needs_config: 0, disabled: 0, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "xiaoluban",
+                provider: "xiaoluban",
+                category: "im",
+                display_name: "Xiaoluban",
+                description: "Xiaoluban",
+                status: "connected",
+                auth_type: "api_token",
+                account_count: 1,
+                enabled_count: 1,
+                capabilities: ["im_forwarding"],
+            },
+        ],
+    };
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [
+        {
+            account_id: "xlb_1",
+            display_name: "Existing Xiaoluban",
+            base_url: "http://127.0.0.1:18080/send",
+            status: "enabled",
+            derived_uid: "uid_self",
+            secret_status: { token_configured: true },
+            im_config: { workspace_id: "workspace-1" },
+        },
+    ];
+}
+""".strip(),
+    )
+
+    field_ids = cast(list[str], payload["fieldIds"])
+    assert "Existing Xiaoluban" in str(payload["managementHtml"])
+    assert "Connect Xiaoluban" in str(payload["managementHtml"])
+    assert "data-feature-gateway-add-xiaoluban" not in str(payload["managementHtml"])
+    assert "Test connection" not in str(payload["managementHtml"])
+    assert "display_name" in field_ids
+    assert payload["displayNameValue"] == "Existing Xiaoluban"
+
+
+def test_project_view_enables_disabled_xiaoluban_connector_from_management_modal(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-connector-open]")?.onclick?.();
+await flushTasks();
+globalThis.__bodyChildren[0]?.querySelector("[data-feature-xiaoluban-toggle]")?.onclick?.();
+await flushTasks();
+
+console.log(JSON.stringify({
+    enabledAccountId: globalThis.__enabledXiaolubanAccountId || "",
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 0, needs_config: 0, disabled: 1, error: 0, total: 1 },
+        items: [
+            {
+                connector_id: "xiaoluban",
+                provider: "xiaoluban",
+                category: "im",
+                display_name: "Xiaoluban",
+                description: "Xiaoluban",
+                status: "disabled",
+                auth_type: "api_token",
+                account_count: 1,
+                enabled_count: 0,
+                capabilities: ["im_forwarding"],
+            },
+        ],
+    };
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [
+        {
+            account_id: "xlb_disabled",
+            display_name: "Disabled Xiaoluban",
+            base_url: "http://127.0.0.1:18080/send",
+            status: "disabled",
+            secret_status: { token_configured: true },
+            im_config: { workspace_id: "workspace-1" },
+        },
+    ];
+}
+""".strip(),
+    )
+
+    assert payload["enabledAccountId"] == "xlb_disabled"
 
 
 def test_project_view_opens_wechat_connect_modal_in_gateway_feature(
@@ -5249,7 +5641,8 @@ export async function updateAutomationProject() {
 """.strip(),
     )
 
-    assert payload["title"] == "IM Gateway"
+    assert payload["title"] == ""
+    assert "connectors-page" in str(payload["contentHtml"])
     assert "data-feature-wechat-modal" in str(payload["modalHtml"])
     assert "https://example.test/qr.png" in str(payload["modalHtml"])
     assert "gateway-qr-card" not in str(payload["contentHtml"])
@@ -5338,7 +5731,8 @@ export async function createXiaolubanGatewayAccount(payload) {
 """.strip(),
     )
 
-    assert payload["title"] == "IM Gateway"
+    assert payload["title"] == ""
+    assert "connectors-page" in str(payload["contentHtml"])
     assert "Xiaoluban" in str(payload["contentHtml"])
     assert "Self Notify" in str(payload["contentHtml"])
     assert "Internal ID: xlb_1" in str(payload["contentHtml"])
@@ -6077,6 +6471,7 @@ def _run_project_view_script(
     mock_subagent_rail_path = tmp_path / "mockSubagentRail.mjs"
     mock_clawhub_settings_path = tmp_path / "settings" / "clawhubSettings.js"
     mock_github_settings_path = tmp_path / "settings" / "githubSettings.js"
+    mock_connector_cards_path = tmp_path / "connectors" / "connectorCards.js"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -6111,7 +6506,7 @@ function createBasicElement() {
             attributeStore.set(name, String(value));
         },
         getAttribute(name) {
-            return attributeStore.get(name) || null;
+            return attributeStore.has(name) ? attributeStore.get(name) : null;
         },
     };
 }
@@ -6122,8 +6517,11 @@ function createTreeNode(attributes = {}) {
         onclick: null,
         onkeydown: null,
         onchange: null,
+        oninput: null,
         value: "",
         checked: false,
+        selectionStart: 0,
+        selectionEnd: 0,
         style: {},
         classList: {
             add() {
@@ -6143,12 +6541,22 @@ function createTreeNode(attributes = {}) {
             if (name === "change") {
                 this.onchange = handler;
             }
+            if (name === "input") {
+                this.oninput = handler;
+            }
+        },
+        focus() {
+            globalThis.__activeElement = this;
+        },
+        setSelectionRange(start, end) {
+            this.selectionStart = start;
+            this.selectionEnd = end;
         },
         setAttribute(name, value) {
             attributeStore.set(name, String(value));
         },
         getAttribute(name) {
-            return attributeStore.get(name) || null;
+            return attributeStore.has(name) ? attributeStore.get(name) : null;
         },
     };
 }
@@ -6178,15 +6586,20 @@ function parseNodes(source, selector) {
             const escapedAttrName = attrName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const escapedAttrValue = String(attrValue || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const dataPattern = attrValue === undefined
-                ? new RegExp(`${escapedAttrName}(?:="([^"]*)")?`, "g")
-                : new RegExp(`${escapedAttrName}="${escapedAttrValue}"`, "g");
+                ? new RegExp(`<[^>]*${escapedAttrName}(?:="([^"]*)")?[^>]*>`, "g")
+                : new RegExp(`<[^>]*${escapedAttrName}="${escapedAttrValue}"[^>]*>`, "g");
             let dataMatch = dataPattern.exec(source);
             while (dataMatch) {
                 const attributes = {};
+                const valuePattern = new RegExp(`${escapedAttrName}="([^"]*)"`, "i");
+                const valueMatch = valuePattern.exec(dataMatch[0]);
                 attributes[attrName] = decodeHtmlAttribute(
-                    attrValue === undefined ? (dataMatch[1] || "") : attrValue,
+                    attrValue === undefined ? (valueMatch ? valueMatch[1] : "") : attrValue,
                 );
-                results.push(createTreeNode(attributes));
+                const node = createTreeNode(attributes);
+                const inputValueMatch = /value="([^"]*)"/i.exec(dataMatch[0]);
+                node.value = decodeHtmlAttribute(inputValueMatch ? inputValueMatch[1] : "");
+                results.push(node);
                 dataMatch = dataPattern.exec(source);
             }
             return results;
@@ -6763,6 +7176,19 @@ export async function fetchGitHubTriggerRules() {
     return globalThis.__mockGitHubRules || [];
 }
 """.strip(),
+        "fetchConnectors": """
+export async function fetchConnectors() {
+    return {
+        summary: { connected: 0, needs_config: 4, disabled: 0, error: 0, total: 4 },
+        items: [],
+    };
+}
+""".strip(),
+        "testConnector": """
+export async function testConnector(connectorId) {
+    return { connector_id: connectorId, ok: true, checks: [] };
+}
+""".strip(),
         "fetchXiaolubanGatewayAccounts": """
 export async function fetchXiaolubanGatewayAccounts() {
     return [];
@@ -7196,6 +7622,11 @@ export const state = {
         "feature.gateway.feishu_section": "Feishu",
         "feature.gateway.xiaoluban_section": "Xiaoluban",
         "feature.gateway.wechat_section": "WeChat",
+        "feature.connectors.action.connect_feishu": "Connect Feishu",
+        "feature.connectors.action.connect_wechat": "Connect WeChat",
+        "feature.connectors.action.connect_xiaoluban": "Connect Xiaoluban",
+        "feature.connectors.accounts.title": "Accounts",
+        "feature.connectors.accounts.empty": "No accounts yet.",
         "sidebar.delivery_none": "No delivery target",
         "sidebar.delivery_none_copy": "Do not send automation updates.",
         "sidebar.delivery_target": "Delivery target",
@@ -7338,6 +7769,45 @@ export async function loadGitHubSettingsPanel() {
 
 export function renderGitHubAccessPanelMarkup() {
     return '<div id="feature-github-access-panel">GitHub access panel</div>';
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    mock_connector_cards_path.parent.mkdir(parents=True, exist_ok=True)
+    mock_connector_cards_path.write_text(
+        """
+export function renderConnectorsCardPageMarkup({ connectorsResponse, searchQuery = "" } = {}) {
+    const items = Array.isArray(connectorsResponse?.items) && connectorsResponse.items.length > 0
+        ? connectorsResponse.items
+        : [{ provider: "feishu" }];
+    return `
+        <div class="connectors-page">
+            <input type="search" value="${searchQuery}" data-connectors-search>
+            ${items.map(item => `<button data-connector-open="${item.provider || item.connector_id}">Open Connector</button><button data-connector-manage="${item.provider || item.connector_id}">Manage Connector</button>`).join("")}
+            <button data-feature-gateway-add-feishu>Add Robot</button>
+            <button data-feature-gateway-connect-wechat>Connect WeChat</button>
+            <button data-feature-gateway-add-xiaoluban>Add Xiaoluban</button>
+            <div>Xiaoluban</div>
+            <div>Self Notify</div>
+            <div>Internal ID: xlb_1</div>
+            <div>Notify: self + 1 groups</div>
+            <div>30 workspaces</div>
+            <div>IM: ready</div>
+            <button data-feature-xiaoluban-edit="xlb_1">Edit Xiaoluban</button>
+            <button data-feature-xiaoluban-toggle="xlb_1">Toggle Xiaoluban</button>
+            <button data-feature-xiaoluban-delete="xlb_1">Delete Xiaoluban</button>
+        </div>
+    `;
+}
+
+export function renderConnectorConfigModalMarkup({ item, accountManagementMarkup = "" } = {}) {
+    const provider = item?.provider || item?.connector_id || "";
+    const labels = {
+        feishu: "Connect Feishu",
+        wechat: "Connect WeChat",
+        xiaoluban: "Connect Xiaoluban",
+    };
+    return `<div data-connector-modal>${accountManagementMarkup}<button data-connector-configure="${provider}">${labels[provider] || "Configure Connector"}</button></div>`;
 }
 """.strip(),
         encoding="utf-8",

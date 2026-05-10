@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Feishu">
+  <rect width="64" height="64" rx="14" fill="#eef6ff"/>
+  <path fill="#00c2ff" d="M18 14h12v18c0 8.8-7.2 16-16 16V36c2.2 0 4-1.8 4-4V14Z"/>
+  <path fill="#2f7bff" d="M30 14h16v12H30V14Z"/>
+  <path fill="#00d084" d="M30 26h16c0 8.8-7.2 16-16 16V26Z"/>
+  <path fill="#165dff" d="M18 42h12v8H18v-8Z"/>
+</svg>

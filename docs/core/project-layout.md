@@ -11,6 +11,7 @@
     - `agents/tasks/`: task models, ids, events, repository, and status helpers
   - `boards/`: TODO/task-board contracts, board state mapping, tracker adapters, board-controlled tools, and future board services
   - `builtin/`: built-in roles, default config, logging config, and bundled skills/resources
+  - `connector/`: connector aggregation facade and API contracts for built-in platform connection status
   - `env/`: runtime env loading, proxy support, web connectivity, and env CLI
   - `hooks/`: runtime hook models, loader, matcher, service, executors, state, and event integration
   - `interfaces/`: external interfaces

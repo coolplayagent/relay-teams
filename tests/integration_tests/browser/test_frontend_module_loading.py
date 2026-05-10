@@ -69,6 +69,89 @@ def test_subagent_rail_module_loads_with_real_frontend_graph() -> None:
     assert completed.stdout.strip() == "function"
 
 
+def test_connector_card_module_and_assets_are_linked() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    module_path = (
+        repo_root
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "connectors"
+        / "connectorCards.js"
+    )
+    index_html = (repo_root / "frontend" / "dist" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    bundled_css = (repo_root / "frontend" / "dist" / "style.css").read_text(
+        encoding="utf-8"
+    )
+    manifest = (
+        repo_root / "frontend" / "dist" / "assets" / "connectors" / "icons.csv"
+    ).read_text(encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            (
+                "const noop = () => undefined; "
+                "const createElement = () => ({"
+                "innerHTML: '', textContent: '', value: '', hidden: false, disabled: false, style: {}, dataset: {}, "
+                "classList: { add: noop, remove: noop, toggle: noop, contains: () => false }, "
+                "appendChild: noop, insertBefore: noop, remove: noop, setAttribute: noop, removeAttribute: noop, "
+                "addEventListener: noop, removeEventListener: noop, querySelector: () => null, querySelectorAll: () => []"
+                "}); "
+                "globalThis.window = globalThis; "
+                "Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { language: 'zh-CN' } }); "
+                "Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin: 'http://127.0.0.1:8000' } }); "
+                "globalThis.localStorage = { getItem: () => null, setItem: noop, removeItem: noop }; "
+                "globalThis.document = { body: createElement(), documentElement: createElement(), "
+                "getElementById: () => null, querySelector: () => null, querySelectorAll: () => [], "
+                "createElement, addEventListener: noop, removeEventListener: noop }; "
+                "globalThis.fetch = async () => ({ ok: true, json: async () => ({}), text: async () => '' }); "
+                f"const mod = await import({module_path.as_uri()!r}); "
+                "const html = mod.renderConnectorsCardPageMarkup({"
+                "connectorsResponse: { summary: { connected: 1, needs_config: 0, error: 0 }, "
+                "items: [{ connector_id: 'github', provider: 'github', display_name: 'GitHub', "
+                "description: 'Connect GitHub repositories.', status: 'connected', "
+                "auth_type: 'api_token', account_count: 1, enabled_count: 1, capabilities: ['repositories'] }] }"
+                "}); "
+                "if (!html.includes('GitHub')) throw new Error('GitHub card missing'); "
+                "if (html.includes('Gmail') || html.includes('Slack') || html.includes('Jira')) throw new Error('unsupported connector rendered'); "
+                "console.log(typeof mod.renderConnectorConfigModalMarkup);"
+            ),
+        ],
+        capture_output=True,
+        check=False,
+        cwd=str(repo_root),
+        text=True,
+        timeout=30,
+    )
+
+    if completed.returncode != 0:
+        raise AssertionError(
+            "Connector card module import failed:\n"
+            f"STDOUT:\n{completed.stdout}\n"
+            f"STDERR:\n{completed.stderr}"
+        )
+
+    assert completed.stdout.strip() == "function"
+    assert "/css/components/connectors.css" in index_html
+    assert "components/connectors.css" in bundled_css
+    for provider in ("github", "feishu", "wechat", "xiaoluban"):
+        assert provider in manifest
+        assert (
+            repo_root
+            / "frontend"
+            / "dist"
+            / "assets"
+            / "connectors"
+            / f"{provider}.svg"
+        ).exists()
+
+
 def test_new_session_draft_opens_without_creating_session() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     module_path = (

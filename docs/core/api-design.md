@@ -3212,6 +3212,38 @@ server initializes and lists tools. This endpoint is intended for the user's
 manual "Test" action and is separate from the settings page's cached tool
 display.
 
+## Connector APIs
+
+Connector APIs are aggregation endpoints under `/api/*`. They do not own
+provider data and do not add connector persistence. GitHub state comes from
+`triggers`; Feishu, WeChat, and Xiaoluban state comes from `gateway`.
+
+### `GET /connectors`
+
+Returns only built-in connectors backed by existing implementations: GitHub,
+Feishu, WeChat, and Xiaoluban. Gmail, Slack, Jira, and other future providers
+are not returned until their backend capability exists.
+
+Response shape:
+- `summary`: counts for `connected`, `needs_config`, `disabled`, `error`, and
+  `total`
+- `items`: connector rows with `connector_id`, `provider`, `category`,
+  `display_name`, `description`, `status`, `auth_type`, `account_count`,
+  `enabled_count`, `last_activity_at`, `last_error`, and `capabilities`
+
+Enums:
+- `provider`: `github`, `feishu`, `wechat`, or `xiaoluban`
+- `category`: `development` or `im`
+- `status`: `needs_config`, `connected`, `disabled`, or `error`
+
+### `POST /connectors/{connector_id}:test`
+
+Runs a lightweight health check for one built-in connector. GitHub uses the
+existing GitHub connectivity probe. Feishu checks account secret readiness and
+subscription runtime state. WeChat returns account running, login, and recent
+error state. Xiaoluban checks token configuration, listener state, and IM
+workspace configuration. Unknown connector ids return `404`.
+
 ## Gateway APIs
 
 ### `GET /gateway/feishu/accounts`

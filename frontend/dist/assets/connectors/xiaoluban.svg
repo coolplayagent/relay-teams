@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Xiaoluban">
+  <rect width="64" height="64" rx="14" fill="#edf7f2"/>
+  <path fill="#26775f" d="M16 46h32v8H16v-8Z"/>
+  <path fill="#2c8c70" d="M20 23h10v23H20V23Zm14-9h10v32H34V14Z"/>
+  <path fill="#8fd5bd" d="M14 42h36v6H14v-6Z"/>
+  <path fill="#26775f" d="M18 18h14v5H18v-5Zm14-9h14v5H32V9Z"/>
+</svg>
