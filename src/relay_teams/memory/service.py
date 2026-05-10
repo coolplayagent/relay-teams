@@ -388,7 +388,10 @@ class MemoryBankService:
     # ------------------------------------------------------------------
 
     async def search_async(self, request: MemorySearchRequest) -> MemorySearchResult:
-        if self._retrieval_service is not None:
+        if (
+            self._retrieval_service is not None
+            and request.status == MemoryEntryStatus.ACTIVE
+        ):
             return await self._search_fts_async(request)
         return await self._search_fallback_async(request)
 
@@ -405,6 +408,7 @@ class MemoryBankService:
                     session_id=request.session_id,
                     role_id=request.role_id,
                     kind=request.kind,
+                    status=request.status,
                     tags=request.tags,
                     min_confidence=request.min_confidence,
                     limit=request.limit,
@@ -423,7 +427,7 @@ class MemoryBankService:
                 session_id=request.session_id,
                 role_id=request.role_id,
                 kind=request.kind,
-                status=MemoryEntryStatus.ACTIVE,
+                status=request.status,
                 tags=request.tags,
                 min_confidence=request.min_confidence,
                 limit=GLOBAL_SEARCH_BATCH_SIZE,
@@ -495,7 +499,7 @@ class MemoryBankService:
             session_id=request.session_id,
             role_id=request.role_id,
             kind=request.kind,
-            status=MemoryEntryStatus.ACTIVE,
+            status=request.status,
             min_confidence=request.min_confidence,
             limit=request.limit,
             offset=0,
@@ -536,7 +540,7 @@ class MemoryBankService:
             session_id=request.session_id,
             role_id=request.role_id,
             kind=request.kind,
-            status=MemoryEntryStatus.ACTIVE,
+            status=request.status,
             min_confidence=request.min_confidence,
             limit=request.limit,
             offset=0,

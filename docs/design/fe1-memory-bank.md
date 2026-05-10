@@ -111,6 +111,10 @@ The frontend Memory page uses the global endpoints for browsing and text search.
 The subagent memory tab uses the workspace list endpoint filtered by
 `scope=role`, `role_id`, and `status=active`.
 
+Task completion writes both a working task-summary entry and a persistent
+`role-performance` insight when verification data is available. Role
+self-assessment reads those Memory Bank insights directly.
+
 ## Frontend Surface
 
 The main sidebar feature list includes Memory directly below IM Gateway.

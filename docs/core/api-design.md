@@ -3803,13 +3803,15 @@ Response: `MemoryQueryResult`.
 
 ### `POST /memories/search`
 
-Searches active Memory Bank entries across all workspaces, or within one
-workspace when `workspace_id` is supplied.
+Searches Memory Bank entries across all workspaces, or within one workspace
+when `workspace_id` is supplied. Search defaults to `status=active`; pass
+`status=superseded`, `status=expired`, or `status=null` to inspect non-active
+history.
 
 Request: `GlobalMemorySearchRequest`
 - `workspace_id`: optional exact-match filter.
 - `text_query`: search text.
-- `tier`, `scope`, `session_id`, `role_id`, `kind`, `tags`: optional filters.
+- `tier`, `scope`, `session_id`, `role_id`, `kind`, `status`, `tags`: optional filters.
 - `min_confidence`: minimum confidence score `0.0..1.0`.
 - `limit`: max results, default `20`.
 
@@ -3902,7 +3904,7 @@ Full-text search across memory entries.
 Request: `MemorySearchRequest`
 - `workspace_id`: path-derived.
 - `text_query`: search text.
-- `tier`, `scope`, `session_id`, `role_id`, `kind`, `tags`: optional filters.
+- `tier`, `scope`, `session_id`, `role_id`, `kind`, `status`, `tags`: optional filters.
 - `min_confidence`: minimum confidence score `0.0..1.0`.
 - `limit`: max results, default `20`.
 

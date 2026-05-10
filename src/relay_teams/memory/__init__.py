@@ -19,6 +19,7 @@ from relay_teams.memory.memory_defaults import (
 from relay_teams.memory.models import (
     ConsolidationMode,
     CreateMemoryEntryRequest,
+    GlobalMemorySearchRequest,
     MemoryConsolidationRequest,
     MemoryConsolidationResult,
     MemoryContent,
@@ -44,6 +45,7 @@ __all__ = [
     "ConsolidationMode",
     "MemoryEventHandler",
     "CreateMemoryEntryRequest",
+    "GlobalMemorySearchRequest",
     "INJECTION_LIMIT",
     "INJECTION_MIN_CONFIDENCE",
     "MAX_MEDIUM_TERM_PER_SESSION_ROLE",

@@ -337,6 +337,41 @@ class TestSearch:
         assert result.total_count == 1
         assert result.items[0].entry.workspace_id == "ws-old-match"
 
+    async def test_global_search_honors_non_active_status(
+        self, service: MemoryBankService
+    ) -> None:
+        entry = await service.create_entry_async(
+            _create_request(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.WORKSPACE,
+                session_id=None,
+                run_id=None,
+                content=MemoryContent(
+                    title="Retired memory",
+                    body="retired-memory-needle",
+                ),
+            )
+        )
+        await service.update_entry_async(
+            entry.id,
+            UpdateMemoryEntryRequest(status=MemoryEntryStatus.EXPIRED),
+        )
+
+        active_result = await service.search_global_async(
+            GlobalMemorySearchRequest(text_query="retired-memory-needle", limit=10)
+        )
+        expired_result = await service.search_global_async(
+            GlobalMemorySearchRequest(
+                text_query="retired-memory-needle",
+                status=MemoryEntryStatus.EXPIRED,
+                limit=10,
+            )
+        )
+
+        assert active_result.total_count == 0
+        assert expired_result.total_count == 1
+        assert expired_result.items[0].entry.status == MemoryEntryStatus.EXPIRED
+
 
 # ---------------------------------------------------------------------------
 # Get / List / Delete
