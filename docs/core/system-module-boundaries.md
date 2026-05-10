@@ -28,6 +28,12 @@ With the current layout, that means:
   and board-controlled tools. It may project existing tasks or external tracker
   issues, but it must not own run-local todo state or core orchestration
   scheduling decisions.
+- `gateway/*` owns external conversational transport adapters, provider account
+  configuration, durable inbound queues, external-to-internal session mapping,
+  and provider reply delivery. Provider subpackages own their own account
+  repositories and secret wrappers; shared `gateway_session_service.py`,
+  `session_ingress_service.py`, and `gateway/im/*` hold cross-provider runtime
+  primitives.
 - `triggers/*` owns external provider ingress, webhook verification, repository
   subscriptions, and provider-triggered automation behavior.
 - `monitors/*` owns the event-driven substrate itself: normalized envelopes,
@@ -111,6 +117,25 @@ Boundary:
 
 Cross-cutting behavior should land in these shared modules when it is reused across
 features.
+
+### IM Gateway Boundary
+
+The IM Gateway provider boundary is documented in
+`docs/modules/gateway/im-gateway-architecture.md`.
+
+Rules:
+
+- Provider packages such as `gateway.discord`, `gateway.feishu`, `gateway.wechat`,
+  and `gateway.xiaoluban` own source-native account semantics and transport
+  clients.
+- `gateway_session_service.py` is the only shared owner of external conversation to
+  internal session mapping.
+- `session_ingress_service.py` is the only shared owner of busy-session run
+  handoff policy for gateway-originated prompts.
+- `gateway/im/*` owns common IM context resolution and tool delivery. It may call
+  provider clients through narrow protocols, but it must not persist provider
+  accounts.
+- `/api/gateway/*` routers are transport adapters and should delegate to services.
 
 ### Async-Only Runtime Interfaces
 

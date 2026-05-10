@@ -16,6 +16,10 @@ from relay_teams.connector.models import (
     ConnectorSummary,
     ConnectorTestResult,
 )
+from relay_teams.gateway.discord.models import (
+    DiscordAccountRecord,
+    DiscordAccountStatus,
+)
 from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountStatus,
@@ -51,6 +55,11 @@ class WeChatGatewayServiceLike(Protocol):
         raise NotImplementedError
 
 
+class DiscordGatewayServiceLike(Protocol):
+    async def list_accounts(self) -> tuple[DiscordAccountRecord, ...]:
+        raise NotImplementedError
+
+
 class XiaolubanGatewayServiceLike(Protocol):
     async def list_accounts_async(self) -> tuple[XiaolubanAccountRecord, ...]:
         raise NotImplementedError
@@ -75,6 +84,7 @@ class XiaolubanImListenerServiceLike(Protocol):
 
 CONNECTOR_PROVIDER_BY_ID: Mapping[str, ConnectorProvider] = {
     ConnectorProvider.GITHUB.value: ConnectorProvider.GITHUB,
+    ConnectorProvider.DISCORD.value: ConnectorProvider.DISCORD,
     ConnectorProvider.FEISHU.value: ConnectorProvider.FEISHU,
     ConnectorProvider.WECHAT.value: ConnectorProvider.WECHAT,
     ConnectorProvider.XIAOLUBAN.value: ConnectorProvider.XIAOLUBAN,
@@ -89,6 +99,7 @@ class ConnectorService:
         github_connectivity_probe_service: GitHubConnectivityProbeServiceLike,
         feishu_gateway_service: FeishuGatewayServiceLike,
         feishu_subscription_service: FeishuSubscriptionServiceLike,
+        discord_gateway_service: DiscordGatewayServiceLike,
         wechat_gateway_service: WeChatGatewayServiceLike,
         xiaoluban_gateway_service: XiaolubanGatewayServiceLike,
         xiaoluban_im_listener_service: XiaolubanImListenerServiceLike,
@@ -97,6 +108,7 @@ class ConnectorService:
         self._github_connectivity_probe_service = github_connectivity_probe_service
         self._feishu_gateway_service = feishu_gateway_service
         self._feishu_subscription_service = feishu_subscription_service
+        self._discord_gateway_service = discord_gateway_service
         self._wechat_gateway_service = wechat_gateway_service
         self._xiaoluban_gateway_service = xiaoluban_gateway_service
         self._xiaoluban_im_listener_service = xiaoluban_im_listener_service
@@ -104,10 +116,12 @@ class ConnectorService:
     async def list_connectors(self) -> ConnectorListResponse:
         github_accounts = await self._github_trigger_service.list_accounts_async()
         feishu_accounts = await self._feishu_gateway_service.list_accounts_async()
+        discord_accounts = await self._discord_gateway_service.list_accounts()
         wechat_accounts = await self._wechat_gateway_service.list_accounts_async()
         xiaoluban_accounts = await self._xiaoluban_gateway_service.list_accounts_async()
         items = (
             self._github_item(github_accounts),
+            self._discord_item(discord_accounts),
             self._feishu_item(feishu_accounts),
             self._wechat_item(wechat_accounts),
             self._xiaoluban_item(xiaoluban_accounts),
@@ -122,6 +136,8 @@ class ConnectorService:
             return await self._test_github()
         if provider == ConnectorProvider.FEISHU:
             return await self._test_feishu()
+        if provider == ConnectorProvider.DISCORD:
+            return await self._test_discord()
         if provider == ConnectorProvider.WECHAT:
             return await self._test_wechat()
         if provider == ConnectorProvider.XIAOLUBAN:
@@ -190,6 +206,51 @@ class ConnectorService:
             last_activity_at=_latest(account.updated_at for account in accounts),
             last_error=last_error,
             capabilities=("messages", "mentions", "bot_events"),
+        )
+
+    @staticmethod
+    def _discord_item(
+        accounts: Sequence[DiscordAccountRecord],
+    ) -> ConnectorItem:
+        enabled = tuple(
+            account
+            for account in accounts
+            if account.status == DiscordAccountStatus.ENABLED
+        )
+        last_error = _first_error(account.last_error for account in accounts)
+        configured = tuple(
+            account
+            for account in enabled
+            if account.secret_status.bot_token_configured
+        )
+        return ConnectorItem(
+            connector_id="discord",
+            provider=ConnectorProvider.DISCORD,
+            category=ConnectorCategory.IM,
+            display_name="Discord",
+            description="Connect Discord direct messages, mentions, and allowlisted channels.",
+            status=_aggregate_status(
+                account_count=len(accounts),
+                enabled_count=len(enabled),
+                configured_count=len(configured),
+                last_error=last_error,
+            ),
+            auth_type=ConnectorAuthType.API_TOKEN,
+            account_count=len(accounts),
+            enabled_count=len(enabled),
+            last_activity_at=_latest(
+                _latest(
+                    (
+                        account.last_event_at,
+                        account.last_inbound_at,
+                        account.last_outbound_at,
+                        account.updated_at,
+                    )
+                )
+                for account in accounts
+            ),
+            last_error=last_error,
+            capabilities=("direct_messages", "mentions", "group_messages"),
         )
 
     @staticmethod
@@ -380,6 +441,44 @@ class ConnectorService:
             else "Feishu connector needs configuration or runtime attention.",
             last_error=item.last_error,
             runtime_running=runtime_running,
+            login_active=None,
+            checks=checks,
+        )
+
+    async def _test_discord(self) -> ConnectorTestResult:
+        accounts = await self._discord_gateway_service.list_accounts()
+        item = self._discord_item(accounts)
+        token_configured = any(
+            account.secret_status.bot_token_configured for account in accounts
+        )
+        running = any(
+            account.running for account in accounts if account.status == DiscordAccountStatus.ENABLED
+        )
+        checks = (
+            ConnectorHealthCheck(
+                name="token_configured",
+                ok=token_configured,
+                message="Discord bot token is configured."
+                if token_configured
+                else "Discord bot token is missing.",
+            ),
+            ConnectorHealthCheck(
+                name="worker_running",
+                ok=running,
+                message="Discord worker is running."
+                if running
+                else "Discord worker is not running.",
+            ),
+        )
+        ok = item.status == ConnectorStatus.CONNECTED and running
+        return self._test_result(
+            item=item,
+            ok=ok,
+            message="Discord connector is healthy."
+            if ok
+            else "Discord connector needs a bot token, worker, or workspace attention.",
+            last_error=item.last_error,
+            runtime_running=running,
             login_active=None,
             checks=checks,
         )

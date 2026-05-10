@@ -132,6 +132,34 @@ class ImSessionCommandService:
             gateway_session_id=gateway_session_id,
         )
 
+    def handle_discord_command(
+        self,
+        *,
+        session_id: str,
+        gateway_session_id: str,
+        text: str,
+    ) -> ImSessionCommandResult | None:
+        command = self._normalize_command(text)
+        if command is None:
+            return None
+        if command == "help":
+            return ImSessionCommandResult(text=self._cmd_help())
+        if command == "status":
+            return ImSessionCommandResult(
+                text=self._cmd_wechat_status(session_id=session_id)
+            )
+        if command == "clear":
+            return ImSessionCommandResult(
+                text=self._cmd_wechat_clear(
+                    session_id=session_id,
+                    gateway_session_id=gateway_session_id,
+                )
+            )
+        return self._cmd_wechat_resume(
+            session_id=session_id,
+            gateway_session_id=gateway_session_id,
+        )
+
     @staticmethod
     def _normalize_command(text: str) -> str | None:
         normalized = text.strip().casefold()

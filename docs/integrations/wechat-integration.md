@@ -88,7 +88,6 @@ CLI management lives under:
 - `agent-teams gateway wechat delete`
 - `agent-teams gateway wechat reload`
 
-Frontend management lives under Settings -> Gateway.
+Frontend management lives under the IM Gateway feature view.
 
-Related diagrams: the shared IM message flow document is not currently
-present in this repository.
+Related architecture: [IM Gateway Architecture](../modules/gateway/im-gateway-architecture.md).

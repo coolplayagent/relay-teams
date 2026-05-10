@@ -76,6 +76,19 @@ class WeChatChatContext:
         self.context_token = context_token
 
 
+class DiscordChatContext:
+    def __init__(
+        self,
+        *,
+        account_id: str,
+        channel_id: str,
+        reply_to_message_id: str | None,
+    ) -> None:
+        self.account_id = account_id
+        self.channel_id = channel_id
+        self.reply_to_message_id = str(reply_to_message_id or "").strip() or None
+
+
 def resolve_feishu_chat_context(
     *,
     session_repo: _SessionLookup,
@@ -104,7 +117,7 @@ def resolve_im_chat_context(
     gateway_session_lookup: _GatewaySessionLookup | None = None,
     session_id: str,
     prefer_direct_send: bool = False,
-) -> FeishuChatContext | WeChatChatContext | None:
+) -> FeishuChatContext | WeChatChatContext | DiscordChatContext | None:
     feishu_context = resolve_feishu_chat_context(
         session_repo=session_repo,
         runtime_config_lookup=runtime_config_lookup,
@@ -116,7 +129,13 @@ def resolve_im_chat_context(
         return feishu_context
     if gateway_session_lookup is None:
         return None
-    return resolve_wechat_chat_context(
+    gateway_context = resolve_wechat_chat_context(
+        gateway_session_lookup=gateway_session_lookup,
+        session_id=session_id,
+    )
+    if gateway_context is not None:
+        return gateway_context
+    return resolve_discord_chat_context(
         gateway_session_lookup=gateway_session_lookup,
         session_id=session_id,
     )
@@ -153,6 +172,40 @@ def resolve_wechat_chat_context(
         account_id=account_id,
         peer_user_id=peer_user_id,
         context_token=context_token,
+    )
+
+
+def resolve_discord_chat_context(
+    *,
+    gateway_session_lookup: _GatewaySessionLookup,
+    session_id: str,
+) -> DiscordChatContext | None:
+    gateway_session = gateway_session_lookup.get_by_internal_session_id(session_id)
+    if (
+        gateway_session is None
+        or gateway_session.channel_type != GatewayChannelType.DISCORD
+    ):
+        return None
+    account_id = str(gateway_session.channel_state.get("account_id", "")).strip()
+    if not account_id:
+        return None
+    channel_id = str(
+        gateway_session.channel_state.get("channel_id")
+        or gateway_session.peer_chat_id
+        or ""
+    ).strip()
+    if not channel_id:
+        return None
+    raw_reply_to_message_id = gateway_session.channel_state.get("reply_to_message_id")
+    reply_to_message_id = None
+    if isinstance(raw_reply_to_message_id, str):
+        normalized_reply_to_message_id = raw_reply_to_message_id.strip()
+        if normalized_reply_to_message_id:
+            reply_to_message_id = normalized_reply_to_message_id
+    return DiscordChatContext(
+        account_id=account_id,
+        channel_id=channel_id,
+        reply_to_message_id=reply_to_message_id,
     )
 
 

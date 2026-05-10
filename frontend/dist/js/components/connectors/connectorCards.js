@@ -6,6 +6,7 @@ import { formatMessage, t } from '../../utils/i18n.js';
 
 const CONNECTOR_ICON_BY_PROVIDER = Object.freeze({
     github: '/assets/connectors/github.svg',
+    discord: '/assets/connectors/discord.svg',
     feishu: '/assets/connectors/feishu.svg',
     wechat: '/assets/connectors/wechat.svg',
     xiaoluban: '/assets/connectors/xiaoluban.svg',
@@ -13,6 +14,7 @@ const CONNECTOR_ICON_BY_PROVIDER = Object.freeze({
 
 const CONNECTOR_GROUP_BY_PROVIDER = Object.freeze({
     github: 'official',
+    discord: 'internal',
     feishu: 'internal',
     wechat: 'internal',
     xiaoluban: 'internal',
@@ -32,6 +34,7 @@ const STATUS_LABEL_KEYS = Object.freeze({
 
 const PROVIDER_NAME_KEYS = Object.freeze({
     github: 'feature.connectors.provider.github.name',
+    discord: 'feature.connectors.provider.discord.name',
     feishu: 'feature.connectors.provider.feishu.name',
     wechat: 'feature.connectors.provider.wechat.name',
     xiaoluban: 'feature.connectors.provider.xiaoluban.name',
@@ -39,6 +42,7 @@ const PROVIDER_NAME_KEYS = Object.freeze({
 
 const PROVIDER_DESCRIPTION_KEYS = Object.freeze({
     github: 'feature.connectors.provider.github.description',
+    discord: 'feature.connectors.provider.discord.description',
     feishu: 'feature.connectors.provider.feishu.description',
     wechat: 'feature.connectors.provider.wechat.description',
     xiaoluban: 'feature.connectors.provider.xiaoluban.description',
@@ -60,6 +64,7 @@ const CAPABILITY_LABEL_KEYS = Object.freeze({
 });
 
 const CONNECT_ACTION_LABEL_KEYS = Object.freeze({
+    discord: 'feature.connectors.action.connect_discord',
     feishu: 'feature.connectors.action.connect_feishu',
     wechat: 'feature.connectors.action.connect_wechat',
     xiaoluban: 'feature.connectors.action.connect_xiaoluban',

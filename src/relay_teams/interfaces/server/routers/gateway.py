@@ -5,6 +5,12 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from relay_teams.gateway.discord import (
+    DiscordAccountCreateInput,
+    DiscordAccountRecord,
+    DiscordAccountUpdateInput,
+    DiscordGatewayService,
+)
 from relay_teams.gateway.wechat.models import (
     WeChatAccountRecord,
     WeChatAccountUpdateInput,
@@ -26,6 +32,7 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanTokenRevealResponse,
 )
 from relay_teams.interfaces.server.deps import (
+    get_discord_gateway_service,
     get_wechat_gateway_service,
     get_xiaoluban_gateway_service,
     get_xiaoluban_im_listener_service,
@@ -43,6 +50,27 @@ async def list_wechat_accounts(
 ) -> list[WeChatAccountRecord]:
     accounts = await service.list_accounts_async()
     return list(accounts)
+
+
+@router.get("/discord/accounts", response_model=list[DiscordAccountRecord])
+async def list_discord_accounts(
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
+) -> list[DiscordAccountRecord]:
+    accounts = await service.list_accounts()
+    return list(accounts)
+
+
+@router.post("/discord/accounts", response_model=DiscordAccountRecord)
+async def create_discord_account(
+    req: DiscordAccountCreateInput,
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
+) -> DiscordAccountRecord:
+    try:
+        return await service.create_account(req)
+    except ValueError as exc:
+        raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
+    except RuntimeError as exc:
+        raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
 
 
 @router.get("/xiaoluban/accounts", response_model=list[XiaolubanAccountRecord])
@@ -265,6 +293,23 @@ async def update_wechat_account(
         ) from exc
 
 
+@router.patch("/discord/accounts/{account_id}", response_model=DiscordAccountRecord)
+async def update_discord_account(
+    account_id: RequiredIdentifierStr,
+    req: DiscordAccountUpdateInput,
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
+) -> DiscordAccountRecord:
+    try:
+        return await service.update_account(account_id, req)
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
+    except RuntimeError as exc:
+        raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
+
+
 @router.post("/wechat/accounts/{account_id}:enable", response_model=WeChatAccountRecord)
 async def enable_wechat_account(
     account_id: RequiredIdentifierStr,
@@ -272,6 +317,23 @@ async def enable_wechat_account(
 ) -> WeChatAccountRecord:
     try:
         return await service.set_account_enabled_async(account_id, True)
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
+
+
+@router.post(
+    "/discord/accounts/{account_id}:enable",
+    response_model=DiscordAccountRecord,
+)
+async def enable_discord_account(
+    account_id: RequiredIdentifierStr,
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
+) -> DiscordAccountRecord:
+    try:
+        return await service.set_account_enabled(account_id, True)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -288,6 +350,23 @@ async def disable_wechat_account(
 ) -> WeChatAccountRecord:
     try:
         return await service.set_account_enabled_async(account_id, False)
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
+
+
+@router.post(
+    "/discord/accounts/{account_id}:disable",
+    response_model=DiscordAccountRecord,
+)
+async def disable_discord_account(
+    account_id: RequiredIdentifierStr,
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
+) -> DiscordAccountRecord:
+    try:
+        return await service.set_account_enabled(account_id, False)
     except (KeyError, ValueError) as exc:
         raise http_exception_for(
             exc,
@@ -313,9 +392,35 @@ async def delete_wechat_account(
         raise http_exception_for(exc, mappings=((RuntimeError, 409),)) from exc
 
 
+@router.delete("/discord/accounts/{account_id}")
+async def delete_discord_account(
+    account_id: RequiredIdentifierStr,
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
+    req: DeleteRequest | None = Body(default=None),
+) -> dict[str, str]:
+    try:
+        await service.delete_account(
+            account_id,
+            force=req.force if req is not None else False,
+        )
+        return {"status": "ok"}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise http_exception_for(exc, mappings=((RuntimeError, 409),)) from exc
+
+
 @router.post("/wechat/reload")
 async def reload_wechat_gateway(
     service: Annotated[WeChatGatewayService, Depends(get_wechat_gateway_service)],
+) -> dict[str, str]:
+    await service.reload_async()
+    return {"status": "ok"}
+
+
+@router.post("/discord/reload")
+async def reload_discord_gateway(
+    service: Annotated[DiscordGatewayService, Depends(get_discord_gateway_service)],
 ) -> dict[str, str]:
     await service.reload_async()
     return {"status": "ok"}

@@ -5795,6 +5795,142 @@ export async function createXiaolubanGatewayAccount(payload) {
     )
 
 
+def test_project_view_renders_discord_section_and_creates_account(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+globalThis.__showFormDialogResult = {
+    display_name: "Discord Bot",
+    bot_token: "discord-token",
+    application_id: "app-1",
+    workspace_id: "workspace-1",
+    session_mode: "normal",
+    normal_root_role_id: "role-1",
+    allowed_channel_ids: "chan-1\\nchan-2,chan-1",
+    allow_channel_messages: true,
+    yolo: false,
+    thinking_enabled: true,
+    thinking_effort: "high",
+    enabled: true,
+};
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+document.querySelector("[data-feature-gateway-add-discord]")?.onclick?.();
+await flushTasks();
+await flushTasks();
+
+const dialogCall = globalThis.__showFormDialogCalls.at(-1) || {};
+const fields = Array.isArray(dialogCall.fields) ? dialogCall.fields : [];
+
+console.log(JSON.stringify({
+    title: els.projectViewTitle.textContent,
+    summary: els.projectViewSummary.textContent,
+    contentHtml: els.projectViewContent.innerHTML,
+    createdPayload: globalThis.__createdDiscordAccountPayload || null,
+    fieldIds: fields.map(field => field.id),
+    allowedChannelsField: fields.find(field => field.id === "allowed_channel_ids") || null,
+    toastCalls: globalThis.__toastCalls || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchTriggers() {
+    return [];
+}
+
+export async function fetchWorkspaces() {
+    return [{ workspace_id: "workspace-1", name: "Main Workspace" }];
+}
+
+export async function fetchRoleConfigOptions() {
+    return [{ role_id: "role-1", name: "Root Role" }];
+}
+
+export async function fetchDiscordGatewayAccounts() {
+    return [
+        {
+            account_id: "discord_1",
+            display_name: "Existing Discord",
+            status: "enabled",
+            application_id: "app-existing",
+            allowed_channel_ids: ["chan-9"],
+            workspace_id: "workspace-1",
+            secret_status: { bot_token_configured: true },
+            running: true,
+        },
+    ];
+}
+
+export async function fetchWeChatGatewayAccounts() {
+    return [];
+}
+
+export async function fetchXiaolubanGatewayAccounts() {
+    return [];
+}
+
+export async function createDiscordGatewayAccount(payload) {
+    globalThis.__createdDiscordAccountPayload = payload;
+    return { account_id: "discord_new", display_name: payload?.display_name || "Discord" };
+}
+""".strip(),
+    )
+
+    assert payload["title"] == "IM Gateway"
+    assert payload["summary"] == "0 Feishu · 0 WeChat · 1 Discord · 0 Xiaoluban"
+    assert "Existing Discord" in str(payload["contentHtml"])
+    assert "1 channels" in str(payload["contentHtml"])
+    assert "data-feature-gateway-add-discord" in str(payload["contentHtml"])
+    assert payload["createdPayload"] == {
+        "display_name": "Discord Bot",
+        "application_id": "app-1",
+        "allowed_channel_ids": ["chan-1", "chan-2"],
+        "allow_channel_messages": True,
+        "workspace_id": "workspace-1",
+        "session_mode": "normal",
+        "yolo": False,
+        "thinking": {
+            "enabled": True,
+            "effort": "high",
+        },
+        "normal_root_role_id": "role-1",
+        "orchestration_preset_id": None,
+        "enabled": True,
+        "bot_token": "discord-token",
+    }
+    assert payload["fieldIds"] == [
+        "display_name",
+        "bot_token",
+        "application_id",
+        "workspace_id",
+        "session_mode",
+        "normal_root_role_id",
+        "orchestration_preset_id",
+        "allowed_channel_ids",
+        "allow_channel_messages",
+        "yolo",
+        "thinking_enabled",
+        "thinking_effort",
+        "enabled",
+    ]
+    allowed_channels_field = cast(dict[str, object], payload["allowedChannelsField"])
+    assert allowed_channels_field["compact"] is True
+    assert allowed_channels_field["rows"] == 2
+    toast_calls = cast(list[dict[str, object]], payload["toastCalls"])
+    assert toast_calls[-1]["message"] == "Discord account saved."
+
+
 def test_project_view_creates_xiaoluban_account_when_prepare_fails(
     tmp_path: Path,
 ) -> None:
@@ -7194,6 +7330,46 @@ export async function fetchXiaolubanGatewayAccounts() {
     return [];
 }
 """.strip(),
+        "fetchDiscordGatewayAccounts": """
+export async function fetchDiscordGatewayAccounts() {
+    return [];
+}
+""".strip(),
+        "createDiscordGatewayAccount": """
+export async function createDiscordGatewayAccount(payload) {
+    globalThis.__createdDiscordAccountPayload = payload;
+    return { account_id: "discord_new", display_name: payload?.display_name || "Discord" };
+}
+""".strip(),
+        "updateDiscordGatewayAccount": """
+export async function updateDiscordGatewayAccount(accountId, payload) {
+    globalThis.__updatedDiscordAccountPayload = { accountId, payload };
+    return { account_id: accountId, display_name: payload?.display_name || "Discord" };
+}
+""".strip(),
+        "enableDiscordGatewayAccount": """
+export async function enableDiscordGatewayAccount(accountId) {
+    globalThis.__enabledDiscordAccountId = accountId;
+    return { account_id: accountId, status: "enabled" };
+}
+""".strip(),
+        "disableDiscordGatewayAccount": """
+export async function disableDiscordGatewayAccount(accountId) {
+    globalThis.__disabledDiscordAccountId = accountId;
+    return { account_id: accountId, status: "disabled" };
+}
+""".strip(),
+        "deleteDiscordGatewayAccount": """
+export async function deleteDiscordGatewayAccount(accountId) {
+    globalThis.__deletedDiscordAccountId = accountId;
+    return { status: "ok" };
+}
+""".strip(),
+        "reloadDiscordGateway": """
+export async function reloadDiscordGateway() {
+    return { status: "ok" };
+}
+""".strip(),
         "createXiaolubanGatewayAccount": """
 export async function createXiaolubanGatewayAccount(payload) {
     globalThis.__createdXiaolubanAccountPayload = payload;
@@ -7468,6 +7644,22 @@ export const state = {
         "settings.gateway.connect_wechat": "Connect WeChat",
         "settings.gateway.wechat_none": "No WeChat accounts",
         "settings.gateway.wechat_none_copy": "Connect a WeChat account.",
+        "settings.gateway.discord_none": "No Discord accounts",
+        "settings.gateway.discord_none_copy": "Add a Discord bot account.",
+        "settings.gateway.discord_account_editor": "Discord Account",
+        "settings.gateway.discord_bot_token": "Bot Token",
+        "settings.gateway.discord_token_copy": "Paste the Discord bot token.",
+        "settings.gateway.discord_token_edit_placeholder": "Bot token saved, re-enter to update",
+        "settings.gateway.discord_token_edit_copy": "A bot token is saved. Leave the masked value as-is to keep it.",
+        "settings.gateway.discord_missing_token": "Bot token is required.",
+        "settings.gateway.discord_application_id": "Application ID",
+        "settings.gateway.discord_application_id_copy": "Optional Discord application ID.",
+        "settings.gateway.discord_allowed_channels": "Allowed Channels",
+        "settings.gateway.discord_allowed_channels_placeholder": "Channel IDs",
+        "settings.gateway.discord_allowed_channels_copy": "Only these guild channels are accepted.",
+        "settings.gateway.discord_allow_channel_messages": "Allow channel messages",
+        "settings.gateway.discord_allow_channel_messages_copy": "Accept non-mention messages from allowlisted channels.",
+        "settings.gateway.discord_allowed_channel_count": "{count} channels",
         "settings.gateway.xiaoluban_account_editor": "Xiaoluban Account",
         "settings.gateway.xiaoluban_title": "Xiaoluban",
         "settings.gateway.xiaoluban_none": "No Xiaoluban accounts",
@@ -7527,12 +7719,16 @@ export const state = {
         "settings.gateway.delete_confirm_message": "Delete account {name}?",
         "settings.gateway.saved": "Saved",
         "settings.gateway.saved_message": "WeChat account saved.",
+        "settings.gateway.discord_saved_title": "Discord account saved",
+        "settings.gateway.discord_saved_message": "Discord account saved.",
         "settings.gateway.xiaoluban_saved_title": "Xiaoluban account saved",
         "settings.gateway.xiaoluban_saved_message": "Xiaoluban account saved.",
         "settings.gateway.xiaoluban_save_failed_message": "Unable to save the Xiaoluban account. Check the personal token and try again.",
         "settings.gateway.save_failed": "Save failed",
         "settings.gateway.deleted": "Deleted",
         "settings.gateway.deleted_message": "WeChat account deleted.",
+        "settings.gateway.discord_deleted_title": "Discord account deleted",
+        "settings.gateway.discord_deleted_message": "Discord account deleted.",
         "settings.gateway.xiaoluban_deleted_message": "Xiaoluban account deleted.",
         "feature.skills.title": "Skills",
         "feature.skills.loading": "Loading skills...",
@@ -7616,13 +7812,16 @@ export const state = {
         "feature.automation.github_deleted_title": "Deleted",
         "feature.gateway.title": "IM Gateway",
         "feature.gateway.loading": "Loading IM integrations...",
-        "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat · {xiaoluban} Xiaoluban",
+        "feature.gateway.summary": "{feishu} Feishu · {wechat} WeChat · {discord} Discord · {xiaoluban} Xiaoluban",
         "feature.gateway.add_feishu": "Add Robot",
+        "feature.gateway.add_discord": "Add Discord",
         "feature.gateway.add_xiaoluban": "Add Xiaoluban",
         "feature.gateway.feishu_section": "Feishu",
+        "feature.gateway.discord_section": "Discord",
         "feature.gateway.xiaoluban_section": "Xiaoluban",
         "feature.gateway.wechat_section": "WeChat",
         "feature.connectors.action.connect_feishu": "Connect Feishu",
+        "feature.connectors.action.connect_discord": "Connect Discord",
         "feature.connectors.action.connect_wechat": "Connect WeChat",
         "feature.connectors.action.connect_xiaoluban": "Connect Xiaoluban",
         "feature.connectors.accounts.title": "Accounts",
@@ -7785,6 +7984,7 @@ export function renderConnectorsCardPageMarkup({ connectorsResponse, searchQuery
             <input type="search" value="${searchQuery}" data-connectors-search>
             ${items.map(item => `<button data-connector-open="${item.provider || item.connector_id}">Open Connector</button><button data-connector-manage="${item.provider || item.connector_id}">Manage Connector</button>`).join("")}
             <button data-feature-gateway-add-feishu>Add Robot</button>
+            <button data-feature-gateway-add-discord>Add Discord</button>
             <button data-feature-gateway-connect-wechat>Connect WeChat</button>
             <button data-feature-gateway-add-xiaoluban>Add Xiaoluban</button>
             <div>Xiaoluban</div>
@@ -7804,6 +8004,7 @@ export function renderConnectorConfigModalMarkup({ item, accountManagementMarkup
     const provider = item?.provider || item?.connector_id || "";
     const labels = {
         feishu: "Connect Feishu",
+        discord: "Connect Discord",
         wechat: "Connect WeChat",
         xiaoluban: "Connect Xiaoluban",
     };

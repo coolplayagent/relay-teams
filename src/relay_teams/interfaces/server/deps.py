@@ -28,6 +28,7 @@ from relay_teams.agent_runtimes import ExternalAgentConfigService
 from relay_teams.gateway.feishu.gateway_service import FeishuGatewayService
 from relay_teams.gateway.feishu.subscription_service import FeishuSubscriptionService
 from relay_teams.gateway.feishu.trigger_handler import FeishuTriggerHandler
+from relay_teams.gateway.discord import DiscordGatewayService
 from relay_teams.gateway.wechat.service import WeChatGatewayService
 from relay_teams.gateway.xiaoluban import (
     XiaolubanGatewayService,
@@ -305,6 +306,10 @@ def get_metrics_service(request: Request) -> MetricsService:
 
 def get_wechat_gateway_service(request: Request) -> WeChatGatewayService:
     return get_container(request).wechat_gateway_service
+
+
+def get_discord_gateway_service(request: Request) -> DiscordGatewayService:
+    return get_container(request).discord_gateway_service
 
 
 def get_xiaoluban_gateway_service(request: Request) -> XiaolubanGatewayService:

@@ -98,6 +98,13 @@ from relay_teams.gateway.im.service import ImToolService
 from relay_teams.gateway.gateway_session_repository import GatewaySessionRepository
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
 from relay_teams.gateway.session_ingress_service import GatewaySessionIngressService
+from relay_teams.gateway.discord import (
+    DiscordAccountRepository,
+    DiscordClient,
+    DiscordGatewayService,
+    DiscordInboundQueueRepository,
+    get_discord_secret_store,
+)
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.memory.event_handler import MemoryEventHandler
@@ -667,11 +674,18 @@ class ServerContainer:
         self.xiaoluban_account_repository = XiaolubanAccountRepository(
             runtime.paths.db_path
         )
+        self.discord_account_repository = DiscordAccountRepository(
+            runtime.paths.db_path
+        )
+        self.discord_inbound_queue_repo = DiscordInboundQueueRepository(
+            runtime.paths.db_path
+        )
         self.wechat_account_repository = WeChatAccountRepository(runtime.paths.db_path)
         self.wechat_inbound_queue_repo = WeChatInboundQueueRepository(
             runtime.paths.db_path
         )
         self.xiaoluban_client = XiaolubanClient()
+        self.discord_client = DiscordClient()
         self.wechat_client = WeChatClient()
         self.github_trigger_secret_store = get_github_trigger_secret_store()
         self.github_api_client = GitHubApiClient(
@@ -697,6 +711,9 @@ class ServerContainer:
             wechat_account_repo=self.wechat_account_repository,
             wechat_secret_store=get_wechat_secret_store(),
             wechat_client=self.wechat_client,
+            discord_account_repo=self.discord_account_repository,
+            discord_secret_store=get_discord_secret_store(),
+            discord_client=self.discord_client,
         )
         self.tool_registry.register_implicit_resolver(
             ImToolContextResolver(
@@ -933,6 +950,20 @@ class ServerContainer:
             gateway_session_service=self.gateway_session_service,
             feishu_message_pool_service=self.feishu_message_pool_service,
         )
+        self.discord_gateway_service = DiscordGatewayService(
+            config_dir=app_config_dir,
+            repository=self.discord_account_repository,
+            secret_store=get_discord_secret_store(),
+            client=self.discord_client,
+            gateway_session_service=self.gateway_session_service,
+            run_service=self.run_service,
+            workspace_service=self.workspace_service,
+            orchestration_settings_service=self.orchestration_settings_service,
+            im_tool_service=self.im_tool_service,
+            im_session_command_service=self.im_session_command_service,
+            inbound_queue_repo=self.discord_inbound_queue_repo,
+            session_ingress_service=self.session_ingress_service,
+        )
         self.wechat_gateway_service = WeChatGatewayService(
             config_dir=app_config_dir,
             repository=self.wechat_account_repository,
@@ -1075,6 +1106,7 @@ class ServerContainer:
             github_connectivity_probe_service=self.github_connectivity_probe_service,
             feishu_gateway_service=self.feishu_gateway_service,
             feishu_subscription_service=self.feishu_subscription_service,
+            discord_gateway_service=self.discord_gateway_service,
             wechat_gateway_service=self.wechat_gateway_service,
             xiaoluban_gateway_service=self.xiaoluban_gateway_service,
             xiaoluban_im_listener_service=self.xiaoluban_im_listener_service,
@@ -1421,6 +1453,7 @@ class ServerContainer:
         self.mcp_config_file_watcher.start()
         self.run_service.bind_event_loop(asyncio.get_running_loop())
         self.background_task_service.bind_completion_sink(self.run_service)
+        await self.discord_gateway_service.start_async()
         self.wechat_gateway_service.start()
         self.xiaoluban_im_listener_service.start()
         self.feishu_subscription_service.start()
@@ -1441,6 +1474,7 @@ class ServerContainer:
         self.feishu_subscription_service.stop()
         self.xiaoluban_im_listener_service.stop()
         self.wechat_gateway_service.stop()
+        self.discord_gateway_service.stop()
         self.localhost_run_tunnel_service.stop()
         stopped_runs = await self.run_service.stop_active_runs_for_shutdown_async()
         if stopped_runs:

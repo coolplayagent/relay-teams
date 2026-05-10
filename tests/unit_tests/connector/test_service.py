@@ -5,6 +5,11 @@ from datetime import UTC, datetime
 import pytest
 
 from relay_teams.connector import ConnectorService, ConnectorStatus
+from relay_teams.gateway.discord.models import (
+    DiscordAccountRecord,
+    DiscordAccountStatus,
+    DiscordSecretStatus,
+)
 from relay_teams.gateway.feishu.models import (
     FeishuGatewayAccountRecord,
     FeishuGatewayAccountStatus,
@@ -56,6 +61,14 @@ class _WeChatService:
         self._accounts = accounts
 
     async def list_accounts_async(self) -> tuple[WeChatAccountRecord, ...]:
+        return self._accounts
+
+
+class _DiscordService:
+    def __init__(self, accounts: tuple[DiscordAccountRecord, ...]) -> None:
+        self._accounts = accounts
+
+    async def list_accounts(self) -> tuple[DiscordAccountRecord, ...]:
         return self._accounts
 
 
@@ -111,6 +124,7 @@ class _XiaolubanListenerService:
 async def test_connector_summary_uses_real_builtin_providers_only() -> None:
     service = _build_service(
         github_accounts=(_github_account(),),
+        discord_accounts=(_discord_account(),),
         feishu_accounts=(_feishu_account(),),
         wechat_accounts=(_wechat_account(),),
         xiaoluban_accounts=(_xiaoluban_account(),),
@@ -121,12 +135,13 @@ async def test_connector_summary_uses_real_builtin_providers_only() -> None:
 
     assert [item.provider.value for item in response.items] == [
         "github",
+        "discord",
         "feishu",
         "wechat",
         "xiaoluban",
     ]
-    assert response.summary.total == 4
-    assert response.summary.connected == 4
+    assert response.summary.total == 5
+    assert response.summary.connected == 5
 
 
 @pytest.mark.asyncio
@@ -137,17 +152,19 @@ async def test_empty_accounts_need_config() -> None:
 
     assert {item.connector_id: item.status for item in response.items} == {
         "github": ConnectorStatus.NEEDS_CONFIG,
+        "discord": ConnectorStatus.NEEDS_CONFIG,
         "feishu": ConnectorStatus.NEEDS_CONFIG,
         "wechat": ConnectorStatus.NEEDS_CONFIG,
         "xiaoluban": ConnectorStatus.NEEDS_CONFIG,
     }
-    assert response.summary.needs_config == 4
+    assert response.summary.needs_config == 5
 
 
 @pytest.mark.asyncio
 async def test_disabled_accounts_are_reported_disabled() -> None:
     service = _build_service(
         github_accounts=(_github_account(status=GitHubTriggerAccountStatus.DISABLED),),
+        discord_accounts=(_discord_account(status=DiscordAccountStatus.DISABLED),),
         feishu_accounts=(_feishu_account(status=FeishuGatewayAccountStatus.DISABLED),),
         wechat_accounts=(_wechat_account(status=WeChatAccountStatus.DISABLED),),
         xiaoluban_accounts=(
@@ -158,13 +175,14 @@ async def test_disabled_accounts_are_reported_disabled() -> None:
     response = await service.list_connectors()
 
     assert all(item.status == ConnectorStatus.DISABLED for item in response.items)
-    assert response.summary.disabled == 4
+    assert response.summary.disabled == 5
 
 
 @pytest.mark.asyncio
 async def test_last_error_has_priority_over_connected_status() -> None:
     service = _build_service(
         github_accounts=(_github_account(last_error="webhook failed"),),
+        discord_accounts=(_discord_account(last_error="worker failed"),),
         feishu_accounts=(_feishu_account(last_error="subscription failed"),),
         wechat_accounts=(_wechat_account(last_error="worker failed"),),
         xiaoluban_accounts=(_xiaoluban_account(),),
@@ -174,6 +192,7 @@ async def test_last_error_has_priority_over_connected_status() -> None:
     statuses = {item.connector_id: item.status for item in response.items}
 
     assert statuses["github"] == ConnectorStatus.ERROR
+    assert statuses["discord"] == ConnectorStatus.ERROR
     assert statuses["feishu"] == ConnectorStatus.ERROR
     assert statuses["wechat"] == ConnectorStatus.ERROR
     assert statuses["xiaoluban"] == ConnectorStatus.CONNECTED
@@ -183,6 +202,7 @@ async def test_last_error_has_priority_over_connected_status() -> None:
 async def test_provider_test_results_include_runtime_checks() -> None:
     service = _build_service(
         github_accounts=(_github_account(),),
+        discord_accounts=(_discord_account(),),
         feishu_accounts=(_feishu_account(),),
         wechat_accounts=(_wechat_account(),),
         xiaoluban_accounts=(_xiaoluban_account(),),
@@ -190,11 +210,13 @@ async def test_provider_test_results_include_runtime_checks() -> None:
     )
 
     github = await service.test_connector("github")
+    discord = await service.test_connector("discord")
     feishu = await service.test_connector("feishu")
     wechat = await service.test_connector("wechat")
     xiaoluban = await service.test_connector("xiaoluban")
 
     assert github.ok is True
+    assert discord.runtime_running is True
     assert feishu.runtime_running is True
     assert wechat.login_active is True
     assert xiaoluban.runtime_running is True
@@ -251,6 +273,7 @@ def _build_service(
     github_tokens: dict[str, str] | None = None,
     github_probe_service: _ProbeService | None = None,
     feishu_accounts: tuple[FeishuGatewayAccountRecord, ...] = (),
+    discord_accounts: tuple[DiscordAccountRecord, ...] = (),
     wechat_accounts: tuple[WeChatAccountRecord, ...] = (),
     xiaoluban_accounts: tuple[XiaolubanAccountRecord, ...] = (),
     feishu_running_ids: tuple[str, ...] = (),
@@ -269,6 +292,7 @@ def _build_service(
         github_connectivity_probe_service=github_probe_service or _ProbeService(),
         feishu_gateway_service=_FeishuService(feishu_accounts),
         feishu_subscription_service=_FeishuSubscriptionService(feishu_running_ids),
+        discord_gateway_service=_DiscordService(discord_accounts),
         wechat_gateway_service=_WeChatService(wechat_accounts),
         xiaoluban_gateway_service=_XiaolubanService(xiaoluban_accounts),
         xiaoluban_im_listener_service=_XiaolubanListenerService(),
@@ -326,6 +350,24 @@ def _wechat_account(
         running=True,
         last_error=last_error,
         last_event_at=_now(),
+    )
+
+
+def _discord_account(
+    *,
+    status: DiscordAccountStatus = DiscordAccountStatus.ENABLED,
+    last_error: str | None = None,
+) -> DiscordAccountRecord:
+    return DiscordAccountRecord(
+        account_id="dc_1",
+        display_name="Discord Main",
+        status=status,
+        workspace_id="default",
+        secret_status=DiscordSecretStatus(bot_token_configured=True),
+        running=True,
+        last_error=last_error,
+        last_event_at=_now(),
+        updated_at=_now(),
     )
 
 
