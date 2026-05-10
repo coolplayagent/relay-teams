@@ -53,7 +53,6 @@ from relay_teams.agents.execution.conversation_compaction import (
     ConversationCompactionResult,
     ConversationCompactionService,
 )
-from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.agents.execution.agent_llm_session import _PreparedPromptContext
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
@@ -65,7 +64,6 @@ from relay_teams.providers.model_config import (
     SamplingConfig,
 )
 from relay_teams.reminders import render_system_reminder
-from relay_teams.roles import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.run_control_manager import RunControlManager
@@ -286,22 +284,6 @@ class _FakeMcpSchemaRegistry:
 
     def get_toolsets(self, server_names: tuple[str, ...]) -> tuple[object, ...]:
         return tuple(object() for _ in server_names)
-
-
-class _FakeSubagentReflectionService:
-    def __init__(self) -> None:
-        self.calls: list[tuple[RoleDefinition, str, str, list[object]]] = []
-
-    async def maybe_compact(
-        self,
-        *,
-        role: RoleDefinition,
-        workspace_id: str,
-        conversation_id: str,
-        history: list[object],
-    ) -> list[object]:
-        self.calls.append((role, workspace_id, conversation_id, list(history)))
-        return history
 
 
 class _FakeResult:
@@ -868,7 +850,6 @@ def _build_provider(
     skill_registry: object | None = None,
     mcp_registry: object | None = None,
     run_control_manager: object | None = None,
-    subagent_reflection_service: object | None = None,
     task_execution_service: object | None = None,
     tool_registry: ToolRegistry | None = None,
     injection_manager: RunInjectionManager | None = None,
@@ -933,11 +914,6 @@ def _build_provider(
             project_root=Path("."), shared_store=shared_store
         ),
         media_asset_service=cast(MediaAssetService, object()),
-        role_memory_service=cast(RoleMemoryService | None, None),
-        subagent_reflection_service=cast(
-            SubagentReflectionService | None,
-            subagent_reflection_service,
-        ),
         tool_registry=tool_registry or cast(ToolRegistry, object()),
         mcp_registry=resolved_mcp_registry,
         skill_registry=registry,

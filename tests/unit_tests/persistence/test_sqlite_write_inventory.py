@@ -58,7 +58,6 @@ _SHARED_SQLITE_WRITERS = {
     Path("src/relay_teams/persistence/shared_state_repo.py"): "SharedStateRepository",
     Path("src/relay_teams/providers/token_usage_repo.py"): "TokenUsageRepository",
     Path("src/relay_teams/retrieval/sqlite_store.py"): "SqliteFts5RetrievalStore",
-    Path("src/relay_teams/roles/memory_repository.py"): "RoleMemoryRepository",
     Path("src/relay_teams/roles/temporary_role_repository.py"): (
         "TemporaryRoleRepository"
     ),

@@ -222,50 +222,6 @@ export async function fetchAgentMessages(sessionId, instanceId, options = {}) {
     );
 }
 
-export async function fetchAgentReflection(sessionId, instanceId) {
-    return requestJsonManaged(
-        `sessions:${sessionId}:agents:${instanceId}:reflection`,
-        `/api/sessions/${sessionId}/agents/${instanceId}/reflection`,
-        undefined,
-        'Failed to fetch agent reflection',
-        { ttlMs: 1000, lane: 'heavy' },
-    );
-}
-
-export async function refreshAgentReflection(sessionId, instanceId) {
-    const result = await requestJson(
-        `/api/sessions/${sessionId}/agents/${instanceId}/reflection:refresh`,
-        { method: 'POST' },
-        'Failed to refresh agent reflection',
-    );
-    invalidateManagedRequests(`sessions:${sessionId}:agents:${instanceId}:reflection`);
-    return result;
-}
-
-export async function updateAgentReflection(sessionId, instanceId, summary) {
-    const result = await requestJson(
-        `/api/sessions/${sessionId}/agents/${instanceId}/reflection`,
-        {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ summary }),
-        },
-        'Failed to update agent reflection',
-    );
-    invalidateManagedRequests(`sessions:${sessionId}:agents:${instanceId}:reflection`);
-    return result;
-}
-
-export async function deleteAgentReflection(sessionId, instanceId) {
-    const result = await requestJson(
-        `/api/sessions/${sessionId}/agents/${instanceId}/reflection`,
-        { method: 'DELETE' },
-        'Failed to delete agent reflection',
-    );
-    invalidateManagedRequests(`sessions:${sessionId}:agents:${instanceId}:reflection`);
-    return result;
-}
-
 export async function deleteSession(sessionId) {
     const result = await requestJson(
         `/api/sessions/${sessionId}`,
@@ -289,4 +245,3 @@ export async function deleteSessionSubagent(sessionId, instanceId) {
     invalidateManagedRequests('sessions:');
     return result;
 }
-

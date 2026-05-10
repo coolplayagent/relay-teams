@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
 
 from relay_teams.logger import get_logger
-from relay_teams.memory.memory_defaults import MEMORY_ID_PREFIX
+from relay_teams.memory.memory_defaults import (
+    MEDIUM_TERM_DECAY_FACTOR,
+    MEMORY_ID_PREFIX,
+    PERSISTENT_DECAY_FACTOR,
+)
 from relay_teams.memory.models import (
     MemoryContent,
     MemoryEntry,
@@ -168,6 +173,169 @@ class MemoryBankRepository(SharedSqliteRepository):
     def _create_schema(self) -> None:
         for stmt in _SCHEMA_STATEMENTS:
             self._conn.execute(stmt)
+        self._migrate_legacy_role_memories()
+        self._conn.execute("DROP TABLE IF EXISTS role_daily_memories")
+
+    def _migrate_legacy_role_memories(self) -> None:
+        table = self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='role_memories'"
+        ).fetchone()
+        if table is None:
+            return
+
+        columns = {
+            str(row["name"])
+            for row in self._conn.execute("PRAGMA table_info(role_memories)").fetchall()
+        }
+        required = {"role_id", "workspace_id", "content_markdown", "updated_at"}
+        if not required.issubset(columns):
+            LOGGER.warning(
+                "Dropping unsupported legacy role_memories table during Memory Bank migration"
+            )
+            self._conn.execute("DROP TABLE role_memories")
+            return
+
+        rows = self._conn.execute("SELECT * FROM role_memories").fetchall()
+        migrated_count = 0
+        for row in rows:
+            role_id = str(row["role_id"]).strip()
+            workspace_id = str(row["workspace_id"]).strip()
+            if not role_id or not workspace_id:
+                continue
+            updated_at = _parse_dt_or_default(row["updated_at"])
+            content_markdown = str(row["content_markdown"] or "").strip()
+            if content_markdown:
+                source_ref = _legacy_source_ref(
+                    role_id=role_id,
+                    workspace_id=workspace_id,
+                    kind="summary",
+                )
+                if not self._legacy_memory_exists(source_ref):
+                    self._insert_legacy_memory_entry(
+                        role_id=role_id,
+                        workspace_id=workspace_id,
+                        kind=MemoryEntryKind.SUMMARY,
+                        source_ref=source_ref,
+                        title=f"Legacy role memory for {role_id}",
+                        body=content_markdown,
+                        context="Migrated from legacy role_memories.content_markdown.",
+                        tags=("legacy", "role-memory"),
+                        updated_at=updated_at,
+                    )
+                    migrated_count += 1
+            performance_json = (
+                str(row["performance_json"] or "").strip()
+                if "performance_json" in columns
+                else ""
+            )
+            if performance_json:
+                source_ref = _legacy_source_ref(
+                    role_id=role_id,
+                    workspace_id=workspace_id,
+                    kind="performance",
+                )
+                if not self._legacy_memory_exists(source_ref):
+                    self._insert_legacy_memory_entry(
+                        role_id=role_id,
+                        workspace_id=workspace_id,
+                        kind=MemoryEntryKind.INSIGHT,
+                        source_ref=source_ref,
+                        title=f"Legacy role performance for {role_id}",
+                        body=performance_json,
+                        context="Migrated from legacy role_memories.performance_json.",
+                        tags=("legacy", "role-performance"),
+                        updated_at=updated_at,
+                    )
+                    migrated_count += 1
+            assessment_json = (
+                str(row["assessment_state_json"] or "").strip()
+                if "assessment_state_json" in columns
+                else ""
+            )
+            if assessment_json:
+                source_ref = _legacy_source_ref(
+                    role_id=role_id,
+                    workspace_id=workspace_id,
+                    kind="assessment",
+                )
+                if not self._legacy_memory_exists(source_ref):
+                    self._insert_legacy_memory_entry(
+                        role_id=role_id,
+                        workspace_id=workspace_id,
+                        kind=MemoryEntryKind.INSIGHT,
+                        source_ref=source_ref,
+                        title=f"Legacy role assessment for {role_id}",
+                        body=assessment_json,
+                        context="Migrated from legacy role_memories.assessment_state_json.",
+                        tags=("legacy", "role-assessment"),
+                        updated_at=updated_at,
+                    )
+                    migrated_count += 1
+
+        self._conn.execute("DROP TABLE role_memories")
+        if migrated_count:
+            LOGGER.info(
+                "Migrated %d legacy role_memories records into Memory Bank",
+                migrated_count,
+            )
+
+    def _legacy_memory_exists(self, source_ref: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM memory_entries WHERE source_ref=? LIMIT 1",
+            (source_ref,),
+        ).fetchone()
+        return row is not None
+
+    def _insert_legacy_memory_entry(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+        kind: MemoryEntryKind,
+        source_ref: str,
+        title: str,
+        body: str,
+        context: str,
+        tags: tuple[str, ...],
+        updated_at: datetime,
+    ) -> None:
+        entry = MemoryEntry(
+            id=generate_memory_id(),
+            tier=MemoryTier.PERSISTENT,
+            scope=MemoryScope.ROLE,
+            workspace_id=workspace_id,
+            role_id=role_id,
+            kind=kind,
+            status=MemoryEntryStatus.ACTIVE,
+            content=MemoryContent(
+                title=title,
+                body=body,
+                context=context,
+                outcome="migrated",
+            ),
+            tags=tags,
+            confidence_score=0.8,
+            source=MemorySourceKind.CONSOLIDATION,
+            source_ref=source_ref,
+            created_at=updated_at,
+            updated_at=updated_at,
+            metadata={
+                "imported_from": "role_memories",
+                "legacy_role_id": role_id,
+                "legacy_workspace_id": workspace_id,
+            },
+        )
+        self._conn.execute(
+            """INSERT INTO memory_entries(
+                memory_id, tier, scope, workspace_id, session_id, run_id, role_id,
+                kind, status, content_title, content_body, content_context, content_outcome,
+                tags, confidence_score, source, source_ref,
+                superseded_by_id, parent_entry_id, version,
+                created_at, updated_at, expires_at, last_accessed_at, access_count,
+                metadata_json
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            self._entry_to_params(entry),
+        )
 
     # ------------------------------------------------------------------
     # Create
@@ -301,8 +469,12 @@ class MemoryBankRepository(SharedSqliteRepository):
 
     @staticmethod
     def _build_where(query: MemoryQuery) -> tuple[str, list[object]]:
-        clauses: list[str] = ["workspace_id = ?"]
-        params: list[object] = [query.workspace_id]
+        clauses: list[str] = []
+        params: list[object] = []
+
+        if query.workspace_id is not None:
+            clauses.append("workspace_id = ?")
+            params.append(query.workspace_id)
 
         if query.tier is not None:
             clauses.append("tier = ?")
@@ -336,7 +508,7 @@ class MemoryBankRepository(SharedSqliteRepository):
                 clauses.append("tags LIKE ?")
                 params.append(f"%{tag}%")
 
-        where_sql = "WHERE " + " AND ".join(clauses)
+        where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
         return where_sql, params
 
     # ------------------------------------------------------------------
@@ -372,11 +544,6 @@ class MemoryBankRepository(SharedSqliteRepository):
         now_iso = now.isoformat()
 
         async def op(conn: aiosqlite.Connection) -> int:
-            from relay_teams.memory.memory_defaults import (
-                MEDIUM_TERM_DECAY_FACTOR,
-                PERSISTENT_DECAY_FACTOR,
-            )
-
             cursor = await conn.execute(
                 "UPDATE memory_entries SET confidence_score = confidence_score * ?, updated_at=? "
                 "WHERE tier='medium_term' AND status='active'",
@@ -524,6 +691,20 @@ class MemoryBankRepository(SharedSqliteRepository):
 
 
 def generate_memory_id() -> str:
-    import uuid
-
     return f"{MEMORY_ID_PREFIX}{uuid.uuid4().hex[:24]}"
+
+
+def _parse_dt_or_default(value: object) -> datetime:
+    try:
+        if value is not None and str(value).strip():
+            parsed = datetime.fromisoformat(str(value))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed
+    except ValueError:
+        pass
+    return datetime.now(tz=timezone.utc)
+
+
+def _legacy_source_ref(*, role_id: str, workspace_id: str, kind: str) -> str:
+    return f"legacy-role-memories:{workspace_id}:{role_id}:{kind}"

@@ -417,9 +417,9 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 用户可见区域：
 
 - subagent 当前 agent 名称、id、role select、token badge。
-- reflection 刷新按钮和 stop 按钮。
+- Memory Bank 角色记忆列表和 stop 按钮。
 - 状态摘要和 role meta。
-- agent drawer 中的 agent history、reflection、task prompt 等面板。
+- agent drawer 中的 agent history、Memory、task prompt 等面板。
 - inspector 中的 system logs。
 - run indicator、subagent session loading、project menu、rail 展开收起等动效详见 `motion-and-loading-states.md`。
 
@@ -427,13 +427,12 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 
 - 没有 subagent 时显示空提示。
 - 加载 subagent 列表时显示 loading。
-- reflection 或 stop 失败通过 log/feedback 呈现。
+- Memory Bank 加载或 stop 失败通过 log/feedback 呈现。
 
 关键交互：
 
 - 顶部 subagents toggle 展开/收起 rail。
 - role select 切换观察的 agent。
-- reflection 按钮刷新 agent reflection。
 - stop 按钮停止 subagent 或相关 run。
 - system log 持续追加前端运行日志。
 
@@ -442,7 +441,5 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 - `fetchSessionAgents`
 - `fetchSessionSubagents`
 - `fetchAgentMessages`
-- `fetchAgentReflection`
-- `refreshAgentReflection`
-- `updateAgentReflection`
+- `fetchMemories`
 - `stopBackgroundTask`

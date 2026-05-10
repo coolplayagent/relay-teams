@@ -38,9 +38,6 @@ class _FakeSessionService:
         self.terminal_view_calls: list[str] = []
         self.topology_update_calls: list[tuple[str, str, str | None, str | None]] = []
         self.delete_subagent_calls: list[tuple[str, str]] = []
-        self.reflection_refresh_calls: list[tuple[str, str]] = []
-        self.reflection_update_calls: list[tuple[str, str, str]] = []
-        self.reflection_delete_calls: list[tuple[str, str]] = []
         self.create_session_error: Exception | None = None
         self.raise_missing = False
         self.raise_missing = False
@@ -400,80 +397,6 @@ class _FakeSessionService:
     async def get_token_usage_by_run_async(self, run_id: str) -> RunTokenUsage:
         return self.get_token_usage_by_run(run_id)
 
-    def get_agent_reflection(
-        self, session_id: str, instance_id: str
-    ) -> dict[str, object]:
-        return {
-            "session_id": session_id,
-            "instance_id": instance_id,
-            "role_id": "writer",
-            "summary": "Use concise drafts.",
-            "updated_at": "2026-03-13T00:01:30Z",
-            "source": "stored",
-        }
-
-    async def get_agent_reflection_async(
-        self, session_id: str, instance_id: str
-    ) -> dict[str, object]:
-        return self.get_agent_reflection(session_id, instance_id)
-
-    async def refresh_subagent_reflection(
-        self, session_id: str, instance_id: str
-    ) -> dict[str, object]:
-        self.reflection_refresh_calls.append((session_id, instance_id))
-        return {
-            "session_id": session_id,
-            "instance_id": instance_id,
-            "role_id": "writer",
-            "summary": "Use concise drafts.",
-            "updated_at": "2026-03-13T00:02:00Z",
-            "source": "manual",
-        }
-
-    def update_agent_reflection(
-        self,
-        session_id: str,
-        instance_id: str,
-        *,
-        summary: str,
-    ) -> dict[str, object]:
-        self.reflection_update_calls.append((session_id, instance_id, summary))
-        return {
-            "session_id": session_id,
-            "instance_id": instance_id,
-            "role_id": "writer",
-            "summary": summary,
-            "updated_at": "2026-03-13T00:03:00Z",
-            "source": "manual_edit",
-        }
-
-    async def update_agent_reflection_async(
-        self,
-        session_id: str,
-        instance_id: str,
-        *,
-        summary: str,
-    ) -> dict[str, object]:
-        return self.update_agent_reflection(session_id, instance_id, summary=summary)
-
-    def delete_agent_reflection(
-        self, session_id: str, instance_id: str
-    ) -> dict[str, object]:
-        self.reflection_delete_calls.append((session_id, instance_id))
-        return {
-            "session_id": session_id,
-            "instance_id": instance_id,
-            "role_id": "writer",
-            "summary": "",
-            "updated_at": None,
-            "source": "manual_delete",
-        }
-
-    async def delete_agent_reflection_async(
-        self, session_id: str, instance_id: str
-    ) -> dict[str, object]:
-        return self.delete_agent_reflection(session_id, instance_id)
-
 
 class _SleepingRecoveryService(_FakeSessionService):
     def get_recovery_snapshot(self, session_id: str) -> dict[str, object]:
@@ -774,12 +697,6 @@ def test_session_routes_call_service() -> None:
         client.get("/api/sessions/session-1/agents"),
         client.get("/api/sessions/session-1/subagents"),
         client.delete("/api/sessions/session-1/subagents/inst-subagent-1"),
-        client.get("/api/sessions/session-1/agents/inst-1/reflection"),
-        client.patch(
-            "/api/sessions/session-1/agents/inst-1/reflection",
-            json={"summary": "Keep implementation notes concise."},
-        ),
-        client.delete("/api/sessions/session-1/agents/inst-1/reflection"),
         client.get("/api/sessions/session-1/events"),
         client.get("/api/sessions/session-1/messages"),
         client.get("/api/sessions/session-1/agents/inst-1/messages"),
@@ -1379,55 +1296,6 @@ def test_get_run_token_usage_route_returns_extended_totals() -> None:
             }
         ],
     }
-
-
-def test_get_agent_reflection_route_returns_projection() -> None:
-    fake_service = _FakeSessionService()
-    client = _create_client(fake_service)
-
-    response = client.get("/api/sessions/session-1/agents/inst-1/reflection")
-
-    assert response.status_code == 200
-    assert response.json()["instance_id"] == "inst-1"
-    assert response.json()["source"] == "stored"
-
-
-def test_refresh_agent_reflection_route_returns_projection() -> None:
-    fake_service = _FakeSessionService()
-    client = _create_client(fake_service)
-
-    response = client.post("/api/sessions/session-1/agents/inst-1/reflection:refresh")
-
-    assert response.status_code == 200
-    assert response.json()["source"] == "manual"
-    assert fake_service.reflection_refresh_calls == [("session-1", "inst-1")]
-
-
-def test_update_agent_reflection_route_returns_projection() -> None:
-    fake_service = _FakeSessionService()
-    client = _create_client(fake_service)
-
-    response = client.patch(
-        "/api/sessions/session-1/agents/inst-1/reflection",
-        json={"summary": "Keep implementation notes concise."},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["source"] == "manual_edit"
-    assert fake_service.reflection_update_calls == [
-        ("session-1", "inst-1", "Keep implementation notes concise.")
-    ]
-
-
-def test_delete_agent_reflection_route_returns_projection() -> None:
-    fake_service = _FakeSessionService()
-    client = _create_client(fake_service)
-
-    response = client.delete("/api/sessions/session-1/agents/inst-1/reflection")
-
-    assert response.status_code == 200
-    assert response.json()["source"] == "manual_delete"
-    assert fake_service.reflection_delete_calls == [("session-1", "inst-1")]
 
 
 def test_delete_session_route_forwards_force_and_cascade() -> None:

@@ -18,7 +18,6 @@ from relay_teams.memory.models import (
     MemoryTier,
 )
 from relay_teams.memory.service import MemoryBankService
-from relay_teams.roles.memory_service import RoleMemoryService
 
 LOGGER = get_logger(__name__)
 
@@ -27,7 +26,7 @@ class MemoryEventHandler:
     """Coordinates lifecycle-driven memory bank operations.
 
     Handles three consolidation triggers:
-    - task success  -> create WORKING entry + dual-write to legacy role_memories
+    - task success  -> create WORKING entry
     - run completion -> consolidate WORKING -> MEDIUM_TERM
     - session completion -> consolidate MEDIUM_TERM -> PERSISTENT
     """
@@ -36,10 +35,8 @@ class MemoryEventHandler:
         self,
         *,
         memory_bank_service: MemoryBankService,
-        role_memory_service: RoleMemoryService | None = None,
     ) -> None:
         self._memory_bank = memory_bank_service
-        self._role_memory_service = role_memory_service
 
     async def on_task_completed_async(
         self,
@@ -53,17 +50,19 @@ class MemoryEventHandler:
         result: str,
         verification_report: VerificationReport | None = None,
     ) -> None:
-        """Create a WORKING memory entry for a completed task.
-
-        Also performs a dual-write to the legacy role_memories table so that
-        ``build_injected_memory_async()`` continues to work during the migration
-        period.
-        """
+        """Create a WORKING memory entry for a completed task."""
+        outcome_parts = ["completed"]
+        if verification_report is not None:
+            outcome_parts.append(
+                "verification=passed"
+                if verification_report.passed
+                else "verification=failed"
+            )
         content = MemoryContent(
             title=objective[:500] if objective else f"Task {task_id}",
             body=result if result else "(no result)",
             context=f"task_id={task_id} session_id={session_id}",
-            outcome="completed",
+            outcome=" ".join(outcome_parts),
         )
         request = CreateMemoryEntryRequest(
             tier=MemoryTier.WORKING,
@@ -85,40 +84,6 @@ class MemoryEventHandler:
                 task_id,
                 exc_info=True,
             )
-
-        # Dual-write bridge: also record in legacy role_memories
-        if self._role_memory_service is not None:
-            try:
-                await self._role_memory_service.record_task_result_async(
-                    role_id=role_id,
-                    workspace_id=workspace_id,
-                    session_id=session_id,
-                    task_id=task_id,
-                    objective=objective,
-                    result=result,
-                    transcript_lines=(),
-                )
-            except (ValueError, OSError, RuntimeError, sqlite3.Error):
-                LOGGER.warning(
-                    "failed to dual-write task result to role_memories for task %s",
-                    task_id,
-                    exc_info=True,
-                )
-
-        # RP-2: record verification outcome for role performance metrics
-        if self._role_memory_service is not None and verification_report is not None:
-            try:
-                await self._role_memory_service.record_verification_outcome(
-                    role_id=role_id,
-                    workspace_id=workspace_id,
-                    verification_report=verification_report,
-                )
-            except (ValueError, OSError, RuntimeError, sqlite3.Error):
-                LOGGER.warning(
-                    "failed to record verification outcome for task %s",
-                    task_id,
-                    exc_info=True,
-                )
 
     async def on_run_completed_async(
         self,
@@ -242,8 +207,7 @@ class MemoryEventHandler:
     ) -> str:
         """Build injectable memory text from PERSISTENT and MEDIUM_TERM entries.
 
-        Used by prompt assembly to include memory bank content alongside
-        the legacy reflection memory section.
+        Used by prompt assembly to include Memory Bank content.
         """
         lines: list[str] = []
         for tier in (MemoryTier.PERSISTENT, MemoryTier.MEDIUM_TERM):

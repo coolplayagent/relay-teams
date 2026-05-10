@@ -6,7 +6,6 @@ from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.roles.evolution_history import RoleEvolutionHistoryService
-from relay_teams.roles.memory_service import RoleMemoryService
 
 
 def _public_callables(cls: type[object]) -> set[str]:
@@ -22,7 +21,6 @@ def test_memory_runtime_has_no_public_sync_async_method_pairs() -> None:
         MemoryBankRepository,
         MemoryBankService,
         MemoryEventHandler,
-        RoleMemoryService,
         RoleEvolutionHistoryService,
     ):
         methods = _public_callables(cls)
@@ -67,15 +65,6 @@ def test_removed_sync_memory_facades_do_not_return() -> None:
             "get_timeline",
             "get_current_state",
         ),
-        RoleMemoryService: (
-            "build_injected_memory",
-            "get_reflection_record",
-            "update_reflection_memory",
-            "delete_reflection_memory",
-            "build_reflection_preview",
-            "get_performance_metrics",
-            "record_task_result",
-        ),
     }
 
     for cls, method_names in forbidden_methods.items():
@@ -89,7 +78,6 @@ def test_memory_injection_old_sync_helpers_do_not_return() -> None:
     forbidden_helpers = (
         "build_role_with_memory",
         "_build_project_memory_section",
-        "_build_role_evolution_section",
         "_find_latest_maturity_level",
         "_count_applied_adjustments",
     )

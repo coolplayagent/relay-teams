@@ -72,7 +72,6 @@ from relay_teams.retrieval import (
     RetrievalTokenizer,
     SqliteFts5RetrievalStore,
 )
-from relay_teams.roles.memory_repository import RoleMemoryRepository
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
@@ -248,25 +247,6 @@ async def test_small_repository_async_paths_share_state(tmp_path: Path) -> None:
     media_by_session = await media_repo.list_by_session_async("session-1")
     await media_repo.delete_by_session_async("session-1")
 
-    memory_repo = RoleMemoryRepository(tmp_path / "memory.db")
-    empty_memory = await memory_repo.read_role_memory_async(
-        role_id="writer",
-        workspace_id="default",
-    )
-    await memory_repo.write_role_memory_async(
-        role_id="writer",
-        workspace_id="default",
-        content_markdown="Remember async paths.",
-    )
-    stored_memory = await memory_repo.read_role_memory_async(
-        role_id="writer",
-        workspace_id="default",
-    )
-    await memory_repo.delete_role_memory_async(
-        role_id="writer",
-        workspace_id="default",
-    )
-
     binding_repo = ExternalSessionBindingRepository(tmp_path / "bindings.db")
     binding = await binding_repo.upsert_binding_async(
         platform="feishu",
@@ -401,8 +381,6 @@ async def test_small_repository_async_paths_share_state(tmp_path: Path) -> None:
     assert tuple(record.account_id for record in xiaoluban_accounts) == ("xiaoluban-1",)
     assert media_loaded.asset_id == "asset-1"
     assert tuple(record.asset_id for record in media_by_session) == ("asset-1",)
-    assert empty_memory.content_markdown == ""
-    assert stored_memory.content_markdown == "Remember async paths."
     assert binding.session_id == "session-1"
     assert loaded_binding is not None
     assert loaded_binding.session_id == "session-1"
@@ -1103,7 +1081,7 @@ async def test_retrieval_store_async_paths_keep_indexes_in_sync(
                 scope_id="skills",
                 document_id="memory",
                 title="Memory",
-                body="reflection storage",
+                body="memory storage",
                 keywords=("memory",),
             ),
         ),

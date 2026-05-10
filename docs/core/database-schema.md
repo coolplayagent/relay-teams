@@ -875,7 +875,6 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 - `relay_teams.gateway.xiaoluban`: `xiaoluban_accounts`.
 - `relay_teams.connector`: no SQLite tables. Connector status is derived from
   `triggers` GitHub rows and the existing gateway account tables.
-- `relay_teams.roles`: `role_memories`.
 - `relay_teams.memory`: `memory_entries`.
 - Role document files: role Markdown front matter stores `RoleDefinition`
   metadata, including the optional `contract` object for behavioral
@@ -1204,24 +1203,18 @@ Notes:
 
 ---
 
-### 2.10 `role_memories`
+### 2.10 Legacy Role Memory Tables
 
-```sql
-CREATE TABLE IF NOT EXISTS role_memories (
-    role_id          TEXT NOT NULL,
-    workspace_id     TEXT NOT NULL,
-    content_markdown TEXT NOT NULL,
-    updated_at       TEXT NOT NULL,
-    PRIMARY KEY (role_id, workspace_id)
-);
-```
+`role_memories` and `role_daily_memories` are no longer owned runtime tables.
+`MemoryBankRepository` treats them as migration input only:
 
-Purpose: workspace-scoped durable role memory. For subagents this table stores the current reflection summary that is injected into future same-role sessions in the same workspace.
+- a supported legacy `role_memories` table is imported into `memory_entries`
+  during repository initialization and then dropped
+- unsupported legacy `role_memories` shapes are dropped with a warning because
+  the current runtime has no legacy reader
+- `role_daily_memories` is always dropped if it exists
 
-Notes:
-- there is no `role_daily_memories` table anymore
-- legacy daily-memory tables may be dropped during repository initialization
-- reflection growth is controlled by compaction and summary rewrite, not append-only rows
+All durable role/workspace memory now lives in `memory_entries`.
 
 ---
 
@@ -1688,12 +1681,13 @@ Notes:
 - `scope` is one of: `workspace`, `session`, `role`.
 - `kind` is one of: `insight`, `constraint`, `decision`, `failure_mode`, `preference`, `fact`, `summary`.
 - `status` is one of: `active`, `superseded`, `expired`.
-- `source` is one of: `consolidation`, `manual`, `reflection`, `condensation`, `task_result`.
+- `source` is one of: `consolidation`, `manual`, `condensation`, `task_result`.
 - `tags` stores space-separated tag tokens for LIKE-based filtering.
 - `confidence_score` decays over time for medium_term and persistent entries; entries below the minimum threshold are automatically expired.
 - `superseded_by_id` references the memory entry that replaced this entry during consolidation.
 - `parent_entry_id` references the source entry from which this entry was consolidated.
 - `expires_at` is set automatically based on tier TTL defaults (working=4h, medium_term=7d, persistent=null).
 - `metadata_json` stores up to 20 key-value string pairs.
-- This table is independent from the existing `role_memories` table and does not affect its operations.
+- Legacy `role_memories` rows are migrated into this table at startup, then
+  the legacy table is removed.
 - Repository: `src/relay_teams/memory/repository.py`

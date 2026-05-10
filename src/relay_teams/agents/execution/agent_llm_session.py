@@ -29,7 +29,6 @@ from relay_teams.agents.execution.session_prompt import SessionPromptMixin
 from relay_teams.agents.execution.session_recovery import SessionRecoveryMixin
 from relay_teams.agents.execution.session_runtime import SessionRuntimeMixin
 from relay_teams.agents.execution.session_support import SessionSupportMixin
-from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.agent_runtimes.instances.instance_repository import (
     AgentInstanceRepository,
 )
@@ -58,7 +57,6 @@ from relay_teams.providers.model_fallback import (
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.reminders.service import SystemReminderService
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.event_log import EventLog
@@ -119,8 +117,6 @@ class AgentLlmSession(
         monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService | None,
-        role_memory_service: RoleMemoryService | None,
-        subagent_reflection_service: SubagentReflectionService | None,
         conversation_compaction_service: ConversationCompactionService | None,
         conversation_microcompact_service: ConversationMicrocompactService | None,
         tool_registry: ToolRegistry,
@@ -176,8 +172,6 @@ class AgentLlmSession(
         self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
-        self._role_memory_service = role_memory_service
-        self._subagent_reflection_service = subagent_reflection_service
         self._conversation_compaction_service = conversation_compaction_service
         self._conversation_microcompact_service = conversation_microcompact_service
         self._tool_registry = tool_registry

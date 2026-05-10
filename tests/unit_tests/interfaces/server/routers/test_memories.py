@@ -13,6 +13,7 @@ from relay_teams.memory.models import (
     MemoryConsolidationResult,
     MemoryEntry,
     MemoryEntryKind,
+    MemoryEntryStatus,
     MemoryQueryResult,
     MemoryScope,
     MemorySearchResult,
@@ -61,13 +62,15 @@ def _build_client(service: MemoryBankService) -> TestClient:
 
 
 class TestRouteRegistration:
-    def test_router_has_seven_routes(self) -> None:
+    def test_router_has_nine_routes(self) -> None:
         routes = [r for r in router.routes if hasattr(r, "path")]
-        assert len(routes) == 7
+        assert len(routes) == 9
 
     def test_router_paths_match_spec(self) -> None:
         paths = {r.path for r in router.routes if hasattr(r, "path")}  # type: ignore[union-attr]
         wid = "/workspaces/{workspace_id}"
+        assert "/memories" in paths
+        assert "/memories/search" in paths
         assert f"{wid}/memories" in paths
         assert f"{wid}/memories/{{memory_id}}" in paths
         assert f"{wid}/memories/consolidate" in paths
@@ -79,6 +82,8 @@ class TestRouteRegistration:
             if hasattr(r, "path") and hasattr(r, "methods"):  # type: ignore[union-attr]
                 route_map.setdefault(r.path, set()).update(r.methods)  # type: ignore[union-attr]
         wid = "/workspaces/{workspace_id}"
+        assert "GET" in route_map.get("/memories", set())
+        assert "POST" in route_map.get("/memories/search", set())
         assert "GET" in route_map.get(f"{wid}/memories", set())
         assert "POST" in route_map.get(f"{wid}/memories", set())
         assert "GET" in route_map.get(f"{wid}/memories/{{memory_id}}", set())
@@ -115,6 +120,9 @@ class _FakeMemoryBankService:
         self.search_async: AsyncMock = AsyncMock(
             return_value=MemorySearchResult(items=(), total_count=0)
         )
+        self.search_global_async: AsyncMock = AsyncMock(
+            return_value=MemorySearchResult(items=(), total_count=0)
+        )
 
 
 def _client() -> tuple[TestClient, _FakeMemoryBankService]:
@@ -127,6 +135,66 @@ def _client() -> tuple[TestClient, _FakeMemoryBankService]:
 
     app.dependency_overrides[get_memory_bank_service] = lambda: svc
     return TestClient(app), svc
+
+
+# ---------------------------------------------------------------------------
+# GET /memories  (global list)
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalListMemories:
+    def test_list_all_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.get("/api/memories")
+        assert response.status_code == 200
+        svc.list_entries_async.assert_awaited_once()
+
+    def test_list_all_passes_optional_workspace_and_filters(self) -> None:
+        client, svc = _client()
+        response = client.get(
+            "/api/memories",
+            params={
+                "workspace_id": "ws-1",
+                "scope": "role",
+                "role_id": "writer",
+                "status": "active",
+                "tags": "legacy,role-memory",
+            },
+        )
+        assert response.status_code == 200
+        call_req = svc.list_entries_async.call_args[0][0]
+        assert call_req.workspace_id == "ws-1"
+        assert call_req.scope == MemoryScope.ROLE
+        assert call_req.role_id == "writer"
+        assert call_req.status == MemoryEntryStatus.ACTIVE
+        assert call_req.tags == ("legacy", "role-memory")
+
+
+# ---------------------------------------------------------------------------
+# POST /memories/search  (global search)
+# ---------------------------------------------------------------------------
+
+
+class TestGlobalSearchMemories:
+    def test_search_all_returns_200(self) -> None:
+        client, svc = _client()
+        response = client.post(
+            "/api/memories/search",
+            json={"text_query": "pydantic", "limit": 5},
+        )
+        assert response.status_code == 200
+        svc.search_global_async.assert_awaited_once()
+
+    def test_search_all_accepts_optional_workspace(self) -> None:
+        client, svc = _client()
+        response = client.post(
+            "/api/memories/search",
+            json={"workspace_id": "ws-1", "text_query": "pydantic"},
+        )
+        assert response.status_code == 200
+        call_req = svc.search_global_async.call_args[0][0]
+        assert call_req.workspace_id == "ws-1"
+        assert call_req.text_query == "pydantic"
 
 
 # ---------------------------------------------------------------------------

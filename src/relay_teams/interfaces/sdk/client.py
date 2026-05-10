@@ -739,39 +739,6 @@ class AsyncAgentTeamsClient:
             {"content": content},
         )
 
-    async def get_subagent_reflection(
-        self,
-        session_id: str,
-        instance_id: str,
-    ) -> dict[str, JsonValue]:
-        return await self._request_json(
-            "GET",
-            f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
-        )
-
-    async def refresh_subagent_reflection(
-        self,
-        session_id: str,
-        instance_id: str,
-    ) -> dict[str, JsonValue]:
-        return await self._request_json(
-            "POST",
-            f"/api/sessions/{session_id}/agents/{instance_id}/reflection:refresh",
-            {},
-        )
-
-    async def update_subagent_reflection(
-        self,
-        session_id: str,
-        instance_id: str,
-        summary: str,
-    ) -> dict[str, JsonValue]:
-        return await self._request_json(
-            "PATCH",
-            f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
-            {"summary": summary},
-        )
-
     async def create_workspace(
         self,
         *,
@@ -1063,16 +1030,6 @@ class AsyncAgentTeamsClient:
         if not isinstance(raw, list):
             return []
         return [item for item in raw if isinstance(item, dict)]
-
-    async def delete_subagent_reflection(
-        self,
-        session_id: str,
-        instance_id: str,
-    ) -> dict[str, JsonValue]:
-        return await self._request_json(
-            "DELETE",
-            f"/api/sessions/{session_id}/agents/{instance_id}/reflection",
-        )
 
     async def _request_json(
         self,

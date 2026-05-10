@@ -45,6 +45,7 @@ import {
     openWorkspaceProjectView,
     requestAutomationProjectInput as requestAutomationProjectEditorInput,
 } from './projectView.js';
+import { openMemoryFeatureView } from './memoryView.js';
 import {
     buildSubagentSessionLabel,
     getActiveSubagentSession,
@@ -78,6 +79,7 @@ const FEATURE_IDS = Object.freeze({
     automation: 'automation',
     connectors: 'connectors',
     gateway: 'gateway',
+    memory: 'memory',
 });
 
 let selectSessionHandler = null;
@@ -1203,6 +1205,15 @@ function renderFeatureNav() {
                 </span>
                 <span class="home-feature-label">${escapeHtml(t('sidebar.feature_gateway'))}</span>
             </button>
+            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.memory ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.memory}">
+                <span class="home-feature-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-memory">
+                        <path d="M6.2 5.4c0-1.1 2.6-2 5.8-2s5.8.9 5.8 2v13.2c0 1.1-2.6 2-5.8 2s-5.8-.9-5.8-2V5.4Z" stroke="currentColor" stroke-width="1.7"/>
+                        <path d="M6.2 5.5c0 1.1 2.6 2 5.8 2s5.8-.9 5.8-2M6.2 10c0 1.1 2.6 2 5.8 2s5.8-.9 5.8-2M6.2 14.5c0 1.1 2.6 2 5.8 2s5.8-.9 5.8-2" stroke="currentColor" stroke-width="1.7"/>
+                    </svg>
+                </span>
+                <span class="home-feature-label">${escapeHtml(t('sidebar.feature_memory'))}</span>
+            </button>
         </div>
     `;
     section.querySelector('.home-new-session-btn')?.addEventListener('click', () => void handlePrimaryNewSessionClick());
@@ -1267,6 +1278,8 @@ async function openFeatureView(featureId) {
         await openAutomationHomeView();
     } else if (safeFeatureId === FEATURE_IDS.connectors) {
         await openImFeatureView();
+    } else if (safeFeatureId === FEATURE_IDS.memory) {
+        await openMemoryFeatureView();
     }
     if (state.currentFeatureViewId === safeFeatureId) {
         syncFeatureNavigationState(safeFeatureId);

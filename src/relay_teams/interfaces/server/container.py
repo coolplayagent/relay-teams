@@ -140,7 +140,6 @@ from relay_teams.providers.model_catalog import ModelCatalogService
 from relay_teams.providers.model_fallback_config_manager import (
     ModelFallbackConfigManager,
 )
-from relay_teams.providers.model_fallback import LlmFallbackMiddleware
 from relay_teams.net import (
     clear_llm_http_client_cache,
     clear_llm_http_client_cache_async,
@@ -163,8 +162,6 @@ from relay_teams.agents.orchestration.task_execution_service_factory import (
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles import (
     RoleLoader,
-    RoleMemoryRepository,
-    RoleMemoryService,
     RoleRegistry,
     RuntimeRoleResolver,
     TemporaryRoleRepository,
@@ -194,7 +191,6 @@ from relay_teams.agent_runtimes.instances.instance_repository import (
 from relay_teams.tools.runtime.approval_ticket_repo import ApprovalTicketRepository
 from relay_teams.sessions.runs.event_log import EventLog
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.sessions.runs.background_tasks.manager import (
     BackgroundTaskManager,
 )
@@ -582,12 +578,6 @@ class ServerContainer:
         self.automation_bound_session_queue_repo: AutomationBoundSessionQueueRepository = AutomationBoundSessionQueueRepository(
             runtime.paths.db_path
         )
-        self.role_memory_repo: RoleMemoryRepository = RoleMemoryRepository(
-            runtime.paths.db_path
-        )
-        self.role_memory_service: RoleMemoryService = RoleMemoryService(
-            repository=self.role_memory_repo
-        )
         self.memory_bank_repo: MemoryBankRepository = MemoryBankRepository(
             runtime.paths.db_path
         )
@@ -597,7 +587,6 @@ class ServerContainer:
         )
         self.memory_event_handler = MemoryEventHandler(
             memory_bank_service=self.memory_bank_service,
-            role_memory_service=self.role_memory_service,
         )
         self.temporary_role_repo: TemporaryRoleRepository = TemporaryRoleRepository(
             runtime.paths.db_path
@@ -606,7 +595,6 @@ class ServerContainer:
             role_registry=self.role_registry,
             temporary_role_repository=self.temporary_role_repo,
         )
-        self.subagent_reflection_service = self._build_subagent_reflection_service()
         self._ensure_default_workspace()
 
         if manage_runtime_state:
@@ -742,7 +730,6 @@ class ServerContainer:
             todo_service=self.todo_service,
             reminder_service=self.reminder_service,
             monitor_service=self.monitor_service,
-            role_memory_service=self.role_memory_service,
             tool_registry=self.tool_registry,
             get_mcp_registry=lambda: self.mcp_registry,
             get_skill_registry=lambda: self.skill_registry,
@@ -798,8 +785,8 @@ class ServerContainer:
 
         semantic_evaluator = LlmSemanticEvaluator(
             resolve_model_config=lambda: (
-                self._resolve_reflection_model_config(),
-                self._resolve_reflection_model_profile_name(),
+                self._resolve_auxiliary_model_config(),
+                self._resolve_auxiliary_model_profile_name(),
             ),
         )
         coordinator = CoordinatorGraph(
@@ -886,8 +873,6 @@ class ServerContainer:
             workspace_manager=self.workspace_manager,
             workspace_service=self.workspace_service,
             external_session_binding_repo=self.external_session_binding_repo,
-            role_memory_service=self.role_memory_service,
-            subagent_reflection_service=self.subagent_reflection_service,
             role_registry=self.role_registry,
             skill_registry=self.skill_registry,
             mcp_registry=self.mcp_registry,
@@ -1168,7 +1153,6 @@ class ServerContainer:
             self.automation_event_repo,
             self.automation_delivery_repo,
             self.automation_bound_session_queue_repo,
-            self.role_memory_repo,
             self.memory_bank_repo,
             self.temporary_role_repo,
             self.monitor_repository,
@@ -1202,8 +1186,6 @@ class ServerContainer:
             workspace_manager=self.workspace_manager,
             media_asset_service=self.media_asset_service,
             computer_runtime=self.computer_runtime,
-            role_memory_service=self.role_memory_service,
-            subagent_reflection_service=self.subagent_reflection_service,
             tool_registry=self.tool_registry,
             mcp_registry=self.mcp_registry,
             mcp_discovery_service=self.mcp_discovery_service,
@@ -1262,7 +1244,6 @@ class ServerContainer:
             mcp_discovery_service=self.mcp_discovery_service,
             injection_manager=self.injection_manager,
             run_control_manager=self.run_control_manager,
-            role_memory_service=self.role_memory_service,
             memory_bank_service=self.memory_bank_service,
             memory_event_handler=self.memory_event_handler,
             runtime_role_resolver=self.runtime_role_resolver,
@@ -1299,25 +1280,25 @@ class ServerContainer:
             plugin_hook_sources=self.plugin_registry.hook_sources(),
         )
 
-    def _resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
+    def _resolve_auxiliary_model_config(self) -> ModelEndpointConfig | None:
         if self.runtime.default_model_profile is not None:
             return self.runtime.llm_profiles.get(self.runtime.default_model_profile)
         for profile in self.runtime.llm_profiles.values():
             return profile
         return None
 
-    def _resolve_reflection_model_profile_name(self) -> str | None:
+    def _resolve_auxiliary_model_profile_name(self) -> str | None:
         if self.runtime.default_model_profile is not None:
             return self.runtime.default_model_profile
         for profile_name in self.runtime.llm_profiles.keys():
             return profile_name
         return None
 
-    def resolve_reflection_model_config(self) -> ModelEndpointConfig | None:
-        return self._resolve_reflection_model_config()
+    def resolve_auxiliary_model_config(self) -> ModelEndpointConfig | None:
+        return self._resolve_auxiliary_model_config()
 
-    def resolve_reflection_model_profile_name(self) -> str | None:
-        return self._resolve_reflection_model_profile_name()
+    def resolve_auxiliary_model_profile_name(self) -> str | None:
+        return self._resolve_auxiliary_model_profile_name()
 
     def create_provider(
         self,
@@ -1390,24 +1371,6 @@ class ServerContainer:
         return resolve_model_profile_config(
             runtime=runtime_to_use,
             profile_name=role.model_profile,
-        )
-
-    def _build_subagent_reflection_service(
-        self,
-    ) -> SubagentReflectionService | None:
-        reflection_config = self._resolve_reflection_model_config()
-        if reflection_config is None:
-            return None
-        return SubagentReflectionService(
-            config=reflection_config,
-            profile_name=self._resolve_reflection_model_profile_name(),
-            retry_config=self.runtime.llm_retry,
-            message_repo=self.message_repo,
-            role_memory_service=self.role_memory_service,
-            fallback_middleware=LlmFallbackMiddleware(
-                get_fallback_config=lambda: self.runtime.model_fallback,
-                get_profiles=lambda: self.runtime.llm_profiles,
-            ),
         )
 
     async def start(self) -> None:
@@ -1522,9 +1485,6 @@ class ServerContainer:
         self.runtime_role_resolver.replace_role_registry(self.role_registry)
         self.delegation_planning_service.replace_role_registry(self.role_registry)
         self.session_service.replace_role_registry(self.role_registry)
-        self.session_service.replace_subagent_reflection_service(
-            self.subagent_reflection_service
-        )
         self.run_service.replace_runtime_dependencies(
             role_registry=self.role_registry,
             provider_factory=self._provider_factory,
@@ -1535,7 +1495,6 @@ class ServerContainer:
 
     def _on_runtime_reloaded(self, runtime: RuntimeConfig) -> None:
         self.runtime = runtime
-        self.subagent_reflection_service = self._build_subagent_reflection_service()
         self._refresh_coordinator_runtime()
         self._refresh_runtime_dependents()
 

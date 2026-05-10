@@ -76,13 +76,3 @@ class RoleAssessmentState(BaseModel):
     workspace_id: RequiredIdentifierStr
     runs_since_last_assessment: int = Field(default=0, ge=0)
     last_assessment_at: datetime | None = None
-
-
-class RoleMemoryRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    role_id: RequiredIdentifierStr
-    workspace_id: RequiredIdentifierStr
-    content_markdown: str = ""
-    updated_at: datetime | None = None
-    performance: RolePerformanceMetrics | None = None

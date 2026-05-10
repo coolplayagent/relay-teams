@@ -43,12 +43,10 @@ async def test_capture_returns_none_for_non_template() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record(template_role_id=None)
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
     )
     result = await service.capture_on_subagent_stop(
         subagent_role_id="temp-1",
@@ -67,12 +65,10 @@ async def test_capture_returns_none_for_identical_prompt() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record()
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
     )
     result = await service.capture_on_subagent_stop(
         subagent_role_id="temp-1",
@@ -90,12 +86,10 @@ async def test_capture_detects_additions() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record()
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
         min_diff_chars=10,
     )
     effective = "Be helpful\n\n## Additional Strategy\nAlways verify before responding with results."
@@ -127,12 +121,10 @@ async def test_capture_ignores_whitespace_only() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record()
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
         min_diff_chars=50,
     )
     result = await service.capture_on_subagent_stop(
@@ -150,12 +142,10 @@ async def test_capture_ignores_whitespace_only() -> None:
 async def test_capture_all_for_session() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
     )
     result = await service.capture_all_for_session(
         _session_id="sess-1",
@@ -170,12 +160,10 @@ async def test_capture_diff_with_removals_and_additions() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record()
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
         min_diff_chars=5,
     )
     effective = "Be very careful and thorough in all analysis tasks."
@@ -200,12 +188,10 @@ async def test_capture_below_min_diff_chars() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record()
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
         min_diff_chars=500,
     )
     effective = "Be helpful\n\nSome small new addition here."
@@ -226,12 +212,10 @@ async def test_capture_keyerror() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.side_effect = KeyError("not found")
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
     )
     result = await service.capture_on_subagent_stop(
         subagent_role_id="temp-1",
@@ -250,12 +234,10 @@ async def test_capture_non_prefix_effective() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
     mock_repo.get_async.return_value = _make_temp_record()
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
         min_diff_chars=5,
     )
     effective = "Completely different prompt with substantial new content here."
@@ -277,12 +259,10 @@ async def test_capture_non_prefix_effective() -> None:
 async def test_capture_all_for_session_returns_empty() -> None:
     mock_engine = MagicMock(spec=SystemPromptAdjustmentEngine)
     mock_repo = MagicMock(spec=TemporaryRoleRepository)
-    mock_memory = MagicMock()
 
     service = TemporaryRoleKnowledgeCaptureService(
         adjustment_engine=mock_engine,
         temporary_role_repository=mock_repo,
-        role_memory_service=mock_memory,
     )
     result = await service.capture_all_for_session(
         _session_id="sess-1",

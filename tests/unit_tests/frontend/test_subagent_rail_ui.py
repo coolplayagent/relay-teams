@@ -43,8 +43,6 @@ console.log(JSON.stringify({
             "status": "running",
             "created_at": "2026-03-13T00:01:00Z",
             "updated_at": "2026-03-13T00:02:00.000Z",
-            "reflection_summary_preview": "Use concise drafts.",
-            "reflection_updated_at": "2026-03-13T00:01:30Z",
             "runtime_system_prompt": "You are the runtime writer.",
             "runtime_tools_json": '{"local_tools":[],"skill_tools":[],"mcp_tools":[]}',
         }
@@ -154,8 +152,6 @@ export async function fetchSessionAgents() {
             status: "running",
             created_at: "2026-03-13T00:01:00Z",
             updated_at: "2026-03-13T00:01:00Z",
-            reflection_summary_preview: "Use concise drafts.",
-            reflection_updated_at: "2026-03-13T00:01:30Z",
             runtime_system_prompt: "You are the runtime writer.",
             runtime_tools_json: '{"local_tools":[],"skill_tools":[],"mcp_tools":[]}',
         },

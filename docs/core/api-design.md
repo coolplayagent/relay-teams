@@ -1372,7 +1372,7 @@ Notes:
 
 ### `GET /sessions/{session_id}/agents`
 
-Lists one reusable session-level agent instance per delegated role in the session. Each entry also includes a compact reflection preview for the subagent role in the current workspace, plus the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
+Lists one reusable session-level agent instance per delegated role in the session. Each entry includes the latest runtime system prompt snapshot and runtime tools JSON captured before the most recent subagent execution step.
 
 Notes:
 - This endpoint continues to back the orchestration/legacy right-rail agent list.
@@ -1385,8 +1385,6 @@ Response fields include:
 - `status`
 - `created_at`
 - `updated_at`
-- `reflection_summary_preview`
-- `reflection_updated_at`
 - `runtime_system_prompt`
 - `runtime_tools_json`
 
@@ -1413,8 +1411,6 @@ Response fields include:
 - `updated_at`
 - `conversation_id`
 - `title`
-- `reflection_summary_preview`
-- `reflection_updated_at`
 - `runtime_system_prompt`
 - `runtime_tools_json`
 
@@ -1449,38 +1445,6 @@ Notes:
 Response entries are ordered oldest to newest and use `entry_type`:
 - `message`: original persisted message row. Includes `hidden_from_context`, `hidden_reason`, `hidden_at`, and `hidden_marker_id`.
 - `marker`: logical history divider with `marker_id`, `marker_type`, `created_at`, and `label`.
-
-### `GET /sessions/{session_id}/agents/{instance_id}/reflection`
-
-Returns the full stored reflection summary for one subagent instance.
-
-Response fields:
-- `instance_id`
-- `role_id`
-- `summary`
-- `preview`
-- `updated_at`
-- `source`
-
-### `POST /sessions/{session_id}/agents/{instance_id}/reflection:refresh`
-
-Triggers reflection recomputation for one subagent instance and returns the refreshed summary. Reflection memory is separate from automatic conversation compaction summaries.
-
-### `PATCH /sessions/{session_id}/agents/{instance_id}/reflection`
-
-Overwrites the stored reflection summary for that subagent role in the current workspace.
-
-Request:
-
-```json
-{
-  "summary": "- Prefer concise implementation notes"
-}
-```
-
-### `DELETE /sessions/{session_id}/agents/{instance_id}/reflection`
-
-Deletes the stored reflection summary for that subagent role in the current workspace. The response returns an empty reflection projection with `updated_at=null`.
 
 ### `GET /sessions/{session_id}/tasks`
 
@@ -3815,7 +3779,41 @@ Router: `src/relay_teams/interfaces/server/routers/guardrails_router.py`
 
 ## Memory Bank APIs
 
-Workspace-scoped structured memory entries with three tiers (working, medium_term, persistent), six kinds (fact, procedure, preference, episode, insight, context), and full-text search.
+Structured Memory Bank entries with three tiers (`working`, `medium_term`, `persistent`), three scopes (`workspace`, `session`, `role`), typed content, tags, confidence, consolidation, and search. The legacy role-memory endpoints were removed; subagent panels and the global Memory page read from these endpoints.
+
+### `GET /memories`
+
+Lists Memory Bank entries across all workspaces, or within one workspace when
+`workspace_id` is supplied.
+
+Query fields:
+- `workspace_id`: optional exact-match filter.
+- `tier`: optional `working`, `medium_term`, or `persistent`.
+- `scope`: optional `workspace`, `session`, or `role`.
+- `session_id`: optional exact-match filter.
+- `role_id`: optional exact-match filter.
+- `kind`: optional `insight`, `constraint`, `decision`, `failure_mode`, `preference`, `fact`, or `summary`.
+- `status`: optional `active`, `superseded`, or `expired`.
+- `tags`: comma-separated tag filter.
+- `min_confidence`: minimum confidence score `0.0..1.0`, default `0.0`.
+- `limit`: page size `1..100`, default `20`.
+- `offset`: default `0`.
+
+Response: `MemoryQueryResult`.
+
+### `POST /memories/search`
+
+Searches active Memory Bank entries across all workspaces, or within one
+workspace when `workspace_id` is supplied.
+
+Request: `GlobalMemorySearchRequest`
+- `workspace_id`: optional exact-match filter.
+- `text_query`: search text.
+- `tier`, `scope`, `session_id`, `role_id`, `kind`, `tags`: optional filters.
+- `min_confidence`: minimum confidence score `0.0..1.0`.
+- `limit`: max results, default `20`.
+
+Response: `MemorySearchResult`.
 
 ### `GET /workspaces/{workspace_id}/memories`
 
@@ -3823,11 +3821,11 @@ Lists memory entries with optional filters.
 
 Query fields:
 - `tier`: optional `working`, `medium_term`, or `persistent`.
-- `scope`: optional `workspace`, `session`, `role`, or `run`.
+- `scope`: optional `workspace`, `session`, or `role`.
 - `session_id`: optional exact-match filter.
 - `role_id`: optional exact-match filter.
-- `kind`: optional entry kind filter (`fact`, `procedure`, `preference`, `episode`, `insight`, `context`).
-- `status`: optional `active` or `archived`.
+- `kind`: optional entry kind filter (`insight`, `constraint`, `decision`, `failure_mode`, `preference`, `fact`, `summary`).
+- `status`: optional `active`, `superseded`, or `expired`.
 - `tags`: comma-separated tag filter.
 - `min_confidence`: minimum confidence score `0.0..1.0`, default `0.0`.
 - `limit`: page size `1..100`, default `20`.
@@ -3846,12 +3844,11 @@ Creates a memory entry. Returns `201` on success.
 Request: `CreateMemoryEntryRequest`
 - `workspace_id`: path-derived.
 - `tier`: `working`, `medium_term`, or `persistent`.
-- `scope`: `workspace`, `session`, `role`, or `run`.
-- `kind`: `fact`, `procedure`, `preference`, `episode`, `insight`, or `context`.
-- `content_title`: human-readable title.
-- `content_body`: full content text.
+- `scope`: `workspace`, `session`, or `role`.
+- `kind`: `insight`, `constraint`, `decision`, `failure_mode`, `preference`, `fact`, or `summary`.
+- `content`: object with `title`, `body`, and optional `context`/`outcome`.
 - `tags`: optional list of tag strings.
-- `source`: optional provenance string.
+- `source`: optional `consolidation`, `manual`, `condensation`, or `task_result`.
 - `confidence_score`: optional `0.0..1.0`.
 - `session_id`, `role_id`, `run_id`: optional scoping references.
 - `expires_at`: optional ISO 8601 expiry timestamp.
@@ -3869,12 +3866,12 @@ Response: `MemoryEntry`. Returns `404` when the entry does not exist or does not
 Updates a memory entry.
 
 Request: `UpdateMemoryEntryRequest`
-- `content_title`: optional new title.
-- `content_body`: optional new body.
+- `content`: optional replacement content object.
 - `tags`: optional replacement tags.
 - `confidence_score`: optional new score.
-- `status`: optional new status (`active` or `archived`).
+- `status`: optional new status (`active`, `superseded`, or `expired`).
 - `expires_at`: optional new expiry.
+- `metadata`: optional replacement metadata.
 
 Response: `MemoryEntry`. Returns `404` when the entry does not exist or does not belong to the workspace.
 
@@ -3895,7 +3892,8 @@ Request: `MemoryConsolidationRequest`
 Response: `MemoryConsolidationResult`
 - `consolidated_entry_count`: number of new entries created.
 - `source_entry_count`: number of source entries examined.
-- `created_entries[]`: list of newly created `MemoryEntry` objects.
+- `superseded_entry_ids[]`: source entries superseded during consolidation.
+- `new_entry_ids[]`: newly created memory entry IDs.
 
 ### `POST /workspaces/{workspace_id}/memories/search`
 
@@ -3904,7 +3902,8 @@ Full-text search across memory entries.
 Request: `MemorySearchRequest`
 - `workspace_id`: path-derived.
 - `text_query`: search text.
-- `tier`, `scope`, `kind`: optional filters.
+- `tier`, `scope`, `session_id`, `role_id`, `kind`, `tags`: optional filters.
+- `min_confidence`: minimum confidence score `0.0..1.0`.
 - `limit`: max results, default `20`.
 
 Response: `MemorySearchResult`

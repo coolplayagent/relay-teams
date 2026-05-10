@@ -55,7 +55,7 @@ from relay_teams.notifications.notification_settings_service import (
 )
 from relay_teams.plugins import PluginRegistry
 from relay_teams.providers.model_config_service import ModelConfigService
-from relay_teams.roles import RoleMemoryService, RoleRegistry
+from relay_teams.roles import RoleRegistry
 from relay_teams.roles.settings_service import RoleSettingsService
 from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.sessions.session_service import SessionService
@@ -95,9 +95,9 @@ def get_task_service(request: Request) -> TaskOrchestrationService:
 
 def get_llm_evaluator(request: Request) -> object:
     container = get_container(request)
-    model_config = container.resolve_reflection_model_config()
+    model_config = container.resolve_auxiliary_model_config()
     model = model_config.model if model_config is not None else "gpt-4o"
-    profile_name = container.resolve_reflection_model_profile_name()
+    profile_name = container.resolve_auxiliary_model_profile_name()
     provider = container.create_provider(
         RoleDefinition(
             role_id="llm-evaluator",
@@ -252,10 +252,6 @@ def get_role_registry(request: Request) -> RoleRegistry:
 
 def get_role_settings_service(request: Request) -> RoleSettingsService:
     return get_container(request).role_settings_service
-
-
-def get_role_memory_service(request: Request) -> RoleMemoryService:
-    return get_container(request).role_memory_service
 
 
 def get_workspace_service(request: Request) -> WorkspaceService:

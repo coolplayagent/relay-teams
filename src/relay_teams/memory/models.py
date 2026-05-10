@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
@@ -55,7 +55,6 @@ class MemoryEntryStatus(str, Enum):
 class MemorySourceKind(str, Enum):
     CONSOLIDATION = "consolidation"
     MANUAL = "manual"
-    REFLECTION = "reflection"
     CONDENSATION = "condensation"
     TASK_RESULT = "task_result"
 
@@ -259,8 +258,6 @@ class UpdateMemoryEntryRequest(BaseModel):
 
 def default_ttl_for_tier(tier: MemoryTier) -> datetime | None:
     """Return an expiry datetime for the given tier relative to now, or None."""
-    from datetime import timezone
-
     now = datetime.now(tz=timezone.utc)
     if tier == MemoryTier.WORKING:
         return now + WORKING_TTL
@@ -277,7 +274,7 @@ def default_ttl_for_tier(tier: MemoryTier) -> datetime | None:
 class MemoryQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    workspace_id: str = Field(min_length=1)
+    workspace_id: str | None = Field(default=None, min_length=1)
     tier: MemoryTier | None = None
     scope: MemoryScope | None = None
     session_id: str | None = None
@@ -365,6 +362,23 @@ class MemorySearchRequest(BaseModel):
 
     workspace_id: str = Field(min_length=1)
     text_query: str = Field(min_length=1)
+    tier: MemoryTier | None = None
+    scope: MemoryScope | None = None
+    session_id: str | None = None
+    role_id: str | None = None
+    kind: MemoryEntryKind | None = None
+    tags: tuple[str, ...] = ()
+    min_confidence: float = 0.3
+    limit: int = Field(default=10, ge=1, le=100)
+
+    validate_tags = field_validator("tags")(_validate_tags)
+
+
+class GlobalMemorySearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text_query: str = Field(min_length=1)
+    workspace_id: str | None = Field(default=None, min_length=1)
     tier: MemoryTier | None = None
     scope: MemoryScope | None = None
     session_id: str | None = None

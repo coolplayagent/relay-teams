@@ -89,7 +89,6 @@ if TYPE_CHECKING:
     from relay_teams.metrics import MetricRecorder
     from relay_teams.notifications import NotificationService
     from relay_teams.persistence.shared_state_repo import SharedStateRepository
-    from relay_teams.roles.memory_service import RoleMemoryService
     from relay_teams.roles.role_registry import RoleRegistry
     from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
     from relay_teams.sessions.runs.event_log import EventLog
@@ -180,7 +179,6 @@ class AgentRuntimeSessionManager:
         background_task_service: BackgroundTaskService | None,
         todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
-        role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         get_mcp_registry: Callable[[], McpRegistry],
         get_skill_registry: Callable[[], SkillRegistry],
@@ -229,7 +227,6 @@ class AgentRuntimeSessionManager:
         self._background_task_service = background_task_service
         self._todo_service = todo_service
         self._monitor_service = monitor_service
-        self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._get_mcp_registry = get_mcp_registry
         self._get_skill_registry = get_skill_registry
@@ -1205,7 +1202,6 @@ class AgentRuntimeSessionManager:
             monitor_service=self._monitor_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,
-            role_memory_service=self._role_memory_service,
             tool_registry=self._tool_registry,
             message_repo=self._message_repo,
             get_mcp_registry=self._get_mcp_registry,

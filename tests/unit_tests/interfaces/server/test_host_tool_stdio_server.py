@@ -79,7 +79,6 @@ async def test_run_stdio_server_passes_todo_service_to_host_tool_bridge(
         monitor_service=object(),
         workspace_manager=object(),
         media_asset_service=object(),
-        role_memory_service=object(),
         tool_registry=object(),
         message_repo=object(),
         mcp_registry=object(),

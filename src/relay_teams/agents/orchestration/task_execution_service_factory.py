@@ -12,7 +12,6 @@ from relay_teams.memory.service import MemoryBankService
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.provider_contracts import LLMProvider
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -64,7 +63,6 @@ def create_task_execution_service(
     mcp_discovery_service: McpDiscoveryService | None,
     injection_manager: RunInjectionManager,
     run_control_manager: RunControlManager,
-    role_memory_service: RoleMemoryService | None = None,
     memory_bank_service: MemoryBankService | None = None,
     runtime_role_resolver: RuntimeRoleResolver | None = None,
     hook_service: HookService | None = None,
@@ -103,7 +101,6 @@ def create_task_execution_service(
         mcp_registry=mcp_registry,
         injection_manager=injection_manager,
         run_control_manager=run_control_manager,
-        role_memory_service=role_memory_service,
         memory_bank_service=memory_bank_service,
         runtime_role_resolver=runtime_role_resolver,
         run_intent_repo=run_intent_repo,

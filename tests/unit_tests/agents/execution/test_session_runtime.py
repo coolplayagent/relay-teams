@@ -1221,8 +1221,6 @@ async def test_generate_async_persists_only_provider_canonical_tool_messages(
         {"resolve_async": _none_workspace_async},
     )()
     session.__dict__["_media_asset_service"] = cast(object, None)
-    session.__dict__["_role_memory_service"] = None
-    session.__dict__["_subagent_reflection_service"] = None
     session.__dict__["_conversation_compaction_service"] = None
     session.__dict__["_conversation_microcompact_service"] = None
     session.__dict__["_mcp_registry"] = McpRegistry()
@@ -1405,7 +1403,6 @@ async def test_generate_async_passes_retry_after_to_retry_schedule() -> None:
         (),
         {"resolve_async": _none_workspace_async},
     )()
-    session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
     session.__dict__["_computer_runtime"] = None
     session.__dict__["_background_task_service"] = None
@@ -1532,7 +1529,6 @@ async def test_generate_async_closes_scoped_transport_cache_on_cancellation() ->
         (),
         {"resolve_async": _none_workspace_async},
     )()
-    session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
     session.__dict__["_computer_runtime"] = None
     session.__dict__["_background_task_service"] = None
@@ -1635,7 +1631,6 @@ async def test_generate_async_closes_scoped_transport_cache_on_setup_failure() -
         (),
         {"resolve_async": _none_workspace_async},
     )()
-    session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
     session.__dict__["_computer_runtime"] = None
     session.__dict__["_background_task_service"] = None
@@ -1768,7 +1763,6 @@ async def test_generate_async_does_not_emit_retry_exhausted_after_fallback_exhau
         (),
         {"resolve_async": _none_workspace_async},
     )()
-    session.__dict__["_role_memory_service"] = None
     session.__dict__["_media_asset_service"] = None
     session.__dict__["_computer_runtime"] = None
     session.__dict__["_background_task_service"] = None

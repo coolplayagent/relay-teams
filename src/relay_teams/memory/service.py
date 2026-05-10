@@ -12,6 +12,7 @@ from relay_teams.memory.memory_defaults import (
 from relay_teams.memory.models import (
     ConsolidationMode,
     CreateMemoryEntryRequest,
+    GlobalMemorySearchRequest,
     MemoryConsolidationRequest,
     MemoryConsolidationResult,
     MemoryEntry,
@@ -353,6 +354,62 @@ class MemoryBankService:
         if self._retrieval_service is not None:
             return await self._search_fts_async(request)
         return await self._search_fallback_async(request)
+
+    async def search_global_async(
+        self, request: GlobalMemorySearchRequest
+    ) -> MemorySearchResult:
+        if request.workspace_id is not None:
+            return await self.search_async(
+                MemorySearchRequest(
+                    workspace_id=request.workspace_id,
+                    text_query=request.text_query,
+                    tier=request.tier,
+                    scope=request.scope,
+                    session_id=request.session_id,
+                    role_id=request.role_id,
+                    kind=request.kind,
+                    tags=request.tags,
+                    min_confidence=request.min_confidence,
+                    limit=request.limit,
+                )
+            )
+
+        query = MemoryQuery(
+            tier=request.tier,
+            scope=request.scope,
+            session_id=request.session_id,
+            role_id=request.role_id,
+            kind=request.kind,
+            status=MemoryEntryStatus.ACTIVE,
+            tags=request.tags,
+            min_confidence=request.min_confidence,
+            limit=100,
+            offset=0,
+        )
+        result = await self._repo.query_entries_async(query)
+        text_lower = request.text_query.lower()
+        items: list[MemorySearchHit] = []
+        rank = 1
+        for summary in result.items:
+            body_lower = summary.content_body_preview.lower()
+            title_lower = summary.content_title.lower()
+            if text_lower not in title_lower and text_lower not in body_lower:
+                continue
+            items.append(
+                MemorySearchHit(
+                    entry=summary,
+                    score=1.0,
+                    rank=rank,
+                    snippet=self._build_snippet(
+                        summary.content_body_preview,
+                        text_lower,
+                    ),
+                )
+            )
+            rank += 1
+            if len(items) >= request.limit:
+                break
+        return MemorySearchResult(items=tuple(items), total_count=len(items))
 
     async def _search_fts_async(
         self, request: MemorySearchRequest

@@ -41,7 +41,7 @@ def test_sqlite_store_replaces_scope_and_reuses_index_after_restart(
                 scope_id="skills",
                 document_id="memory-notes",
                 title="Memory Notes",
-                body="Reflection memory storage and reuse",
+                body="Memory storage and reuse",
                 keywords=("memory",),
             ),
         ),
@@ -101,7 +101,7 @@ def test_sqlite_store_isolates_scopes_and_supports_trigram_queries(
             RetrievalDocument(
                 scope_kind=RetrievalScopeKind.MEMORY,
                 scope_id="memories",
-                document_id="reflection-1",
+                document_id="memory-1",
                 title="中文反思",
                 body="这是中文检索测试能力样本",
                 keywords=("中文检索",),
@@ -127,7 +127,7 @@ def test_sqlite_store_isolates_scopes_and_supports_trigram_queries(
     )
 
     assert skill_hits == ()
-    assert [hit.document_id for hit in memory_hits] == ["reflection-1"]
+    assert [hit.document_id for hit in memory_hits] == ["memory-1"]
 
 
 def test_sqlite_store_upsert_and_delete_keep_indexes_in_sync(tmp_path: Path) -> None:

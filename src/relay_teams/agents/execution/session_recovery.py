@@ -667,15 +667,6 @@ class SessionRecoveryMixin(AgentLlmSessionMixinBase):
             monitor_service=self._monitor_service,
             workspace_manager=self._workspace_manager,
             media_asset_service=self._media_asset_service,
-            role_memory_service=self._role_memory_service,
-            subagent_reflection_service=(
-                self._subagent_reflection_service.with_config(
-                    config,
-                    profile_name=profile_name,
-                )
-                if self._subagent_reflection_service is not None
-                else None
-            ),
             conversation_compaction_service=(
                 self._conversation_compaction_service.with_config(
                     config,
