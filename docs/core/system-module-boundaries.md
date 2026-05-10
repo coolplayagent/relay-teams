@@ -40,6 +40,13 @@ With the current layout, that means:
   planning contracts and conversion into task drafts. It must use the existing
   task orchestration and runtime role resolver paths; it must not call providers
   directly or write model-visible execution results.
+- `agents/orchestration/coordinator.py` owns orchestration control flow,
+  including fixed graph execution and synthesis of completed DAG results. It
+  may schedule ready task nodes, but it must not duplicate task persistence,
+  role resolution, or provider execution logic owned by lower layers.
+- `agents/orchestration/task_orchestration_service.py` owns delegated task
+  creation, dynamic DAG validation, node-id dependency resolution, role binding,
+  and dispatch through the shared task execution path.
 - `notifications/*` owns outbound notification delivery only.
 - `persistence/*` and module-local `repository.py` files own storage mechanics only;
   they should not perform orchestration decisions.

@@ -723,7 +723,7 @@ SP-3 的核心机制已在 SP-1 中落地。后续增强方向及实施状态（
 - **`RuntimeGuardrailStatus` 枚举**（三种状态）：`PASSED` / `WARNING` / `BLOCKED` — 规则评估后的结果分类
 - **`RuntimeGuardrailRule`** 模型：支持 `tool_names`、`role_ids`、`session_modes`、`run_kinds` 等作用域限定，以及 `max_bytes`、`max_calls_per_task`、`blocked_patterns` 等约束参数
 
-规则通过 `default_runtime_guardrail_rules()` 预置默认集，运行时评估结果持久化到共享状态，观察记录上限 200 条。设计与实现规格见 [`docs/modules/security/runtime-guardrails-sg1.md`](../modules/security/runtime-guardrails-sg1.md)。
+规则通过 `default_runtime_guardrail_rules()` 预置默认集，运行时评估结果持久化到共享状态，观察记录上限 200 条。设计与实现规格见 [`docs/modules/security/runtime-guardrails-spec.md`](../modules/security/runtime-guardrails-spec.md)。
 
 仍需后续增强的方向：
 
@@ -741,7 +741,7 @@ SP-3 的核心机制已在 SP-1 中落地。后续增强方向及实施状态（
 |----------|-----------|-----------|
 | `harness/README.md` | #15 | Runtime Guardrails — AgentDoG 诊断框架、ILION 确定性预执行安全门、Proof-of-Guardrail |
 | `Bengio_International_AI_Safety_Report_2026.md` | #12 | 国际 AI 安全报告的多维度安全框架 |
-| [`docs/modules/security/runtime-guardrails-sg1.md`](../modules/security/runtime-guardrails-sg1.md) | 内部规格 | SG-1 运行时护栏设计与实现规格 |
+| [`docs/modules/security/runtime-guardrails-spec.md`](../modules/security/runtime-guardrails-spec.md) | 内部规格 | SG-1 运行时护栏设计与实现规格 |
 
 #### 实施建议
 
@@ -781,7 +781,7 @@ SP-3 的核心机制已在 SP-1 中落地。后续增强方向及实施状态（
 
 #### 落地状态
 
-2026-05-01 已落地 SG-2 基础强制执行：`must_not_have_tools` 不变量会在运行时工具注册和共享工具执行策略中同时生效，脏的既有角色配置不会阻断启动，但被合约禁止的工具会被过滤并记录警告；旧的 runtime tool snapshot 也不能重新授予被合约禁止的工具。内置 Gater 已关闭 `shell` 与 `write_tmp`，只保留读取、后台任务观察和监控控制能力。设计与实现规格见 [`docs/modules/agents/sg2-role-behavior-boundaries-spec.md`](../modules/agents/sg2-role-behavior-boundaries-spec.md)。
+2026-05-01 已落地 SG-2 基础强制执行：`must_not_have_tools` 不变量会在运行时工具注册和共享工具执行策略中同时生效，脏的既有角色配置不会阻断启动，但被合约禁止的工具会被过滤并记录警告；旧的 runtime tool snapshot 也不能重新授予被合约禁止的工具。内置 Gater 已关闭 `shell` 与 `write_tmp`，只保留读取、后台任务观察和监控控制能力。设计与实现规格见 [`docs/modules/agents/role-behavior-boundaries-spec.md`](../modules/agents/role-behavior-boundaries-spec.md)。
 
 ---
 

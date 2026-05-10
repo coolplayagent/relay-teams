@@ -3,8 +3,15 @@
 ## 1. Purpose
 
 Configurable orchestration policy lets each orchestration preset, and optionally
-each run request, constrain coordinator loops and delegated task concurrency
-without changing role prompts or workflow graph definitions.
+each run request, constrain coordinator loops, delegated task concurrency, and
+DelegationPlanner automatic task decomposition without changing role prompts or
+fixed graph definitions.
+
+The first orchestration principle is task-backed DAG execution. Complex,
+long-running, staged, or parallelizable work should become durable task nodes
+with explicit dependencies. In non-graph presets, `DelegationPlanner` is the
+default way to discover that DAG before Coordinator creates lane tasks and
+dispatches them through the normal runtime.
 
 The feature has two hard execution limits and a planning policy:
 
@@ -23,22 +30,24 @@ may expose them to the model, but enforcement stays in the orchestration runtime
 
 - Preserve legacy behavior by default: eight orchestration cycles and four
   parallel delegated task lanes.
+- Prefer automatic `DelegationPlanner` decomposition for long or spec-heavy
+  non-graph runs so dynamic roles and parallel lanes can be used early.
 - Allow lightweight direct-answer presets by setting one or both limits to
   zero.
 - Support preset-level policy through `/api/system/configs/orchestration`.
 - Support per-run override through `/api/runs` without mutating saved presets.
 - Snapshot the effective policy into the run topology so queued and recoverable
   runs resume with the same policy that was selected at creation time.
-- Apply the same policy semantics in AI-mode orchestration, graph-mode
-  orchestration, and explicit delegated task dispatch.
+- Apply the same policy semantics in AI-mode orchestration, fixed graph-mode
+  orchestration, dynamic DAG task creation, and explicit delegated task dispatch.
 - Fail visibly instead of silently completing a run when policy limits block
   delegated work that already exists.
 
 ## 3. Non-Goals
 
 - This feature does not add persisted policy versions or migration state.
-- This feature does not replace graph `max_parallel_tasks`; graph concurrency is
-  still useful as a graph-local upper bound.
+- This feature does not replace graph `max_parallel_tasks`; fixed graph
+  concurrency is still useful as a graph-local upper bound.
 - This feature does not allow role prompts to bypass runtime limits.
 - This feature does not change task status values or the task repository schema.
 
@@ -87,7 +96,7 @@ Validation rules:
 policy overrides the selected preset policy for that run only. The SDK forwards
 the same payload field without adding a separate client-side schema.
 
-The settings UI exposes both preset policy fields next to the preset definition.
+The settings UI exposes preset policy fields next to the preset definition.
 Frontend parsing normalizes blank or invalid edits back to the default policy
 values before submitting the settings payload.
 
@@ -124,22 +133,27 @@ AI mode uses `RunTopologySnapshot.orchestration_policy` as the loop contract.
 
 Flow:
 
-1. If `auto_plan_long_tasks` is enabled and the root task looks long or
-   spec-heavy, the coordinator creates a delegated `DelegationPlanner` task through the
-   existing task orchestration path.
-2. `DelegationPlanner` returns a structured `DelegationPlan`; the coordinator validates
-   lane bounds, creates or reuses temporary roles through `RuntimeRoleResolver`,
-   and creates lane tasks through `TaskOrchestrationService`.
-3. If planning is disabled, unavailable, unnecessary, or invalid, the optional
+1. If `auto_plan_long_tasks` is enabled and the root task looks long,
+   spec-heavy, or otherwise worth parallelizing, the coordinator creates a
+   delegated `DelegationPlanner` task through the existing task orchestration
+   path.
+2. `DelegationPlanner` returns a structured `DelegationPlan`; the coordinator
+   validates lane bounds, creates or reuses temporary roles through
+   `RuntimeRoleResolver`, and creates lane tasks through
+   `TaskOrchestrationService`.
+3. Lane dependencies become task DAG edges. Each lane receives an
+   `auto_lane_*` `orchestration_node_id`; `depends_on_lane_ids` are resolved to
+   node dependencies and then to persisted `depends_on_task_ids`.
+4. If planning is disabled, unavailable, unnecessary, or invalid, the optional
    first coordinator pass may create delegated tasks.
-4. If `max_orchestration_cycles` is `0`, the coordinator checks whether any
+5. If `max_orchestration_cycles` is `0`, the coordinator checks whether any
    delegated tasks are already `CREATED` or `ASSIGNED`.
-5. If delegated work exists, the root task is marked failed and the run returns
+6. If delegated work exists, the root task is marked failed and the run returns
    an assistant error with code `orchestration_cycles_exhausted`.
-6. Otherwise the coordinator executes at most `max_orchestration_cycles` cycles.
-7. Each cycle runs ready delegated lanes through `_run_pending_delegated_tasks`
+7. Otherwise the coordinator executes at most `max_orchestration_cycles` cycles.
+8. Each cycle runs ready delegated lanes through `_run_pending_delegated_tasks`
    with `max_parallel_tasks=policy.max_parallel_delegated_tasks`.
-8. If ready lanes exist while `max_parallel_delegated_tasks` is `0`, delegated
+9. If ready lanes exist while `max_parallel_delegated_tasks` is `0`, delegated
    execution is blocked, the root task is marked failed, and the run returns an
    assistant error with code `delegated_task_execution_disabled`.
 
@@ -148,7 +162,9 @@ completion.
 
 ### 8.2 Graph Mode
 
-Graph mode combines graph-local and policy-local concurrency:
+Graph mode applies when the selected preset includes a fixed `graph` template.
+The template is materialized into task nodes and combines graph-local and
+policy-local concurrency:
 
 ```text
 resolved_max_parallel_tasks =
@@ -161,10 +177,19 @@ graph work exists while the resolved limit is zero, graph execution returns the
 same `delegated_task_execution_disabled` assistant error and fails the root task.
 
 Graph mode does not inject an automatic planner node. Fixed DAG presets remain
-the source of truth for node order. Presets may include `DelegationPlanner` explicitly if
-they need a planning node.
+the source of truth for node order. Presets may include `DelegationPlanner`
+explicitly if they need a planning node.
 
-### 8.3 Explicit Delegated Dispatch
+### 8.3 Dynamic DAG Task Creation
+
+Coordinator-created task drafts can form a run-local DAG without using a fixed
+graph preset. `orch_create_tasks` accepts `role_id`, `orchestration_node_id`,
+and `depends_on_node_ids`; the task service validates unique node ids, rejects
+unknown dependencies and cycles, resolves dependencies to task ids, pre-binds
+roles, and queues ready nodes for automatic execution after the current
+Coordinator turn.
+
+### 8.4 Explicit Delegated Dispatch
 
 `TaskOrchestrationService` uses the run intent topology to size the per-run
 execution semaphore for explicit delegated task dispatch. When the snapshotted
@@ -210,6 +235,8 @@ Coverage should stay aligned with the runtime boundary touched by each behavior:
   acyclic dependencies.
 - Automatic planning creates a planner task and lane tasks through existing task
   orchestration services.
+- Dynamic DAG task creation validates node references, rejects cycles, and
+  schedules ready pre-bound task nodes by dependency order.
 - Settings service preset policy resolution and run override resolution.
 - System config API reads and writes for preset policy.
 - Run creation API and SDK forwarding for per-run policy overrides.
