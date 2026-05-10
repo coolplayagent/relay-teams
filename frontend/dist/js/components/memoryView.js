@@ -187,15 +187,10 @@ async function searchMemoryRows() {
     if (memoryState.scope) {
         payload.scope = memoryState.scope;
     }
-    const result = await searchMemories(payload);
-    if (!memoryState.status) {
-        return result;
+    if (memoryState.status) {
+        payload.status = memoryState.status;
     }
-    return {
-        ...result,
-        items: (Array.isArray(result?.items) ? result.items : [])
-            .filter(hit => String(hit?.entry?.status || '') === memoryState.status),
-    };
+    return await searchMemories(payload);
 }
 
 function normalizeMemoryRows(result) {

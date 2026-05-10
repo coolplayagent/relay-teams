@@ -42,8 +42,10 @@ Global search uses:
 - optional `workspace_id`
 
 When `workspace_id` is supplied, global search delegates to workspace search.
-When it is omitted, the service queries active Memory Bank summaries across
-workspaces and applies text filtering in the service fallback path.
+When it is omitted, the service queries Memory Bank summaries across workspaces
+and applies text filtering in the service fallback path. Search defaults to
+`status=active`; non-active status filters bypass FTS because only active rows
+are indexed.
 
 Filters:
 
@@ -52,6 +54,7 @@ Filters:
 - `session_id`
 - `role_id`
 - `kind`
+- `status`
 - `tags`
 - `min_confidence`
 - `limit`

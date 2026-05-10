@@ -18,6 +18,7 @@ from relay_teams.memory.models import (
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
+from relay_teams.roles.memory_models import RolePerformanceMetrics
 
 pytestmark = pytest.mark.asyncio
 
@@ -103,6 +104,50 @@ class TestOnTaskCompleted:
         entry = await memory_bank_service.get_entry_async(result.items[0].id)
         assert entry is not None
         assert entry.content.outcome == "completed verification=passed"
+
+    async def test_records_role_performance_memory_from_verification(
+        self,
+        handler: MemoryEventHandler,
+        memory_bank_service: MemoryBankService,
+    ) -> None:
+        await handler.on_task_completed_async(
+            workspace_id="ws-1",
+            role_id="role-1",
+            session_id="sess-1",
+            run_id="run-1",
+            task_id="task-1",
+            objective="Test",
+            result="OK",
+            verification_report=VerificationReport(
+                task_id="task-1",
+                passed=False,
+                checks=(),
+            ),
+        )
+
+        result = await memory_bank_service.list_entries_async(
+            MemoryQuery(
+                workspace_id="ws-1",
+                scope=MemoryScope.ROLE,
+                role_id="role-1",
+                kind=MemoryEntryKind.INSIGHT,
+                tags=("role-performance",),
+                limit=10,
+            )
+        )
+        entry = await memory_bank_service.get_entry_async(result.items[0].id)
+
+        assert result.total_count == 1
+        assert entry is not None
+        metrics = RolePerformanceMetrics.model_validate_json(entry.content.body)
+        assert metrics.role_id == "role-1"
+        assert metrics.task_counts.total_tasks == 1
+        assert metrics.task_counts.failed_tasks == 1
+        assert metrics.verification_pass_rate.total_verifications == 1
+        assert metrics.verification_pass_rate.passed_verifications == 0
+        assert entry.kind == MemoryEntryKind.INSIGHT
+        assert entry.scope == MemoryScope.ROLE
+        assert "role-performance" in entry.tags
 
 
 class TestOnRunCompleted:

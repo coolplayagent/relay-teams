@@ -367,6 +367,7 @@ class MemorySearchRequest(BaseModel):
     session_id: str | None = None
     role_id: str | None = None
     kind: MemoryEntryKind | None = None
+    status: MemoryEntryStatus | None = MemoryEntryStatus.ACTIVE
     tags: tuple[str, ...] = ()
     min_confidence: float = 0.3
     limit: int = Field(default=10, ge=1, le=100)
@@ -384,6 +385,7 @@ class GlobalMemorySearchRequest(BaseModel):
     session_id: str | None = None
     role_id: str | None = None
     kind: MemoryEntryKind | None = None
+    status: MemoryEntryStatus | None = MemoryEntryStatus.ACTIVE
     tags: tuple[str, ...] = ()
     min_confidence: float = 0.3
     limit: int = Field(default=10, ge=1, le=100)
