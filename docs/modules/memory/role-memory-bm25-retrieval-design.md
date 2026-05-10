@@ -72,8 +72,10 @@ The injection path should remain deterministic:
 ## Index Lifecycle
 
 Indexing occurs after create/update when a retrieval service is configured.
-Delete removes the Memory Bank row; retrieval stores may rebuild from
-`memory_entries` if needed.
+Server startup also reindexes active Memory Bank entries so rows imported from
+legacy `role_memories` become searchable even though migration writes them
+before the retrieval service is available. Delete removes the Memory Bank row;
+retrieval stores may rebuild from `memory_entries` if needed.
 
 For fallback deployments without retrieval service configuration, search scans
 Memory Bank summaries with the same filters and returns ranked matches with

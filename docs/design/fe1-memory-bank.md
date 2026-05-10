@@ -133,14 +133,18 @@ drawer now shows Memory Bank entries only.
 Startup migration is automatic:
 
 1. Create `memory_entries` and indexes.
-2. If a supported `role_memories` table exists, import:
+2. Normalize any already-persisted `source=reflection` rows to
+   `source=consolidation`.
+3. If a supported `role_memories` table exists, import:
    - `content_markdown` as a `summary`
    - `performance_json` as an `insight` tagged `role-performance`
    - `assessment_state_json` as an `insight` tagged `role-assessment`
-3. Mark imported rows as `tier=persistent`, `scope=role`,
+4. Mark imported rows as `tier=persistent`, `scope=role`,
    `source=consolidation`, `confidence_score=0.8`.
-4. Drop `role_memories`.
-5. Drop `role_daily_memories`.
+5. Drop `role_memories`.
+6. Drop `role_daily_memories`.
+7. On server start, backfill active Memory Bank entries into the retrieval
+   index so migrated rows are searchable through FTS-backed search.
 
 Unsupported legacy table shapes are dropped with a warning because the current
 runtime has no legacy reader.

@@ -158,6 +158,35 @@ class TestSchemaInit:
             "role-assessment",
         }
 
+    async def test_legacy_reflection_source_is_normalized(self, tmp_path: Path) -> None:
+        db_file = tmp_path / "legacy_reflection_source.db"
+        initial_repo = MemoryBankRepository(db_file)
+        entry = _make_entry(id="mem-legacy-source", workspace_id="ws-legacy-source")
+        await initial_repo.create_entry_async(entry=entry)
+        await initial_repo.close_async()
+
+        with sqlite3.connect(db_file) as conn:
+            conn.execute(
+                "UPDATE memory_entries SET source='reflection' WHERE memory_id=?",
+                (entry.id,),
+            )
+            conn.commit()
+
+        migrated_repo = MemoryBankRepository(db_file)
+        loaded = await migrated_repo.get_by_id_async(entry.id)
+        row = await migrated_repo._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT source FROM memory_entries WHERE memory_id=?",
+                (entry.id,),
+            )
+        )
+
+        assert loaded is not None
+        assert loaded.source == MemorySourceKind.CONSOLIDATION
+        assert row is not None
+        assert str(row["source"]) == MemorySourceKind.CONSOLIDATION.value
+
 
 # ---------------------------------------------------------------------------
 # AC-6: CRUD operations
