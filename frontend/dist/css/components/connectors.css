@@ -22,7 +22,7 @@
 
 .connectors-title-block p {
     margin: 8px 0 0;
-    color: var(--text-muted, #64748b);
+    color: var(--text-secondary, #64748b);
     font-size: 15px;
 }
 
@@ -41,7 +41,7 @@
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
     color: var(--text-secondary, #475569);
-    background: var(--surface-panel, #fff);
+    background: var(--bg-surface, #fff);
     font-size: 13px;
 }
 
@@ -51,15 +51,15 @@
 }
 
 .connectors-summary-chip.is-connected strong {
-    color: #13795b;
+    color: var(--success, #13795b);
 }
 
 .connectors-summary-chip.is-pending strong {
-    color: #a16207;
+    color: var(--warning, #a16207);
 }
 
 .connectors-summary-chip.is-error strong {
-    color: #b42318;
+    color: var(--danger, #b42318);
 }
 
 .connectors-toolbar {
@@ -77,11 +77,11 @@
     padding: 0 14px;
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
-    background: var(--surface-panel, #fff);
+    background: var(--bg-surface, #fff);
 }
 
 .connectors-search-icon {
-    color: var(--text-muted, #64748b);
+    color: var(--text-secondary, #64748b);
     font-size: 22px;
     line-height: 1;
 }
@@ -102,7 +102,7 @@
     padding: 4px;
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
-    background: var(--surface-panel, #fff);
+    background: var(--bg-surface, #fff);
 }
 
 .connectors-tab {
@@ -119,9 +119,9 @@
 }
 
 .connectors-tab.is-active {
-    color: #fff;
-    background: #1f6b57;
-    box-shadow: 0 4px 12px rgba(31, 107, 87, 0.22);
+    color: var(--text-on-primary, #fff);
+    background: var(--primary, #1f6b57);
+    box-shadow: none;
 }
 
 .connectors-section {
@@ -153,7 +153,7 @@
     padding: 26px;
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
-    background: var(--surface-panel, #fff);
+    background: var(--bg-surface, #fff);
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
 }
 
@@ -162,7 +162,7 @@
     top: 22px;
     right: 22px;
     border: 0;
-    color: var(--text-muted, #64748b);
+    color: var(--text-secondary, #64748b);
     background: transparent;
     font-weight: 700;
     letter-spacing: 2px;
@@ -170,7 +170,7 @@
 }
 
 .connectors-card-menu:hover {
-    color: #1f6b57;
+    color: var(--primary, #1f6b57);
 }
 
 .connectors-card-main {
@@ -196,7 +196,7 @@
 
 .connectors-card-title p {
     margin: 0;
-    color: var(--text-muted, #64748b);
+    color: var(--text-secondary, #64748b);
     font-size: 14px;
     line-height: 1.55;
 }
@@ -223,20 +223,20 @@
     height: 8px;
     flex: 0 0 auto;
     border-radius: 999px;
-    background: #94a3b8;
+    background: var(--text-secondary, #94a3b8);
 }
 
 .connectors-status-dot.is-connected {
-    background: #2fb579;
+    background: var(--success, #2fb579);
 }
 
 .connectors-status-dot.is-needs_config,
 .connectors-status-dot.is-disabled {
-    background: #94a3b8;
+    background: var(--text-secondary, #94a3b8);
 }
 
 .connectors-status-dot.is-error {
-    background: #e5484d;
+    background: var(--danger, #e5484d);
 }
 
 .connectors-card-action {
@@ -246,7 +246,7 @@
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
     color: var(--text-primary, #111827);
-    background: var(--surface-panel, #fff);
+    background: var(--bg-surface, #fff);
     font: inherit;
     font-weight: 700;
     white-space: nowrap;
@@ -254,8 +254,8 @@
 }
 
 .connectors-card-action:hover {
-    border-color: #1f6b57;
-    color: #1f6b57;
+    border-color: var(--primary, #1f6b57);
+    color: var(--primary, #1f6b57);
 }
 
 .connectors-config-modal-content {
@@ -286,7 +286,7 @@
     padding: 12px 14px;
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
-    background: var(--surface-subtle, #f8fafc);
+    background: var(--bg-surface-muted, #f8fafc);
 }
 
 .connectors-config-details {
@@ -304,7 +304,7 @@
 
 .connectors-config-details dt {
     margin: 0 0 6px;
-    color: var(--text-muted, #64748b);
+    color: var(--text-secondary, #64748b);
     font-size: 12px;
 }
 
@@ -320,7 +320,7 @@
     padding: 10px 12px;
     border: 1px solid rgba(229, 72, 77, 0.28);
     border-radius: 8px;
-    color: #b42318;
+    color: var(--danger, #b42318);
     background: rgba(229, 72, 77, 0.08);
 }
 
@@ -390,7 +390,7 @@
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 5px;
     color: var(--text-secondary, #475569);
-    background: var(--surface-subtle, #f8fafc);
+    background: var(--bg-surface-muted, #f8fafc);
     font-size: 12px;
     line-height: 1.35;
     overflow-wrap: anywhere;
@@ -439,8 +439,8 @@
     padding: 34px;
     border: 1px solid var(--border-color, #e2e8f0);
     border-radius: 8px;
-    color: var(--text-muted, #64748b);
-    background: var(--surface-panel, #fff);
+    color: var(--text-secondary, #64748b);
+    background: var(--bg-surface, #fff);
     text-align: center;
 }
 

@@ -11,9 +11,22 @@ import { sysLog } from '../utils/logger.js';
 
 let currentScope = 'global';
 const chartInstances = new Map();
-const CHART_LABEL_COLOR = '#cbd5e1';
-const CHART_MUTED_COLOR = '#94a3b8';
-const CHART_GRID_COLOR = 'rgba(148, 163, 184, 0.14)';
+const OBSERVABILITY_CHART_COLORS = Object.freeze({
+    primary: [145, 166, 152],
+    success: [118, 161, 123],
+    warning: [184, 154, 102],
+    danger: [194, 123, 114],
+});
+const OBSERVABILITY_BREAKDOWN_PALETTE = Object.freeze([
+    OBSERVABILITY_CHART_COLORS.primary,
+    OBSERVABILITY_CHART_COLORS.success,
+    OBSERVABILITY_CHART_COLORS.warning,
+]);
+const DEFAULT_CHART_THEME = Object.freeze({
+    labelColor: '#f0eee8',
+    mutedColor: '#a5aaa6',
+    gridColor: 'rgba(165, 170, 166, 0.18)',
+});
 
 export function initializeObservability() {
     const button = document.getElementById('observability-btn');
@@ -373,7 +386,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
     createSeriesMetricChart('observability-metric-steps-chart', {
         labels: trendLabels,
         values: trends.map(row => Number(row.steps || 0)),
-        color: [37, 99, 235],
+        color: chartColor('primary'),
         type: 'line',
         label: t('observability.kpi.steps'),
         scopeLabel,
@@ -383,7 +396,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
     createSeriesMetricChart('observability-metric-input-chart', {
         labels: trendLabels,
         values: trends.map(row => Number(row.input_tokens || 0)),
-        color: [13, 148, 136],
+        color: chartColor('primary'),
         type: 'line',
         label: t('observability.kpi.input_tokens'),
         scopeLabel,
@@ -394,7 +407,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.cached_input_tokens'),
         categoryLabel: scopeLabel,
         value: Number(kpis.cached_input_tokens || 0),
-        color: [8, 145, 178],
+        color: chartColor('primary'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.cached_input_tokens'),
         tickMode: 'compact',
@@ -403,7 +416,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.uncached_input_tokens'),
         categoryLabel: scopeLabel,
         value: Number(kpis.uncached_input_tokens || 0),
-        color: [225, 29, 72],
+        color: chartColor('warning'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.uncached_input_tokens'),
         tickMode: 'compact',
@@ -411,7 +424,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
     createSeriesMetricChart('observability-metric-output-chart', {
         labels: trendLabels,
         values: trends.map(row => Number(row.output_tokens || 0)),
-        color: [217, 119, 6],
+        color: chartColor('warning'),
         type: 'line',
         label: t('observability.kpi.output_tokens'),
         scopeLabel,
@@ -421,7 +434,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
     createSeriesMetricChart('observability-metric-tool-calls-chart', {
         labels: trendLabels,
         values: trends.map(row => Number(row.tool_calls || 0)),
-        color: [124, 58, 237],
+        color: chartColor('primary'),
         type: 'bar',
         label: t('observability.kpi.tool_calls'),
         scopeLabel,
@@ -432,7 +445,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.cached_ratio'),
         categoryLabel: scopeLabel,
         value: Number(kpis.cached_token_ratio || 0) * 100,
-        color: [124, 58, 237],
+        color: chartColor('primary'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolvePercentageAxisTitle(),
         maxValue: 100,
@@ -442,7 +455,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.tool_success'),
         categoryLabel: scopeLabel,
         value: Number(kpis.tool_success_rate || 0) * 100,
-        color: [22, 163, 74],
+        color: chartColor('success'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolvePercentageAxisTitle(),
         maxValue: 100,
@@ -452,7 +465,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.avg_tool_ms'),
         categoryLabel: scopeLabel,
         value: Number(kpis.tool_avg_duration_ms || 0),
-        color: [225, 29, 72],
+        color: chartColor('warning'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolveDurationAxisTitle(),
         maxValue: durationMax,
@@ -462,7 +475,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.retrieval_searches'),
         categoryLabel: scopeLabel,
         value: Number(kpis.retrieval_searches || 0),
-        color: [14, 116, 144],
+        color: chartColor('primary'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.retrieval_searches'),
         tickMode: 'compact',
@@ -471,7 +484,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.retrieval_failure_rate'),
         categoryLabel: scopeLabel,
         value: Number(kpis.retrieval_failure_rate || 0) * 100,
-        color: [190, 24, 93],
+        color: chartColor('danger'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.retrieval_failure_rate'),
         maxValue: 100,
@@ -481,7 +494,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.avg_retrieval_ms'),
         categoryLabel: scopeLabel,
         value: Number(kpis.retrieval_avg_duration_ms || 0),
-        color: [124, 58, 237],
+        color: chartColor('warning'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.avg_retrieval_ms'),
         maxValue: retrievalDurationMax,
@@ -491,7 +504,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.retrieval_document_count'),
         categoryLabel: scopeLabel,
         value: Number(kpis.retrieval_document_count || 0),
-        color: [22, 163, 74],
+        color: chartColor('success'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.retrieval_document_count'),
         tickMode: 'compact',
@@ -499,7 +512,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
     createChart('observability-metric-integrations-chart', buildGroupedMetricBarChartConfig({
         labels: [t('observability.kpi.skill_calls'), t('observability.kpi.mcp_calls')],
         values: [Number(kpis.skill_calls || 0), Number(kpis.mcp_calls || 0)],
-        colors: [[8, 145, 178], [79, 70, 229]],
+        colors: [chartColor('primary'), chartColor('success')],
         datasetLabel: `${t('observability.kpi.skill_calls')} / ${t('observability.kpi.mcp_calls')}`,
         xTitle: resolveSourceAxisTitle(),
         yTitle: resolveCallsAxisTitle(),
@@ -508,7 +521,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_calls'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_calls || 0),
-        color: [37, 99, 235],
+        color: chartColor('primary'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.gateway_calls'),
         tickMode: 'compact',
@@ -518,7 +531,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_failure_rate'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_failure_rate || 0) * 100,
-        color: [225, 29, 72],
+        color: chartColor('danger'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolvePercentageAxisTitle(),
         tickMode: 'percentage',
@@ -528,7 +541,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_avg_duration_ms'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_avg_duration_ms || 0),
-        color: [217, 119, 6],
+        color: chartColor('warning'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolveDurationAxisTitle(),
         tickMode: 'number',
@@ -538,7 +551,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_prompt_avg_start_ms'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_prompt_avg_start_ms || 0),
-        color: [8, 145, 178],
+        color: chartColor('primary'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolveDurationAxisTitle(),
         tickMode: 'number',
@@ -548,7 +561,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_prompt_avg_first_update_ms'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_prompt_avg_first_update_ms || 0),
-        color: [79, 70, 229],
+        color: chartColor('primary'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: resolveDurationAxisTitle(),
         tickMode: 'number',
@@ -558,7 +571,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_mcp_calls'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_mcp_calls || 0),
-        color: [15, 118, 110],
+        color: chartColor('success'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.gateway_mcp_calls'),
         tickMode: 'compact',
@@ -568,7 +581,7 @@ function renderMetricCharts({ kpis, trends, rows, gatewayRows, safeScope }) {
         label: t('observability.kpi.gateway_cold_start_calls'),
         categoryLabel: scopeLabel,
         value: Number(kpis.gateway_cold_start_calls || 0),
-        color: [124, 58, 237],
+        color: chartColor('warning'),
         xTitle: resolveScopeAxisTitle(),
         yTitle: t('observability.kpi.gateway_cold_start_calls'),
         tickMode: 'compact',
@@ -590,19 +603,19 @@ function renderTrendCharts(trends) {
     const labels = trends.map(row => formatBucketLabel(row.bucket_start));
     createChart('observability-steps-chart', buildLineChartConfig({
         labels,
-        datasets: [buildLineDataset(t('observability.legend.steps'), trends.map(row => Number(row.steps || 0)), [37, 99, 235])],
+        datasets: [buildLineDataset(t('observability.legend.steps'), trends.map(row => Number(row.steps || 0)), chartColor('primary'))],
         xTitle: resolveTimeAxisTitle(),
         yTitle: t('observability.kpi.steps'),
     }));
     createChart('observability-input-chart', buildLineChartConfig({
         labels,
-        datasets: [buildLineDataset(t('observability.legend.input_tokens'), trends.map(row => Number(row.input_tokens || 0)), [13, 148, 136])],
+        datasets: [buildLineDataset(t('observability.legend.input_tokens'), trends.map(row => Number(row.input_tokens || 0)), chartColor('primary'))],
         xTitle: resolveTimeAxisTitle(),
         yTitle: t('observability.kpi.input_tokens'),
     }));
     createChart('observability-output-chart', buildLineChartConfig({
         labels,
-        datasets: [buildLineDataset(t('observability.legend.output_tokens'), trends.map(row => Number(row.output_tokens || 0)), [217, 119, 6])],
+        datasets: [buildLineDataset(t('observability.legend.output_tokens'), trends.map(row => Number(row.output_tokens || 0)), chartColor('warning'))],
         xTitle: resolveTimeAxisTitle(),
         yTitle: t('observability.kpi.output_tokens'),
     }));
@@ -611,8 +624,8 @@ function renderTrendCharts(trends) {
         datasets: [{
             label: t('observability.legend.tool_calls'),
             data: trends.map(row => Number(row.tool_calls || 0)),
-            backgroundColor: 'rgba(124, 58, 237, 0.84)',
-            hoverBackgroundColor: 'rgba(139, 92, 246, 0.96)',
+            backgroundColor: toRgba(chartColor('primary'), 0.84),
+            hoverBackgroundColor: toRgba(chartColor('primary'), 0.96),
             borderRadius: 8,
             maxBarThickness: 28,
         }],
@@ -671,7 +684,7 @@ function renderBreakdownCharts(rows) {
             return accumulator;
         }, []),
         values: buildSourceValues(rows),
-        colors: [[37, 99, 235], [8, 145, 178], [124, 58, 237]],
+        colors: [chartColor('primary'), chartColor('success'), chartColor('warning')],
         datasetLabel: t('observability.breakdowns.source_chart_title'),
         xTitle: resolveSourceAxisTitle(),
         yTitle: resolveCallsAxisTitle(),
@@ -791,8 +804,8 @@ function createSeriesMetricChart(id, { labels, values, color, type, label, scope
                 datasets: [{
                     label,
                     data: values,
-                    backgroundColor: `rgba(${color.join(', ')}, 0.84)`,
-                    hoverBackgroundColor: `rgba(${color.join(', ')}, 0.96)`,
+                    backgroundColor: toRgba(color, 0.84),
+                    hoverBackgroundColor: toRgba(color, 0.96),
                     borderRadius: 8,
                     maxBarThickness: 28,
                 }],
@@ -824,16 +837,16 @@ function buildLineDataset(label, data, color) {
     return {
         label,
         data,
-        borderColor: `rgba(${color.join(', ')}, 0.96)`,
+        borderColor: toRgba(color, 0.96),
         backgroundColor(context) {
             const chart = context.chart;
             const area = chart.chartArea;
             if (!area) {
-                return `rgba(${color.join(', ')}, 0.18)`;
+                return toRgba(color, 0.18);
             }
             const gradient = chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
-            gradient.addColorStop(0, `rgba(${color.join(', ')}, 0.34)`);
-            gradient.addColorStop(1, `rgba(${color.join(', ')}, 0.03)`);
+            gradient.addColorStop(0, toRgba(color, 0.22));
+            gradient.addColorStop(1, toRgba(color, 0.02));
             return gradient;
         },
         fill: true,
@@ -875,8 +888,8 @@ function buildSingleMetricBarChartConfig({ label, categoryLabel, value, color, x
             datasets: [{
                 label,
                 data: [value],
-                backgroundColor: `rgba(${color.join(', ')}, 0.84)`,
-                hoverBackgroundColor: `rgba(${color.join(', ')}, 0.96)`,
+                backgroundColor: toRgba(color, 0.84),
+                hoverBackgroundColor: toRgba(color, 0.96),
                 borderRadius: 10,
                 maxBarThickness: 40,
             }],
@@ -897,8 +910,8 @@ function buildGroupedMetricBarChartConfig({ labels, values, colors, datasetLabel
             datasets: [{
                 label: datasetLabel,
                 data: values,
-                backgroundColor: values.map((_, index) => `rgba(${colors[index % colors.length].join(', ')}, 0.86)`),
-                hoverBackgroundColor: values.map((_, index) => `rgba(${colors[index % colors.length].join(', ')}, 0.98)`),
+                backgroundColor: values.map((_, index) => toRgba(colors[index % colors.length], 0.86)),
+                hoverBackgroundColor: values.map((_, index) => toRgba(colors[index % colors.length], 0.98)),
                 borderRadius: 10,
                 maxBarThickness: 44,
             }],
@@ -934,6 +947,7 @@ function buildHorizontalBarChartConfig({ labels, values, seriesLabel, colorValue
 }
 
 function buildCartesianOptions({ xScale, yScale, showLegend, indexAxis = 'x' }) {
+    const theme = resolveChartTheme();
     return {
         indexAxis,
         maintainAspectRatio: false,
@@ -945,7 +959,7 @@ function buildCartesianOptions({ xScale, yScale, showLegend, indexAxis = 'x' }) 
                 display: showLegend,
                 position: 'bottom',
                 labels: {
-                    color: CHART_LABEL_COLOR,
+                    color: theme.labelColor,
                     usePointStyle: true,
                     boxWidth: 10,
                     boxHeight: 10,
@@ -975,16 +989,17 @@ function resolveTooltipMode(indexAxis, yScale, xScale) {
 }
 
 function buildCategoryScale({ title, maxRotation }) {
+    const theme = resolveChartTheme();
     return {
         title: {
             display: true,
             text: title,
-            color: CHART_MUTED_COLOR,
+            color: theme.mutedColor,
             font: { size: 11, weight: '600' },
         },
         grid: { display: false },
         ticks: {
-            color: CHART_MUTED_COLOR,
+            color: theme.mutedColor,
             font: { size: 11 },
             maxRotation,
             minRotation: 0,
@@ -994,6 +1009,7 @@ function buildCategoryScale({ title, maxRotation }) {
 }
 
 function buildNumericScale({ title, mode, maxValue = null }) {
+    const theme = resolveChartTheme();
     return {
         metricMode: mode,
         beginAtZero: true,
@@ -1001,15 +1017,15 @@ function buildNumericScale({ title, mode, maxValue = null }) {
         title: {
             display: true,
             text: title,
-            color: CHART_MUTED_COLOR,
+            color: theme.mutedColor,
             font: { size: 11, weight: '600' },
         },
         grid: {
-            color: CHART_GRID_COLOR,
+            color: theme.gridColor,
             drawBorder: false,
         },
         ticks: {
-            color: CHART_MUTED_COLOR,
+            color: theme.mutedColor,
             font: { size: 11 },
             callback(value) {
                 return formatAxisValue(value, mode);
@@ -1077,19 +1093,60 @@ function handleWindowResize() {
     chartInstances.forEach(chart => chart.resize());
 }
 
-function pickPalette(index, alpha) {
-    const colors = [
-        [37, 99, 235],
-        [15, 118, 110],
-        [217, 119, 6],
-        [124, 58, 237],
-        [225, 29, 72],
-        [8, 145, 178],
-        [79, 70, 229],
-        [22, 163, 74],
-    ];
-    const [r, g, b] = colors[index % colors.length];
+function chartColor(tone) {
+    return OBSERVABILITY_CHART_COLORS[tone] || OBSERVABILITY_CHART_COLORS.primary;
+}
+
+function toRgba(color, alpha) {
+    const [r, g, b] = Array.isArray(color) ? color : OBSERVABILITY_CHART_COLORS.primary;
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function resolveChartTheme() {
+    if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') {
+        return DEFAULT_CHART_THEME;
+    }
+    const styles = window.getComputedStyle(document.body || document.documentElement);
+    const labelColor = readCssColor(styles, '--text-primary', DEFAULT_CHART_THEME.labelColor);
+    const mutedColor = readCssColor(styles, '--text-secondary', DEFAULT_CHART_THEME.mutedColor);
+    const mutedRgb = parseCssColor(mutedColor);
+    return {
+        labelColor,
+        mutedColor,
+        gridColor: mutedRgb ? toRgba(mutedRgb, 0.18) : DEFAULT_CHART_THEME.gridColor,
+    };
+}
+
+function readCssColor(styles, propertyName, fallback) {
+    const value = String(styles.getPropertyValue(propertyName) || '').trim();
+    return value || fallback;
+}
+
+function parseCssColor(value) {
+    const text = String(value || '').trim();
+    const hex = text.match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+    if (hex) {
+        const raw = hex[1].length === 3
+            ? hex[1].split('').map(part => `${part}${part}`).join('')
+            : hex[1];
+        return [
+            Number.parseInt(raw.slice(0, 2), 16),
+            Number.parseInt(raw.slice(2, 4), 16),
+            Number.parseInt(raw.slice(4, 6), 16),
+        ];
+    }
+    const rgb = text.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (!rgb) {
+        return null;
+    }
+    return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+}
+
+function pickPalette(index, alpha) {
+    return toRgba(
+        OBSERVABILITY_BREAKDOWN_PALETTE[index % OBSERVABILITY_BREAKDOWN_PALETTE.length],
+        alpha,
+    );
 }
 function setVisible(visible) {
     const view = document.getElementById('observability-view');
