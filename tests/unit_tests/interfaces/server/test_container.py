@@ -412,6 +412,19 @@ def test_container_stop_requests_active_runs_before_background_tasks(
     assert calls == ["runs", "external", "background", "repositories", "llm_cache"]
 
 
+def test_container_registers_discord_repositories_for_shutdown_close(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    assert container.discord_account_repository in container._async_closeables
+    assert container.discord_inbound_queue_repo in container._async_closeables
+
+
 def test_roles_reload_updates_long_lived_role_registry_references(
     monkeypatch,
     tmp_path: Path,
