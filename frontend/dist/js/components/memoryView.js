@@ -187,9 +187,7 @@ async function searchMemoryRows() {
     if (memoryState.scope) {
         payload.scope = memoryState.scope;
     }
-    if (memoryState.status) {
-        payload.status = memoryState.status;
-    }
+    payload.status = memoryState.status || null;
     return await searchMemories(payload);
 }
 

@@ -372,6 +372,40 @@ class TestSearch:
         assert expired_result.total_count == 1
         assert expired_result.items[0].entry.status == MemoryEntryStatus.EXPIRED
 
+    async def test_workspace_search_non_active_status_scans_full_body(
+        self, service: MemoryBankService
+    ) -> None:
+        needle = "workspace-expired-memory-needle"
+        entry = await service.create_entry_async(
+            _create_request(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.WORKSPACE,
+                session_id=None,
+                run_id=None,
+                content=MemoryContent(
+                    title="Retired workspace memory",
+                    body=f"{'x' * 240} {needle}",
+                ),
+            )
+        )
+        await service.update_entry_async(
+            entry.id,
+            UpdateMemoryEntryRequest(status=MemoryEntryStatus.EXPIRED),
+        )
+
+        result = await service.search_async(
+            MemorySearchRequest(
+                workspace_id="ws-test",
+                text_query=needle,
+                status=MemoryEntryStatus.EXPIRED,
+                limit=10,
+            )
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.id == entry.id
+        assert needle in result.items[0].snippet
+
 
 # ---------------------------------------------------------------------------
 # Get / List / Delete
