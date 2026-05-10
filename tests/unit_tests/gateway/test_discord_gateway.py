@@ -1195,6 +1195,10 @@ async def test_discord_service_watcher_and_future_edges(tmp_path: Path) -> None:
                     event_type=RunEventType.RUN_PAUSED,
                     payload_json=json.dumps({"error_message": "need input"}),
                 ),
+                _FakeRunEvent(
+                    event_type=RunEventType.RUN_COMPLETED,
+                    payload_json="{}",
+                ),
             )
         ),
         im_tool_service=fake_im_tool,
@@ -1235,14 +1239,14 @@ async def test_discord_service_watcher_and_future_edges(tmp_path: Path) -> None:
     cancelled_future.cancel()
     failed_future: Future[None] = Future()
     failed_future.set_exception(RuntimeError("reply failed"))
-    DiscordGatewayService._handle_reply_future(
+    drain_service._handle_reply_future(
         account_id="bot-1",
         gateway_session_id="gws-1",
         run_id="run-cancelled",
         channel_id="channel-1",
         future=cancelled_future,
     )
-    DiscordGatewayService._handle_reply_future(
+    drain_service._handle_reply_future(
         account_id="bot-1",
         gateway_session_id="gws-1",
         run_id="run-failed",
@@ -1268,7 +1272,116 @@ async def test_discord_service_watcher_and_future_edges(tmp_path: Path) -> None:
         )
         in fake_im_tool.sent_texts
     )
+    assert (
+        _SentDiscordText(
+            account_id="bot-1",
+            channel_id="channel-1",
+            text="Completed.",
+            reply_to_message_id="message-1",
+        )
+        in fake_im_tool.sent_texts
+    )
     assert "run-drain" not in drain_service._drain_watched_runs
+
+
+@pytest.mark.asyncio
+async def test_discord_reply_watcher_completes_queue_after_pause(
+    tmp_path: Path,
+) -> None:
+    inbound_queue_repo = DiscordInboundQueueRepository(tmp_path / "discord-queue.db")
+    queue_record, _ = await inbound_queue_repo.create_or_get(
+        _queue_record(
+            inbound_queue_id="queue-paused-run",
+            message_key="mid:paused-run",
+            status=DiscordInboundQueueStatus.WAITING_RESULT,
+        ).model_copy(update={"run_id": "run-paused"})
+    )
+    fake_im_tool = _FakeImToolService()
+    service = _build_service(
+        tmp_path,
+        inbound_queue_repo=inbound_queue_repo,
+        run_service=_FakeRunService(
+            (
+                _FakeRunEvent(
+                    event_type=RunEventType.RUN_PAUSED,
+                    payload_json=json.dumps({"error_message": "need input"}),
+                ),
+                _FakeRunEvent(event_type=RunEventType.RUN_COMPLETED, payload_json="{}"),
+            )
+        ),
+        im_tool_service=fake_im_tool,
+    )
+
+    await service._await_terminal_and_reply(
+        account_id="bot-1",
+        gateway_session_id="gws-1",
+        run_id="run-paused",
+        channel_id="channel-1",
+        reply_to_message_id="message-1",
+    )
+    completed = await _wait_for_discord_queue_status(
+        inbound_queue_repo,
+        queue_record.inbound_queue_id,
+        DiscordInboundQueueStatus.COMPLETED,
+    )
+
+    assert completed.completed_at is not None
+    assert (
+        _SentDiscordText(
+            account_id="bot-1",
+            channel_id="channel-1",
+            text="Run paused: need input\nSend resume to continue.",
+            reply_to_message_id="message-1",
+        )
+        in fake_im_tool.sent_texts
+    )
+    assert (
+        _SentDiscordText(
+            account_id="bot-1",
+            channel_id="channel-1",
+            text="Completed.",
+            reply_to_message_id="message-1",
+        )
+        in fake_im_tool.sent_texts
+    )
+
+
+@pytest.mark.asyncio
+async def test_discord_reply_watcher_cancellation_marks_queue_failed(
+    tmp_path: Path,
+) -> None:
+    inbound_queue_repo = DiscordInboundQueueRepository(tmp_path / "discord-queue.db")
+    queue_record, _ = await inbound_queue_repo.create_or_get(
+        _queue_record(
+            inbound_queue_id="queue-cancelled-run",
+            message_key="mid:cancelled-run",
+            status=DiscordInboundQueueStatus.WAITING_RESULT,
+        ).model_copy(update={"run_id": "run-cancelled"})
+    )
+    service = _build_service(
+        tmp_path,
+        inbound_queue_repo=inbound_queue_repo,
+    )
+    cancelled_future: Future[None] = Future()
+    cancelled_future.cancel()
+
+    service._handle_reply_future(
+        account_id="bot-1",
+        gateway_session_id="gws-1",
+        run_id="run-cancelled",
+        channel_id="channel-1",
+        future=cancelled_future,
+    )
+    failed = await _wait_for_discord_queue_status(
+        inbound_queue_repo,
+        queue_record.inbound_queue_id,
+        DiscordInboundQueueStatus.FAILED,
+    )
+
+    assert failed.completed_at is not None
+    assert (
+        failed.last_error == "Discord reply task was cancelled for run run-cancelled."
+    )
 
 
 def test_discord_service_helper_edges(tmp_path: Path) -> None:
@@ -1465,6 +1578,21 @@ def _queue_record(
         status=status,
         created_at=updated_at or now,
         updated_at=updated_at or now,
+    )
+
+
+async def _wait_for_discord_queue_status(
+    repository: DiscordInboundQueueRepository,
+    inbound_queue_id: str,
+    status: DiscordInboundQueueStatus,
+) -> DiscordInboundQueueRecord:
+    for _ in range(50):
+        record = await repository.get(inbound_queue_id)
+        if record is not None and record.status == status:
+            return record
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        f"Discord queue record {inbound_queue_id} did not reach {status.value}"
     )
 
 
