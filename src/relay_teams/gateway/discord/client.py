@@ -15,6 +15,15 @@ _DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
 class DiscordClient:
+    def __init__(
+        self,
+        *,
+        api_base_url: str = _DISCORD_API_BASE_URL,
+        timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
+        self._api_base_url = api_base_url.rstrip("/")
+        self._timeout_seconds = timeout_seconds
+
     async def fetch_current_bot_identity(self, *, token: str) -> DiscordBotIdentity:
         user_payload = await self._request_json(
             token=token,
@@ -75,11 +84,11 @@ class DiscordClient:
             payload["allowed_mentions"] = {"replied_user": False}
         try:
             async with create_async_http_client(
-                timeout_seconds=_DEFAULT_TIMEOUT_SECONDS,
+                timeout_seconds=self._timeout_seconds,
             ) as client:
                 with file_path.open("rb") as handle:
                     response = await client.post(
-                        f"{_DISCORD_API_BASE_URL}/channels/{channel_id}/messages",
+                        f"{self._api_base_url}/channels/{channel_id}/messages",
                         headers={"Authorization": _authorization_header(token)},
                         data={"payload_json": json.dumps(payload)},
                         files={
@@ -122,11 +131,11 @@ class DiscordClient:
     ) -> dict[str, object]:
         try:
             async with create_async_http_client(
-                timeout_seconds=_DEFAULT_TIMEOUT_SECONDS,
+                timeout_seconds=self._timeout_seconds,
             ) as client:
                 response = await client.request(
                     method,
-                    f"{_DISCORD_API_BASE_URL}{path}",
+                    f"{self._api_base_url}{path}",
                     headers={
                         "Authorization": _authorization_header(token),
                         "Content-Type": "application/json",
