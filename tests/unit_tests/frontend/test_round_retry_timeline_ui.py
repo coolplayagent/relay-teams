@@ -1133,6 +1133,14 @@ export function roundStateLabel() {
 export function roundStateTone() {
     return 'idle';
 }
+
+export function effectiveRoundStatus(round) {
+    return String(round?.run_status || '');
+}
+
+export function roundIsRunning(round) {
+    return effectiveRoundStatus(round) === 'running';
+}
 """.strip(),
         encoding="utf-8",
     )

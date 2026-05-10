@@ -969,6 +969,42 @@ console.log(JSON.stringify({
     assert payload["statusCalls"] == []
 
 
+def test_handle_model_step_finished_keeps_orchestration_subagent_running(
+    tmp_path: Path,
+) -> None:
+    payload = _run_run_events_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { handleModelStepFinished } = await import('./runEvents.mjs');
+const { state } = await import('./mockState.mjs');
+
+state.currentSessionId = 'session-1';
+state.currentSessionMode = 'orchestration';
+state.coordinatorRoleId = 'Coordinator';
+state.instanceRoleMap['writer-1'] = 'writer';
+
+handleModelStepFinished(
+    { run_id: 'run-parent', trace_id: 'run-parent' },
+    'writer-1',
+);
+
+console.log(JSON.stringify({
+    finalizeCalls: globalThis.__finalizeStreamCalls,
+    statusCalls: globalThis.__markSubagentStatusCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["finalizeCalls"] == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {"runId": "run-parent"},
+        }
+    ]
+    assert payload["statusCalls"] == []
+
+
 def _run_run_events_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -1095,8 +1131,8 @@ export async function refreshSubagentRail(sessionId, options = {}) {
     globalThis.__refreshSubagentRailCalls.push({ sessionId, options });
 }
 
-export function markSubagentStatus() {
-    return undefined;
+export function markSubagentStatus(instanceId, status) {
+    globalThis.__markSubagentStatusCalls.push({ instanceId, status });
 }
 """.strip(),
         encoding="utf-8",
@@ -1276,6 +1312,7 @@ export async function markSessionTerminalRunViewed(sessionId) {
         f"""
 globalThis.__rememberLiveSubagentCalls = [];
 globalThis.__refreshSubagentRailCalls = [];
+globalThis.__markSubagentStatusCalls = [];
 globalThis.__openAgentPanelCalls = [];
 globalThis.__rememberNormalModeSubagentSessionCalls = [];
 globalThis.__renderActiveSubagentSessionCalls = [];

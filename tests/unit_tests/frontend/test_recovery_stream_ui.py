@@ -280,7 +280,7 @@ def test_recovery_ui_uses_automatic_stream_reconnect_without_connect_button() ->
     assert (
         "if (!shouldPreserveSubagentView(state.currentSessionId)) {" in timeline_script
     )
-    assert "runStatus: round.run_status," in timeline_script
+    assert "runStatus: effectiveRoundStatus(round)," in timeline_script
     assert "runPhase: round.run_phase," in timeline_script
     assert "isLatestRound," in timeline_script
     assert (

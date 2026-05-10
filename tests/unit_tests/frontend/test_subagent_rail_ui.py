@@ -113,6 +113,308 @@ console.log(JSON.stringify({
     assert payload["clearPanelCalls"] == 1
 
 
+def test_subagent_rail_keeps_agent_running_when_assigned_task_runs(
+    tmp_path: Path,
+) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { refreshSubagentRail } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
+globalThis.__fetchSessionAgentsPayload = [
+    {
+        instance_id: "writer-1",
+        role_id: "writer",
+        status: "idle",
+        created_at: "2026-03-13T00:01:00Z",
+        updated_at: "2026-03-13T00:03:00Z",
+    },
+];
+globalThis.__fetchSessionTasksPayload = [
+    {
+        task_id: "task-writer",
+        role_id: "writer",
+        status: "running",
+        instance_id: "writer-1",
+        run_id: "run-1",
+        created_at: "2026-03-13T00:02:00Z",
+        updated_at: "2026-03-13T00:04:00Z",
+    },
+];
+
+await refreshSubagentRail("session-1");
+
+console.log(JSON.stringify({
+    sessionAgents: state.sessionAgents,
+    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["sessionAgents"] == [
+        {
+            "instance_id": "writer-1",
+            "role_id": "writer",
+            "status": "running",
+            "created_at": "2026-03-13T00:01:00Z",
+            "updated_at": "2026-03-13T00:04:00Z",
+            "runtime_system_prompt": "",
+            "runtime_tools_json": "",
+        }
+    ]
+    assert payload["summaryText"] == "1 running / 1 roles"
+
+
+def test_subagent_rail_preserves_newer_terminal_state_over_stale_running_task(
+    tmp_path: Path,
+) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { markSubagentStatus, refreshSubagentRail } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
+globalThis.__fetchSessionAgentsPayload = [
+    {
+        instance_id: "writer-1",
+        role_id: "writer",
+        status: "running",
+        created_at: "2026-03-13T00:01:00Z",
+        updated_at: "2026-03-13T00:01:00Z",
+    },
+];
+globalThis.__fetchSessionTasksPayload = [
+    {
+        task_id: "task-writer",
+        role_id: "writer",
+        status: "running",
+        instance_id: "writer-1",
+        run_id: "run-1",
+        created_at: "2026-03-13T00:01:10Z",
+        updated_at: "2026-03-13T00:01:40Z",
+    },
+];
+
+await refreshSubagentRail("session-1");
+markSubagentStatus("writer-1", "completed");
+
+console.log(JSON.stringify({
+    sessionAgents: state.sessionAgents,
+    sessionTasks: state.sessionTasks,
+    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
+}));
+""".strip(),
+    )
+
+    assert payload["sessionAgents"] == [
+        {
+            "instance_id": "writer-1",
+            "role_id": "writer",
+            "status": "completed",
+            "created_at": "2026-03-13T00:01:00Z",
+            "updated_at": "2026-03-13T00:02:00.000Z",
+            "runtime_system_prompt": "",
+            "runtime_tools_json": "",
+        }
+    ]
+    assert payload["sessionTasks"] == [
+        {
+            "task_id": "task-writer",
+            "title": "task-writer",
+            "assigned_role_id": "writer",
+            "role_id": "writer",
+            "status": "running",
+            "assigned_instance_id": "writer-1",
+            "instance_id": "writer-1",
+            "run_id": "run-1",
+            "created_at": "2026-03-13T00:01:10Z",
+            "updated_at": "2026-03-13T00:01:40Z",
+            "spec_artifact_id": "",
+            "spec_source_task_id": "",
+            "spec_summary": "",
+            "spec_strictness": "",
+            "evidence_bundle": None,
+        }
+    ]
+    assert payload["summaryText"] == "0 running / 1 roles"
+
+
+def test_subagent_rail_preserves_newer_role_record_over_stale_task_instance(
+    tmp_path: Path,
+) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { refreshSubagentRail } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
+globalThis.__fetchSessionAgentsPayload = [
+    {
+        instance_id: "writer-2",
+        role_id: "writer",
+        status: "completed",
+        created_at: "2026-03-13T00:01:50Z",
+        updated_at: "2026-03-13T00:02:00Z",
+    },
+];
+globalThis.__fetchSessionTasksPayload = [
+    {
+        task_id: "task-writer",
+        role_id: "writer",
+        status: "running",
+        instance_id: "writer-1",
+        run_id: "run-1",
+        created_at: "2026-03-13T00:01:10Z",
+        updated_at: "2026-03-13T00:01:40Z",
+    },
+];
+
+await refreshSubagentRail("session-1");
+
+console.log(JSON.stringify({
+    sessionAgents: state.sessionAgents,
+    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
+    openAgentPanelCalls: globalThis.__openAgentPanelCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["sessionAgents"] == [
+        {
+            "instance_id": "writer-2",
+            "role_id": "writer",
+            "status": "completed",
+            "created_at": "2026-03-13T00:01:50Z",
+            "updated_at": "2026-03-13T00:02:00Z",
+            "runtime_system_prompt": "",
+            "runtime_tools_json": "",
+        }
+    ]
+    assert payload["summaryText"] == "0 running / 1 roles"
+    assert payload["openAgentPanelCalls"] == [
+        {
+            "instanceId": "writer-2",
+            "roleId": "writer",
+            "options": {
+                "reveal": False,
+                "forceRefresh": False,
+            },
+        },
+    ]
+
+
+def test_subagent_rail_projects_running_task_without_agent_snapshot(
+    tmp_path: Path,
+) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { refreshSubagentRail } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
+globalThis.__fetchSessionAgentsPayload = [];
+globalThis.__fetchSessionTasksPayload = [
+    {
+        task_id: "task-writer",
+        assigned_role_id: "writer",
+        status: "running",
+        assigned_instance_id: "writer-1",
+        run_id: "run-1",
+        created_at: "2026-03-13T00:02:00Z",
+        updated_at: "2026-03-13T00:04:00Z",
+    },
+];
+
+await refreshSubagentRail("session-1");
+
+console.log(JSON.stringify({
+    sessionAgents: state.sessionAgents,
+    selectedRoleId: state.selectedRoleId,
+    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
+    openAgentPanelCalls: globalThis.__openAgentPanelCalls,
+}));
+""".strip(),
+    )
+
+    assert payload["sessionAgents"] == [
+        {
+            "instance_id": "writer-1",
+            "role_id": "writer",
+            "status": "running",
+            "created_at": "2026-03-13T00:02:00Z",
+            "updated_at": "2026-03-13T00:04:00Z",
+            "runtime_system_prompt": "",
+            "runtime_tools_json": "",
+        }
+    ]
+    assert payload["selectedRoleId"] == "writer"
+    assert payload["summaryText"] == "1 running / 1 roles"
+    assert payload["openAgentPanelCalls"] == [
+        {
+            "instanceId": "writer-1",
+            "roleId": "writer",
+            "options": {
+                "reveal": False,
+                "forceRefresh": False,
+            },
+        },
+    ]
+
+
+def test_subagent_rail_counts_unique_running_instances(tmp_path: Path) -> None:
+    payload = _run_subagent_rail_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { refreshSubagentRail } = await import("./subagentRail.mjs");
+const { state } = await import("./mockState.mjs");
+
+state.currentSessionId = "session-1";
+state.coordinatorRoleId = "Coordinator";
+state.mainAgentRoleId = "MainAgent";
+globalThis.__fetchSessionAgentsPayload = [];
+globalThis.__fetchSessionTasksPayload = [
+    {
+        task_id: "task-writer",
+        role_id: "writer",
+        status: "running",
+        instance_id: "shared-1",
+        run_id: "run-1",
+    },
+    {
+        task_id: "task-reviewer",
+        role_id: "reviewer",
+        status: "running",
+        instance_id: "shared-1",
+        run_id: "run-1",
+    },
+];
+
+await refreshSubagentRail("session-1");
+
+console.log(JSON.stringify({
+    sessionAgents: state.sessionAgents,
+    summaryText: globalThis.__elements.subagentStatusSummary.textContent,
+}));
+""".strip(),
+    )
+
+    assert len(cast(list[object], payload["sessionAgents"])) == 2
+    assert payload["summaryText"] == "1 running / 2 roles"
+
+
 def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, object]:
     repo_root = Path(__file__).resolve().parents[3]
     source_path = (
@@ -131,7 +433,7 @@ def _run_subagent_rail_script(tmp_path: Path, runner_source: str) -> dict[str, o
     mock_api_path.write_text(
         """
 export async function fetchSessionAgents() {
-    return [
+    return globalThis.__fetchSessionAgentsPayload || [
         {
             instance_id: "coord-1",
             role_id: "Coordinator",
@@ -159,7 +461,7 @@ export async function fetchSessionAgents() {
 }
 
 export async function fetchSessionTasks() {
-    return [
+    return globalThis.__fetchSessionTasksPayload || [
         {
             task_id: "task-coordinator",
             title: "Coordinate run",

@@ -78,8 +78,11 @@ export async function refreshSubagentRail(
         if (signal?.aborted) return;
         if (state.currentSessionId !== safeSessionId) return;
 
-        state.sessionAgents = normalizeSessionAgents(agentsPayload);
         state.sessionTasks = normalizeSessionTasks(tasksPayload);
+        state.sessionAgents = reconcileSessionAgentsWithTasks(
+            normalizeSessionAgents(agentsPayload),
+            state.sessionTasks,
+        );
         subagentRailLoadingSessionId = '';
         renderSubagentRail({ preserveSelection, syncPanel: preserveSelection });
     } catch (e) {
@@ -203,10 +206,10 @@ function renderSubagentRail({ preserveSelection = true, syncPanel = true } = {})
 }
 
 function updateSubagentSummary() {
-    const roles = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
+    const roles = getDisplaySessionAgents();
     const isLoading = subagentRailLoadingSessionId
         && subagentRailLoadingSessionId === String(state.currentSessionId || '').trim();
-    const runningCount = roles.filter(agent => String(agent.status || '') === 'running').length;
+    const runningCount = countRunningSubagentInstances(roles);
     const summary = isLoading && roles.length === 0
         ? t('settings.system.loading_state')
         : roles.length === 0
@@ -229,7 +232,7 @@ function renderRoleSelector({ preserveSelection = true } = {}) {
     const select = els.subagentRoleSelect;
     if (!select) return;
 
-    const roles = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
+    const roles = getDisplaySessionAgents();
     const selectedRoleId = preserveSelection ? resolveSelectedRoleId() : resolveDefaultRoleId();
     const isLoading = subagentRailLoadingSessionId
         && subagentRailLoadingSessionId === String(state.currentSessionId || '').trim();
@@ -279,7 +282,7 @@ function resolveSelectedRoleId() {
 }
 
 function resolveDefaultRoleId() {
-    const roles = Array.isArray(state.sessionAgents) ? state.sessionAgents : [];
+    const roles = getDisplaySessionAgents();
     if (roles.length === 0) return null;
 
     const activeRoleId = String(
@@ -297,7 +300,7 @@ function resolveDefaultRoleId() {
 function findAgentByRole(roleId) {
     const safeRoleId = String(roleId || '').trim();
     if (!safeRoleId) return null;
-    return (state.sessionAgents || []).find(agent => agent.role_id === safeRoleId) || null;
+    return getDisplaySessionAgents().find(agent => agent.role_id === safeRoleId) || null;
 }
 
 function normalizeSessionAgents(payload) {
@@ -354,6 +357,120 @@ function normalizeSessionTasks(payload) {
                 ? item.evidence_bundle
                 : null,
         }));
+}
+
+function getDisplaySessionAgents() {
+    return reconcileSessionAgentsWithTasks(state.sessionAgents, state.sessionTasks);
+}
+
+function reconcileSessionAgentsWithTasks(agentsPayload, tasksPayload) {
+    const rows = normalizeSessionAgents(agentsPayload);
+    const activeTasks = activeRunningTasks(tasksPayload);
+    if (activeTasks.length === 0) {
+        return rows;
+    }
+
+    const latestByRole = new Map(rows.map(agent => [agent.role_id, agent]));
+    activeTasks.forEach(task => {
+        const roleId = String(task.assigned_role_id || task.role_id || '').trim();
+        const instanceId = String(
+            task.assigned_instance_id || task.instance_id || '',
+        ).trim();
+        if (!roleId || !instanceId || isPrimaryOrReservedRoleId(roleId)) {
+            return;
+        }
+        const existing = latestByRole.get(roleId);
+        if (!shouldProjectRunningTask(existing, task, instanceId)) {
+            return;
+        }
+        latestByRole.set(roleId, {
+            instance_id: instanceId,
+            role_id: roleId,
+            status: 'running',
+            created_at: existing?.created_at || task.created_at || '',
+            updated_at: latestTimestamp(existing?.updated_at || '', task.updated_at || ''),
+            runtime_system_prompt: existing?.runtime_system_prompt || '',
+            runtime_tools_json: existing?.runtime_tools_json || '',
+        });
+    });
+
+    return Array.from(latestByRole.values()).sort((left, right) =>
+        String(left.role_id || '').localeCompare(String(right.role_id || ''))
+    );
+}
+
+function activeRunningTasks(tasksPayload) {
+    const rows = Array.isArray(tasksPayload) ? tasksPayload : [];
+    return rows.filter(task => {
+        if (!task || typeof task !== 'object') {
+            return false;
+        }
+        const status = String(task.status || '').trim().toLowerCase();
+        const roleId = String(task.assigned_role_id || task.role_id || '').trim();
+        const instanceId = String(
+            task.assigned_instance_id || task.instance_id || '',
+        ).trim();
+        return (
+            status === 'running'
+            && !!roleId
+            && !!instanceId
+            && !isPrimaryOrReservedRoleId(roleId)
+        );
+    });
+}
+
+function shouldProjectRunningTask(existing, task, instanceId) {
+    if (!existing) {
+        return true;
+    }
+    if (String(existing.status || '').trim().toLowerCase() === 'running') {
+        return String(existing.instance_id || '').trim() === instanceId
+            || timestampIsAfter(
+                task.updated_at || task.created_at || '',
+                existing.updated_at || existing.created_at || '',
+            );
+    }
+    return timestampIsAfter(
+        task.updated_at || task.created_at || '',
+        existing.updated_at || existing.created_at || '',
+    );
+}
+
+function countRunningSubagentInstances(agents) {
+    const runningInstanceIds = new Set();
+    const rows = Array.isArray(agents) ? agents : [];
+    rows.forEach(agent => {
+        if (String(agent?.status || '').trim().toLowerCase() !== 'running') {
+            return;
+        }
+        const instanceId = String(agent?.instance_id || '').trim();
+        if (instanceId) {
+            runningInstanceIds.add(instanceId);
+        }
+    });
+    return runningInstanceIds.size;
+}
+
+function latestTimestamp(left, right) {
+    const safeLeft = String(left || '');
+    const safeRight = String(right || '');
+    if (!safeLeft) return safeRight;
+    if (!safeRight) return safeLeft;
+    return timestampIsAfter(safeRight, safeLeft) ? safeRight : safeLeft;
+}
+
+function timestampIsAfter(left, right) {
+    const safeLeft = String(left || '').trim();
+    const safeRight = String(right || '').trim();
+    if (!safeLeft) return false;
+    if (!safeRight) return true;
+
+    const leftMs = Date.parse(safeLeft);
+    const rightMs = Date.parse(safeRight);
+    if (!Number.isNaN(leftMs) && !Number.isNaN(rightMs)) {
+        return leftMs > rightMs;
+    }
+    return safeLeft.localeCompare(safeRight) > 0;
 }
 
 function humanizeStatus(value) {
