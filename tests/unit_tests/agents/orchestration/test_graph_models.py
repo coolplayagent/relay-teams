@@ -88,6 +88,15 @@ def test_orchestration_graph_normalizes_optional_text_fields() -> None:
 
 
 def test_orchestration_graph_rejects_invalid_node_and_edge_references() -> None:
+    with pytest.raises(ValueError, match="reserved prefix: auto_lane_"):
+        OrchestrationGraphNode.model_validate(
+            {
+                "node_id": "auto_lane_build",
+                "role_id": "Writer",
+                "objective": "Build.",
+            }
+        )
+
     with pytest.raises(ValueError, match="cannot target the same node"):
         OrchestrationGraphEdge.model_validate(
             {"from_node_id": "write", "to_node_id": "write"}

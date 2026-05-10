@@ -436,6 +436,11 @@ async def test_planning_service_skip_and_fallback_paths(tmp_path: Path) -> None:
         topology=_topology_with_graph(),
         policy=OrchestrationPolicy(),
     )
+    assert await service.should_plan_async(
+        root_task=root_task,
+        topology=_topology_with_graph(),
+        policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+    )
     assert not await service.should_plan_async(
         root_task=root_task,
         topology=None,

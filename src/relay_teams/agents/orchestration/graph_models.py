@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from relay_teams.agents.tasks.models import VerificationPlan
 from relay_teams.validation import OptionalIdentifierStr, RequiredIdentifierStr
 
+_RESERVED_NODE_ID_PREFIXES = ("auto_lane_",)
+
 
 class OrchestrationGraphNode(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -24,6 +26,16 @@ class OrchestrationGraphNode(BaseModel):
         if value is None:
             return ""
         return str(value).strip()
+
+    @field_validator("node_id")
+    @classmethod
+    def _reject_reserved_node_id_prefixes(cls, value: str) -> str:
+        for prefix in _RESERVED_NODE_ID_PREFIXES:
+            if value.startswith(prefix):
+                raise ValueError(
+                    "orchestration graph node_id uses reserved prefix: " + prefix
+                )
+        return value
 
 
 class OrchestrationGraphEdge(BaseModel):

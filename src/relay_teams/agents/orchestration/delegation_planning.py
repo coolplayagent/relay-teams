@@ -322,8 +322,6 @@ class DelegationPlanningService:
             return False
         if policy.max_parallel_delegated_tasks < 1:
             return False
-        if topology is not None and topology.orchestration_graph is not None:
-            return False
         allowed_role_ids = _topology_allowed_role_ids(topology)
         if allowed_role_ids and policy.planner_role_id not in allowed_role_ids:
             return False

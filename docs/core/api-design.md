@@ -83,9 +83,11 @@ Notes:
   `DelegationPlanner` task. The planner returns a bounded lane plan; Coordinator
   validates it, creates or reuses temporary roles, creates lane task nodes, and
   lets the runtime execute ready nodes concurrently.
-- Fixed `graph` presets provide an explicit DAG template. Automatic
-  `DelegationPlanner` planning does not inject extra planner nodes into fixed
-  graph presets unless the preset itself includes a planner node.
+- Fixed `graph` presets provide an explicit DAG template. When automatic
+  `DelegationPlanner` planning is enabled and the planner role is allowed by the
+  preset, Coordinator first gives the planner a chance to produce a dynamic
+  bounded DAG. If the planner declines decomposition or planning fails, the
+  fixed graph template runs as the fallback path.
 - A delegated task binds to exactly one delegated role and one subagent instance on first dispatch.
 - Re-dispatching an `assigned` or `stopped` task reuses its bound instance.
 - `completed`, `failed`, and `timeout` tasks must be replaced instead of re-dispatched.
@@ -923,9 +925,13 @@ Rules:
 - `presets[].policy.max_parallel_delegated_tasks` accepts `0..16`; `0` disables automatic delegated task execution for simple direct-answer presets.
 - `presets[].policy.planner_role_id` defaults to `DelegationPlanner`; when automatic planning is enabled, this role is executed through the normal delegated task runtime path.
 - `presets[].policy.max_temporary_roles_per_run` accepts `0..16` and bounds automatic DelegationPlanner temporary role proposals.
-- `graph` presets are fixed DAG templates. Non-graph presets can still produce
-  a dynamic task DAG through automatic `DelegationPlanner` planning or through
-  Coordinator-created task nodes.
+- `graph` presets are fixed DAG templates with planner-first preflight when
+  `auto_plan_long_tasks` is enabled and `planner_role_id` is listed in
+  `role_ids`. Non-graph presets can still produce a dynamic task DAG through
+  automatic `DelegationPlanner` planning or through Coordinator-created task
+  nodes.
+- `graph.nodes[].node_id` must not use the reserved `auto_lane_` prefix, which
+  identifies dynamic DelegationPlanner lane tasks during resume.
 - The default preset id must match one existing preset.
 - `MainAgent` and `Coordinator` base role prompts are edited through `/roles/configs/*`, not this config.
 - `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.

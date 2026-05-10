@@ -8,6 +8,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 import pytest
 
+from relay_teams.agents.orchestration.delegation_planning import AUTO_PLANNER_NODE_ID
+
 from integration_tests.support.api_helpers import (
     create_run,
     create_session,
@@ -160,7 +162,9 @@ def _run_orchestration_clone_benchmark(
     completed_tasks = [
         task
         for task in task_items
-        if isinstance(task, dict) and task.get("status") == "completed"
+        if isinstance(task, dict)
+        and task.get("status") == "completed"
+        and task.get("orchestration_node_id") != AUTO_PLANNER_NODE_ID
     ]
     return _BenchmarkResult(
         duration_seconds=duration_seconds,

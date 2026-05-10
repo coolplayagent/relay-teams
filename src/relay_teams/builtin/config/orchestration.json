@@ -18,7 +18,7 @@
         "max_parallel_delegated_tasks": 4,
         "auto_plan_long_tasks": true,
         "planner_role_id": "DelegationPlanner",
-        "coordinator_inline_budget_steps": 2,
+        "coordinator_inline_budget_steps": 0,
         "max_temporary_roles_per_run": 5,
         "prefer_temporary_roles_for_long_tasks": true
       }
@@ -28,13 +28,17 @@
       "name": "Fast Graph",
       "description": "Template DAG for straightforward implementation plus verification.",
       "role_ids": [
+        "DelegationPlanner",
         "Crafter",
         "Gater"
       ],
-      "orchestration_prompt": "Run the fixed graph template. Crafter implements the task, then Gater verifies the completed work before Coordinator returns the final answer.",
+      "orchestration_prompt": "Give DelegationPlanner the first opportunity to decide whether the task should become a bounded parallel DAG. If DelegationPlanner returns no decomposition plan, run the fixed graph template: Crafter implements the task, then Gater verifies the completed work before Coordinator returns the final answer.",
       "policy": {
-        "max_orchestration_cycles": 2,
-        "max_parallel_delegated_tasks": 2
+        "max_orchestration_cycles": 8,
+        "max_parallel_delegated_tasks": 2,
+        "auto_plan_long_tasks": true,
+        "planner_role_id": "DelegationPlanner",
+        "coordinator_inline_budget_steps": 0
       },
       "graph": {
         "max_parallel_tasks": 4,
@@ -71,10 +75,13 @@
         "Crafter",
         "Gater"
       ],
-      "orchestration_prompt": "Run the fixed graph template. Designer defines the approach, Crafter implements it, and Gater verifies the result before Coordinator returns the final answer.",
+      "orchestration_prompt": "Give DelegationPlanner the first opportunity to decide whether the task should become a bounded parallel DAG. If DelegationPlanner returns no decomposition plan, run the fixed graph template: Designer defines the approach, Crafter implements it, and Gater verifies the result before Coordinator returns the final answer.",
       "policy": {
         "max_orchestration_cycles": 8,
-        "max_parallel_delegated_tasks": 4
+        "max_parallel_delegated_tasks": 4,
+        "auto_plan_long_tasks": true,
+        "planner_role_id": "DelegationPlanner",
+        "coordinator_inline_budget_steps": 0
       },
       "graph": {
         "max_parallel_tasks": 4,
