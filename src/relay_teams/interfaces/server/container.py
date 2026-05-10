@@ -1210,6 +1210,8 @@ class ServerContainer:
             self.temporary_role_repo,
             self.monitor_repository,
             self.xiaoluban_account_repository,
+            self.discord_account_repository,
+            self.discord_inbound_queue_repo,
             self.wechat_account_repository,
             self.wechat_inbound_queue_repo,
         )
