@@ -392,6 +392,7 @@ function renderMemoryContent() {
     }
     if (memoryState.rows.length === 0) {
         els.projectViewContent.innerHTML = `
+            ${renderMemoryArchitectureMap()}
             <div class="workspace-view-empty-state">
                 <p>${escapeHtml(t('feature.memory.empty'))}</p>
             </div>
@@ -399,6 +400,7 @@ function renderMemoryContent() {
         return;
     }
     els.projectViewContent.innerHTML = `
+        ${renderMemoryArchitectureMap()}
         <section class="memory-view-shell" aria-label="${escapeAttribute(t('feature.memory.title'))}">
             <div class="memory-list" role="listbox" aria-label="${escapeAttribute(t('feature.memory.entries'))}">
                 ${memoryState.rows.map(renderMemoryRow).join('')}
@@ -409,6 +411,71 @@ function renderMemoryContent() {
         </section>
     `;
     bindMemoryRows();
+}
+
+function renderMemoryArchitectureMap() {
+    const tiers = [
+        {
+            key: 'working',
+            title: t('feature.memory.arch.working.title'),
+            scope: t('feature.memory.arch.working.scope'),
+            ttl: t('feature.memory.arch.working.ttl'),
+            copy: t('feature.memory.arch.working.copy'),
+        },
+        {
+            key: 'medium',
+            title: t('feature.memory.arch.medium.title'),
+            scope: t('feature.memory.arch.medium.scope'),
+            ttl: t('feature.memory.arch.medium.ttl'),
+            copy: t('feature.memory.arch.medium.copy'),
+        },
+        {
+            key: 'persistent',
+            title: t('feature.memory.arch.persistent.title'),
+            scope: t('feature.memory.arch.persistent.scope'),
+            ttl: t('feature.memory.arch.persistent.ttl'),
+            copy: t('feature.memory.arch.persistent.copy'),
+        },
+    ];
+    return `
+        <section class="memory-architecture-map" aria-label="${escapeAttribute(t('feature.memory.arch.title'))}">
+            <div class="memory-architecture-edge memory-architecture-source">
+                <strong>${escapeHtml(t('feature.memory.arch.capture'))}</strong>
+                <span>${escapeHtml(t('feature.memory.arch.capture_sources'))}</span>
+            </div>
+            <div class="memory-architecture-flow" aria-label="${escapeAttribute(t('feature.memory.arch.layers'))}">
+                ${tiers.map((tier, index) => `
+                    ${index > 0 ? renderArchitectureLink() : ''}
+                    ${renderArchitectureTier(tier)}
+                `).join('')}
+            </div>
+            <div class="memory-architecture-edge memory-architecture-output">
+                <strong>${escapeHtml(t('feature.memory.arch.reuse'))}</strong>
+                <span>${escapeHtml(t('feature.memory.arch.reuse_targets'))}</span>
+            </div>
+        </section>
+    `;
+}
+
+function renderArchitectureTier(tier) {
+    return `
+        <article class="memory-architecture-tier is-${escapeAttribute(tier.key)}">
+            <div class="memory-architecture-tier-head">
+                <h3>${escapeHtml(tier.title)}</h3>
+                <span>${escapeHtml(tier.ttl)}</span>
+            </div>
+            <p>${escapeHtml(tier.scope)}</p>
+            <div class="memory-architecture-tier-copy">${escapeHtml(tier.copy)}</div>
+        </article>
+    `;
+}
+
+function renderArchitectureLink() {
+    return `
+        <div class="memory-architecture-link" aria-hidden="true">
+            <span>${escapeHtml(t('feature.memory.arch.consolidation'))}</span>
+        </div>
+    `;
 }
 
 function renderMemoryRow(row) {
@@ -490,8 +557,11 @@ function renderMemoryDetail() {
                 ${renderDetailItem(t('feature.memory.tier'), formatEnumLabel(entry?.tier || summary?.tier))}
                 ${renderDetailItem(t('feature.memory.scope'), formatEnumLabel(entry?.scope || summary?.scope))}
                 ${renderDetailItem(t('feature.memory.kind'), formatEnumLabel(entry?.kind || summary?.kind))}
+                ${renderDetailItem(t('feature.memory.status'), formatEnumLabel(entry?.status || summary?.status))}
+                ${renderDetailItem(t('feature.memory.source'), formatEnumLabel(entry?.source || summary?.source))}
                 ${renderDetailItem(t('feature.memory.role'), entry?.role_id || summary?.role_id || '')}
                 ${renderDetailItem(t('feature.memory.updated'), formatTimestamp(entry?.updated_at || summary?.updated_at))}
+                ${renderDetailItem(t('feature.memory.expires'), formatExpiry(entry?.expires_at || summary?.expires_at))}
             </dl>
             <div class="memory-detail-text">${escapeHtml(content.body || '')}</div>
             ${content.context ? `<div class="memory-detail-note">${escapeHtml(content.context)}</div>` : ''}
@@ -539,6 +609,11 @@ function formatTimestamp(value) {
         return safeValue;
     }
     return parsed.toLocaleString();
+}
+
+function formatExpiry(value) {
+    const formatted = formatTimestamp(value);
+    return formatted || t('feature.memory.no_expiry');
 }
 
 function formatPercent(value) {

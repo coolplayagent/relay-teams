@@ -1,4 +1,4 @@
-# FE-1: Memory Bank Technical Specification
+# Memory Bank Architecture
 
 > **Feature ID**: FE-1
 > **Name**: Cross-Run Memory Bank
@@ -8,14 +8,45 @@
 
 ## Overview
 
-Memory Bank is the durable long-term memory system for Relay Teams. It replaces
-legacy role-memory storage with typed, tagged, versioned entries in
-`memory_entries`.
+Memory Bank is the durable memory architecture for Relay Teams. It captures
+task results, manual notes, and condensed session context as typed, tagged,
+versioned entries in `memory_entries`, then makes those entries available
+through search and prompt injection.
+
+The system is organized as three memory tiers:
+
+```text
+capture sources
+-> working memory
+-> medium-term memory
+-> persistent memory
+-> search and prompt injection
+```
+
+This tiered shape lets short-lived execution observations decay or expire
+quickly while useful session, role, and workspace knowledge can be consolidated
+into longer-lived project memory.
 
 The runtime no longer reads or writes legacy role-memory services. During
 `MemoryBankRepository` initialization, supported legacy `role_memories` rows are
 migrated into `memory_entries` and the old table is dropped. `role_daily_memories`
 is also dropped if present.
+
+## Architecture Map
+
+Memory Bank uses tier, scope, status, source, confidence, and expiry fields to
+keep memory lifecycle explicit.
+
+| Tier | Scope | Default TTL | Purpose |
+| --- | --- | --- | --- |
+| `working` | run/task | 4 hours | Immediate observations from active execution. |
+| `medium_term` | session/role | 7 days | Useful context that should survive a single run. |
+| `persistent` | workspace | none | Long-lived facts, decisions, preferences, and role-performance insights. |
+
+Entries move through the architecture by consolidation. Runtime task completion
+creates working memory, consolidation can promote useful information into
+medium-term or persistent memory, and retrieval selects active entries for
+Memory page search and `## Project Memory` prompt injection.
 
 ## Goals
 
@@ -121,13 +152,15 @@ The main sidebar feature list includes Memory directly below IM Gateway.
 
 The Memory page provides:
 
+- graphical architecture map for capture, tier consolidation, and reuse
 - workspace filter
 - tier filter
 - scope filter
 - status filter
 - text search
 - result list with tags and timestamps
-- detail pane for selected entries
+- detail pane for selected entries, including lifecycle fields such as status,
+  source, confidence, update time, and expiry
 
 The old subagent UI page for manual role summaries is removed. The subagent
 drawer now shows Memory Bank entries only.
