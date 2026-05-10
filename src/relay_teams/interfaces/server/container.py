@@ -5,6 +5,7 @@ import asyncio
 from collections.abc import Callable
 import logging
 from pathlib import Path
+import sqlite3
 from typing import Protocol
 
 from relay_teams.agents.execution.prompt_instructions import PromptInstructionResolver
@@ -1381,7 +1382,7 @@ class ServerContainer:
     async def start(self) -> None:
         try:
             await self.memory_bank_service.reindex_active_entries_async()
-        except Exception:
+        except (ValueError, OSError, RuntimeError, sqlite3.Error):
             LOGGER.warning(
                 "Failed to reindex active Memory Bank entries during startup",
                 exc_info=True,
