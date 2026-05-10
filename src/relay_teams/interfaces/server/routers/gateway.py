@@ -67,8 +67,11 @@ async def create_discord_account(
 ) -> DiscordAccountRecord:
     try:
         return await service.create_account(req)
-    except ValueError as exc:
-        raise http_exception_for(exc, mappings=((ValueError, 422),)) from exc
+    except (KeyError, ValueError) as exc:
+        raise http_exception_for(
+            exc,
+            mappings=((ValueError, 422),),
+        ) from exc
     except RuntimeError as exc:
         raise http_exception_for(exc, mappings=((RuntimeError, 400),)) from exc
 

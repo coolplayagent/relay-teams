@@ -584,6 +584,11 @@ def test_discord_account_routes_map_service_errors() -> None:
         "/api/gateway/discord/accounts",
         json={"bot_token": "bad-token"},
     )
+    fake_discord_service.create_error = KeyError("Unknown workspace_id")
+    create_missing_workspace_response = client.post(
+        "/api/gateway/discord/accounts",
+        json={"bot_token": "bad-token"},
+    )
     fake_discord_service.update_error = ValueError(
         "orchestration_preset_id is required"
     )
@@ -611,6 +616,7 @@ def test_discord_account_routes_map_service_errors() -> None:
 
     assert create_response.status_code == 400
     assert create_validation_response.status_code == 422
+    assert create_missing_workspace_response.status_code == 404
     assert update_response.status_code == 422
     assert update_runtime_response.status_code == 400
     assert enable_response.status_code == 422
