@@ -1374,7 +1374,13 @@ class ServerContainer:
         )
 
     async def start(self) -> None:
-        await self.memory_bank_service.reindex_active_entries_async()
+        try:
+            await self.memory_bank_service.reindex_active_entries_async()
+        except Exception:
+            LOGGER.warning(
+                "Failed to reindex active Memory Bank entries during startup",
+                exc_info=True,
+            )
         self.mcp_discovery_service.start_warmup(self.mcp_registry)
         self.app_env_file_watcher.start()
         self.mcp_config_file_watcher.start()
