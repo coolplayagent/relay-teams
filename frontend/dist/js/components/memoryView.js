@@ -258,6 +258,7 @@ async function loadSelectedMemory(memoryId, token = memoryRequestToken) {
 }
 
 function renderMemoryToolbar() {
+    els.projectViewTitle?.closest?.('.project-view-toolbar')?.classList?.remove('is-hidden');
     if (els.projectViewTitle) {
         els.projectViewTitle.textContent = t('feature.memory.title');
     }

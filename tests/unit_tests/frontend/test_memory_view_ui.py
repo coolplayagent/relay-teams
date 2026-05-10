@@ -13,6 +13,19 @@ def test_memory_search_payload_preserves_any_status() -> None:
     assert "if (memoryState.status) {\n        payload.status" not in source
 
 
+def test_memory_toolbar_restores_search_after_feature_switch() -> None:
+    source = Path("frontend/dist/js/components/memoryView.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".classList?.remove('is-hidden')" in source
+    assert "data-memory-search" in source
+    assert "searchMemoryRows()" in source
+    assert "return await searchMemories(payload);" in source
+    assert "event.key === 'Enter'" in source
+    assert "applyToolbarFilters();" in source
+
+
 def test_memory_view_renders_architecture_map() -> None:
     source = Path("frontend/dist/js/components/memoryView.js").read_text(
         encoding="utf-8"
@@ -57,6 +70,23 @@ def test_memory_architecture_i18n_keys_exist() -> None:
         "feature.memory.no_expiry",
     ]:
         assert source.count(f"'{key}'") == 2
+
+
+def test_memory_chinese_copy_uses_ji_yi() -> None:
+    source = Path("frontend/dist/js/utils/i18n.js").read_text(encoding="utf-8")
+    feature_start = source.index("'feature.memory.title': '记忆'")
+    feature_end = source.index("});", feature_start)
+    zh_feature_block = source[feature_start:feature_end]
+
+    assert "'sidebar.feature_memory': '记忆'" in source
+    assert "'subagent.memory_empty': '暂无记忆条目。'" in source
+    assert "'feature.memory.title': '记忆'" in zh_feature_block
+    assert "'feature.memory.loading': '正在加载记忆...'" in zh_feature_block
+    assert "'feature.memory.empty': '暂无记忆条目'" in zh_feature_block
+    assert "'feature.memory.search_placeholder': '搜索记忆'" in zh_feature_block
+    assert "'feature.memory.arch.title': '记忆架构'" in zh_feature_block
+    assert "Memory Bank" not in zh_feature_block
+    assert "搜索 memory" not in zh_feature_block
 
 
 def test_memory_bank_architecture_doc_was_renamed() -> None:

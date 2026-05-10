@@ -2,10 +2,7 @@
     display: block;
     padding: 1.35rem;
     overflow: auto;
-    background:
-        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 26%),
-        radial-gradient(circle at bottom left, rgba(15, 118, 110, 0.1), transparent 28%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
+    background: var(--bg-base);
 }
 
 .observability-toolbar {
@@ -36,30 +33,30 @@
 .observability-scope-group {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.28rem;
-    border: 1px solid color-mix(in srgb, var(--border-color) 88%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--bg-surface) 92%, var(--primary) 8%);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    gap: 0;
+    padding: 0.18rem;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+    box-shadow: none;
 }
 
 .observability-scope-btn {
     min-width: 7rem;
-    border-radius: 999px;
+    border-radius: 6px;
     background: transparent;
     border-color: transparent;
 }
 
 .observability-scope-btn:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--bg-hover) 88%, var(--primary) 12%);
+    background: var(--bg-hover);
 }
 
 .observability-scope-btn.active {
-    background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 76%, white 6%), color-mix(in srgb, var(--primary) 58%, #0f766e 42%));
-    border-color: color-mix(in srgb, var(--primary) 72%, white 12%);
-    color: var(--text-on-primary);
-    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    background: var(--button-primary-bg);
+    border-color: var(--button-primary-border);
+    color: var(--button-primary-text);
+    box-shadow: none;
 }
 
 .observability-scope-btn:focus-visible {
@@ -72,13 +69,13 @@
     align-items: center;
     min-height: 2.3rem;
     padding: 0.3rem 0.85rem;
-    border-radius: 999px;
-    border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border-color) 78%);
-    background: color-mix(in srgb, var(--primary) 12%, var(--bg-surface) 88%);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface);
     color: var(--text-primary);
     font-size: 0.8rem;
     font-weight: 600;
-    letter-spacing: 0.01em;
+    letter-spacing: 0;
 }
 
 .observability-scope-indicator[data-scope="global"]::before,
@@ -86,19 +83,19 @@
     content: '';
     width: 0.55rem;
     height: 0.55rem;
-    border-radius: 999px;
+    border-radius: 50%;
     margin-right: 0.5rem;
     background: currentColor;
     opacity: 0.78;
 }
 
 .observability-scope-indicator[data-scope="session"] {
-    background: color-mix(in srgb, #0f766e 16%, var(--bg-surface) 84%);
-    border-color: color-mix(in srgb, #0f766e 28%, var(--border-color) 72%);
+    background: var(--bg-surface-muted);
+    border-color: var(--border-color);
 }
 
 .observability-session-label {
-    color: var(--text-muted, #9aa1a9);
+    color: var(--text-secondary, #9aa1a9);
     font-size: 0.9rem;
 }
 
@@ -107,10 +104,10 @@
 .observability-kpi-card,
 .observability-chart-card,
 .observability-breakdown-row {
-    border: 1px solid color-mix(in srgb, var(--settings-border-soft) 75%, transparent 25%);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--settings-surface-bg) 88%, rgba(255, 255, 255, 0.04) 12%), color-mix(in srgb, var(--settings-surface-bg) 98%, rgba(0, 0, 0, 0.04) 2%));
-    border-radius: 18px;
-    box-shadow: 0 22px 48px -36px rgba(15, 23, 42, 0.75);
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface);
+    border-radius: 8px;
+    box-shadow: none;
 }
 
 .observability-summary-card {
@@ -124,8 +121,8 @@
 
 .observability-summary-eyebrow {
     font-size: 0.74rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    letter-spacing: 0;
+    text-transform: none;
     color: var(--primary);
     margin-bottom: 0.35rem;
 }
@@ -142,9 +139,10 @@
 
 .observability-summary-pill {
     padding: 0.45rem 0.8rem;
-    border-radius: 999px;
-    background: rgba(37, 99, 235, 0.12);
-    color: var(--primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface-muted);
+    color: var(--text-primary);
     font-size: 0.82rem;
     font-weight: 600;
     white-space: nowrap;
@@ -163,31 +161,14 @@
 }
 
 .observability-kpi-card::after {
-    content: '';
-    position: absolute;
-    inset: auto -12% -35% auto;
-    width: 90px;
-    height: 90px;
-    border-radius: 50%;
-    background: var(--tone-glow, rgba(37, 99, 235, 0.12));
-    filter: blur(4px);
+    content: none;
 }
-
-.observability-kpi-card[data-tone='primary'] { --tone-glow: rgba(37, 99, 235, 0.16); }
-.observability-kpi-card[data-tone='teal'] { --tone-glow: rgba(13, 148, 136, 0.16); }
-.observability-kpi-card[data-tone='amber'] { --tone-glow: rgba(217, 119, 6, 0.16); }
-.observability-kpi-card[data-tone='violet'] { --tone-glow: rgba(124, 58, 237, 0.16); }
-.observability-kpi-card[data-tone='slate'] { --tone-glow: rgba(71, 85, 105, 0.16); }
-.observability-kpi-card[data-tone='green'] { --tone-glow: rgba(22, 163, 74, 0.16); }
-.observability-kpi-card[data-tone='rose'] { --tone-glow: rgba(225, 29, 72, 0.16); }
-.observability-kpi-card[data-tone='cyan'] { --tone-glow: rgba(8, 145, 178, 0.16); }
-.observability-kpi-card[data-tone='indigo'] { --tone-glow: rgba(79, 70, 229, 0.16); }
 
 .observability-kpi-label {
     position: relative;
     z-index: 1;
     font-size: 0.8rem;
-    color: var(--text-muted, #9aa1a9);
+    color: var(--text-secondary, #9aa1a9);
     margin-bottom: 0.45rem;
 }
 
@@ -203,7 +184,7 @@
     z-index: 1;
     margin-top: 0.7rem;
     height: 6px;
-    border-radius: 999px;
+    border-radius: 4px;
     background: rgba(148, 163, 184, 0.18);
     overflow: hidden;
 }
@@ -212,7 +193,7 @@
     display: block;
     height: 100%;
     border-radius: inherit;
-    background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(15, 118, 110, 0.95));
+    background: var(--primary);
 }
 
 .observability-section {
@@ -275,7 +256,7 @@
 }
 
 .observability-chart-axis {
-    color: var(--text-muted, #9aa1a9);
+    color: var(--text-secondary, #9aa1a9);
     font-size: 0.76rem;
 }
 
@@ -292,7 +273,7 @@
 }
 
 .observability-chart-label {
-    fill: var(--text-muted, #9aa1a9);
+    fill: var(--text-secondary, #9aa1a9);
     font-size: 10px;
 }
 
@@ -319,9 +300,9 @@
 .observability-chart-swatch {
     width: 10px;
     height: 10px;
-    border-radius: 50%;
+    border-radius: 3px;
     background: var(--swatch);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--swatch) 16%, transparent 84%);
+    box-shadow: none;
 }
 
 .observability-breakdown-list {
@@ -354,16 +335,17 @@
     align-items: center;
     justify-content: center;
     padding: 0.2rem 0.55rem;
-    border-radius: 999px;
-    background: rgba(37, 99, 235, 0.1);
-    color: var(--primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-surface-muted);
+    color: var(--text-primary);
     font-size: 0.74rem;
     font-weight: 600;
 }
 
 .observability-breakdown-bar {
     height: 10px;
-    border-radius: 999px;
+    border-radius: 5px;
     background: rgba(148, 163, 184, 0.16);
     overflow: hidden;
 }
@@ -372,7 +354,7 @@
     display: block;
     height: 100%;
     border-radius: inherit;
-    background: linear-gradient(90deg, rgba(37, 99, 235, 0.95), rgba(124, 58, 237, 0.95));
+    background: var(--primary);
 }
 
 .observability-breakdown-metrics {
@@ -388,7 +370,7 @@
 }
 
 .observability-breakdown-metrics span {
-    color: var(--text-muted, #9aa1a9);
+    color: var(--text-secondary, #9aa1a9);
     font-size: 0.75rem;
 }
 
@@ -402,7 +384,7 @@
     justify-content: center;
     min-height: 120px;
     border: 1px dashed rgba(148, 163, 184, 0.28);
-    border-radius: 16px;
+    border-radius: 8px;
     color: var(--text-secondary);
     background: rgba(148, 163, 184, 0.05);
     text-align: center;
@@ -484,7 +466,7 @@
 }
 
 .observability-breakdown-stats span {
-    color: var(--text-muted, #9aa1a9);
+    color: var(--text-secondary, #9aa1a9);
     font-size: 0.75rem;
 }
 
@@ -498,7 +480,7 @@
     justify-content: center;
     height: 100%;
     border: 1px dashed rgba(148, 163, 184, 0.24);
-    border-radius: 14px;
+    border-radius: 8px;
     color: var(--text-secondary);
     background: rgba(148, 163, 184, 0.05);
     text-align: center;
@@ -520,9 +502,7 @@
 
 .observability-metric-chart-card {
     min-height: 220px;
-    background:
-        radial-gradient(circle at top right, rgba(37, 99, 235, 0.12), transparent 36%),
-        linear-gradient(180deg, rgba(15, 23, 42, 0.04), rgba(15, 23, 42, 0));
+    background: var(--bg-surface);
 }
 
 .observability-metric-chart-header {
@@ -534,7 +514,7 @@
     font-size: 1.55rem;
     line-height: 1.1;
     font-weight: 700;
-    letter-spacing: -0.03em;
+    letter-spacing: 0;
 }
 
 .observability-metric-chart-stage {
@@ -648,4 +628,3 @@ body.observability-mode #round-nav-float {
     display: none !important;
     pointer-events: none !important;
 }
-
