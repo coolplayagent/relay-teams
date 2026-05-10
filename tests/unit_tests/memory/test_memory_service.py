@@ -275,6 +275,68 @@ class TestSearch:
         assert result.total_count == 1
         assert result.items[0].entry.workspace_id == "ws-alpha"
 
+    async def test_global_search_scans_full_body_beyond_preview(
+        self, service: MemoryBankService
+    ) -> None:
+        await service.create_entry_async(
+            _create_request(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.WORKSPACE,
+                session_id=None,
+                run_id=None,
+                content=MemoryContent(
+                    title="Deep body note",
+                    body=f"{'x' * 240} pydantic-contract-tail",
+                ),
+            )
+        )
+
+        result = await service.search_global_async(
+            GlobalMemorySearchRequest(text_query="pydantic-contract-tail", limit=10)
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.content_title == "Deep body note"
+        assert "pydantic-contract-tail" in result.items[0].snippet
+
+    async def test_global_search_scans_past_first_page(
+        self, service: MemoryBankService
+    ) -> None:
+        await service.create_entry_async(
+            _create_request(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.WORKSPACE,
+                workspace_id="ws-old-match",
+                session_id=None,
+                run_id=None,
+                content=MemoryContent(
+                    title="Older global match",
+                    body="global-memory-needle",
+                ),
+            )
+        )
+        for index in range(105):
+            await service.create_entry_async(
+                _create_request(
+                    tier=MemoryTier.PERSISTENT,
+                    scope=MemoryScope.WORKSPACE,
+                    workspace_id=f"ws-newer-{index}",
+                    session_id=None,
+                    run_id=None,
+                    content=MemoryContent(
+                        title=f"Newer note {index}",
+                        body="unrelated memory body",
+                    ),
+                )
+            )
+
+        result = await service.search_global_async(
+            GlobalMemorySearchRequest(text_query="global-memory-needle", limit=10)
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.workspace_id == "ws-old-match"
+
 
 # ---------------------------------------------------------------------------
 # Get / List / Delete
