@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from urllib.parse import quote
 
 import httpx
@@ -14,6 +15,8 @@ _GITHUB_API_BASE_URL = "https://api.github.com"
 _DEFAULT_TIMEOUT_SECONDS = 20.0
 _API_VERSION = "2022-11-28"
 _PULL_REQUEST_FILES_PAGE_SIZE = 100
+_ISSUE_LIST_PAGE_SIZE = 100
+_PULL_REQUEST_LIST_PAGE_SIZE = 100
 _REPOSITORY_LIST_PAGE_SIZE = 100
 _REPOSITORY_LIST_MAX_PAGES = 10
 
@@ -169,6 +172,127 @@ class GitHubApiClient:
                 break
             page += 1
         return tuple(filenames)
+
+    async def list_repository_issues(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        state: str = "all",
+        updated_since: datetime | None = None,
+    ) -> tuple[JsonObject, ...]:
+        issues: list[JsonObject] = []
+        page = 1
+        while True:
+            query_params = {
+                "state": state,
+                "sort": "updated",
+                "direction": "desc",
+                "per_page": str(_ISSUE_LIST_PAGE_SIZE),
+                "page": str(page),
+            }
+            if updated_since is not None:
+                query_params["since"] = updated_since.astimezone().isoformat()
+            response = await self._request_json(
+                token=token,
+                method="GET",
+                path=f"/repos/{owner}/{repo}/issues",
+                query_params=query_params,
+            )
+            if not isinstance(response, list):
+                raise GitHubApiError(message="Unexpected issues response")
+            issues.extend(item for item in response if isinstance(item, dict))
+            if len(response) < _ISSUE_LIST_PAGE_SIZE:
+                break
+            page += 1
+        return tuple(issues)
+
+    async def list_repository_pull_requests(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        state: str = "all",
+        updated_since: datetime | None = None,
+    ) -> tuple[JsonObject, ...]:
+        pull_requests: list[JsonObject] = []
+        page = 1
+        while True:
+            response = await self._request_json(
+                token=token,
+                method="GET",
+                path=f"/repos/{owner}/{repo}/pulls",
+                query_params={
+                    "state": state,
+                    "sort": "updated",
+                    "direction": "desc",
+                    "per_page": str(_PULL_REQUEST_LIST_PAGE_SIZE),
+                    "page": str(page),
+                },
+            )
+            if not isinstance(response, list):
+                raise GitHubApiError(message="Unexpected pull requests response")
+            seen_older_pull_request = False
+            for item in response:
+                if not isinstance(item, dict):
+                    continue
+                if updated_since is not None and not _is_updated_after(
+                    item.get("updated_at"),
+                    updated_since,
+                ):
+                    seen_older_pull_request = True
+                    continue
+                pull_requests.append(item)
+            if seen_older_pull_request:
+                break
+            if len(response) < _PULL_REQUEST_LIST_PAGE_SIZE:
+                break
+            page += 1
+        return tuple(pull_requests)
+
+    async def get_repository_pull_request(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        pull_request_number: int,
+    ) -> JsonObject:
+        return await self._request_object_json(
+            token=token,
+            method="GET",
+            path=f"/repos/{owner}/{repo}/pulls/{pull_request_number}",
+        )
+
+    async def list_issue_timeline_events(
+        self,
+        *,
+        token: str,
+        owner: str,
+        repo: str,
+        issue_number: int,
+    ) -> tuple[JsonObject, ...]:
+        events: list[JsonObject] = []
+        page = 1
+        while True:
+            response = await self._request_json(
+                token=token,
+                method="GET",
+                path=f"/repos/{owner}/{repo}/issues/{issue_number}/timeline",
+                query_params={
+                    "per_page": str(_ISSUE_LIST_PAGE_SIZE),
+                    "page": str(page),
+                },
+            )
+            if not isinstance(response, list):
+                raise GitHubApiError(message="Unexpected issue timeline response")
+            events.extend(item for item in response if isinstance(item, dict))
+            if len(response) < _ISSUE_LIST_PAGE_SIZE:
+                break
+            page += 1
+        return tuple(events)
 
     async def create_issue_comment(
         self,
@@ -408,6 +532,18 @@ def _extract_error_message(response: httpx.Response) -> str:
     return f"GitHub API request failed with status {response.status_code}"
 
 
+def _is_updated_after(value: JsonValue | None, threshold: datetime) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return True
+    try:
+        updated_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if updated_at.tzinfo is None:
+        return updated_at > threshold.replace(tzinfo=None)
+    return updated_at > threshold.astimezone(updated_at.tzinfo)
+
+
 def _normalize_query(value: str | None) -> str | None:
     if value is None:
         return None
@@ -436,4 +572,5 @@ def _repository_full_name(payload: JsonObject) -> str | None:
 __all__ = [
     "GitHubApiClient",
     "GitHubApiError",
+    "JsonObject",
 ]

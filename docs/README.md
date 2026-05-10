@@ -20,6 +20,7 @@ This directory is organized by documentation purpose and runtime module.
 - [Role contracts](modules/agents/role-contracts-spec.md)
 - [Role behavior boundaries](modules/agents/role-behavior-boundaries-spec.md)
 - [Async path unification](modules/automation/async-path-unification-spec.md)
+- [Boards](modules/boards/workspace-todo-board-design.md)
 - [CLI commands](modules/cli/commands.md)
 - [Frontend](modules/frontend/README.md)
 - [IM Gateway architecture](modules/gateway/im-gateway-architecture.md)

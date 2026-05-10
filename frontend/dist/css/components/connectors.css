@@ -454,6 +454,62 @@
     margin: 8px 0 0;
 }
 
+body:not(.light-theme) .connectors-page {
+    background: var(--bg-base);
+}
+
+body:not(.light-theme) .connectors-summary-chip,
+body:not(.light-theme) .connectors-search,
+body:not(.light-theme) .connectors-tabs,
+body:not(.light-theme) .connectors-card,
+body:not(.light-theme) .connectors-card-action,
+body:not(.light-theme) .connectors-config-status-row,
+body:not(.light-theme) .connectors-config-details div,
+body:not(.light-theme) .connectors-account-management,
+body:not(.light-theme) .connectors-empty {
+    background: var(--bg-surface);
+    border-color: var(--border-color);
+}
+
+body:not(.light-theme) .connectors-card {
+    box-shadow: none;
+}
+
+body:not(.light-theme) .connectors-account-chips span {
+    background: var(--bg-surface-muted);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+}
+
+body:not(.light-theme) .connectors-tab.is-active {
+    background: var(--button-primary-bg);
+    box-shadow: none;
+    color: var(--button-primary-text);
+}
+
+body:not(.light-theme) .connectors-card-action:hover,
+body:not(.light-theme) .connectors-card-menu:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+body:not(.light-theme) .connectors-error-copy {
+    background: rgba(194, 123, 114, 0.12);
+    border-color: rgba(194, 123, 114, 0.28);
+    color: #e3a39c;
+}
+
+body:not(.light-theme) .connectors-summary-chip.is-connected strong {
+    color: #8bcf9a;
+}
+
+body:not(.light-theme) .connectors-summary-chip.is-pending strong {
+    color: #d7ba7d;
+}
+
+body:not(.light-theme) .connectors-summary-chip.is-error strong {
+    color: #e3a39c;
+}
 
 @media (max-width: 1280px) {
     .connectors-card-grid {

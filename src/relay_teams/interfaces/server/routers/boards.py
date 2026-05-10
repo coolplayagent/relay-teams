@@ -1,14 +1,30 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from relay_teams.boards import (
+    BoardTodoArchiveRequest,
+    BoardTodoBoardResponse,
+    BoardTodoCreateInput,
+    BoardTodoDeltaResponse,
+    BoardTodoItem,
+    BoardTodoLinkPullRequestRequest,
+    BoardTodoService,
+    BoardTodoStartRequest,
+    BoardTodoStatusUpdateRequest,
+    BoardTodoSyncChangesRequest,
+    BoardTodoSyncRequest,
+)
 from relay_teams.boards.adapter import (
     BoardTaskState,
     TaskBoardConfig,
     TaskBoardStateMap,
 )
+from relay_teams.interfaces.server.deps import get_board_todo_service
 from relay_teams.logger import get_logger
 
 LOGGER = get_logger(__name__)
@@ -63,6 +79,149 @@ def list_boards() -> list[BoardSummaryResponse]:
     return []
 
 
+# GET /api/boards/todos
+async def list_board_todos(
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+    workspace_id: str = Query(min_length=1),
+    include_archived: bool = False,
+) -> BoardTodoBoardResponse:
+    try:
+        return await service.list_board(
+            workspace_id=workspace_id,
+            include_archived=include_archived,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# GET /api/boards/todos:changes
+async def list_board_todo_changes(
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+    workspace_id: str = Query(min_length=1),
+    include_archived: bool = False,
+    after_revision: int = Query(default=0, ge=0),
+) -> BoardTodoDeltaResponse:
+    try:
+        return await service.list_board_changes(
+            workspace_id=workspace_id,
+            include_archived=include_archived,
+            after_revision=after_revision,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos:sync
+async def sync_board_todos(
+    request: BoardTodoSyncRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoBoardResponse:
+    try:
+        return await service.sync_board(
+            workspace_id=request.workspace_id,
+            include_archived=request.include_archived,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos:sync-changes
+async def sync_board_todo_changes(
+    request: BoardTodoSyncChangesRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoDeltaResponse:
+    try:
+        return await service.sync_board_changes(request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos
+async def create_board_todo(
+    request: BoardTodoCreateInput,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.create_todo(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:start
+async def start_board_todo(
+    todo_id: str,
+    request: BoardTodoStartRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.start_todo(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:request-changes
+async def request_board_todo_changes(
+    todo_id: str,
+    request: BoardTodoStatusUpdateRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.request_changes(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:archive
+async def archive_board_todo(
+    todo_id: str,
+    request: BoardTodoArchiveRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.archive_todo(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:restore
+async def restore_board_todo(
+    todo_id: str,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.restore_todo(todo_id=todo_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# POST /api/boards/todos/{todo_id}:link-pr
+async def link_board_todo_pull_request(
+    todo_id: str,
+    request: BoardTodoLinkPullRequestRequest,
+    service: Annotated[BoardTodoService, Depends(get_board_todo_service)],
+) -> BoardTodoItem:
+    try:
+        return await service.link_pull_request(todo_id=todo_id, payload=request)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 # GET /api/boards/{board_id}/tasks
 async def list_board_tasks(board_id: str) -> list[BoardTaskResponse]:
     """List tasks on a board."""
@@ -115,6 +274,66 @@ def get_state_map() -> StateMapResponse:
 
 
 router.add_api_route("", list_boards, methods=["GET"])
+router.add_api_route(
+    "/todos",
+    list_board_todos,
+    methods=["GET"],
+    response_model=BoardTodoBoardResponse,
+)
+router.add_api_route(
+    "/todos:changes",
+    list_board_todo_changes,
+    methods=["GET"],
+    response_model=BoardTodoDeltaResponse,
+)
+router.add_api_route(
+    "/todos:sync",
+    sync_board_todos,
+    methods=["POST"],
+    response_model=BoardTodoBoardResponse,
+)
+router.add_api_route(
+    "/todos:sync-changes",
+    sync_board_todo_changes,
+    methods=["POST"],
+    response_model=BoardTodoDeltaResponse,
+)
+router.add_api_route(
+    "/todos",
+    create_board_todo,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:start",
+    start_board_todo,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:request-changes",
+    request_board_todo_changes,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:archive",
+    archive_board_todo,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:restore",
+    restore_board_todo,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
+router.add_api_route(
+    "/todos/{todo_id}:link-pr",
+    link_board_todo_pull_request,
+    methods=["POST"],
+    response_model=BoardTodoItem,
+)
 router.add_api_route("/{board_id}/tasks", list_board_tasks, methods=["GET"])
 router.add_api_route("/{board_id}/sync", sync_board, methods=["POST"])
 router.add_api_route(

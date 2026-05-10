@@ -40,6 +40,7 @@ import { formatMessage, t } from '../utils/i18n.js';
 import {
     hideProjectView,
     openAutomationHomeView,
+    openBoardsFeatureView,
     openImFeatureView,
     openSkillsFeatureView,
     openWorkspaceProjectView,
@@ -78,6 +79,7 @@ const FEATURE_IDS = Object.freeze({
     skills: 'skills',
     automation: 'automation',
     connectors: 'connectors',
+    boards: 'boards',
     gateway: 'gateway',
     memory: 'memory',
 });
@@ -1205,6 +1207,16 @@ function renderFeatureNav() {
                 </span>
                 <span class="home-feature-label">${escapeHtml(t('sidebar.feature_gateway'))}</span>
             </button>
+            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.boards ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.boards}">
+                <span class="home-feature-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-boards">
+                        <rect x="3.8" y="5.2" width="16.4" height="13.6" rx="2.2" stroke="currentColor" stroke-width="1.7"/>
+                        <path d="M8.2 5.2v13.6M12 5.2v13.6M15.8 5.2v13.6" stroke="currentColor" stroke-width="1.45"/>
+                        <path d="M5.7 8.7h.8M9.7 8.7h.8M13.5 8.7h.8M17.3 8.7h.8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    </svg>
+                </span>
+                <span class="home-feature-label">${escapeHtml(t('sidebar.feature_boards'))}</span>
+            </button>
             <button class="home-feature-item${activeFeatureId === FEATURE_IDS.memory ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.memory}">
                 <span class="home-feature-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-memory">
@@ -1280,6 +1292,8 @@ async function openFeatureView(featureId) {
         await openImFeatureView();
     } else if (safeFeatureId === FEATURE_IDS.memory) {
         await openMemoryFeatureView();
+    } else if (safeFeatureId === FEATURE_IDS.boards) {
+        await openBoardsFeatureView();
     }
     if (state.currentFeatureViewId === safeFeatureId) {
         syncFeatureNavigationState(safeFeatureId);

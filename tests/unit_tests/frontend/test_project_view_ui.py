@@ -4948,6 +4948,130 @@ console.log(JSON.stringify({
     assert "Previous feature content" not in str(payload["finalContentHtml"])
 
 
+def test_project_view_switches_from_boards_to_memory_without_surface_leak(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openBoardsFeatureView,
+} from "./projectView.mjs";
+import { openMemoryFeatureView } from "./memoryView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openBoardsFeatureView();
+await flushTasks();
+const toolbar = document.getElementById("project-view-toolbar");
+const afterBoards = {
+    contentHasBoardsClass: els.projectViewContent.classList.contains("is-boards-feature"),
+    toolbarHidden: toolbar.classList.contains("is-hidden"),
+    contentHtml: els.projectViewContent.innerHTML,
+    unmountCalls: globalThis.__boardTodoUnmountCalls || 0,
+};
+
+await openMemoryFeatureView();
+await flushTasks();
+await flushTasks();
+const afterMemory = {
+    contentHasBoardsClass: els.projectViewContent.classList.contains("is-boards-feature"),
+    toolbarHidden: toolbar.classList.contains("is-hidden"),
+    contentHtml: els.projectViewContent.innerHTML,
+    toolbarHtml: els.projectViewToolbarActions.innerHTML,
+    unmountCalls: globalThis.__boardTodoUnmountCalls || 0,
+};
+
+console.log(JSON.stringify({ afterBoards, afterMemory }));
+""".strip(),
+    )
+
+    after_boards = cast(dict[str, object], payload["afterBoards"])
+    after_memory = cast(dict[str, object], payload["afterMemory"])
+    assert after_boards["contentHasBoardsClass"] is True
+    assert after_boards["toolbarHidden"] is True
+    assert "board-todo-root" in str(after_boards["contentHtml"])
+    assert after_memory["contentHasBoardsClass"] is False
+    assert after_memory["toolbarHidden"] is False
+    assert "memory-view-shell" in str(after_memory["contentHtml"])
+    assert "memory-toolbar-controls" in str(after_memory["toolbarHtml"])
+    after_memory_unmounts = after_memory["unmountCalls"]
+    after_boards_unmounts = after_boards["unmountCalls"]
+    assert isinstance(after_memory_unmounts, int)
+    assert isinstance(after_boards_unmounts, int)
+    assert after_memory_unmounts > after_boards_unmounts
+
+
+def test_project_view_switches_from_memory_to_boards_without_toolbar_residue(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openBoardsFeatureView,
+} from "./projectView.mjs";
+import { openMemoryFeatureView } from "./memoryView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openMemoryFeatureView();
+await flushTasks();
+await flushTasks();
+const toolbar = document.getElementById("project-view-toolbar");
+const afterMemory = {
+    contentHtml: els.projectViewContent.innerHTML,
+    toolbarHtml: els.projectViewToolbarActions.innerHTML,
+    toolbarHidden: toolbar.classList.contains("is-hidden"),
+};
+
+await openBoardsFeatureView();
+await flushTasks();
+const afterBoards = {
+    contentHasBoardsClass: els.projectViewContent.classList.contains("is-boards-feature"),
+    contentHtml: els.projectViewContent.innerHTML,
+    toolbarHtml: els.projectViewToolbarActions.innerHTML,
+    toolbarHidden: toolbar.classList.contains("is-hidden"),
+    mountCalls: globalThis.__boardTodoMountCalls || [],
+};
+
+console.log(JSON.stringify({ afterMemory, afterBoards }));
+""".strip(),
+    )
+
+    after_memory = cast(dict[str, object], payload["afterMemory"])
+    after_boards = cast(dict[str, object], payload["afterBoards"])
+    assert "memory-view-shell" in str(after_memory["contentHtml"])
+    assert "memory-toolbar-controls" in str(after_memory["toolbarHtml"])
+    assert after_memory["toolbarHidden"] is False
+    assert after_boards["contentHasBoardsClass"] is True
+    assert after_boards["toolbarHidden"] is True
+    assert "board-todo-root" in str(after_boards["contentHtml"])
+    assert "memory-toolbar-controls" not in str(after_boards["toolbarHtml"])
+    assert len(cast(list[object], after_boards["mountCalls"])) == 1
+
+
+def test_board_todo_full_sync_bypasses_stale_delta_cache() -> None:
+    source = (
+        Path(__file__).resolve().parents[3]
+        / "frontend"
+        / "dist"
+        / "js"
+        / "components"
+        / "boards"
+        / "todoBoard.js"
+    ).read_text(encoding="utf-8")
+
+    assert "if (cached && sync && forceFull)" in source
+    assert (
+        "return syncBoardTodos({ workspaceId, includeArchived: archived });" in source
+    )
+    assert "function isStaleDeltaResponse(cached, response)" in source
+    assert "? fetchBoardTodos({ workspaceId, includeArchived: archived })" in source
+
+
 def test_project_view_opens_robot_dialog_in_gateway_feature(
     tmp_path: Path,
 ) -> None:
@@ -6608,6 +6732,8 @@ def _run_project_view_script(
     mock_clawhub_settings_path = tmp_path / "settings" / "clawhubSettings.js"
     mock_github_settings_path = tmp_path / "settings" / "githubSettings.js"
     mock_connector_cards_path = tmp_path / "connectors" / "connectorCards.js"
+    mock_board_todo_path = tmp_path / "boards" / "todoBoard.js"
+    memory_view_module_path = tmp_path / "memoryView.mjs"
     runner_path = tmp_path / "runner.mjs"
 
     mock_dom_path.write_text(
@@ -6625,7 +6751,8 @@ function decodeHtmlAttribute(value) {
 
 function createBasicElement() {
     const attributeStore = new Map();
-    return {
+    const classSet = new Set();
+    const node = {
         id: "",
         className: "",
         style: {},
@@ -6633,9 +6760,20 @@ function createBasicElement() {
         innerHTML: "",
         onclick: null,
         onkeydown: null,
+        closest() {
+            return null;
+        },
         classList: {
+            add(name) {
+                classSet.add(String(name));
+            },
             remove() {
-                return undefined;
+                for (const name of arguments) {
+                    classSet.delete(String(name));
+                }
+            },
+            contains(name) {
+                return classSet.has(String(name));
             },
         },
         setAttribute(name, value) {
@@ -6645,6 +6783,7 @@ function createBasicElement() {
             return attributeStore.has(name) ? attributeStore.get(name) : null;
         },
     };
+    return node;
 }
 
 function createTreeNode(attributes = {}) {
@@ -6823,6 +6962,7 @@ function createHtmlElement() {
     let html = "";
     const cache = new Map();
     const idCache = new Map();
+    const classSet = new Set();
     return {
         id: "",
         className: "",
@@ -6830,6 +6970,22 @@ function createHtmlElement() {
         textContent: "",
         onclick: null,
         onkeydown: null,
+        closest() {
+            return null;
+        },
+        classList: {
+            add(name) {
+                classSet.add(String(name));
+            },
+            remove() {
+                for (const name of arguments) {
+                    classSet.delete(String(name));
+                }
+            },
+            contains(name) {
+                return classSet.has(String(name));
+            },
+        },
         get innerHTML() {
             return html;
         },
@@ -6863,9 +7019,13 @@ function createHtmlElement() {
 }
 
 export function createDomEnvironment() {
+    const toolbarElement = createBasicElement();
+    const titleElement = createBasicElement();
+    titleElement.closest = selector => selector === ".project-view-toolbar" ? toolbarElement : null;
     const elements = new Map([
         ["project-view", createBasicElement()],
-        ["project-view-title", createBasicElement()],
+        ["project-view-toolbar", toolbarElement],
+        ["project-view-title", titleElement],
         ["project-view-summary", createBasicElement()],
         ["project-view-toolbar-actions", createHtmlElement()],
         ["project-view-content", createHtmlElement()],
@@ -7000,6 +7160,43 @@ export async function fetchAutomationProjectSessions() {
 
 export async function fetchWorkspaces() {
     return [];
+}
+
+export async function fetchMemories() {
+    return {
+        total_count: 1,
+        items: [
+            {
+                id: "mem_1",
+                workspace_id: "alpha-project",
+                content_title: "Memory entry",
+                content_body_preview: "Remember the board state.",
+                tier: "working",
+                scope: "workspace",
+                status: "active",
+                tags: [],
+                updated_at: "2026-05-10T08:00:00Z",
+            },
+        ],
+    };
+}
+
+export async function searchMemories() {
+    return await fetchMemories();
+}
+
+export async function getMemory() {
+    return {
+        id: "mem_1",
+        workspace_id: "alpha-project",
+        content_title: "Memory entry",
+        content_body: "Remember the board state.",
+        tier: "working",
+        scope: "workspace",
+        status: "active",
+        tags: [],
+        updated_at: "2026-05-10T08:00:00Z",
+    };
 }
 
 export async function fetchConfigStatus() {
@@ -7833,6 +8030,20 @@ export const state = {
         "feature.connectors.action.connect_xiaoluban": "Connect Xiaoluban",
         "feature.connectors.accounts.title": "Accounts",
         "feature.connectors.accounts.empty": "No accounts yet.",
+        "feature.memory.title": "Memory",
+        "feature.memory.loading": "Loading memory...",
+        "feature.memory.loading_detail": "Loading entry...",
+        "feature.memory.summary": "{count} entries",
+        "feature.memory.empty": "No Memory Bank entries",
+        "feature.memory.search_placeholder": "Search memory",
+        "feature.memory.workspace": "Workspace",
+        "feature.memory.all_workspaces": "All workspaces",
+        "feature.memory.tier": "Tier",
+        "feature.memory.scope": "Scope",
+        "feature.memory.status": "Status",
+        "feature.memory.any": "Any",
+        "feature.memory.entries": "Entries",
+        "feature.memory.select_entry": "Select an entry",
         "sidebar.delivery_none": "No delivery target",
         "sidebar.delivery_none_copy": "Do not send automation updates.",
         "sidebar.delivery_target": "Delivery target",
@@ -7873,6 +8084,14 @@ export const state = {
 
 export function t(key) {
     return translations[key] || key;
+}
+
+export function formatMessage(key, values = {}) {
+    let template = t(key);
+    for (const [name, value] of Object.entries(values)) {
+        template = template.replaceAll(`{${name}}`, String(value));
+    }
+    return template;
 }
 """.strip(),
         encoding="utf-8",
@@ -8017,6 +8236,20 @@ export function renderConnectorConfigModalMarkup({ item, accountManagementMarkup
     };
     return `<div data-connector-modal>${accountManagementMarkup}<button data-connector-configure="${provider}">${labels[provider] || "Configure Connector"}</button></div>`;
 }
+    """.strip(),
+        encoding="utf-8",
+    )
+    mock_board_todo_path.parent.mkdir(parents=True, exist_ok=True)
+    mock_board_todo_path.write_text(
+        """
+export function mountBoardTodoBoard(options = {}) {
+    globalThis.__boardTodoMountCalls = globalThis.__boardTodoMountCalls || [];
+    globalThis.__boardTodoMountCalls.push(options);
+}
+
+export function unmountBoardTodoBoard() {
+    globalThis.__boardTodoUnmountCalls = (globalThis.__boardTodoUnmountCalls || 0) + 1;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -8036,6 +8269,21 @@ export function renderConnectorConfigModalMarkup({ item, accountManagementMarkup
         .replace("./settings/githubSettings.js", "./settings/githubSettings.js")
     )
     module_under_test_path.write_text(source_text, encoding="utf-8")
+    memory_view_module_path.write_text(
+        (repo_root / "frontend" / "dist" / "js" / "components" / "memoryView.js")
+        .read_text(encoding="utf-8")
+        .replace("../core/api.js", "./mockApi.mjs")
+        .replace("../core/state.js", "./mockState.mjs")
+        .replace("../utils/dom.js", "./mockDom.mjs")
+        .replace("../utils/i18n.js", "./mockI18n.mjs")
+        .replace("../utils/logger.js", "./mockLogger.mjs")
+        .replace("./agentPanel.js", "./mockAgentPanel.mjs")
+        .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
+        .replace("./projectView.js", "./projectView.mjs")
+        .replace("./rounds/navigator.js", "./mockNavigator.mjs")
+        .replace("./subagentRail.js", "./mockSubagentRail.mjs"),
+        encoding="utf-8",
+    )
 
     runner_path.write_text(
         f"""
@@ -8054,6 +8302,7 @@ globalThis.__dispatchedEvents = [];
 globalThis.__logs = [];
 globalThis.__toastCalls = [];
 globalThis.__clearNewSessionDraftCalls = 0;
+globalThis.__boardTodoUnmountCalls = 0;
 globalThis.CustomEvent = class CustomEvent {{
     constructor(type, init = {{}}) {{
         this.type = type;

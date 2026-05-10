@@ -181,6 +181,19 @@ export {
 } from './connectors.js';
 
 export {
+    archiveBoardTodo,
+    createBoardTodo,
+    fetchBoardTodoChanges,
+    fetchBoardTodos,
+    linkBoardTodoPullRequest,
+    requestBoardTodoChanges,
+    restoreBoardTodo,
+    startBoardTodo,
+    syncBoardTodoChanges,
+    syncBoardTodos,
+} from './boardTodos.js';
+
+export {
     createDiscordGatewayAccount,
     createXiaolubanGatewayAccount,
     deleteDiscordGatewayAccount,

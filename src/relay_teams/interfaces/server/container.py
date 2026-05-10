@@ -41,6 +41,7 @@ from relay_teams.builtin import (
     get_builtin_roles_dir,
     get_builtin_skills_dir,
 )
+from relay_teams.boards import BoardTodoRepository, BoardTodoService
 from relay_teams.commands import CommandRegistry
 from relay_teams.connector import ConnectorService
 from relay_teams.computer import build_default_computer_runtime
@@ -523,6 +524,9 @@ class ServerContainer:
             BackgroundTaskRepository(runtime.paths.db_path)
         )
         self.todo_repository: TodoRepository = TodoRepository(runtime.paths.db_path)
+        self.board_todo_repository: BoardTodoRepository = BoardTodoRepository(
+            runtime.paths.db_path
+        )
         self.run_state_repo: RunStateRepository = RunStateRepository(
             runtime.paths.db_path
         )
@@ -1088,6 +1092,21 @@ class ServerContainer:
             session_ingress_service=self.session_ingress_service,
             get_github_config=self.github_config_service.get_github_config,
         )
+        self.board_todo_service = BoardTodoService(
+            repository=self.board_todo_repository,
+            workspace_service=self.workspace_service,
+            github_trigger_service=self.github_trigger_service,
+            github_client=self.github_api_client,
+            session_service=self.session_service,
+            run_service=self.run_service,
+            run_runtime_repo=self.run_runtime_repo,
+            get_shared_github_token=lambda: (
+                self.github_config_service.get_github_config().token
+            ),
+        )
+        self.github_trigger_service.replace_board_todo_service(self.board_todo_service)
+        self.run_service.replace_board_todo_service(self.board_todo_service)
+        self.session_service.replace_board_todo_service(self.board_todo_service)
         self.connector_service = ConnectorService(
             github_trigger_service=self.github_trigger_service,
             github_connectivity_probe_service=self.github_connectivity_probe_service,
@@ -1097,6 +1116,9 @@ class ServerContainer:
             wechat_gateway_service=self.wechat_gateway_service,
             xiaoluban_gateway_service=self.xiaoluban_gateway_service,
             xiaoluban_im_listener_service=self.xiaoluban_im_listener_service,
+            get_shared_github_token=lambda: (
+                self.github_config_service.get_github_config().token
+            ),
         )
         self.github_trigger_action_worker = GitHubTriggerActionWorker(
             trigger_service=self.github_trigger_service

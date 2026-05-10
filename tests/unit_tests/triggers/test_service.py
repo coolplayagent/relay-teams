@@ -298,6 +298,22 @@ class _FakeMonitorService:
         return ()
 
 
+class _FakeBoardTodoMergeService:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[tuple[str, int]] = []
+
+    def mark_github_pull_request_merged(
+        self,
+        *,
+        repository_full_name: str,
+        pull_request_number: int,
+    ) -> None:
+        if self.fail:
+            raise RuntimeError("board update failed")
+        self.calls.append((repository_full_name, pull_request_number))
+
+
 def _build_service(
     tmp_path: Path,
     *,
@@ -362,6 +378,31 @@ def _create_repo_subscription(service: GitHubTriggerService) -> str:
         )
     )
     return created.repo_subscription_id
+
+
+def _board_todo_pull_request_delivery(
+    *,
+    event_name: str = "pull_request",
+    event_action: str | None = "closed",
+    normalized_payload: dict[str, JsonValue] | None = None,
+) -> TriggerDeliveryRecord:
+    return TriggerDeliveryRecord(
+        trigger_delivery_id="tdel_board_todo",
+        provider=TriggerProvider.GITHUB,
+        provider_delivery_id="delivery-board-todo",
+        event_name=event_name,
+        event_action=event_action,
+        signature_status=TriggerDeliverySignatureStatus.VALID,
+        ingest_status=TriggerDeliveryIngestStatus.RECEIVED,
+        headers={},
+        payload={},
+        normalized_payload=normalized_payload
+        or {
+            "merged": True,
+            "repository_full_name": "coolplayagent/relay-teams",
+            "pull_request_number": 318,
+        },
+    )
 
 
 def _build_signature(*, body: bytes, secret: str) -> str:
@@ -568,6 +609,73 @@ def test_match_rule_reports_each_mismatch_reason(tmp_path: Path) -> None:
         True,
         "matched",
         None,
+    )
+
+
+def test_board_todo_merge_update_handles_pull_request_delivery(
+    tmp_path: Path,
+) -> None:
+    service, _, _, _ = _build_service(tmp_path)
+    board_service = _FakeBoardTodoMergeService()
+    service.replace_board_todo_service(board_service)
+
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery()
+    )
+
+    assert board_service.calls == [("coolplayagent/relay-teams", 318)]
+
+
+def test_board_todo_merge_update_ignores_non_matching_deliveries(
+    tmp_path: Path,
+) -> None:
+    service, _, _, _ = _build_service(tmp_path)
+    board_service = _FakeBoardTodoMergeService()
+    service.replace_board_todo_service(board_service)
+
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery(event_name="issues")
+    )
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery(event_action="opened")
+    )
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery(
+            normalized_payload={
+                "merged": False,
+                "repository_full_name": "coolplayagent/relay-teams",
+                "pull_request_number": 318,
+            }
+        )
+    )
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery(
+            normalized_payload={
+                "merged": True,
+                "repository_full_name": 123,
+                "pull_request_number": 318,
+            }
+        )
+    )
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery(
+            normalized_payload={
+                "merged": True,
+                "repository_full_name": "coolplayagent/relay-teams",
+                "pull_request_number": "bad",
+            }
+        )
+    )
+
+    assert board_service.calls == []
+
+
+def test_board_todo_merge_update_swallows_board_errors(tmp_path: Path) -> None:
+    service, _, _, _ = _build_service(tmp_path)
+    service.replace_board_todo_service(_FakeBoardTodoMergeService(fail=True))
+
+    service._update_board_todo_for_merged_pull_request(
+        _board_todo_pull_request_delivery()
     )
 
 

@@ -21,12 +21,46 @@ from relay_teams.boards.internal_adapter import (
     InternalBoardAdapter,
 )
 from relay_teams.boards.linear_adapter import LinearAdapter
+from relay_teams.boards.todo_models import (
+    BoardTodoArchiveRequest,
+    BoardTodoBoardResponse,
+    BoardTodoCreateInput,
+    BoardTodoDeltaResponse,
+    BoardTodoItem,
+    BoardTodoLinkPullRequestRequest,
+    BoardTodoSourceProvider,
+    BoardTodoSourceType,
+    BoardTodoStartRequest,
+    BoardTodoStatus,
+    BoardTodoStatusCounts,
+    BoardTodoStatusUpdateRequest,
+    BoardTodoSyncChangesRequest,
+    BoardTodoSyncRequest,
+)
+from relay_teams.boards.todo_repository import BoardTodoRepository
+from relay_teams.boards.todo_service import BoardTodoService
 
 __all__ = [
     "BoardEventDispatcher",
     "BoardEventKind",
     "BoardTask",
     "BoardTaskState",
+    "BoardTodoArchiveRequest",
+    "BoardTodoBoardResponse",
+    "BoardTodoCreateInput",
+    "BoardTodoDeltaResponse",
+    "BoardTodoItem",
+    "BoardTodoLinkPullRequestRequest",
+    "BoardTodoRepository",
+    "BoardTodoService",
+    "BoardTodoSourceProvider",
+    "BoardTodoSourceType",
+    "BoardTodoStartRequest",
+    "BoardTodoStatus",
+    "BoardTodoStatusCounts",
+    "BoardTodoStatusUpdateRequest",
+    "BoardTodoSyncChangesRequest",
+    "BoardTodoSyncRequest",
     "GitHubAdapter",
     "InternalBoardAdapter",
     "LinearAdapter",

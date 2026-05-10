@@ -953,6 +953,7 @@ Board configurations are currently held in-memory via `TaskBoardConfig` models. 
 - `relay_teams.agent_runtimes`: `external_agent_sessions`, `agent_instances`.
 - `relay_teams.workspace`: `workspaces`.
 - `relay_teams.sessions.runs`: `events`, `run_intents`, `run_runtime`, `run_states`, `run_snapshots`, `background_tasks`, `run_todos`.
+- `relay_teams.boards`: `board_todo_items`.
 - `relay_teams.audit`: `security_audit_events`.
 - `relay_teams.monitors`: `monitor_subscriptions`, `monitor_triggers`.
 - `relay_teams.agents.tasks`: `tasks`, `task_spec_artifacts`.
@@ -1120,7 +1121,75 @@ Notes:
 
 ---
 
-### 2.9.1.2 `monitor_subscriptions`
+### 2.9.1.2 `board_todo_items`
+
+```sql
+CREATE TABLE IF NOT EXISTS board_todo_items (
+    todo_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    source_provider TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    repository_full_name TEXT,
+    issue_number INTEGER,
+    pull_request_number INTEGER,
+    html_url TEXT,
+    session_id TEXT,
+    run_id TEXT,
+    linked_pr_number INTEGER,
+    linked_pr_url TEXT,
+    archived_at TEXT,
+    last_synced_at TEXT,
+    source_updated_at TEXT,
+    last_status_reason TEXT,
+    item_revision INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(workspace_id, source_provider, source_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_board_todo_items_workspace_status
+    ON board_todo_items(workspace_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_board_todo_items_workspace_revision
+    ON board_todo_items(workspace_id, item_revision);
+CREATE INDEX IF NOT EXISTS idx_board_todo_items_run
+    ON board_todo_items(run_id);
+CREATE INDEX IF NOT EXISTS idx_board_todo_items_linked_pr
+    ON board_todo_items(repository_full_name, linked_pr_number);
+
+CREATE TABLE IF NOT EXISTS board_todo_workspace_state (
+    workspace_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL DEFAULT 0,
+    github_issue_sync_cursor TEXT,
+    repository_full_name TEXT,
+    updated_at TEXT NOT NULL
+);
+```
+
+Purpose: workspace-scoped TODO board state owned by Agent Teams. External
+systems such as GitHub provide source records only; they do not own board
+columns.
+
+Notes:
+- `status` is one of `todo`, `in_progress`, `review`, `done`, or `archived`.
+- GitHub sync upserts by `(workspace_id, source_provider, source_key)`.
+- `updated_at` is the local board row update time; `source_updated_at` stores
+  the external source update time, such as GitHub issue `updated_at`, for
+  business-time sorting.
+- `session_id/run_id` bind an item to the dedicated session/run created when processing starts.
+- Session deletion clears stale board references; active non-`done` items bound to that session return to `todo`.
+- `linked_pr_number/linked_pr_url` move issue/manual items to `done` when the linked PR merges.
+- `archived_at` implements soft delete. Sync does not reactivate manually archived rows. Full GitHub sync treats the open issue set as active truth; closed or otherwise non-open GitHub issues without merged linked PR evidence are archived instead of staying in TODO. If GitHub later reports an issue as open again, rows archived by GitHub closed/non-open reconciliation are restored to `todo`.
+- `item_revision` and `board_todo_workspace_state.revision` power frontend delta updates.
+- `github_issue_sync_cursor` stores the per-workspace cursor for incremental GitHub issue sync.
+- Repository: `src/relay_teams/boards/todo_repository.py`
+
+---
+
+### 2.9.1.3 `monitor_subscriptions`
 
 ```sql
 CREATE TABLE IF NOT EXISTS monitor_subscriptions (
