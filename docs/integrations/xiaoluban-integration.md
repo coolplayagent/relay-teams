@@ -65,9 +65,9 @@ Example:
 
 ## UI Flow
 
-### IM Gateway
+### Connectors
 
-Open `IM Gateway` from the left-side feature navigation.
+Open `Connectors` from the left-side feature navigation.
 
 The Xiaoluban section supports:
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
+from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
 from threading import Lock, Thread
 
@@ -113,10 +114,32 @@ class _DiscordMessageClient(discord.Client):  # pragma: no cover - discord.py ca
 
     async def on_message(self, message: discord.Message) -> None:
         inbound = self._to_inbound_message(message)
-        _ = asyncio.run_coroutine_threadsafe(
+        future = asyncio.run_coroutine_threadsafe(
             self._handle_message(self._account_id, inbound),
             self._target_loop,
         )
+        future.add_done_callback(self._handle_message_done)
+
+    def _handle_message_done(self, future: Future[None]) -> None:
+        try:
+            future.result()
+        except FutureCancelledError:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="gateway.discord.inbound.cancelled",
+                message="Discord inbound message handler was cancelled",
+                payload={"account_id": self._account_id},
+            )
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="gateway.discord.inbound.failed",
+                message="Discord inbound message handler failed",
+                payload={"account_id": self._account_id, "error": str(exc)},
+                exc_info=exc,
+            )
 
     def request_close(self) -> None:
         try:

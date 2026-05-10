@@ -122,7 +122,7 @@
 - `fetchRoleConfigOptions`
 - `fetchOrchestrationConfig`
 
-## Gateway 视图
+## Connectors 视图
 
 负责模块：
 
@@ -139,6 +139,7 @@
 
 用户可见区域：
 
+- Connector 卡片网格，Discord 位于第一组连接器。
 - Feishu 触发器列表和编辑器。
 - Discord gateway accounts。
 - Xiaoluban gateway accounts。
@@ -188,7 +189,7 @@ WeChat 表现：
 - 创建、更新、启停、删除 Discord account。
 - 创建、更新、启停、删除 Xiaoluban account。
 - 启动 WeChat 登录并轮询登录结果。
-- 更新 gateway 的目标 workspace、session mode、role/preset。
+- 更新 connector 的目标 workspace、session mode、role/preset。
 
 依赖 API：
 

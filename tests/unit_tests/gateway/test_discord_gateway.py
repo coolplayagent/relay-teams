@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
@@ -51,6 +52,7 @@ from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressStatus,
 )
 from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.runs.run_models import IntentInput
 from relay_teams.sessions.external_session_binding_repository import (
     ExternalSessionBindingRepository,
 )
@@ -651,6 +653,42 @@ def test_discord_gateway_worker_preserves_thread_parent_channel_id() -> None:
         loop.close()
 
 
+def test_discord_gateway_worker_logs_inbound_handler_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def handle_message(account_id: str, inbound: DiscordInboundMessage) -> None:
+        _ = (account_id, inbound)
+
+    def set_running(running: bool, error: str | None) -> None:
+        _ = (running, error)
+
+    loop = asyncio.new_event_loop()
+    try:
+        client = _DiscordMessageClient(
+            account_id="bot-1",
+            target_loop=loop,
+            handle_message=handle_message,
+            set_running=set_running,
+        )
+        future: Future[None] = Future()
+        future.set_exception(RuntimeError("database unavailable"))
+        caplog.set_level(logging.WARNING)
+
+        client._handle_message_done(future)
+
+        assert any(
+            record.__dict__.get("event") == "gateway.discord.inbound.failed"
+            and record.__dict__.get("payload")
+            == {
+                "account_id": "bot-1",
+                "error": "database unavailable",
+            }
+            for record in caplog.records
+        )
+    finally:
+        loop.close()
+
+
 def test_discord_message_acceptance_and_terminal_text_helpers() -> None:
     account = _discord_account().model_copy(update={"allow_channel_messages": True})
 
@@ -903,10 +941,14 @@ async def test_discord_service_start_queued_record_failure_paths(
 ) -> None:
     repository = DiscordAccountRepository(tmp_path / "discord.db")
     inbound_queue_repo = DiscordInboundQueueRepository(tmp_path / "discord-queue.db")
+    fake_run_service = _FakeRunService(())
+    fake_gateway_sessions = _FakeGatewaySessionService()
     service = _build_service(
         tmp_path,
         repository=repository,
         inbound_queue_repo=inbound_queue_repo,
+        run_service=fake_run_service,
+        gateway_session_service=fake_gateway_sessions,
     )
     missing_account_record, _ = await inbound_queue_repo.create_or_get(
         _queue_record(
@@ -918,6 +960,12 @@ async def test_discord_service_start_queued_record_failure_paths(
     missing_result = await service._start_queued_record(missing_account_record)
     failed_record = await inbound_queue_repo.get("queue-missing-account")
     await repository.upsert_account(_discord_account())
+    fake_gateway_sessions.resolve_or_create_session(
+        channel_type=GatewayChannelType.DISCORD,
+        external_session_id="discord:bot-1:dm:user-1",
+        workspace_id="workspace-1",
+        peer_chat_id="channel-1",
+    )
     no_ingress_record, _ = await inbound_queue_repo.create_or_get(
         _queue_record(
             inbound_queue_id="queue-no-ingress",
@@ -926,15 +974,18 @@ async def test_discord_service_start_queued_record_failure_paths(
         )
     )
     no_ingress_result = await service._start_queued_record(no_ingress_record)
-    requeued = await inbound_queue_repo.get("queue-no-ingress")
+    started_without_ingress = await inbound_queue_repo.get("queue-no-ingress")
 
     assert missing_result is False
     assert failed_record is not None
     assert failed_record.status == DiscordInboundQueueStatus.FAILED
     assert failed_record.last_error == "Discord account not found: missing-account"
-    assert no_ingress_result is False
-    assert requeued is not None
-    assert requeued.status == DiscordInboundQueueStatus.QUEUED
+    assert no_ingress_result is True
+    assert started_without_ingress is not None
+    assert started_without_ingress.status == DiscordInboundQueueStatus.WAITING_RESULT
+    assert started_without_ingress.run_id == "run-1"
+    assert fake_run_service.created_intents[0].session_id == "session-1"
+    assert fake_run_service.started_run_ids == ["run-1"]
 
 
 @pytest.mark.asyncio
@@ -1529,6 +1580,8 @@ class _FakeRunEvent:
 class _FakeRunService:
     def __init__(self, events: tuple[_FakeRunEvent, ...]) -> None:
         self._events = events
+        self.created_intents: list[IntentInput] = []
+        self.started_run_ids: list[str] = []
 
     @property
     def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
@@ -1540,6 +1593,13 @@ class _FakeRunService:
     def stream_run_events(self, run_id: str) -> AsyncIterator[_FakeRunEvent]:
         _ = run_id
         return self._iter_events()
+
+    async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        self.created_intents.append(intent)
+        return f"run-{len(self.created_intents)}", intent.session_id
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        self.started_run_ids.append(run_id)
 
     async def _iter_events(self) -> AsyncIterator[_FakeRunEvent]:
         for event in self._events:
