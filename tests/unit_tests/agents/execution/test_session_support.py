@@ -402,7 +402,7 @@ async def test_tool_result_state_checks_async_runtime_event_id_path() -> None:
     )
 
 
-def test_filter_model_messages_drops_thinking_only_response() -> None:
+def test_filter_model_messages_keeps_thinking_only_response() -> None:
     session = object.__new__(AgentLlmSession)
     filtered = AgentLlmSession._filter_model_messages(
         session,
@@ -412,8 +412,10 @@ def test_filter_model_messages_drops_thinking_only_response() -> None:
         ],
     )
 
-    assert len(filtered) == 1
+    assert len(filtered) == 2
     assert isinstance(filtered[0], ModelResponse)
+    assert isinstance(filtered[0].parts[0], ThinkingPart)
+    assert isinstance(filtered[1], ModelResponse)
 
 
 def test_tool_args_from_preview_handles_empty_invalid_and_scalar_json() -> None:
