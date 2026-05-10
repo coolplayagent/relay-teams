@@ -38,6 +38,7 @@ from relay_teams.gateway.discord.gateway_worker import DiscordGatewayWorker
 from relay_teams.gateway.im.command_service import (
     ImSessionCommandResult,
     ImSessionCommandService,
+    _FeishuQueueLookup,
 )
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressRequest,
@@ -46,8 +47,13 @@ from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressStatus,
 )
 from relay_teams.sessions.runs.enums import RunEventType
+from relay_teams.sessions.external_session_binding_repository import (
+    ExternalSessionBindingRepository,
+)
+from relay_teams.sessions.runs.run_service import SessionRunService
 from relay_teams.secrets import AppSecretStore
 from relay_teams.sessions.session_models import SessionMode
+from relay_teams.sessions.session_service import SessionService
 from relay_teams.workspace import WorkspaceService
 
 
@@ -1560,7 +1566,16 @@ class _FakeDiscordGatewayWorker:
 
 class _DiscordCommandServiceForTest(ImSessionCommandService):
     def __init__(self) -> None:
-        pass
+        super().__init__(
+            session_service=cast(SessionService, object()),
+            run_service=cast(SessionRunService, object()),
+            external_session_binding_repo=cast(
+                ExternalSessionBindingRepository,
+                object(),
+            ),
+            gateway_session_service=cast(GatewaySessionService, object()),
+            feishu_message_pool_service=cast(_FeishuQueueLookup, object()),
+        )
 
     def _cmd_wechat_status(self, *, session_id: str) -> str:
         return f"status:{session_id}"
