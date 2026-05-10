@@ -228,7 +228,12 @@ Notes:
 - `spec_artifact_id` links the task envelope to the current versioned row in `task_spec_artifacts`.
 - `spec_source_task_id` records the upstream task whose specification this task derives from.
 - `evidence_bundle` stores normalized verification evidence generated from checklist, file, command, spec, and formal-verification checks.
-- The system no longer stores workflow graphs. `tasks` is the only orchestration source of truth.
+- The system does not store a separate workflow graph table. `tasks` is the
+  durable orchestration DAG source of truth: `orchestration_node_id` identifies
+  graph nodes, and `depends_on_task_ids` stores the resolved dependency edges.
+- Fixed orchestration presets materialize their `graph` template as task rows.
+  Dynamic Coordinator-created DAGs and automatic planner lanes use the same task
+  row shape and recovery semantics.
 - Automatic DelegationPlanner planning uses `orchestration_node_id` values such as
   `auto_plan` and `auto_lane_*` to make generated planner and lane tasks
   recoverable and to prevent duplicate planning on resume.
@@ -920,7 +925,7 @@ Notes:
 - `yolo` controls whether tool approvals are skipped entirely for that run.
 - `thinking_enabled` and `thinking_effort` capture per-run thinking configuration for providers that support reasoning streams.
 - `target_role_id` stores an optional one-run direct-chat override, such as a leading `@Role` mention from the web composer.
-- `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role and effective orchestration policy, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later. The policy snapshot includes DelegationPlanner auto-planning fields such as `auto_plan_long_tasks`, `planner_role_id`, and `max_temporary_roles_per_run`.
+- `session_mode` and `topology_json` snapshot the resolved root-agent topology, including the selected normal-mode root role, selected fixed orchestration graph when present, and effective orchestration policy, used when the run was created, so recoverable resumes do not drift when global orchestration settings change later. The policy snapshot includes DelegationPlanner auto-planning fields such as `auto_plan_long_tasks`, `planner_role_id`, and `max_temporary_roles_per_run`.
 - `conversation_context_json` stores optional source-channel context, including Feishu group-chat markers used by runtime prompt assembly and the automation direct-send override used by IM-bound scheduled runs.
 
 ---

@@ -6,7 +6,9 @@
 - Content type: `application/json`
 - Streaming endpoint: `text/event-stream`
 - Time fields: ISO 8601 UTC strings
-- Orchestration model: task-only. There is no workflow graph API, workflow template registry, or persisted dependency DAG.
+- Orchestration model: task-backed DAG. There is no separate workflow graph
+  table or workflow template registry; persisted tasks are the durable
+  orchestration graph through node ids and dependency task ids.
 
 Common status codes:
 - `200`: success
@@ -74,6 +76,16 @@ Notes:
   - `orchestration`: the root role is `Coordinator`, and delegation is limited by the selected orchestration preset.
 - Session mode and orchestration preset can be changed only before the session starts its first run.
 - Every delegated task is a persisted task record under that root task.
+- Orchestration is DAG-first: delegated work should be represented as durable
+  task nodes with explicit dependency edges whenever the work is long-running,
+  staged, or parallelizable.
+- Long or spec-heavy non-graph orchestration runs may first create a
+  `DelegationPlanner` task. The planner returns a bounded lane plan; Coordinator
+  validates it, creates or reuses temporary roles, creates lane task nodes, and
+  lets the runtime execute ready nodes concurrently.
+- Fixed `graph` presets provide an explicit DAG template. Automatic
+  `DelegationPlanner` planning does not inject extra planner nodes into fixed
+  graph presets unless the preset itself includes a planner node.
 - A delegated task binds to exactly one delegated role and one subagent instance on first dispatch.
 - Re-dispatching an `assigned` or `stopped` task reuses its bound instance.
 - `completed`, `failed`, and `timeout` tasks must be replaced instead of re-dispatched.
@@ -898,7 +910,7 @@ Response fields:
     - `coordinator_inline_budget_steps`
     - `max_temporary_roles_per_run`
     - `prefer_temporary_roles_for_long_tasks`
-  - `graph`, optional DAG template
+  - `graph`, optional fixed DAG template
 
 ### `PUT /system/configs/orchestration`
 
@@ -911,6 +923,9 @@ Rules:
 - `presets[].policy.max_parallel_delegated_tasks` accepts `0..16`; `0` disables automatic delegated task execution for simple direct-answer presets.
 - `presets[].policy.planner_role_id` defaults to `DelegationPlanner`; when automatic planning is enabled, this role is executed through the normal delegated task runtime path.
 - `presets[].policy.max_temporary_roles_per_run` accepts `0..16` and bounds automatic DelegationPlanner temporary role proposals.
+- `graph` presets are fixed DAG templates. Non-graph presets can still produce
+  a dynamic task DAG through automatic `DelegationPlanner` planning or through
+  Coordinator-created task nodes.
 - The default preset id must match one existing preset.
 - `MainAgent` and `Coordinator` base role prompts are edited through `/roles/configs/*`, not this config.
 - `orchestration_prompt` is appended only for `Coordinator` in `orchestration` session mode.
@@ -2115,12 +2130,19 @@ Request:
 ```
 
 Behavior:
-- Creates delegated task contracts only.
+- Creates delegated task contracts and, when `role_id` plus
+  `orchestration_node_id` are provided, queues task nodes for DAG execution.
 - If `spec` is provided, it is persisted as a versioned task spec artifact and the created task envelope is bound through `spec_artifact_id`.
 - If `spec_artifact_id` is provided during creation, the stored spec is imported and the new task receives its own artifact version; cross-task artifact rows are not reused as the task's current `spec_artifact_id`.
 - If `spec_source_task_id` is provided, or when a draft depends on exactly one existing spec-bearing task, the new task is linked to that source task and can inherit the current spec artifact.
 - A provided `spec_source_task_id` must resolve to a task with a bound spec.
-- Role binding happens later during dispatch.
+- Role binding happens later during dispatch unless the draft includes
+  `role_id`; pre-bound task nodes are assigned immediately and ready nodes run
+  automatically after the current Coordinator turn.
+- `depends_on_node_ids` expresses dynamic DAG edges inside the create batch or
+  against existing `orchestration_node_id` values. The backend resolves them to
+  `depends_on_task_ids`, rejects unknown nodes, rejects self-dependencies, and
+  requires the resulting graph to be acyclic.
 - If a task contract sets `lifecycle.timeout_seconds`, the timeout is progress-sensitive rather than a strict wall clock cap. The dispatch starts with one timeout window, and each persisted model/tool message for the same task and assigned instance extends the deadline by another full window. If no new task message is persisted before the current deadline, the worker is cancelled and `lifecycle.on_timeout` is applied. Task status heartbeats only keep the running row fresh; they do not extend the lifecycle timeout by themselves.
 - `lifecycle.spec_checkpoint` controls automatic spec refresh for long non-coordinator runs. Defaults are enabled with refresh thresholds of 12 completed tool calls, 48 active history messages, or 8000 estimated history tokens since the previous checkpoint. The object accepts `enabled`, `refresh_interval_tool_calls`, `refresh_interval_messages`, `refresh_interval_history_tokens`, and `max_summary_chars`.
 
@@ -2167,6 +2189,11 @@ The embedded `envelope` may include:
 - `spec`: normalized task specification.
 - `spec_artifact_id`: current versioned spec artifact bound to this task.
 - `spec_source_task_id`: upstream task whose specification this task derives from.
+- `orchestration_node_id`: stable DAG node id for fixed graph nodes,
+  Coordinator-created dynamic nodes, and automatic `auto_plan` / `auto_lane_*`
+  planning nodes.
+- `depends_on_task_ids`: resolved upstream task ids that must reach a completed
+  state before this node is ready.
 - `evidence_bundle`: normalized verification evidence generated by the latest verification pass.
 
 ### `PATCH /tasks/{task_id}`
