@@ -533,41 +533,61 @@ class MemoryBankService:
         self, request: MemorySearchRequest
     ) -> MemorySearchResult:
         """Fallback text search when no FTS5 retrieval service is available."""
-        query = MemoryQuery(
-            workspace_id=request.workspace_id,
-            tier=request.tier,
-            scope=request.scope,
-            session_id=request.session_id,
-            role_id=request.role_id,
-            kind=request.kind,
-            status=request.status,
-            min_confidence=request.min_confidence,
-            limit=request.limit,
-            offset=0,
-        )
-        result = await self._repo.query_entries_async(query)
-
         items: list[MemorySearchHit] = []
+        total_matches = 0
         rank = 1
+        offset = 0
         text_lower = request.text_query.lower()
-        for summary in result.items:
-            body_lower = summary.content_body_preview.lower()
-            title_lower = summary.content_title.lower()
-            if text_lower in title_lower or text_lower in body_lower:
-                snippet = self._build_snippet(summary.content_body_preview, text_lower)
-                items.append(
-                    MemorySearchHit(
-                        entry=summary,
-                        score=1.0,
-                        rank=rank,
-                        snippet=snippet,
+        while True:
+            query = MemoryQuery(
+                workspace_id=request.workspace_id,
+                tier=request.tier,
+                scope=request.scope,
+                session_id=request.session_id,
+                role_id=request.role_id,
+                kind=request.kind,
+                status=request.status,
+                min_confidence=request.min_confidence,
+                limit=GLOBAL_SEARCH_BATCH_SIZE,
+                offset=offset,
+            )
+            result = await self._repo.query_entries_async(query)
+            if not result.items:
+                break
+
+            for summary in result.items:
+                entry = await self._repo.get_by_id_async(summary.id)
+                if entry is None:
+                    continue
+                searchable_text = "\n".join(
+                    (
+                        entry.content.title,
+                        entry.content.body,
+                        entry.content.context,
+                        entry.content.outcome,
                     )
                 )
+                if text_lower not in searchable_text.lower():
+                    continue
+                total_matches += 1
+                if len(items) < request.limit:
+                    items.append(
+                        MemorySearchHit(
+                            entry=summary,
+                            score=1.0,
+                            rank=rank,
+                            snippet=self._build_snippet(searchable_text, text_lower),
+                        )
+                    )
                 rank += 1
+
+            offset += GLOBAL_SEARCH_BATCH_SIZE
+            if offset >= result.total_count:
+                break
 
         return MemorySearchResult(
             items=tuple(items),
-            total_count=len(items),
+            total_count=total_matches,
         )
 
     @staticmethod
