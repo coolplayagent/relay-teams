@@ -40,6 +40,7 @@ from relay_teams.retrieval.retrieval_service import RetrievalService
 
 LOGGER = get_logger(__name__)
 GLOBAL_SEARCH_BATCH_SIZE = 100
+INDEX_BACKFILL_BATCH_SIZE = 100
 
 
 class MemoryBankService:
@@ -108,6 +109,41 @@ class MemoryBankService:
 
     async def list_entries_async(self, query: MemoryQuery) -> MemoryQueryResult:
         return await self._repo.query_entries_async(query)
+
+    async def reindex_active_entries_async(self) -> int:
+        if self._retrieval_service is None:
+            return 0
+
+        indexed_count = 0
+        offset = 0
+        while True:
+            result = await self._repo.query_entries_async(
+                MemoryQuery(
+                    status=MemoryEntryStatus.ACTIVE,
+                    limit=INDEX_BACKFILL_BATCH_SIZE,
+                    offset=offset,
+                )
+            )
+            if not result.items:
+                break
+
+            for summary in result.items:
+                entry = await self._repo.get_by_id_async(summary.id)
+                if entry is None:
+                    continue
+                if await self._index_entry_async(entry):
+                    indexed_count += 1
+
+            offset += INDEX_BACKFILL_BATCH_SIZE
+            if offset >= result.total_count:
+                break
+
+        if indexed_count > 0:
+            LOGGER.info(
+                "Reindexed %d active Memory Bank entries into retrieval",
+                indexed_count,
+            )
+        return indexed_count
 
     # ------------------------------------------------------------------
     # 3. Update
@@ -546,16 +582,16 @@ class MemoryBankService:
     # FTS5 indexing integration
     # ------------------------------------------------------------------
 
-    async def _index_entry_async(self, entry: MemoryEntry) -> None:
+    async def _index_entry_async(self, entry: MemoryEntry) -> bool:
         """Index a memory entry into the FTS5 retrieval store.
 
         Silently skips indexing if no retrieval_service is configured or if
         the entry should not be indexed (e.g. non-ACTIVE status).
         """
         if self._retrieval_service is None:
-            return
+            return False
         if entry.status != MemoryEntryStatus.ACTIVE:
-            return
+            return False
 
         scope_id = entry.workspace_id
         config = RetrievalScopeConfig(
@@ -582,12 +618,14 @@ class MemoryBankService:
                 config=config,
                 documents=(doc,),
             )
+            return True
         except (ValueError, OSError, RuntimeError):
             LOGGER.warning(
                 "failed to index memory entry %s in FTS5",
                 entry.id,
                 exc_info=True,
             )
+            return False
 
     # ------------------------------------------------------------------
     # 8. Condensation (placeholder)

@@ -1374,6 +1374,7 @@ class ServerContainer:
         )
 
     async def start(self) -> None:
+        await self.memory_bank_service.reindex_active_entries_async()
         self.mcp_discovery_service.start_warmup(self.mcp_registry)
         self.app_env_file_watcher.start()
         self.mcp_config_file_watcher.start()

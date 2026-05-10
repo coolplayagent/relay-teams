@@ -1682,6 +1682,8 @@ Notes:
 - `kind` is one of: `insight`, `constraint`, `decision`, `failure_mode`, `preference`, `fact`, `summary`.
 - `status` is one of: `active`, `superseded`, `expired`.
 - `source` is one of: `consolidation`, `manual`, `condensation`, `task_result`.
+  Already-persisted legacy `reflection` values are normalized to
+  `consolidation` during repository initialization.
 - `tags` stores space-separated tag tokens for LIKE-based filtering.
 - `confidence_score` decays over time for medium_term and persistent entries; entries below the minimum threshold are automatically expired.
 - `superseded_by_id` references the memory entry that replaced this entry during consolidation.
@@ -1690,4 +1692,6 @@ Notes:
 - `metadata_json` stores up to 20 key-value string pairs.
 - Legacy `role_memories` rows are migrated into this table at startup, then
   the legacy table is removed.
+- Server startup reindexes active Memory Bank rows into retrieval so migrated
+  records are searchable through FTS-backed memory search.
 - Repository: `src/relay_teams/memory/repository.py`

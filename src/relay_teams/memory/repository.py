@@ -35,6 +35,7 @@ from relay_teams.persistence.sqlite_repository import (
 )
 
 LOGGER = get_logger(__name__)
+_LEGACY_REFLECTION_SOURCE = "reflection"
 
 _SCHEMA_STATEMENTS: list[str] = [
     """\
@@ -120,7 +121,7 @@ def _row_to_entry(row: sqlite3.Row) -> MemoryEntry:
         ),
         tags=tags,
         confidence_score=float(row["confidence_score"]),
-        source=MemorySourceKind(str(row["source"])),
+        source=_memory_source_from_db(row["source"]),
         source_ref=str(row["source_ref"]),
         superseded_by_id=_nullable_str(row["superseded_by_id"]),
         parent_entry_id=_nullable_str(row["parent_entry_id"]),
@@ -154,6 +155,16 @@ def _parse_dt_or_none(value: object) -> datetime | None:
     return datetime.fromisoformat(text)
 
 
+def _memory_source_from_db(value: object) -> MemorySourceKind:
+    source_value = str(value).strip()
+    if source_value == _LEGACY_REFLECTION_SOURCE:
+        LOGGER.warning(
+            "Read legacy reflection Memory Bank source; treating it as consolidation"
+        )
+        return MemorySourceKind.CONSOLIDATION
+    return MemorySourceKind(source_value)
+
+
 def _row_to_summary(row: sqlite3.Row) -> MemoryEntrySummary:
     entry = _row_to_entry(row)
     return _entry_to_summary(entry)
@@ -173,8 +184,21 @@ class MemoryBankRepository(SharedSqliteRepository):
     def _create_schema(self) -> None:
         for stmt in _SCHEMA_STATEMENTS:
             self._conn.execute(stmt)
+        self._normalize_legacy_memory_sources()
         self._migrate_legacy_role_memories()
         self._conn.execute("DROP TABLE IF EXISTS role_daily_memories")
+
+    def _normalize_legacy_memory_sources(self) -> None:
+        cursor = self._conn.execute(
+            "UPDATE memory_entries SET source=? WHERE source=?",
+            (MemorySourceKind.CONSOLIDATION.value, _LEGACY_REFLECTION_SOURCE),
+        )
+        normalized_count = cursor.rowcount
+        if normalized_count > 0:
+            LOGGER.info(
+                "Normalized %d legacy reflection Memory Bank source values",
+                normalized_count,
+            )
 
     def _migrate_legacy_role_memories(self) -> None:
         table = self._conn.execute(

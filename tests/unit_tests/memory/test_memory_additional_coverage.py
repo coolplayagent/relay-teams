@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -337,6 +339,55 @@ class TestSearchFallback:
 
 
 class TestFTSIndexing:
+    async def test_reindex_active_entries_indexes_migrated_legacy_memory(
+        self, tmp_path: Path
+    ) -> None:
+        db_file = tmp_path / "legacy_reindex.db"
+        with sqlite3.connect(db_file) as conn:
+            conn.execute(
+                """CREATE TABLE role_memories (
+                    role_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    content_markdown TEXT NOT NULL,
+                    performance_json TEXT NOT NULL DEFAULT '',
+                    assessment_state_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO role_memories (
+                    role_id,
+                    workspace_id,
+                    content_markdown,
+                    performance_json,
+                    assessment_state_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    "writer",
+                    "ws-legacy",
+                    "Prefer indexed migrations.",
+                    "",
+                    "",
+                    "2026-03-15T08:30:00+00:00",
+                ),
+            )
+            conn.commit()
+
+        repo = MemoryBankRepository(db_file)
+        mock_retrieval = MagicMock()
+        mock_retrieval.upsert_documents_async = AsyncMock()
+        service = MemoryBankService(repository=repo, retrieval_service=mock_retrieval)
+
+        indexed_count = await service.reindex_active_entries_async()
+
+        assert indexed_count == 1
+        mock_retrieval.upsert_documents_async.assert_awaited_once()
+        documents = mock_retrieval.upsert_documents_async.await_args.kwargs["documents"]
+        assert len(documents) == 1
+        assert documents[0].scope_id == "ws-legacy"
+        assert "Prefer indexed migrations." in documents[0].body
+
     async def test_index_entry_with_retrieval_service(self, tmp_path: Path) -> None:
         repo = MemoryBankRepository(tmp_path / "test_fts.db")
         mock_retrieval = MagicMock()
