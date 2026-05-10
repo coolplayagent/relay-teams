@@ -369,6 +369,31 @@ def _build_signature(*, body: bytes, secret: str) -> str:
     return f"sha256={digest}"
 
 
+@pytest.mark.asyncio
+async def test_resolve_account_token_async_returns_account_token(
+    tmp_path: Path,
+) -> None:
+    service, _, _, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+
+    token = await service.resolve_account_token_async(account_id)
+
+    assert token == "ghp_test"
+
+
+@pytest.mark.asyncio
+async def test_resolve_account_token_async_returns_none_when_missing(
+    tmp_path: Path,
+) -> None:
+    service, _, secret_store, _ = _build_service(tmp_path)
+    account_id = _create_account(service)
+    secret_store.delete_token(tmp_path / ".agent-teams", account_id=account_id)
+
+    token = await service.resolve_account_token_async(account_id)
+
+    assert token is None
+
+
 def test_execute_github_actions_returns_request_and_response_payloads(
     tmp_path: Path,
 ) -> None:

@@ -76,6 +76,7 @@ const AUTOMATION_INTERNAL_WORKSPACE_ID = 'automation-system';
 const FEATURE_IDS = Object.freeze({
     skills: 'skills',
     automation: 'automation',
+    connectors: 'connectors',
     gateway: 'gateway',
 });
 
@@ -205,7 +206,7 @@ function syncFeatureNavigationState(featureId) {
         || [],
     );
     for (const item of featureItems) {
-        const itemFeatureId = String(item?.getAttribute?.('data-feature-id') || '').trim();
+        const itemFeatureId = normalizeFeatureId(item?.getAttribute?.('data-feature-id'));
         const active = !!activeFeatureId && itemFeatureId === activeFeatureId;
         setElementClassFlag(item, 'is-active', active);
         item.setAttribute?.('aria-current', active ? 'page' : 'false');
@@ -1141,7 +1142,7 @@ function getSignatureSubagentChildren(sessionId) {
 }
 
 function getActiveFeatureId() {
-    return String(state.currentFeatureViewId || '').trim();
+    return normalizeFeatureId(state.currentFeatureViewId);
 }
 
 function renderFeatureNav() {
@@ -1193,7 +1194,7 @@ function renderFeatureNav() {
                 </span>
                 <span class="home-feature-label">${escapeHtml(t('sidebar.feature_automation'))}</span>
             </button>
-            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.gateway ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.gateway}">
+            <button class="home-feature-item${activeFeatureId === FEATURE_IDS.connectors ? ' is-active' : ''}" type="button" data-feature-id="${FEATURE_IDS.gateway}" data-feature-canonical-id="${FEATURE_IDS.connectors}">
                 <span class="home-feature-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" class="icon home-feature-icon-svg home-feature-icon-svg-gateway">
                         <path d="M5.2 6.4h13.6a1.8 1.8 0 0 1 1.8 1.8v7a1.8 1.8 0 0 1-1.8 1.8H12.3l-3.2 2.35a.5.5 0 0 1-.8-.4V17H5.2a1.8 1.8 0 0 1-1.8-1.8v-7a1.8 1.8 0 0 1 1.8-1.8Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
@@ -1245,7 +1246,7 @@ async function handlePrimaryNewSessionClick() {
 }
 
 async function openFeatureView(featureId) {
-    const safeFeatureId = String(featureId || '').trim();
+    const safeFeatureId = normalizeFeatureId(featureId);
     if (!safeFeatureId) {
         return;
     }
@@ -1264,12 +1265,20 @@ async function openFeatureView(featureId) {
         await openSkillsFeatureView();
     } else if (safeFeatureId === FEATURE_IDS.automation) {
         await openAutomationHomeView();
-    } else if (safeFeatureId === FEATURE_IDS.gateway) {
+    } else if (safeFeatureId === FEATURE_IDS.connectors) {
         await openImFeatureView();
     }
     if (state.currentFeatureViewId === safeFeatureId) {
         syncFeatureNavigationState(safeFeatureId);
     }
+}
+
+function normalizeFeatureId(featureId) {
+    const normalized = String(featureId || '').trim();
+    if (normalized === FEATURE_IDS.gateway) {
+        return FEATURE_IDS.connectors;
+    }
+    return normalized;
 }
 
 function isNativeDirectoryPickerUnavailable(error) {

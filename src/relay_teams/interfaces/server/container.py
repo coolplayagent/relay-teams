@@ -41,6 +41,7 @@ from relay_teams.builtin import (
     get_builtin_skills_dir,
 )
 from relay_teams.commands import CommandRegistry
+from relay_teams.connector import ConnectorService
 from relay_teams.computer import build_default_computer_runtime
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.orchestration.settings_config_manager import (
@@ -1064,6 +1065,15 @@ class ServerContainer:
             monitor_service=self.monitor_service,
             session_ingress_service=self.session_ingress_service,
             get_github_config=self.github_config_service.get_github_config,
+        )
+        self.connector_service = ConnectorService(
+            github_trigger_service=self.github_trigger_service,
+            github_connectivity_probe_service=self.github_connectivity_probe_service,
+            feishu_gateway_service=self.feishu_gateway_service,
+            feishu_subscription_service=self.feishu_subscription_service,
+            wechat_gateway_service=self.wechat_gateway_service,
+            xiaoluban_gateway_service=self.xiaoluban_gateway_service,
+            xiaoluban_im_listener_service=self.xiaoluban_im_listener_service,
         )
         self.github_trigger_action_worker = GitHubTriggerActionWorker(
             trigger_service=self.github_trigger_service

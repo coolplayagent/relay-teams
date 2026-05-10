@@ -61,6 +61,8 @@ export {
     fetchGitHubTriggerRules,
     fetchGitHubAccountRepositories,
     fetchTriggers,
+    fetchConnectors,
+    testConnector,
     fetchWeChatGatewayAccounts,
     fetchXiaolubanGatewayAccounts,
     deleteTrigger,

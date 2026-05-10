@@ -214,6 +214,17 @@ class FeishuSubscriptionService:
                     },
                 )
 
+    def is_account_running(self, account_id: str) -> bool:
+        normalized_account_id = str(account_id or "").strip()
+        if not normalized_account_id:
+            return False
+        with self._lock:
+            existing = self._runners.get(normalized_account_id)
+            if existing is None:
+                return False
+            _runtime_config, runner = existing
+            return runner.is_alive()
+
     def _stop_runner_locked(self, *, trigger_id: str, reason: str) -> None:
         existing = self._runners.pop(trigger_id, None)
         if existing is None:

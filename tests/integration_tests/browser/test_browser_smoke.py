@@ -489,11 +489,7 @@ def test_browser_shell_settings_and_session_management(
         )
     ) as create_feishu_request_info:
         page.locator('.home-feature-item[data-feature-id="gateway"]').click()
-        expect(page.locator("#project-view-title")).to_contain_text(
-            re.compile(r"(IM Gateway|IM 接入)"),
-            timeout=_WAIT_TIMEOUT_MS,
-        )
-        page.locator("[data-feature-gateway-add-feishu]").click()
+        _open_connector_create_flow(page, "feishu")
         expect(page.locator("#feishu-trigger-name-input")).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
@@ -528,9 +524,8 @@ def test_browser_shell_settings_and_session_management(
 
     page.locator("#settings-close").click()
     expect(page.locator("#settings-modal")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
-    page.locator("#project-view-close").click()
-    expect(page.locator("#project-view")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
     page.locator(f'.session-item[data-session-id="{session_id}"]').click()
+    expect(page.locator("#project-view")).to_be_hidden(timeout=_WAIT_TIMEOUT_MS)
 
     with page.expect_request(
         lambda request: (
@@ -1874,7 +1869,7 @@ def test_browser_gateway_xiaoluban_and_automation_binding_flow(
     ) as create_xiaoluban_response_info:
         page.locator('.home-feature-item[data-feature-id="gateway"]').click()
         expect(page.locator("#project-view")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
-        page.locator("[data-feature-gateway-add-xiaoluban]").click()
+        _open_connector_create_flow(page, "xiaoluban")
         expect(page.locator('[role="alertdialog"]')).to_be_visible(
             timeout=_WAIT_TIMEOUT_MS
         )
@@ -2370,6 +2365,21 @@ def _open_app(page: Page, integration_env: IntegrationEnvironment) -> None:
         timeout=_WAIT_TIMEOUT_MS,
     )
     expect(page.locator("#projects-list")).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+
+
+def _open_connector_create_flow(page: Page, provider: str) -> None:
+    connector_action = page.locator(
+        f'.connectors-card[data-connector-card="{provider}"] '
+        f'[data-connector-open="{provider}"]'
+    )
+    expect(connector_action).to_be_visible(timeout=_WAIT_TIMEOUT_MS)
+    connector_action.click()
+    modal_connect = page.locator(f'[data-connector-configure="{provider}"]')
+    try:
+        expect(modal_connect).to_be_visible(timeout=1000)
+    except (AssertionError, PlaywrightError):
+        return
+    modal_connect.click()
 
 
 def _click_visible_session_item(page: Page, session_id: str) -> None:

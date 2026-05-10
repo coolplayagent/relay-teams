@@ -862,6 +862,10 @@
     margin-bottom: 0.9rem;
 }
 
+.project-view-toolbar.is-hidden {
+    display: none;
+}
+
 .project-view-toolbar-copy h3 {
     margin: 0;
     font-size: 1.14rem;

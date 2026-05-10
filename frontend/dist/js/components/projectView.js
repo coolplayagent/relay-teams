@@ -35,6 +35,7 @@ import {
     fetchAutomationProject,
     fetchAutomationProjectSessions,
     fetchConfigStatus,
+    fetchConnectors,
     fetchGitHubAccountRepositories,
     fetchGitHubRepoSubscriptions,
     fetchGitHubTriggerAccounts,
@@ -78,6 +79,10 @@ import {
     loadGitHubSettingsPanel,
     renderGitHubAccessPanelMarkup,
 } from './settings/githubSettings.js';
+import {
+    renderConnectorConfigModalMarkup,
+    renderConnectorsCardPageMarkup,
+} from './connectors/connectorCards.js';
 import { state } from '../core/state.js';
 import { els } from '../utils/dom.js';
 import { t } from '../utils/i18n.js';
@@ -117,7 +122,7 @@ const workspaceViewCache = new Map();
 const FEATURE_VIEW_IDS = Object.freeze({
     skills: 'skills',
     automation: 'automation',
-    gateway: 'gateway',
+    gateway: 'connectors',
 });
 const FEATURE_LOADING_DELAY_MS = 120;
 const FEATURE_CLAWHUB_FIELD_IDS = Object.freeze({
@@ -216,6 +221,10 @@ function createInitialGatewayFeatureState() {
         feishuDraft: null,
         xiaolubanAccounts: [],
         wechatAccounts: [],
+        connectorsResponse: null,
+        connectorSearch: '',
+        connectorStatusFilter: 'all',
+        connectorModalProvider: '',
         workspaces: [],
         normalRoles: [],
         orchestrationPresets: [],
@@ -3746,7 +3755,8 @@ export async function openImFeatureView() {
         request,
     );
     try {
-        const [triggers, xiaolubanAccounts, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+        const [connectorsResponse, triggers, xiaolubanAccounts, wechatAccounts, workspaces, roleOptions, orchestrationConfig] = await Promise.all([
+            fetchConnectors({ signal: request.signal }),
             fetchTriggers({ signal: request.signal }),
             fetchXiaolubanGatewayAccounts({ signal: request.signal }),
             fetchWeChatGatewayAccounts({ signal: request.signal }),
@@ -3762,6 +3772,7 @@ export async function openImFeatureView() {
             feishuTriggers: normalizeFeishuTriggers(triggers),
             feishuEditingTriggerId: '',
             feishuDraft: null,
+            connectorsResponse,
             xiaolubanAccounts: normalizeXiaolubanAccounts(xiaolubanAccounts),
             wechatAccounts: normalizeWeChatAccounts(wechatAccounts),
             workspaces: normalizeGatewayWorkspaces(workspaces),
@@ -5186,13 +5197,19 @@ function renderGatewayFeatureModal() {
     if (!root) {
         return;
     }
-    const content = currentGatewayFeatureState.feishuDraft
-        ? renderGatewayFeishuModal()
-        : renderGatewayWeChatConnectModal();
+    let content = '';
+    if (currentGatewayFeatureState.feishuDraft) {
+        content = renderGatewayFeishuModal();
+    } else if (currentGatewayFeatureState.wechatModalOpen) {
+        content = renderGatewayWeChatConnectModal();
+    } else {
+        content = renderConnectorConfigModal();
+    }
     root.innerHTML = content;
     if (!content) {
         return;
     }
+    bindConnectorConfigModalHandlers(root);
     root.querySelectorAll('[data-feature-gateway-modal-close]').forEach(button => {
         button.addEventListener('click', () => {
             handleCancelFeishuFeatureTrigger();
@@ -5218,138 +5235,434 @@ function renderGatewayFeatureModal() {
             void handleStartWeChatFeatureLogin();
         });
     });
+    bindGatewayRecordHandlers(root);
     bindFeishuEditorInputs();
 }
 
-function renderGatewayFeatureView() {
-    renderToolbar(null, {
-        title: t('feature.gateway.title'),
-        mode: 'feature',
-        summary: resolveGatewayFeatureSummary(currentGatewayFeatureState),
+function getCurrentConnectorModalItem() {
+    const provider = String(currentGatewayFeatureState.connectorModalProvider || '').trim();
+    if (!provider) {
+        return null;
+    }
+    const items = Array.isArray(currentGatewayFeatureState.connectorsResponse?.items)
+        ? currentGatewayFeatureState.connectorsResponse.items
+        : [];
+    return items.find(item => String(item?.provider || item?.connector_id || '').trim() === provider) || null;
+}
+
+function renderConnectorConfigModal() {
+    const item = getCurrentConnectorModalItem();
+    if (!item) {
+        return '';
+    }
+    return renderConnectorConfigModalMarkup({
+        item,
+        accountManagementMarkup: renderConnectorAccountManagement(item),
     });
+}
+
+function renderConnectorAccountManagement(item) {
+    const provider = String(item?.provider || item?.connector_id || '').trim();
+    if (provider === FEISHU_PLATFORM) {
+        return renderConnectorAccountManagementSection(
+            renderConnectorFeishuAccountList(currentGatewayFeatureState.feishuTriggers),
+        );
+    }
+    if (provider === WECHAT_PLATFORM) {
+        return renderConnectorAccountManagementSection(
+            renderConnectorWeChatAccountList(currentGatewayFeatureState.wechatAccounts),
+        );
+    }
+    if (provider === XIAOLUBAN_PLATFORM) {
+        return renderConnectorAccountManagementSection(
+            renderConnectorXiaolubanAccountList(currentGatewayFeatureState.xiaolubanAccounts),
+        );
+    }
+    return '';
+}
+
+function renderConnectorAccountManagementSection(recordsMarkup) {
+    return `
+        <section class="connectors-account-management">
+            <div class="connectors-account-management-header">
+                <h4>${escapeHtml(t('feature.connectors.accounts.title'))}</h4>
+            </div>
+            ${recordsMarkup}
+        </section>
+    `;
+}
+
+function renderConnectorFeishuAccountList(triggers) {
+    const rows = Array.isArray(triggers) ? triggers : [];
+    if (rows.length === 0) {
+        return renderConnectorAccountEmptyState();
+    }
+    return `
+        <div class="connectors-account-list">
+            ${rows.map(trigger => {
+                const triggerId = String(trigger?.trigger_id || '').trim();
+                const status = String(trigger?.status || 'disabled').trim() || 'disabled';
+                const workspaceId = String(trigger?.target_config?.workspace_id || '').trim();
+                const appName = resolveFeishuTriggerAppName(trigger);
+                const credentialsReady = trigger?.secret_status?.app_secret_configured === true;
+                return renderConnectorAccountRow({
+                    id: triggerId,
+                    title: String(trigger?.display_name || trigger?.name || triggerId),
+                    chips: [
+                        t(`automation.status.${status}`),
+                        credentialsReady ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'),
+                    ],
+                    meta: [workspaceId, appName],
+                    actions: [
+                        {
+                            attr: 'data-feature-feishu-toggle',
+                            label: status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'),
+                        },
+                        { attr: 'data-feature-feishu-edit', label: t('settings.action.edit') },
+                        { attr: 'data-feature-feishu-delete', label: t('settings.action.delete') },
+                    ],
+                });
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderConnectorWeChatAccountList(accounts) {
+    const rows = Array.isArray(accounts) ? accounts : [];
+    if (rows.length === 0) {
+        return renderConnectorAccountEmptyState();
+    }
+    return `
+        <div class="connectors-account-list">
+            ${rows.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const status = String(account?.status || 'disabled').trim() || 'disabled';
+                const statusLabel = account?.running === true
+                    ? t('settings.gateway.status_running')
+                    : t(`automation.status.${status}`);
+                const lastError = account?.last_error
+                    ? `${t('settings.gateway.last_error')}: ${String(account.last_error)}`
+                    : '';
+                return renderConnectorAccountRow({
+                    id: accountId,
+                    title: String(account?.display_name || accountId),
+                    chips: [statusLabel, accountId],
+                    meta: [account?.workspace_id ? String(account.workspace_id) : '', lastError],
+                    actions: [
+                        {
+                            attr: 'data-feature-wechat-toggle',
+                            label: status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'),
+                        },
+                        { attr: 'data-feature-wechat-edit', label: t('settings.action.edit') },
+                        { attr: 'data-feature-wechat-delete', label: t('settings.action.delete') },
+                    ],
+                });
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderConnectorXiaolubanAccountList(accounts) {
+    const rows = Array.isArray(accounts) ? accounts : [];
+    if (rows.length === 0) {
+        return renderConnectorAccountEmptyState();
+    }
+    return `
+        <div class="connectors-account-list">
+            ${rows.map(account => {
+                const accountId = String(account?.account_id || '').trim();
+                const status = String(account?.status || 'disabled').trim() || 'disabled';
+                const derivedUid = String(account?.derived_uid || '').trim();
+                const tokenConfigured = account?.secret_status?.token_configured === true;
+                const workspaceIds = Array.isArray(account?.notification_workspace_ids)
+                    ? account.notification_workspace_ids.map(value => String(value || '').trim()).filter(Boolean)
+                    : [];
+                const receiverLabel = formatXiaolubanReceiverSummary(account);
+                const imStatus = getXiaolubanImStatus(account);
+                return renderConnectorAccountRow({
+                    id: accountId,
+                    title: String(account?.display_name || accountId),
+                    chips: [
+                        t(`automation.status.${status}`),
+                        tokenConfigured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'),
+                        formatMessage('settings.gateway.xiaoluban_notification_workspace_count', { count: workspaceIds.length }),
+                        formatMessage('settings.gateway.xiaoluban_im_summary', { status: imStatus }),
+                        derivedUid,
+                    ],
+                    meta: [
+                        accountId ? formatMessage('settings.gateway.xiaoluban_internal_id_copy', { account_id: accountId }) : '',
+                        formatMessage('settings.gateway.xiaoluban_notification_receiver_summary', { receiver: receiverLabel }),
+                    ],
+                    actions: [
+                        {
+                            attr: 'data-feature-xiaoluban-toggle',
+                            label: status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'),
+                        },
+                        { attr: 'data-feature-xiaoluban-edit', label: t('settings.action.edit') },
+                        { attr: 'data-feature-xiaoluban-delete', label: t('settings.action.delete') },
+                    ],
+                });
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderConnectorAccountRow({ id, title, chips, meta, actions }) {
+    const visibleChips = Array.isArray(chips)
+        ? chips.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const visibleMeta = Array.isArray(meta)
+        ? meta.map(value => String(value || '').trim()).filter(Boolean)
+        : [];
+    const visibleActions = Array.isArray(actions) ? actions : [];
+    return `
+        <article class="connectors-account-row">
+            <div class="connectors-account-main">
+                <div class="connectors-account-title-row">
+                    <strong>${escapeHtml(title)}</strong>
+                    ${visibleChips.length > 0 ? `
+                        <div class="connectors-account-chips">
+                            ${visibleChips.map(value => `<span>${escapeHtml(value)}</span>`).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+                ${visibleMeta.length > 0 ? `<p>${visibleMeta.map(escapeHtml).join(' · ')}</p>` : ''}
+            </div>
+            <div class="connectors-account-actions">
+                ${visibleActions.map(action => `
+                    <button class="settings-inline-action settings-list-action" type="button" ${action.attr}="${escapeHtml(id)}">${escapeHtml(action.label)}</button>
+                `).join('')}
+            </div>
+        </article>
+    `;
+}
+
+function renderConnectorAccountEmptyState() {
+    return `
+        <div class="connectors-account-empty">
+            ${escapeHtml(t('feature.connectors.accounts.empty'))}
+        </div>
+    `;
+}
+
+function bindConnectorConfigModalHandlers(root) {
+    root.querySelectorAll('[data-connector-modal-close]').forEach(button => {
+        button.addEventListener('click', () => {
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                connectorModalProvider: '',
+            };
+            renderGatewayFeatureModal();
+        });
+    });
+    root.querySelectorAll('[data-connector-configure]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleConnectConnectorFromModal(button.getAttribute('data-connector-configure'));
+        });
+    });
+}
+
+function renderGatewayFeatureView({ restoreSearchFocus = false, searchSelectionStart = null, searchSelectionEnd = null } = {}) {
+    hideProjectViewToolbar();
     if (!els.projectViewContent) {
         return;
     }
-    const feishuTriggers = Array.isArray(currentGatewayFeatureState.feishuTriggers) ? currentGatewayFeatureState.feishuTriggers : [];
-    const xiaolubanAccounts = Array.isArray(currentGatewayFeatureState.xiaolubanAccounts) ? currentGatewayFeatureState.xiaolubanAccounts : [];
-    const wechatAccounts = Array.isArray(currentGatewayFeatureState.wechatAccounts) ? currentGatewayFeatureState.wechatAccounts : [];
     els.projectViewContent.innerHTML = `
-        <div class="feature-page feature-page-neutral gateway-feature-page">
-            <section class="workspace-view-panel gateway-section">
-                <div class="workspace-view-panel-header gateway-section-header">
-                    <div class="gateway-section-headline">
-                        <h3>${escapeHtml(t('feature.gateway.feishu_section'))}</h3>
-                        <p>${escapeHtml(t('settings.triggers.feishu_detail_copy'))}</p>
-                    </div>
-                    <button class="secondary-btn gateway-section-btn" type="button" data-feature-gateway-add-feishu>${escapeHtml(t('feature.gateway.add_feishu'))}</button>
-                </div>
-                <div class="gateway-section-body">
-                    ${renderGatewaySummaryChips([
-                        t('settings.triggers.trigger_count').replace('{count}', String(feishuTriggers.length)),
-                        t('settings.triggers.enabled_count').replace('{count}', String(feishuTriggers.filter(trigger => String(trigger?.status || '').trim() === 'enabled').length)),
-                    ])}
-                    ${renderGatewayFeishuRecords(feishuTriggers)}
-                </div>
-            </section>
-            <section class="workspace-view-panel gateway-section">
-                <div class="workspace-view-panel-header gateway-section-header">
-                    <div class="gateway-section-headline">
-                        <h3>${escapeHtml(t('feature.gateway.wechat_section'))}</h3>
-                        <p>${escapeHtml(t('settings.gateway.wechat_none_copy'))}</p>
-                    </div>
-                    <button class="secondary-btn gateway-section-btn" type="button" data-feature-gateway-connect-wechat>${escapeHtml(t('settings.gateway.connect_wechat'))}</button>
-                </div>
-                <div class="gateway-section-body">
-                    ${renderGatewaySummaryChips([
-                        t('settings.gateway.gateway_count').replace('{count}', String(wechatAccounts.length)),
-                        t('settings.triggers.enabled_count').replace('{count}', String(wechatAccounts.filter(account => String(account?.status || '').trim() === 'enabled').length)),
-                        t('settings.gateway.running_count').replace('{count}', String(wechatAccounts.filter(account => account?.running === true).length)),
-                    ])}
-                    ${currentGatewayFeatureState.wechatStatusMessage ? `
-                        <div class="feature-inline-status is-${escapeHtml(currentGatewayFeatureState.wechatStatusTone || 'neutral')}">${escapeHtml(currentGatewayFeatureState.wechatStatusMessage)}</div>
-                    ` : ''}
-                    ${renderGatewayWeChatRecords(wechatAccounts)}
-                </div>
-            </section>
-            <section class="workspace-view-panel gateway-section">
-                <div class="workspace-view-panel-header gateway-section-header">
-                    <div class="gateway-section-headline">
-                        <h3>${escapeHtml(t('feature.gateway.xiaoluban_section'))}</h3>
-                        <p>${escapeHtml(t('settings.gateway.xiaoluban_none_copy'))}</p>
-                    </div>
-                    <button class="secondary-btn gateway-section-btn" type="button" data-feature-gateway-add-xiaoluban>${escapeHtml(t('feature.gateway.add_xiaoluban'))}</button>
-                </div>
-                <div class="gateway-section-body">
-                    ${renderGatewaySummaryChips([
-                        t('settings.gateway.gateway_count').replace('{count}', String(xiaolubanAccounts.length)),
-                        t('settings.triggers.enabled_count').replace('{count}', String(xiaolubanAccounts.filter(account => String(account?.status || '').trim() === 'enabled').length)),
-                    ])}
-                    ${renderGatewayXiaolubanRecords(xiaolubanAccounts)}
-                </div>
-            </section>
-        </div>
+        ${renderConnectorsCardPageMarkup({
+            connectorsResponse: currentGatewayFeatureState.connectorsResponse,
+            searchQuery: currentGatewayFeatureState.connectorSearch,
+            statusFilter: currentGatewayFeatureState.connectorStatusFilter,
+        })}
     `;
-    els.projectViewContent.querySelectorAll('[data-feature-gateway-add-feishu]').forEach(button => {
+    els.projectViewContent.querySelectorAll('[data-connectors-search]').forEach(input => {
+        input.addEventListener('input', () => {
+            const nextSearch = String(input.value || '');
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                connectorSearch: nextSearch,
+            };
+            renderGatewayFeatureView({
+                restoreSearchFocus: true,
+                searchSelectionStart: typeof input.selectionStart === 'number'
+                    ? input.selectionStart
+                    : nextSearch.length,
+                searchSelectionEnd: typeof input.selectionEnd === 'number'
+                    ? input.selectionEnd
+                    : nextSearch.length,
+            });
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-connectors-filter]').forEach(button => {
+        button.addEventListener('click', () => {
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                connectorStatusFilter: String(button.getAttribute('data-connectors-filter') || 'all').trim() || 'all',
+            };
+            renderGatewayFeatureView();
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-connector-open]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleOpenConnectorCard(button.getAttribute('data-connector-open'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-connector-manage]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleManageConnectorCard(button.getAttribute('data-connector-manage'));
+        });
+    });
+    bindGatewayRecordHandlers();
+    renderGatewayFeatureModal();
+    if (restoreSearchFocus) {
+        restoreConnectorSearchFocus(searchSelectionStart, searchSelectionEnd);
+    }
+}
+
+function restoreConnectorSearchFocus(selectionStart, selectionEnd) {
+    const input = els.projectViewContent?.querySelector?.('[data-connectors-search]');
+    if (!input || typeof input.focus !== 'function') {
+        return;
+    }
+    input.focus({ preventScroll: true });
+    if (typeof input.setSelectionRange !== 'function') {
+        return;
+    }
+    const inputLength = String(input.value || '').length;
+    const start = typeof selectionStart === 'number'
+        ? Math.min(Math.max(selectionStart, 0), inputLength)
+        : inputLength;
+    const end = typeof selectionEnd === 'number'
+        ? Math.min(Math.max(selectionEnd, 0), inputLength)
+        : start;
+    input.setSelectionRange(start, end);
+}
+
+async function handleOpenConnectorCard(provider) {
+    const normalizedProvider = String(provider || '').trim();
+    if (normalizedProvider === 'github') {
+        await openAutomationGitHubView('access');
+        return;
+    }
+    const item = getConnectorItemByProvider(normalizedProvider);
+    if (Number(item?.account_count || 0) === 0) {
+        await handleConnectConnectorFromModal(normalizedProvider);
+        return;
+    }
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        connectorModalProvider: normalizedProvider,
+    };
+    renderGatewayFeatureModal();
+}
+
+async function handleManageConnectorCard(provider) {
+    const normalizedProvider = String(provider || '').trim();
+    if (normalizedProvider === 'github') {
+        await openAutomationGitHubView('access');
+        return;
+    }
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        connectorModalProvider: normalizedProvider,
+    };
+    renderGatewayFeatureModal();
+}
+
+function getConnectorItemByProvider(provider) {
+    const items = Array.isArray(currentGatewayFeatureState.connectorsResponse?.items)
+        ? currentGatewayFeatureState.connectorsResponse.items
+        : [];
+    return items.find(item => String(item?.provider || item?.connector_id || '').trim() === provider) || null;
+}
+
+function bindGatewayRecordHandlers(root = els.projectViewContent) {
+    if (!root) {
+        return;
+    }
+    root.querySelectorAll('[data-feature-gateway-add-feishu]').forEach(button => {
         button.addEventListener('click', () => {
             void handleCreateFeishuFeatureTrigger();
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-gateway-add-xiaoluban]').forEach(button => {
+    root.querySelectorAll('[data-feature-gateway-add-xiaoluban]').forEach(button => {
         button.addEventListener('click', () => {
             void handleCreateXiaolubanFeatureAccount();
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-gateway-connect-wechat]').forEach(button => {
+    root.querySelectorAll('[data-feature-gateway-connect-wechat]').forEach(button => {
         button.addEventListener('click', () => {
             void handleStartWeChatFeatureLogin();
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-feishu-edit]').forEach(button => {
+    root.querySelectorAll('[data-feature-feishu-edit]').forEach(button => {
         button.addEventListener('click', () => {
             void handleEditFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-edit'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-feishu-toggle]').forEach(button => {
+    root.querySelectorAll('[data-feature-feishu-toggle]').forEach(button => {
         button.addEventListener('click', () => {
             void handleToggleFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-toggle'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-feishu-delete]').forEach(button => {
+    root.querySelectorAll('[data-feature-feishu-delete]').forEach(button => {
         button.addEventListener('click', () => {
             void handleDeleteFeishuFeatureTrigger(button.getAttribute('data-feature-feishu-delete'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-xiaoluban-edit]').forEach(button => {
+    root.querySelectorAll('[data-feature-xiaoluban-edit]').forEach(button => {
         button.addEventListener('click', () => {
             void handleEditXiaolubanFeatureAccount(button.getAttribute('data-feature-xiaoluban-edit'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-xiaoluban-toggle]').forEach(button => {
+    root.querySelectorAll('[data-feature-xiaoluban-toggle]').forEach(button => {
         button.addEventListener('click', () => {
             void handleToggleXiaolubanFeatureAccount(button.getAttribute('data-feature-xiaoluban-toggle'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-xiaoluban-delete]').forEach(button => {
+    root.querySelectorAll('[data-feature-xiaoluban-delete]').forEach(button => {
         button.addEventListener('click', () => {
             void handleDeleteXiaolubanFeatureAccount(button.getAttribute('data-feature-xiaoluban-delete'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-wechat-edit]').forEach(button => {
+    root.querySelectorAll('[data-feature-wechat-edit]').forEach(button => {
         button.addEventListener('click', () => {
             void handleEditWeChatFeatureAccount(button.getAttribute('data-feature-wechat-edit'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-wechat-toggle]').forEach(button => {
+    root.querySelectorAll('[data-feature-wechat-toggle]').forEach(button => {
         button.addEventListener('click', () => {
             void handleToggleWeChatFeatureAccount(button.getAttribute('data-feature-wechat-toggle'));
         });
     });
-    els.projectViewContent.querySelectorAll('[data-feature-wechat-delete]').forEach(button => {
+    root.querySelectorAll('[data-feature-wechat-delete]').forEach(button => {
         button.addEventListener('click', () => {
             void handleDeleteWeChatFeatureAccount(button.getAttribute('data-feature-wechat-delete'));
         });
     });
+}
+
+async function handleConnectConnectorFromModal(provider) {
+    const normalizedProvider = String(provider || '').trim();
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        connectorModalProvider: '',
+    };
     renderGatewayFeatureModal();
+    if (normalizedProvider === 'github') {
+        await openAutomationGitHubView('access');
+        return;
+    }
+    if (normalizedProvider === FEISHU_PLATFORM) {
+        await handleCreateFeishuFeatureTrigger();
+        return;
+    }
+    if (normalizedProvider === WECHAT_PLATFORM) {
+        await handleStartWeChatFeatureLogin();
+        return;
+    }
+    if (normalizedProvider === XIAOLUBAN_PLATFORM) {
+        await handleCreateXiaolubanFeatureAccount();
+    }
 }
 
 async function handleSkillsReloadFeature() {
@@ -6524,7 +6837,29 @@ function renderWorkspaceRootMeta(snapshot) {
     `;
 }
 
+function getProjectViewToolbarElement() {
+    return els.projectViewTitle?.closest?.('.project-view-toolbar') || null;
+}
+
+function hideProjectViewToolbar() {
+    const toolbar = getProjectViewToolbarElement();
+    toolbar?.classList?.add('is-hidden');
+    if (els.projectViewTitle) {
+        els.projectViewTitle.textContent = '';
+    }
+    if (els.projectViewSummary) {
+        els.projectViewSummary.textContent = '';
+    }
+    if (els.projectViewToolbarActions) {
+        els.projectViewToolbarActions.innerHTML = '';
+    }
+    els.projectViewReloadBtn = null;
+    els.projectViewCloseBtn = null;
+}
+
 function renderToolbar(projectOrWorkspace, { title = '', summary = '', mode = 'workspace', actions = '' } = {}) {
+    const toolbar = getProjectViewToolbarElement();
+    toolbar?.classList?.remove('is-hidden');
     if (els.projectViewTitle) {
         if (title) {
             els.projectViewTitle.textContent = title;

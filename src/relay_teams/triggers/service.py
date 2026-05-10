@@ -890,6 +890,15 @@ class GitHubTriggerService:
 
         return await asyncio.to_thread(self.list_accounts)
 
+    async def resolve_account_token_async(self, account_id: str) -> str | None:
+        def resolve_token() -> str | None:
+            try:
+                return self._require_account_token(account_id)
+            except ValueError:
+                return None
+
+        return await asyncio.to_thread(resolve_token)
+
     async def create_account_async(
         self, req: GitHubTriggerAccountCreateInput
     ) -> GitHubTriggerAccountRecord:

@@ -46,6 +46,7 @@ from relay_teams.interfaces.server.routers import (
     boards,
     a2a_internal,
     commands,
+    connectors,
     feishu_gateway,
     gateway,
     guardrails_router,
@@ -208,6 +209,7 @@ app = FastAPI(
 app.include_router(system.router, prefix="/api")
 app.include_router(audit.router, prefix="/api")
 app.include_router(commands.router, prefix="/api")
+app.include_router(connectors.router, prefix="/api")
 app.include_router(automation.router, prefix="/api")
 app.include_router(auto_harness.router, prefix="/api")
 app.include_router(feishu_gateway.router, prefix="/api")

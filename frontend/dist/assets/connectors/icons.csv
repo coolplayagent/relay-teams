@@ -1,0 +1,5 @@
+provider,label,asset,source
+github,GitHub,/assets/connectors/github.svg,local
+feishu,Feishu,/assets/connectors/feishu.svg,local
+wechat,WeChat,/assets/connectors/wechat.svg,local
+xiaoluban,Xiaoluban,/assets/connectors/xiaoluban.svg,local

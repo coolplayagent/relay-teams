@@ -173,6 +173,11 @@ export {
 } from './triggers.js';
 
 export {
+    fetchConnectors,
+    testConnector,
+} from './connectors.js';
+
+export {
     createXiaolubanGatewayAccount,
     deleteXiaolubanGatewayAccount,
     disableXiaolubanGatewayAccount,

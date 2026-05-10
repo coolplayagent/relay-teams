@@ -17,6 +17,7 @@ from relay_teams.agents.tasks.spec_artifact_diff_service import (
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.automation.automation_service import AutomationService
+from relay_teams.connector import ConnectorService
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
 from relay_teams.env.environment_variable_service import EnvironmentVariableService
 from relay_teams.env.github_config_service import GitHubConfigService
@@ -117,6 +118,10 @@ def get_audit_service(request: Request) -> AuditService:
 
 def get_automation_service(request: Request) -> AutomationService:
     return get_container(request).automation_service
+
+
+def get_connector_service(request: Request) -> ConnectorService:
+    return get_container(request).connector_service
 
 
 def get_feishu_gateway_service(request: Request) -> FeishuGatewayService:
