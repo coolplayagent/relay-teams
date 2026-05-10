@@ -59,6 +59,11 @@ Filters:
 - `min_confidence`
 - `limit`
 
+The FTS path pages retrieval hits before applying Memory Bank filters such as
+status, tags, scope, role, and confidence. The final `limit` is applied only
+after those filters so selective searches do not hide lower-ranked valid
+matches.
+
 ## Prompt Injection
 
 Prompt injection reads Memory Bank through `MemoryBankService` and formats a
