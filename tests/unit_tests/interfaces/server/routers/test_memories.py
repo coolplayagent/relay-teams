@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from relay_teams.interfaces.server.routers.memories import router
@@ -63,11 +64,11 @@ def _build_client(service: MemoryBankService) -> TestClient:
 
 class TestRouteRegistration:
     def test_router_has_nine_routes(self) -> None:
-        routes = [r for r in router.routes if hasattr(r, "path")]
+        routes = [r for r in router.routes if isinstance(r, APIRoute)]
         assert len(routes) == 9
 
     def test_router_paths_match_spec(self) -> None:
-        paths = {r.path for r in router.routes if hasattr(r, "path")}  # type: ignore[union-attr]
+        paths = {r.path for r in router.routes if isinstance(r, APIRoute)}
         wid = "/workspaces/{workspace_id}"
         assert "/memories" in paths
         assert "/memories/search" in paths
@@ -79,8 +80,8 @@ class TestRouteRegistration:
     def test_list_memories_methods(self) -> None:
         route_map: dict[str, set[str]] = {}
         for r in router.routes:
-            if hasattr(r, "path") and hasattr(r, "methods"):  # type: ignore[union-attr]
-                route_map.setdefault(r.path, set()).update(r.methods)  # type: ignore[union-attr]
+            if isinstance(r, APIRoute):
+                route_map.setdefault(r.path, set()).update(r.methods)
         wid = "/workspaces/{workspace_id}"
         assert "GET" in route_map.get("/memories", set())
         assert "POST" in route_map.get("/memories/search", set())
