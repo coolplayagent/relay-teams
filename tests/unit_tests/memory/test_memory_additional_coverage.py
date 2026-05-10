@@ -339,6 +339,11 @@ class TestSearchFallback:
 
 
 class TestFTSIndexing:
+    async def test_reindex_active_entries_skips_without_retrieval_service(
+        self, service: MemoryBankService
+    ) -> None:
+        assert await service.reindex_active_entries_async() == 0
+
     async def test_reindex_active_entries_indexes_migrated_legacy_memory(
         self, tmp_path: Path
     ) -> None:

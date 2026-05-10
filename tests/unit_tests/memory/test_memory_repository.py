@@ -158,6 +158,95 @@ class TestSchemaInit:
             "role-assessment",
         }
 
+    async def test_unsupported_legacy_role_memories_table_is_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        db_file = tmp_path / "unsupported_legacy_memory.db"
+        with sqlite3.connect(db_file) as conn:
+            conn.execute(
+                """CREATE TABLE role_memories (
+                    role_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL
+                )"""
+            )
+            conn.commit()
+
+        migrated_repo = MemoryBankRepository(db_file)
+        table_row = await migrated_repo._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='role_memories'",
+            )
+        )
+        result = await migrated_repo.query_entries_async(
+            MemoryQuery(workspace_id="ws-legacy", limit=10)
+        )
+
+        assert table_row is None
+        assert result.total_count == 0
+
+    async def test_legacy_role_memories_skip_blank_ids_and_default_bad_timestamp(
+        self, tmp_path: Path
+    ) -> None:
+        db_file = tmp_path / "legacy_memory_bad_timestamp.db"
+        with sqlite3.connect(db_file) as conn:
+            conn.execute(
+                """CREATE TABLE role_memories (
+                    role_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    content_markdown TEXT NOT NULL,
+                    performance_json TEXT NOT NULL DEFAULT '',
+                    assessment_state_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            conn.executemany(
+                """INSERT INTO role_memories (
+                    role_id,
+                    workspace_id,
+                    content_markdown,
+                    performance_json,
+                    assessment_state_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    (
+                        "",
+                        "ws-legacy",
+                        "Skip blank role.",
+                        "",
+                        "",
+                        "2026-03-15T08:30:00+00:00",
+                    ),
+                    (
+                        "writer",
+                        "ws-legacy",
+                        "Use default timestamp.",
+                        "",
+                        "",
+                        "not-a-timestamp",
+                    ),
+                ),
+            )
+            conn.commit()
+
+        migrated_repo = MemoryBankRepository(db_file)
+        result = await migrated_repo.query_entries_async(
+            MemoryQuery(
+                workspace_id="ws-legacy",
+                scope=MemoryScope.ROLE,
+                role_id="writer",
+                limit=10,
+            )
+        )
+        loaded = await migrated_repo.get_by_id_async(result.items[0].id)
+
+        assert result.total_count == 1
+        assert loaded is not None
+        assert loaded.content.body == "Use default timestamp."
+        assert loaded.created_at.tzinfo is not None
+
     async def test_legacy_reflection_source_is_normalized(self, tmp_path: Path) -> None:
         db_file = tmp_path / "legacy_reflection_source.db"
         initial_repo = MemoryBankRepository(db_file)
