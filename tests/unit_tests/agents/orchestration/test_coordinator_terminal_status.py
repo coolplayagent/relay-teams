@@ -10,6 +10,11 @@ from relay_teams.media import content_parts_from_text
 from relay_teams.agent_runtimes.instances.enums import InstanceStatus
 from relay_teams.agent_runtimes.instances.models import create_subagent_instance
 from relay_teams.agents.orchestration.coordinator import CoordinatorGraph
+from relay_teams.agents.orchestration.delegation_planning import (
+    AUTO_LANE_NODE_PREFIX,
+    DelegationPlan,
+    DelegationPlanningService,
+)
 from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraph,
     OrchestrationGraphEdge,
@@ -262,6 +267,66 @@ class _CancellingTaskExecutionService:
         _ = instance_id, role_id
         self.calls.append(task.task_id)
         raise asyncio.CancelledError
+
+
+class _CreatingPlanningService:
+    def __init__(
+        self,
+        *,
+        task_repo: TaskRepository,
+        agent_repo: AgentInstanceRepository,
+        plan: DelegationPlan | None,
+    ) -> None:
+        self._task_repo = task_repo
+        self._agent_repo = agent_repo
+        self._plan = plan
+        self.calls = 0
+
+    async def plan_and_create_tasks_async(
+        self,
+        *,
+        root_task: TaskEnvelope,
+        topology: RunTopologySnapshot | None,
+        policy: OrchestrationPolicy,
+    ) -> DelegationPlan | None:
+        _ = topology, policy
+        self.calls += 1
+        if self._plan is None or not self._plan.should_decompose:
+            return self._plan
+        for lane in self._plan.lanes:
+            instance = create_subagent_instance(
+                lane.role_id,
+                workspace_id="workspace-1",
+                conversation_id=f"conversation-{lane.lane_id}",
+            )
+            self._agent_repo.upsert_instance(
+                run_id=root_task.trace_id,
+                trace_id=root_task.trace_id,
+                session_id=root_task.session_id,
+                instance_id=instance.instance_id,
+                role_id=lane.role_id,
+                workspace_id=instance.workspace_id,
+                conversation_id=instance.conversation_id,
+                status=InstanceStatus.IDLE,
+            )
+            task = TaskEnvelope(
+                task_id=f"task-auto-{lane.lane_id}",
+                session_id=root_task.session_id,
+                parent_task_id=root_task.task_id,
+                trace_id=root_task.trace_id,
+                role_id=lane.role_id,
+                title=lane.title,
+                objective=lane.objective,
+                verification=VerificationPlan(checklist=("non_empty_response",)),
+                orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}{lane.lane_id}",
+            )
+            _ = await self._task_repo.create_async(task)
+            await self._task_repo.update_status_async(
+                task.task_id,
+                TaskStatus.ASSIGNED,
+                assigned_instance_id=instance.instance_id,
+            )
+        return self._plan
 
 
 class _CapturingHookService:
@@ -1321,6 +1386,861 @@ async def test_graph_mode_runs_fanout_then_join_before_final_coordinator(
     assert right_record.result is not None
     assert left_record.result in join_record.envelope.objective
     assert right_record.result in join_record.envelope.objective
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_uses_auto_delegation_plan_before_fixed_graph(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="ship the graph feature",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+    planning_service = _CreatingPlanningService(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        plan=DelegationPlan.model_validate(
+            {
+                "should_decompose": True,
+                "lanes": [
+                    {
+                        "lane_id": "implementation",
+                        "title": "Planned implementation",
+                        "role_id": "time",
+                        "objective": "Run the planner-created implementation lane.",
+                    }
+                ],
+            }
+        ),
+    )
+    coordinator.planning_service = cast(DelegationPlanningService, planning_service)
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+    auto_record = records_by_node[f"{AUTO_LANE_NODE_PREFIX}implementation"]
+
+    assert planning_service.calls == 1
+    assert "implement" not in records_by_node
+    assert auto_record.status == TaskStatus.COMPLETED
+    assert task_execution_service.calls == [
+        auto_record.envelope.task_id,
+        root_task.task_id,
+    ]
+    assert result.output == "task-root-1 done"
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_resume_existing_auto_lanes_uses_dynamic_cycle(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="ship the graph feature",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    lane_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-auto-lane",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=lane_instance.instance_id,
+        role_id="time",
+        workspace_id=lane_instance.workspace_id,
+        conversation_id=lane_instance.conversation_id,
+        status=InstanceStatus.IDLE,
+    )
+    auto_task = TaskEnvelope(
+        task_id="task-auto-implementation",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        title="Planned implementation",
+        objective="Resume the planner-created implementation lane.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}implementation",
+    )
+    _ = task_repo.create(auto_task)
+    task_repo.update_status(
+        auto_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=lane_instance.instance_id,
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        coordinator_first=False,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+
+    assert "implement" not in records_by_node
+    assert records_by_node[f"{AUTO_LANE_NODE_PREFIX}implementation"].status == (
+        TaskStatus.COMPLETED
+    )
+    assert task_execution_service.calls == [auto_task.task_id, root_task.task_id]
+    assert result.output == "task-root-1 done"
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_resume_terminal_auto_lanes_runs_coordinator_synthesis(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="summarize completed planner lanes",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    auto_task = TaskEnvelope(
+        task_id="task-auto-implementation",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        title="Planned implementation",
+        objective="Already finished planner-created work.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}implementation",
+    )
+    _ = task_repo.create(auto_task)
+    task_repo.update_status(
+        auto_task.task_id,
+        TaskStatus.COMPLETED,
+        result="implementation already done",
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+    planning_service = _CreatingPlanningService(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        plan=DelegationPlan.model_validate(
+            {
+                "should_decompose": True,
+                "lanes": [
+                    {
+                        "lane_id": "new_implementation",
+                        "title": "Duplicate planner lane",
+                        "role_id": "time",
+                        "objective": "This lane must not be created on resume.",
+                    }
+                ],
+            }
+        ),
+    )
+    coordinator.planning_service = cast(DelegationPlanningService, planning_service)
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+
+    assert planning_service.calls == 0
+    assert "implement" not in records_by_node
+    assert f"{AUTO_LANE_NODE_PREFIX}new_implementation" not in records_by_node
+    assert task_execution_service.calls == [root_task.task_id]
+    assert result.output == "task-root-1 done"
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_resume_paused_auto_lanes_skips_coordinator_prepass(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="resume the paused planner lane",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    lane_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-auto-lane",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=lane_instance.instance_id,
+        role_id="time",
+        workspace_id=lane_instance.workspace_id,
+        conversation_id=lane_instance.conversation_id,
+        status=InstanceStatus.STOPPED,
+    )
+    auto_task = TaskEnvelope(
+        task_id="task-auto-implementation",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        title="Planned implementation",
+        objective="Wait for manual input before continuing.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}implementation",
+    )
+    _ = task_repo.create(auto_task)
+    task_repo.update_status(
+        auto_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=lane_instance.instance_id,
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            root_task_id=root_task.task_id,
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+            active_task_id=auto_task.task_id,
+            active_role_id="time",
+            active_subagent_instance_id=lane_instance.instance_id,
+            last_error="Waiting for manual action",
+        )
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    root_record = await task_repo.get_async(root_task.task_id)
+    auto_record = await task_repo.get_async(auto_task.task_id)
+    assert result.output == ""
+    assert task_execution_service.calls == []
+    assert root_record.status != TaskStatus.COMPLETED
+    assert auto_record.status == TaskStatus.ASSIGNED
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_resume_existing_fixed_nodes_skips_planner_preflight(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="resume the fixed graph feature",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    implement_task = TaskEnvelope(
+        task_id="task-graph-implement",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        title="Implementation",
+        objective="Already completed fixed graph implementation.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id="implement",
+    )
+    _ = task_repo.create(implement_task)
+    task_repo.update_status(
+        implement_task.task_id,
+        TaskStatus.COMPLETED,
+        result="implementation already done",
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+            OrchestrationGraphNode(
+                node_id="verify",
+                role_id="time",
+                objective="Verify the resumed fixed graph work.",
+            ),
+        ),
+        edges=(
+            OrchestrationGraphEdge(
+                from_node_id="implement",
+                to_node_id="verify",
+            ),
+        ),
+        final_response_node_id="verify",
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+    planning_service = _CreatingPlanningService(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        plan=DelegationPlan.model_validate(
+            {
+                "should_decompose": True,
+                "lanes": [
+                    {
+                        "lane_id": "implementation",
+                        "title": "Planned implementation",
+                        "role_id": "time",
+                        "objective": "This auto lane must not be created on resume.",
+                    }
+                ],
+            }
+        ),
+    )
+    coordinator.planning_service = cast(DelegationPlanningService, planning_service)
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+
+    assert planning_service.calls == 0
+    assert f"{AUTO_LANE_NODE_PREFIX}implementation" not in records_by_node
+    assert records_by_node["implement"].status == TaskStatus.COMPLETED
+    assert records_by_node["verify"].status == TaskStatus.COMPLETED
+    assert task_execution_service.calls == [records_by_node["verify"].envelope.task_id]
+    assert result.output.startswith("Graph-based orchestration completed.")
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cycles_report_exhausted_budget_with_pending_dependencies(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="ship dependent lanes",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    first_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-first-lane",
+    )
+    second_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-second-lane",
+    )
+    for instance in (first_instance, second_instance):
+        agent_repo.upsert_instance(
+            run_id="run-1",
+            trace_id="run-1",
+            session_id="session-1",
+            instance_id=instance.instance_id,
+            role_id="time",
+            workspace_id=instance.workspace_id,
+            conversation_id=instance.conversation_id,
+            status=InstanceStatus.IDLE,
+        )
+    first_task = TaskEnvelope(
+        task_id="task-auto-first",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="Run the first lane.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}first",
+    )
+    second_task = TaskEnvelope(
+        task_id="task-auto-second",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="Run the second lane after the first lane.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}second",
+        depends_on_task_ids=(first_task.task_id,),
+    )
+    _ = task_repo.create(first_task)
+    _ = task_repo.create(second_task)
+    task_repo.update_status(
+        first_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=first_instance.instance_id,
+    )
+    task_repo.update_status(
+        second_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=second_instance.instance_id,
+    )
+
+    result = await coordinator._run_dynamic_delegation_cycles_async(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        policy=OrchestrationPolicy(max_orchestration_cycles=1),
+        coordinator_result=TaskExecutionResult(output=""),
+    )
+
+    root_record = await task_repo.get_async(root_task.task_id)
+    first_record = await task_repo.get_async(first_task.task_id)
+    second_record = await task_repo.get_async(second_task.task_id)
+
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_ERROR
+    assert result.error_code == "orchestration_cycles_exhausted"
+    assert root_record.status == TaskStatus.FAILED
+    assert first_record.status == TaskStatus.COMPLETED
+    assert second_record.status == TaskStatus.ASSIGNED
+    assert task_execution_service.calls == [first_task.task_id, root_task.task_id]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_cycles_do_not_exhaust_budget_for_paused_lane(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="resume paused planner lane later",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    paused_instance = create_subagent_instance(
+        "time",
+        workspace_id="workspace-1",
+        conversation_id="conversation-time",
+    )
+    agent_repo.upsert_instance(
+        run_id="run-1",
+        trace_id="run-1",
+        session_id="session-1",
+        instance_id=paused_instance.instance_id,
+        role_id="time",
+        workspace_id=paused_instance.workspace_id,
+        conversation_id=paused_instance.conversation_id,
+        status=InstanceStatus.STOPPED,
+    )
+    paused_task = TaskEnvelope(
+        task_id="task-auto-paused",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="Wait for manual input before continuing.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}paused",
+    )
+    downstream_task = TaskEnvelope(
+        task_id="task-auto-downstream",
+        session_id="session-1",
+        parent_task_id=root_task.task_id,
+        trace_id="run-1",
+        role_id="time",
+        objective="Continue after manual input is handled.",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+        orchestration_node_id=f"{AUTO_LANE_NODE_PREFIX}downstream",
+        depends_on_task_ids=(paused_task.task_id,),
+    )
+    _ = task_repo.create(paused_task)
+    _ = task_repo.create(downstream_task)
+    task_repo.update_status(
+        paused_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=paused_instance.instance_id,
+    )
+    task_repo.update_status(
+        downstream_task.task_id,
+        TaskStatus.ASSIGNED,
+        assigned_instance_id=paused_instance.instance_id,
+    )
+    run_runtime_repo.upsert(
+        RunRuntimeRecord(
+            run_id="run-1",
+            session_id="session-1",
+            root_task_id=root_task.task_id,
+            status=RunRuntimeStatus.PAUSED,
+            phase=RunRuntimePhase.AWAITING_MANUAL_ACTION,
+            active_task_id=paused_task.task_id,
+            active_role_id="time",
+            active_subagent_instance_id=paused_instance.instance_id,
+            last_error="Waiting for manual action",
+        )
+    )
+
+    result = await coordinator._run_dynamic_delegation_cycles_async(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        policy=OrchestrationPolicy(max_orchestration_cycles=1),
+        coordinator_result=TaskExecutionResult(output="waiting for resume"),
+    )
+
+    root_record = await task_repo.get_async(root_task.task_id)
+    paused_record = await task_repo.get_async(paused_task.task_id)
+    downstream_record = await task_repo.get_async(downstream_task.task_id)
+    assert result.completion_reason == RunCompletionReason.ASSISTANT_RESPONSE
+    assert result.output == "waiting for resume"
+    assert root_record.status != TaskStatus.FAILED
+    assert paused_record.status == TaskStatus.ASSIGNED
+    assert downstream_record.status == TaskStatus.ASSIGNED
+    assert task_execution_service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_falls_back_to_fixed_graph_when_planner_declines(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="ship the graph feature",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+    planning_service = _CreatingPlanningService(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        plan=DelegationPlan(should_decompose=False, rationale="simple graph"),
+    )
+    coordinator.planning_service = cast(DelegationPlanningService, planning_service)
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+
+    assert planning_service.calls == 1
+    assert "implement" in records_by_node
+    assert not any(
+        str(node_id).startswith(AUTO_LANE_NODE_PREFIX) for node_id in records_by_node
+    )
+    assert task_execution_service.calls == [
+        records_by_node["implement"].envelope.task_id
+    ]
+    assert result.output.startswith("Graph-based orchestration completed.")
+
+
+@pytest.mark.asyncio
+async def test_graph_mode_falls_back_to_fixed_graph_when_planner_unavailable(
+    tmp_path: Path,
+) -> None:
+    coordinator, task_repo, agent_repo, _run_runtime_repo, task_execution_service = (
+        _build_coordinator(tmp_path)
+    )
+    root_task = TaskEnvelope(
+        task_id="task-root-1",
+        session_id="session-1",
+        parent_task_id=None,
+        trace_id="run-1",
+        role_id="Coordinator",
+        objective="ship the graph feature",
+        verification=VerificationPlan(checklist=("non_empty_response",)),
+    )
+    _ = task_repo.create(root_task)
+    coordinator_instance_id = await coordinator._ensure_root_instance_async(
+        session_id="session-1",
+        trace_id="run-1",
+        root_task=root_task,
+        reuse_existing_instance=False,
+    )
+    graph = OrchestrationGraph(
+        nodes=(
+            OrchestrationGraphNode(
+                node_id="implement",
+                role_id="time",
+                objective="Run the fixed implementation fallback.",
+            ),
+        )
+    )
+    topology = RunTopologySnapshot(
+        session_mode=SessionMode.ORCHESTRATION,
+        main_agent_role_id="Coordinator",
+        normal_root_role_id="time",
+        coordinator_role_id="Coordinator",
+        orchestration_preset_id="graph",
+        orchestration_prompt="Run graph.",
+        allowed_role_ids=("DelegationPlanner", "time"),
+        orchestration_policy=OrchestrationPolicy(coordinator_inline_budget_steps=0),
+        orchestration_graph=graph,
+    )
+    planning_service = _CreatingPlanningService(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        plan=None,
+    )
+    coordinator.planning_service = cast(DelegationPlanningService, planning_service)
+
+    result = await coordinator._run_ai_mode(
+        trace_id="run-1",
+        root_task=root_task,
+        coordinator_instance_id=coordinator_instance_id,
+        topology=topology,
+    )
+
+    records = await task_repo.list_by_trace_async("run-1")
+    records_by_node = {
+        record.envelope.orchestration_node_id: record
+        for record in records
+        if record.envelope.orchestration_node_id is not None
+    }
+
+    assert planning_service.calls == 1
+    assert "implement" in records_by_node
+    assert not any(
+        str(node_id).startswith(AUTO_LANE_NODE_PREFIX) for node_id in records_by_node
+    )
+    assert task_execution_service.calls == [
+        records_by_node["implement"].envelope.task_id
+    ]
+    assert result.output.startswith("Graph-based orchestration completed.")
 
 
 @pytest.mark.asyncio

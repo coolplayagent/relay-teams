@@ -22,6 +22,7 @@ from relay_teams.agents.orchestration.graph_models import (
     OrchestrationGraphNode,
 )
 from relay_teams.agents.orchestration.delegation_planning import (
+    AUTO_LANE_NODE_PREFIX,
     DelegationPlanningService,
 )
 from relay_teams.agents.orchestration.policy_models import OrchestrationPolicy
@@ -106,6 +107,9 @@ from relay_teams.agents.tasks.wakeup_models import AgentWakeupEntry
 from relay_teams.roles.tool_diet_validation import should_reject
 
 LOGGER = get_logger(__name__)
+_AUTO_DELEGATION_TERMINAL_STATUSES = frozenset(
+    {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.TIMEOUT}
+)
 
 _TASK_ID_PREFIX_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:"
@@ -172,6 +176,13 @@ class CoordinatorRunResult(BaseModel):
     completion_reason: RunCompletionReason = RunCompletionReason.ASSISTANT_RESPONSE
     error_code: str | None = None
     error_message: str | None = None
+
+
+class _AutoDelegationLaneState(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    has_lanes: bool = False
+    has_nonterminal_lanes: bool = False
 
 
 class DelegatedTaskExecutionDisabledError(RuntimeError):
@@ -532,42 +543,115 @@ class CoordinatorGraph(BaseModel):
         initial_result: str = "",
         topology: RunTopologySnapshot | None = None,
     ) -> TaskExecutionResult:
-        if topology is not None and topology.orchestration_graph is not None:
-            return await self._run_graph_mode(
-                trace_id=trace_id,
-                root_task=root_task,
-                coordinator_instance_id=coordinator_instance_id,
-                topology=topology,
-                initial_result=initial_result,
-            )
         policy = _orchestration_policy(topology)
         coordinator_result = TaskExecutionResult(output=initial_result)
         coordinator_role_id = _require_task_role_id(root_task)
         if coordinator_first:
-            planned_delegation = await self._run_auto_delegation_planning_async(
-                root_task=root_task,
-                topology=topology,
-                policy=policy,
+            auto_lane_state = await self._run_auto_delegation_lane_state_async(
+                trace_id=trace_id
             )
-            if not planned_delegation:
-                coordinator_result = await self._task_executor(
-                    instance_id=coordinator_instance_id,
-                    role_id=coordinator_role_id,
-                    task=root_task,
+            if auto_lane_state.has_nonterminal_lanes:
+                return await self._run_dynamic_delegation_cycles_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    policy=policy,
+                    coordinator_result=coordinator_result,
                 )
-                log_event(
-                    LOGGER,
-                    logging.DEBUG,
-                    event="coord.cycle.first_pass.completed",
-                    message="Coordinator first pass completed",
-                    payload={
-                        "max_orchestration_cycles": policy.max_orchestration_cycles,
-                        "max_parallel_delegated_tasks": (
-                            policy.max_parallel_delegated_tasks
-                        ),
-                    },
+            if not auto_lane_state.has_lanes:
+                if topology is not None and topology.orchestration_graph is not None:
+                    if await self._run_has_fixed_graph_nodes_async(
+                        trace_id=trace_id,
+                        graph=topology.orchestration_graph,
+                    ):
+                        return await self._run_graph_mode(
+                            trace_id=trace_id,
+                            root_task=root_task,
+                            coordinator_instance_id=coordinator_instance_id,
+                            topology=topology,
+                            initial_result=initial_result,
+                        )
+                if await self._run_auto_delegation_planning_async(
+                    root_task=root_task,
+                    topology=topology,
+                    policy=policy,
+                ):
+                    return await self._run_dynamic_delegation_cycles_async(
+                        trace_id=trace_id,
+                        root_task=root_task,
+                        coordinator_instance_id=coordinator_instance_id,
+                        policy=policy,
+                        coordinator_result=coordinator_result,
+                    )
+                if topology is not None and topology.orchestration_graph is not None:
+                    return await self._run_graph_mode(
+                        trace_id=trace_id,
+                        root_task=root_task,
+                        coordinator_instance_id=coordinator_instance_id,
+                        topology=topology,
+                        initial_result=initial_result,
+                    )
+            coordinator_result = await self._task_executor(
+                instance_id=coordinator_instance_id,
+                role_id=coordinator_role_id,
+                task=root_task,
+            )
+            log_event(
+                LOGGER,
+                logging.DEBUG,
+                event="coord.cycle.first_pass.completed",
+                message="Coordinator first pass completed",
+                payload={
+                    "max_orchestration_cycles": policy.max_orchestration_cycles,
+                    "max_parallel_delegated_tasks": (
+                        policy.max_parallel_delegated_tasks
+                    ),
+                },
+            )
+        elif topology is not None and topology.orchestration_graph is not None:
+            auto_lane_state = await self._run_auto_delegation_lane_state_async(
+                trace_id=trace_id
+            )
+            if auto_lane_state.has_nonterminal_lanes:
+                return await self._run_dynamic_delegation_cycles_async(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    policy=policy,
+                    coordinator_result=coordinator_result,
                 )
+            if not auto_lane_state.has_lanes:
+                return await self._run_graph_mode(
+                    trace_id=trace_id,
+                    root_task=root_task,
+                    coordinator_instance_id=coordinator_instance_id,
+                    topology=topology,
+                    initial_result=initial_result,
+                )
+            coordinator_result = await self._task_executor(
+                instance_id=coordinator_instance_id,
+                role_id=coordinator_role_id,
+                task=root_task,
+            )
 
+        return await self._run_dynamic_delegation_cycles_async(
+            trace_id=trace_id,
+            root_task=root_task,
+            coordinator_instance_id=coordinator_instance_id,
+            policy=policy,
+            coordinator_result=coordinator_result,
+        )
+
+    async def _run_dynamic_delegation_cycles_async(
+        self,
+        *,
+        trace_id: str,
+        root_task: TaskEnvelope,
+        coordinator_instance_id: str,
+        policy: OrchestrationPolicy,
+        coordinator_result: TaskExecutionResult,
+    ) -> TaskExecutionResult:
+        coordinator_role_id = _require_task_role_id(root_task)
         if policy.max_orchestration_cycles < 1:
             pending_task_count = await self._pending_delegated_task_count_async(
                 trace_id=trace_id,
@@ -681,7 +765,75 @@ class CoordinatorGraph(BaseModel):
                 payload={"cycle": cycle},
             )
 
+        pending_task_count = await self._pending_delegated_task_count_async(
+            trace_id=trace_id,
+            root_task_id=root_task.task_id,
+        )
+        if pending_task_count:
+            error_message = (
+                "Orchestration policy exhausted "
+                f"{policy.max_orchestration_cycles} cycle(s) while "
+                f"{pending_task_count} delegated task(s) are still pending."
+            )
+            assistant_message = build_assistant_error_message(
+                error_code="orchestration_cycles_exhausted",
+                error_message=error_message,
+            )
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="coord.cycle.exhausted",
+                message="Coordinator cycle budget exhausted with pending tasks",
+                payload={
+                    "trace_id": trace_id,
+                    "root_task_id": root_task.task_id,
+                    "pending_task_count": pending_task_count,
+                    "max_orchestration_cycles": policy.max_orchestration_cycles,
+                },
+            )
+            await self._fail_root_task_async(
+                trace_id=trace_id,
+                root_task=root_task,
+                coordinator_instance_id=coordinator_instance_id,
+                error_code="orchestration_cycles_exhausted",
+                error_message=error_message,
+            )
+            return TaskExecutionResult(
+                output=assistant_message,
+                completion_reason=RunCompletionReason.ASSISTANT_ERROR,
+                error_code="orchestration_cycles_exhausted",
+                error_message=error_message,
+            )
+
         return coordinator_result
+
+    async def _run_auto_delegation_lane_state_async(
+        self, *, trace_id: str
+    ) -> _AutoDelegationLaneState:
+        has_lanes = False
+        has_nonterminal_lanes = False
+        for record in await self.task_repo.list_by_trace_async(trace_id):
+            node_id = record.envelope.orchestration_node_id or ""
+            if node_id.startswith(AUTO_LANE_NODE_PREFIX):
+                has_lanes = True
+                if record.status not in _AUTO_DELEGATION_TERMINAL_STATUSES:
+                    has_nonterminal_lanes = True
+        return _AutoDelegationLaneState(
+            has_lanes=has_lanes,
+            has_nonterminal_lanes=has_nonterminal_lanes,
+        )
+
+    async def _run_has_fixed_graph_nodes_async(
+        self,
+        *,
+        trace_id: str,
+        graph: OrchestrationGraph,
+    ) -> bool:
+        records_by_node = await self._graph_records_by_node_async(
+            trace_id=trace_id,
+            graph=graph,
+        )
+        return bool(records_by_node)
 
     async def _run_auto_delegation_planning_async(
         self,
@@ -1347,6 +1499,7 @@ class CoordinatorGraph(BaseModel):
         max_parallel_tasks: int | None = None,
     ) -> bool:
         records = await self.task_repo.list_by_trace_async(trace_id)
+        runtime = await self.run_runtime_repo.get_async(trace_id)
         records_by_task_id = {record.envelope.task_id: record for record in records}
         lanes: dict[str, list[TaskRecord]] = {}
         instances: dict[str, AgentRuntimeRecord] = {}
@@ -1366,16 +1519,16 @@ class CoordinatorGraph(BaseModel):
                 records_by_task_id=records_by_task_id,
             ):
                 continue
+            if self._is_paused_pending_delegated_task(
+                runtime=runtime,
+                record=record,
+            ):
+                continue
             if record.assigned_instance_id is None:
                 continue
             if await self._fail_task_if_role_contract_preconditions_async(
                 record=record,
                 records_by_task_id=records_by_task_id,
-            ):
-                continue
-            if self.run_control_manager.is_subagent_paused(
-                session_id=task.session_id,
-                instance_id=record.assigned_instance_id,
             ):
                 continue
             try:
@@ -1476,12 +1629,43 @@ class CoordinatorGraph(BaseModel):
         root_task_id: str,
     ) -> int:
         records = await self.task_repo.list_by_trace_async(trace_id)
+        records_by_task_id = {record.envelope.task_id: record for record in records}
+        runtime = await self.run_runtime_repo.get_async(trace_id)
         pending_statuses = {TaskStatus.ASSIGNED, TaskStatus.CREATED}
         return sum(
             1
             for record in records
             if record.envelope.task_id != root_task_id
             and record.status in pending_statuses
+            and _dependencies_completed(
+                record=record,
+                records_by_task_id=records_by_task_id,
+            )
+            and not self._is_paused_pending_delegated_task(
+                runtime=runtime,
+                record=record,
+            )
+        )
+
+    def _is_paused_pending_delegated_task(
+        self,
+        *,
+        runtime: RunRuntimeRecord | None,
+        record: TaskRecord,
+    ) -> bool:
+        task = record.envelope
+        assigned_instance_id = record.assigned_instance_id
+        if self._is_paused_subagent_task(
+            runtime=runtime,
+            task_id=task.task_id,
+            assigned_instance_id=assigned_instance_id,
+        ):
+            return True
+        if assigned_instance_id is None:
+            return False
+        return self.run_control_manager.is_subagent_paused(
+            session_id=task.session_id,
+            instance_id=assigned_instance_id,
         )
 
     async def _fail_task_if_dependency_failed_async(
