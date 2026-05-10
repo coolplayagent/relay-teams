@@ -41,6 +41,7 @@ from relay_teams.mcp.config_reload_service import McpConfigReloadService
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.mcp.mcp_service import McpService
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.media import MediaAssetService
 from relay_teams.memory.service import MemoryBankService
 from relay_teams.metrics import MetricsService
@@ -190,6 +191,10 @@ def get_mcp_registry(request: Request) -> McpRegistry:
 
 def get_mcp_discovery_service(request: Request) -> McpDiscoveryService:
     return get_container(request).mcp_discovery_service
+
+
+def get_runtime_mcp_schema_loader(request: Request) -> RuntimeMcpSchemaLoader:
+    return get_container(request).runtime_mcp_schema_loader
 
 
 def get_proxy_config_service(request: Request) -> ProxyConfigService:

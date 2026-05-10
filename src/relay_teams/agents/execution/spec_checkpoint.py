@@ -221,11 +221,13 @@ def render_spec_checkpoint(
         lines.extend(
             _format_nested_items(
                 "Proof Artifacts",
-                tuple(str(path) for path in formal.proof_artifacts),
+                tuple(path.as_posix() for path in formal.proof_artifacts),
             )
         )
         if formal.counterexample_path is not None:
-            lines.append(f"  - Counterexample Path: {formal.counterexample_path}")
+            lines.append(
+                f"  - Counterexample Path: {formal.counterexample_path.as_posix()}"
+            )
         if formal.replay_command is not None:
             lines.append(
                 "  - Replay Command: " + " ".join(formal.replay_command.command)

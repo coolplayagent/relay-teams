@@ -263,6 +263,24 @@ def _build_cli_agent(
     )
 
 
+def _write_json_rpc_runtime_executable(path: Path) -> Path:
+    if os.name == "nt":
+        script_path = path.with_suffix(".py")
+        script_path.write_text(_JSON_RPC_RUNTIME_SCRIPT, encoding="utf-8")
+        command_path = path.with_suffix(".cmd")
+        command_path.write_text(
+            f'@echo off\r\n"{sys.executable}" "%~dp0{script_path.name}"\r\n',
+            encoding="utf-8",
+        )
+        return command_path
+    path.write_text(
+        f"#!{sys.executable}\n{_JSON_RPC_RUNTIME_SCRIPT}",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 class _NotificationClient:
     def __init__(self, notifications: list[_CliJsonRpcNotification]) -> None:
         self._notifications = notifications
@@ -337,20 +355,15 @@ async def test_probe_cli_agent_resolves_relative_command_from_runtime_cwd(
 ) -> None:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    executable = bin_dir / "runtime-agent"
-    executable.write_text(
-        f"#!{sys.executable}\n{_JSON_RPC_RUNTIME_SCRIPT}",
-        encoding="utf-8",
-    )
-    executable.chmod(0o755)
+    executable = _write_json_rpc_runtime_executable(bin_dir / "runtime-agent")
 
     result = await probe_cli_agent(
-        _build_cli_agent("./bin/runtime-agent", ()),
+        _build_cli_agent(f"./bin/{executable.name}", ()),
         runtime_cwd=tmp_path,
     )
 
     assert result.ok is True
-    assert result.agent_name == "runtime-agent"
+    assert result.agent_name == executable.name
 
 
 @pytest.mark.asyncio
@@ -358,23 +371,18 @@ async def test_probe_cli_agent_resolves_relative_command_from_runtime_cwd(
 async def test_probe_cli_agent_uses_transport_env_for_command_lookup(
     tmp_path: Path,
 ) -> None:
-    executable = tmp_path / "runtime-agent"
-    executable.write_text(
-        f"#!{sys.executable}\n{_JSON_RPC_RUNTIME_SCRIPT}",
-        encoding="utf-8",
-    )
-    executable.chmod(0o755)
+    executable = _write_json_rpc_runtime_executable(tmp_path / "runtime-agent")
 
     result = await probe_cli_agent(
         _build_cli_agent(
-            "runtime-agent",
+            executable.name,
             (),
             env=(ExternalAgentSecretBinding(name="PATH", value=str(tmp_path)),),
         )
     )
 
     assert result.ok is True
-    assert result.agent_name == "runtime-agent"
+    assert result.agent_name == executable.name
 
 
 @pytest.mark.asyncio

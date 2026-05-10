@@ -19,8 +19,10 @@ from relay_teams.mcp.mcp_models import (
     McpServerSummary,
     McpServerToolsSummary,
     McpServerUpdateRequest,
+    McpToolInfo,
 )
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 
 from relay_teams.trace import trace_span
 
@@ -36,6 +38,7 @@ class McpService:
         on_registry_changed: Callable[[McpRegistry], None] | None = None,
         extra_specs: tuple[McpServerSpec, ...] = (),
         discovery_service: McpDiscoveryService | None = None,
+        runtime_schema_loader: RuntimeMcpSchemaLoader | None = None,
     ) -> None:
         self._registry: McpRegistry = registry
         self._config_manager: McpConfigManager | None = config_manager
@@ -44,11 +47,14 @@ class McpService:
         )
         self._extra_specs: tuple[McpServerSpec, ...] = extra_specs
         self._discovery_service: McpDiscoveryService | None = discovery_service
+        self._runtime_schema_loader = runtime_schema_loader
 
     def replace_registry(self, registry: McpRegistry) -> None:
         self._registry = registry
         if self._discovery_service is not None:
             self._discovery_service.replace_registry(registry)
+        if self._runtime_schema_loader is not None:
+            self._runtime_schema_loader.replace_registry(registry)
 
     def replace_extra_specs(self, extra_specs: tuple[McpServerSpec, ...]) -> None:
         self._extra_specs = extra_specs
@@ -139,7 +145,23 @@ class McpService:
                     enabled=spec.enabled,
                     status=McpDiscoveryStatus.DISABLED,
                 )
-            tools = await self._registry.list_tools(name)
+            loader = self._runtime_schema_loader or RuntimeMcpSchemaLoader(
+                self._registry
+            )
+            result = await loader.load_server(spec.name)
+            if not result.ok:
+                return McpServerToolsSummary(
+                    server=spec.name,
+                    source=spec.source,
+                    transport=_detect_transport(spec.server_config),
+                    enabled=spec.enabled,
+                    status=McpDiscoveryStatus.FAILED,
+                    error=result.error,
+                )
+            tools = tuple(
+                McpToolInfo(name=schema.name, description=schema.description)
+                for schema in result.schemas
+            )
             return McpServerToolsSummary(
                 server=spec.name,
                 source=spec.source,
@@ -160,6 +182,8 @@ class McpService:
             if self._discovery_service is not None:
                 return self._discovery_service.refresh_server(name)
             spec = self._registry.get_spec(name)
+            if self._runtime_schema_loader is not None:
+                self._runtime_schema_loader.invalidate_server(spec.name)
             return McpServerToolsSummary(
                 server=spec.name,
                 source=spec.source,

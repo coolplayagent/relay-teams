@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import asyncio
+from typing import cast
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,6 +21,7 @@ from relay_teams.mcp.mcp_models import (
     McpServerUpdateRequest,
     McpToolInfo,
 )
+from relay_teams.mcp.mcp_service import McpService
 
 
 class _FakeMcpService:
@@ -135,6 +139,12 @@ def _create_test_client(fake_service: object) -> TestClient:
     app.include_router(mcp.router, prefix="/api")
     app.dependency_overrides[get_mcp_service] = lambda: fake_service
     return TestClient(app)
+
+
+def _clear_route_guard_state() -> None:
+    with mcp._TOOLS_ROUTE_LOCK:
+        mcp._TOOLS_ROUTE_CACHE.clear()
+        mcp._TOOLS_ROUTE_IN_FLIGHT.clear()
 
 
 def test_list_mcp_servers() -> None:
@@ -380,6 +390,7 @@ def test_update_mcp_server_config_returns_503_when_unavailable() -> None:
 
 
 def test_list_mcp_server_tools() -> None:
+    _clear_route_guard_state()
     client = _create_test_client(_FakeMcpService())
 
     response = client.get("/api/mcp/servers/filesystem/tools")
@@ -397,7 +408,80 @@ def test_list_mcp_server_tools() -> None:
     }
 
 
+def test_list_mcp_server_tools_route_guard_reuses_short_interval_result() -> None:
+    _clear_route_guard_state()
+
+    class _CountingService(_FakeMcpService):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def list_server_tools(self, name: str) -> McpServerToolsSummary:
+            self.calls += 1
+            return await super().list_server_tools(name)
+
+    service = _CountingService()
+
+    first = asyncio.run(
+        mcp._list_mcp_server_tools_with_route_guard(
+            "filesystem",
+            cast(McpService, service),
+        )
+    )
+    second = asyncio.run(
+        mcp._list_mcp_server_tools_with_route_guard(
+            "filesystem",
+            cast(McpService, service),
+        )
+    )
+
+    assert first.server == "filesystem"
+    assert second.server == "filesystem"
+    assert service.calls == 1
+
+
+def test_list_mcp_server_tools_route_guard_shares_concurrent_request() -> None:
+    _clear_route_guard_state()
+
+    class _BlockingService(_FakeMcpService):
+        def __init__(self) -> None:
+            self.calls = 0
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def list_server_tools(self, name: str) -> McpServerToolsSummary:
+            self.calls += 1
+            self.entered.set()
+            await self.release.wait()
+            return await super().list_server_tools(name)
+
+    async def run_guarded_calls(service: _BlockingService) -> None:
+        first_task = asyncio.create_task(
+            mcp._list_mcp_server_tools_with_route_guard(
+                "filesystem",
+                cast(McpService, service),
+            )
+        )
+        second_task = asyncio.create_task(
+            mcp._list_mcp_server_tools_with_route_guard(
+                "filesystem",
+                cast(McpService, service),
+            )
+        )
+        await asyncio.wait_for(service.entered.wait(), timeout=1)
+        service.release.set()
+        first, second = await asyncio.gather(first_task, second_task)
+        assert first.server == "filesystem"
+        assert second.server == "filesystem"
+
+    service = _BlockingService()
+
+    asyncio.run(run_guarded_calls(service))
+
+    assert service.calls == 1
+
+
 def test_refresh_mcp_server_tools() -> None:
+    _clear_route_guard_state()
     client = _create_test_client(_FakeMcpService())
 
     response = client.post("/api/mcp/servers/filesystem/tools:refresh")

@@ -12,6 +12,7 @@ from relay_teams.interfaces.server.deps import (
     get_mcp_discovery_service,
     get_mcp_registry,
     get_role_registry,
+    get_runtime_mcp_schema_loader,
     get_skill_registry,
     get_skill_runtime_service,
     get_tool_registry,
@@ -28,6 +29,7 @@ from relay_teams.agents.execution.system_prompts import (
 )
 from relay_teams.mcp.mcp_discovery_service import McpDiscoveryService
 from relay_teams.mcp.mcp_registry import McpRegistry
+from relay_teams.mcp.runtime_schema_loader import RuntimeMcpSchemaLoader
 from relay_teams.paths import get_app_config_dir
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -103,6 +105,9 @@ async def preview_prompts(
     mcp_discovery_service: Annotated[
         McpDiscoveryService, Depends(get_mcp_discovery_service)
     ],
+    runtime_mcp_schema_loader: Annotated[
+        RuntimeMcpSchemaLoader, Depends(get_runtime_mcp_schema_loader)
+    ],
     skill_registry: Annotated[SkillRegistry, Depends(get_skill_registry)],
     skill_runtime_service: Annotated[
         SkillRuntimeService, Depends(get_skill_runtime_service)
@@ -168,6 +173,7 @@ async def preview_prompts(
         role_registry=role_registry,
         mcp_registry=mcp_registry,
         mcp_discovery_service=mcp_discovery_service,
+        runtime_mcp_schema_loader=runtime_mcp_schema_loader,
         instruction_resolver=PromptInstructionResolver(
             app_config_dir=get_app_config_dir()
         ),

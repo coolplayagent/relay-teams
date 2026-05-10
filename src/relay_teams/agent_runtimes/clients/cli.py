@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -102,8 +103,13 @@ async def probe_cli_agent(
             env=runtime_env,
         ):
             raise CliAgentError(f"CLI command not found: {command}")
+        resolved_command = _resolve_cli_command(
+            command,
+            runtime_cwd=probe_cwd,
+            env=runtime_env,
+        )
         client = _StdioCliJsonRpcClient(
-            command=command,
+            command=resolved_command or command,
             args=_build_command_args(transport=transport),
             runtime_cwd=probe_cwd,
             transport=transport,
@@ -118,7 +124,7 @@ async def probe_cli_agent(
             message="External CLI agent runtime is reachable over stdio JSON-RPC.",
             protocol=ExternalAgentProtocol.CLI,
             protocol_version_text="stdio-jsonrpc",
-            agent_name=Path(command).name,
+            agent_name=Path(resolved_command or command).name,
             agent_version=user_agent,
         )
     except Exception as exc:
@@ -198,23 +204,40 @@ def _cli_command_exists(
     runtime_cwd: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> bool:
+    return _resolve_cli_command(command, runtime_cwd=runtime_cwd, env=env) is not None
+
+
+def _resolve_cli_command(
+    command: str,
+    *,
+    runtime_cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> str | None:
+    lookup_env = env or os.environ
     if "/" in command or "\\" in command:
         candidate = Path(command)
         if not candidate.is_absolute() and runtime_cwd is not None:
             candidate = runtime_cwd / candidate
-        return _executable_path_exists(candidate)
-    lookup_env = env or os.environ
+        return _resolve_executable_path(candidate, env=lookup_env)
     for directory in os.get_exec_path(lookup_env):
         candidate = Path(directory) / command
-        if _executable_path_exists(candidate):
-            return True
-        if os.name == "nt":
-            for suffix in lookup_env.get("PATHEXT", "").split(";"):
-                if suffix and _executable_path_exists(
-                    Path(directory) / f"{command}{suffix}"
-                ):
-                    return True
-    return False
+        resolved = _resolve_executable_path(candidate, env=lookup_env)
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _resolve_executable_path(path: Path, *, env: Mapping[str, str]) -> str | None:
+    if _executable_path_exists(path):
+        return str(path)
+    if os.name != "nt" or path.suffix:
+        return None
+    for suffix in env.get("PATHEXT", "").split(";"):
+        if suffix:
+            candidate = path.with_name(f"{path.name}{suffix}")
+            if _executable_path_exists(candidate):
+                return str(candidate)
+    return None
 
 
 def _executable_path_exists(path: Path) -> bool:
@@ -554,8 +577,13 @@ class _StdioCliJsonRpcClient:
         if self._process is not None and self._process.returncode is None:
             return
         env = _runtime_env(self._transport)
-        self._process = await asyncio.create_subprocess_exec(
+        command = _resolve_cli_command(
             self._command,
+            runtime_cwd=self._runtime_cwd,
+            env=env,
+        )
+        self._process = await asyncio.create_subprocess_exec(
+            command or self._command,
             *self._args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
