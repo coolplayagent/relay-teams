@@ -543,6 +543,12 @@ class DiscordGatewayService:
             )
             return False
         if result is None:
+            blocking_run_id = await self._active_run_id(record.session_id)
+            if blocking_run_id is not None:
+                self._start_queue_drain_watcher(
+                    session_id=record.session_id,
+                    run_id=blocking_run_id,
+                )
             _ = await self._inbound_queue_repo.requeue_if_starting(
                 inbound_queue_id=record.inbound_queue_id
             )

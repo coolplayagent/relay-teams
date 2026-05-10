@@ -1076,6 +1076,51 @@ async def test_discord_service_uses_recovery_snapshot_without_ingress(
 
 
 @pytest.mark.asyncio
+async def test_discord_service_watches_blocking_run_after_ingress_requeues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = DiscordAccountRepository(tmp_path / "discord.db")
+    inbound_queue_repo = DiscordInboundQueueRepository(tmp_path / "discord-queue.db")
+    await repository.upsert_account(_discord_account())
+    queued_record, _ = await inbound_queue_repo.create_or_get(
+        _queue_record(
+            inbound_queue_id="queue-racing-active",
+            message_key="mid:racing-active",
+            status=DiscordInboundQueueStatus.QUEUED,
+        )
+    )
+    fake_ingress = _QueuedAfterSubmitIngressService(blocking_run_id="run-active")
+    fake_run_service = _FakeRunService(())
+    service = _build_service(
+        tmp_path,
+        repository=repository,
+        inbound_queue_repo=inbound_queue_repo,
+        run_service=fake_run_service,
+        session_ingress_service=fake_ingress,
+    )
+    watched_runs: list[tuple[str, str]] = []
+
+    def capture_queue_drain_watcher(*, session_id: str, run_id: str) -> None:
+        watched_runs.append((session_id, run_id))
+
+    monkeypatch.setattr(
+        service,
+        "_start_queue_drain_watcher",
+        capture_queue_drain_watcher,
+    )
+
+    await service._drain_inbound_queue()
+    requeued = await inbound_queue_repo.get(queued_record.inbound_queue_id)
+
+    assert fake_ingress.active_run_checks == ["session-1", "session-1"]
+    assert len(fake_ingress.requests) == 1
+    assert requeued is not None
+    assert requeued.status == DiscordInboundQueueStatus.QUEUED
+    assert watched_runs == [("session-1", "run-active")]
+
+
+@pytest.mark.asyncio
 async def test_discord_service_receipt_queue_depth_paths(tmp_path: Path) -> None:
     inbound_queue_repo = DiscordInboundQueueRepository(tmp_path / "discord-queue.db")
     active_run_record, _ = await inbound_queue_repo.create_or_get(
@@ -1657,6 +1702,29 @@ class _FakeIngressService:
             status=GatewaySessionIngressStatus.STARTED,
             session_id=request.intent.session_id,
             run_id=self._run_id,
+        )
+
+
+class _QueuedAfterSubmitIngressService(_FakeIngressService):
+    def __init__(self, *, blocking_run_id: str) -> None:
+        super().__init__(run_id=None, active_run_id=None)
+        self._blocking_run_id = blocking_run_id
+        self.active_run_checks: list[str] = []
+
+    async def active_run_id_async(self, session_id: str) -> str | None:
+        self.active_run_checks.append(session_id)
+        return await super().active_run_id_async(session_id)
+
+    async def submit_async(
+        self,
+        request: GatewaySessionIngressRequest,
+    ) -> GatewaySessionIngressResult:
+        self.requests.append(request)
+        self._active_run_id = self._blocking_run_id
+        return GatewaySessionIngressResult(
+            status=GatewaySessionIngressStatus.QUEUED,
+            session_id=request.intent.session_id,
+            run_id=None,
         )
 
 
