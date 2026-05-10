@@ -33,11 +33,154 @@
     flex: 0 0 auto;
 }
 
+.memory-architecture-map {
+    display: grid;
+    grid-template-columns: minmax(150px, 0.46fr) minmax(0, 2fr) minmax(160px, 0.54fr);
+    gap: 0.75rem;
+    align-items: stretch;
+    margin: 0 0 1rem;
+    min-width: 0;
+}
+
+.memory-architecture-edge,
+.memory-architecture-tier {
+    min-width: 0;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-surface);
+}
+
+.memory-architecture-edge {
+    display: grid;
+    align-content: center;
+    gap: 0.35rem;
+    padding: 0.85rem;
+}
+
+.memory-architecture-edge strong {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.memory-architecture-edge span {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+}
+
+.memory-architecture-source {
+    border-left: 3px solid var(--warning);
+}
+
+.memory-architecture-output {
+    border-left: 3px solid var(--success);
+}
+
+.memory-architecture-flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 76px minmax(0, 1fr) 76px minmax(0, 1fr);
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.memory-architecture-tier {
+    display: grid;
+    gap: 0.55rem;
+    padding: 0.82rem;
+}
+
+.memory-architecture-tier.is-working {
+    border-top: 3px solid var(--warning);
+}
+
+.memory-architecture-tier.is-medium {
+    border-top: 3px solid var(--primary);
+}
+
+.memory-architecture-tier.is-persistent {
+    border-top: 3px solid var(--success);
+}
+
+.memory-architecture-tier-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.memory-architecture-tier-head h3 {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-primary);
+    font-size: 0.94rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.memory-architecture-tier-head span {
+    flex: 0 0 auto;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+}
+
+.memory-architecture-tier p,
+.memory-architecture-tier-copy {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.4;
+}
+
+.memory-architecture-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    color: var(--text-secondary);
+    font-size: 0.7rem;
+    text-align: center;
+}
+
+.memory-architecture-link::before,
+.memory-architecture-link::after {
+    display: block;
+    content: "";
+}
+
+.memory-architecture-link::before {
+    flex: 1 1 auto;
+    min-width: 12px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+}
+
+.memory-architecture-link::after {
+    width: 7px;
+    height: 7px;
+    margin-left: -6px;
+    border-top: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+    transform: rotate(45deg);
+}
+
+.memory-architecture-link span {
+    max-width: 62px;
+    padding: 0 0.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .memory-view-shell {
     display: grid;
     grid-template-columns: minmax(280px, 0.82fr) minmax(340px, 1.18fr);
     gap: 1rem;
-    min-height: calc(100vh - 168px);
+    min-height: max(360px, calc(100vh - 324px));
 }
 
 .memory-list {
@@ -256,6 +399,44 @@
 }
 
 @media (max-width: 920px) {
+    .memory-architecture-map {
+        grid-template-columns: 1fr;
+    }
+
+    .memory-architecture-flow {
+        grid-template-columns: 1fr;
+    }
+
+    .memory-architecture-link {
+        flex-direction: column;
+        gap: 0.2rem;
+        min-height: 24px;
+    }
+
+    .memory-architecture-link::before {
+        width: 1px;
+        height: 18px;
+        min-width: 0;
+        flex: 0 0 auto;
+        border-top: 0;
+        border-left: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+    }
+
+    .memory-architecture-link::after {
+        width: 7px;
+        height: 7px;
+        margin: -7px 0 0;
+        border-top: 0;
+        border-right: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+        border-bottom: 1px solid color-mix(in srgb, var(--border-color) 78%, var(--text-secondary));
+        transform: rotate(45deg);
+    }
+
+    .memory-architecture-link span {
+        max-width: none;
+        padding: 0 0.45rem;
+    }
+
     .memory-view-shell {
         grid-template-columns: 1fr;
         min-height: auto;
