@@ -5491,59 +5491,6 @@ function renderGatewayWeChatRecords(accounts) {
     `;
 }
 
-function renderGatewayDiscordRecords(accounts) {
-    if (!Array.isArray(accounts) || accounts.length === 0) {
-        return `
-            <div class="feature-panel-body">
-                ${renderFeatureEmptyState(
-                    t('settings.gateway.discord_none'),
-                    t('settings.gateway.discord_none_copy'),
-                )}
-            </div>
-        `;
-    }
-    return `
-        <div class="role-records trigger-records gateway-records">
-            ${accounts.map(account => {
-                const accountId = String(account?.account_id || '').trim();
-                const status = String(account?.status || 'disabled').trim() || 'disabled';
-                const statusLabel = account?.running === true
-                    ? t('settings.gateway.status_running')
-                    : t(`automation.status.${status}`);
-                const tokenConfigured = account?.secret_status?.bot_token_configured === true;
-                const allowedChannelIds = Array.isArray(account?.allowed_channel_ids)
-                    ? account.allowed_channel_ids.map(value => String(value || '').trim()).filter(Boolean)
-                    : [];
-                const applicationId = String(account?.application_id || '').trim();
-                return `
-                    <div class="role-record gateway-feature-record" data-feature-discord-record="${escapeHtml(accountId)}">
-                        <div class="role-record-main">
-                            <div class="role-record-title-row trigger-record-title-row">
-                                <div class="role-record-title">${escapeHtml(String(account?.display_name || accountId))}</div>
-                                <div class="profile-card-chips role-record-chips">
-                                    <span class="profile-card-chip">${escapeHtml(statusLabel)}</span>
-                                    <span class="profile-card-chip">${escapeHtml(tokenConfigured ? t('settings.triggers.credentials_ready') : t('settings.triggers.credentials_missing'))}</span>
-                                    <span class="profile-card-chip">${escapeHtml(formatMessage('settings.gateway.discord_allowed_channel_count', { count: allowedChannelIds.length }))}</span>
-                                </div>
-                            </div>
-                            <div class="role-record-meta trigger-record-meta">
-                                ${account?.workspace_id ? `<span>${escapeHtml(String(account.workspace_id))}</span>` : ''}
-                                ${applicationId ? `<span>${escapeHtml(applicationId)}</span>` : ''}
-                                ${account?.last_error ? `<span>${escapeHtml(`${t('settings.gateway.last_error')}: ${String(account.last_error)}`)}</span>` : ''}
-                            </div>
-                        </div>
-                        <div class="role-record-actions trigger-record-actions">
-                            <button class="settings-inline-action settings-list-action" type="button" data-feature-discord-toggle="${escapeHtml(accountId)}">${escapeHtml(status === 'enabled' ? t('settings.gateway.disable_account') : t('settings.gateway.enable_account'))}</button>
-                            <button class="settings-inline-action settings-list-action" type="button" data-feature-discord-edit="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.edit'))}</button>
-                            <button class="settings-inline-action settings-list-action" type="button" data-feature-discord-delete="${escapeHtml(accountId)}">${escapeHtml(t('settings.action.delete'))}</button>
-                        </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
-}
-
 function renderGatewayXiaolubanRecords(accounts) {
     if (!Array.isArray(accounts) || accounts.length === 0) {
         return `

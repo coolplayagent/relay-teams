@@ -723,6 +723,34 @@ def test_discord_message_acceptance_and_terminal_text_helpers() -> None:
         DiscordGatewayService._accepted_text(
             account=account,
             message=DiscordInboundMessage(
+                message_id="m2-user-mentions",
+                channel_id="channel-2",
+                guild_id="guild-1",
+                author_id="user-1",
+                content="<@bot-1> ask <@user-2> about <@!user-3>",
+                mentions_bot=True,
+            ),
+        )
+        == "ask <@user-2> about <@!user-3>"
+    )
+    assert (
+        DiscordGatewayService._accepted_text(
+            account=account,
+            message=DiscordInboundMessage(
+                message_id="m2-nickname",
+                channel_id="channel-2",
+                guild_id="guild-1",
+                author_id="user-1",
+                content="<@!bot-1> inspect <@bot-2>",
+                mentions_bot=True,
+            ),
+        )
+        == "inspect <@bot-2>"
+    )
+    assert (
+        DiscordGatewayService._accepted_text(
+            account=account,
+            message=DiscordInboundMessage(
                 message_id="m3",
                 channel_id="channel-1",
                 guild_id="guild-1",
