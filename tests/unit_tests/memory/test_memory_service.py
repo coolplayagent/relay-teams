@@ -24,6 +24,7 @@ from relay_teams.memory.models import (
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
+from relay_teams.retrieval.retrieval_models import RetrievalHit
 
 pytestmark = pytest.mark.asyncio
 
@@ -406,6 +407,34 @@ class TestSearch:
         assert result.items[0].entry.id == entry.id
         assert needle in result.items[0].snippet
 
+    async def test_workspace_search_fallback_honors_tags(
+        self, service: MemoryBankService
+    ) -> None:
+        await service.create_entry_async(
+            _create_request(
+                content=MemoryContent(title="Tagged", body="shared tagged body"),
+                tags=("keep",),
+            )
+        )
+        await service.create_entry_async(
+            _create_request(
+                content=MemoryContent(title="Untagged", body="shared tagged body"),
+                tags=("skip",),
+            )
+        )
+
+        result = await service.search_async(
+            MemorySearchRequest(
+                workspace_id="ws-test",
+                text_query="shared tagged body",
+                tags=("keep",),
+                limit=10,
+            )
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.tags == ("keep",)
+
 
 # ---------------------------------------------------------------------------
 # Get / List / Delete
@@ -477,10 +506,6 @@ class TestSearchFTS5:
         self, service: MemoryBankService
     ) -> None:
         """When a retrieval_service IS configured, the FTS5 path is used."""
-        from relay_teams.retrieval.retrieval_models import (
-            RetrievalHit,
-        )
-
         # Create entry first so summary data exists
         req = _create_request(
             content=MemoryContent(title="FastAPI tips", body="Use dependency injection")
@@ -508,6 +533,90 @@ class TestSearchFTS5:
         assert result.total_count >= 1
         assert result.items[0].entry.id == entry.id
         assert result.items[0].score == 0.85
+
+    async def test_search_fts_loads_hits_by_document_id(
+        self, service: MemoryBankService
+    ) -> None:
+        older = await service.create_entry_async(
+            _create_request(
+                content=MemoryContent(title="Older match", body="needle in older row"),
+            )
+        )
+        await service.create_entry_async(
+            _create_request(
+                content=MemoryContent(title="Newer miss", body="unrelated newest row"),
+            )
+        )
+        mock_retrieval = MagicMock()
+        mock_retrieval.search_async = AsyncMock(
+            return_value=[
+                RetrievalHit(
+                    document_id=older.id,
+                    title="Older match",
+                    snippet="needle",
+                    score=0.9,
+                    rank=1,
+                )
+            ]
+        )
+        service._retrieval_service = mock_retrieval
+
+        result = await service.search_async(
+            MemorySearchRequest(
+                workspace_id="ws-test",
+                text_query="needle",
+                limit=1,
+            )
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.id == older.id
+
+    async def test_search_fts_honors_tags(self, service: MemoryBankService) -> None:
+        keep = await service.create_entry_async(
+            _create_request(
+                content=MemoryContent(title="Keep", body="shared retrieval body"),
+                tags=("keep",),
+            )
+        )
+        skip = await service.create_entry_async(
+            _create_request(
+                content=MemoryContent(title="Skip", body="shared retrieval body"),
+                tags=("skip",),
+            )
+        )
+        mock_retrieval = MagicMock()
+        mock_retrieval.search_async = AsyncMock(
+            return_value=[
+                RetrievalHit(
+                    document_id=skip.id,
+                    title="Skip",
+                    snippet="shared",
+                    score=0.95,
+                    rank=1,
+                ),
+                RetrievalHit(
+                    document_id=keep.id,
+                    title="Keep",
+                    snippet="shared",
+                    score=0.9,
+                    rank=2,
+                ),
+            ]
+        )
+        service._retrieval_service = mock_retrieval
+
+        result = await service.search_async(
+            MemorySearchRequest(
+                workspace_id="ws-test",
+                text_query="shared",
+                tags=("keep",),
+                limit=10,
+            )
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.id == keep.id
 
     async def test_search_fts_no_hits_returns_empty(
         self, service: MemoryBankService

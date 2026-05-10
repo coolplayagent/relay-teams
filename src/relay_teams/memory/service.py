@@ -26,6 +26,7 @@ from relay_teams.memory.models import (
     MemoryTier,
     UpdateMemoryEntryRequest,
     _UNSET,
+    _entry_to_summary,
     default_ttl_for_tier,
 )
 from relay_teams.memory.repository import MemoryBankRepository, generate_memory_id
@@ -486,38 +487,18 @@ class MemoryBankService:
         if not fts_hits:
             return MemorySearchResult(items=(), total_count=0)
 
-        # Build a set of matching document IDs for fast lookup
-        hit_map: dict[str, tuple[float, int, str]] = {}
-        for hit in fts_hits:
-            hit_map[hit.document_id] = (hit.score, hit.rank, hit.snippet)
-
-        # Pull matching entries from the memory table, applying filters
-        query = MemoryQuery(
-            workspace_id=request.workspace_id,
-            tier=request.tier,
-            scope=request.scope,
-            session_id=request.session_id,
-            role_id=request.role_id,
-            kind=request.kind,
-            status=request.status,
-            min_confidence=request.min_confidence,
-            limit=request.limit,
-            offset=0,
-        )
-        result = await self._repo.query_entries_async(query)
-
         items: list[MemorySearchHit] = []
-        for summary in result.items:
-            fts_match = hit_map.get(summary.id)
-            if fts_match is None:
+        for hit in fts_hits:
+            entry = await self._repo.get_by_id_async(hit.document_id)
+            if entry is None or not self._entry_matches_search_request(entry, request):
                 continue
-            score, rank, snippet = fts_match
+            summary = _entry_to_summary(entry)
             items.append(
                 MemorySearchHit(
                     entry=summary,
-                    score=score,
-                    rank=rank,
-                    snippet=snippet
+                    score=hit.score,
+                    rank=hit.rank,
+                    snippet=hit.snippet
                     or self._build_snippet(
                         summary.content_body_preview, request.text_query.lower()
                     ),
@@ -547,6 +528,7 @@ class MemoryBankService:
                 role_id=request.role_id,
                 kind=request.kind,
                 status=request.status,
+                tags=request.tags,
                 min_confidence=request.min_confidence,
                 limit=GLOBAL_SEARCH_BATCH_SIZE,
                 offset=offset,
@@ -601,6 +583,31 @@ class MemoryBankService:
         prefix = "..." if start > 0 else ""
         suffix = "..." if end < len(body_preview) else ""
         return f"{prefix}{body_preview[start:end]}{suffix}"
+
+    @staticmethod
+    def _entry_matches_search_request(
+        entry: MemoryEntry,
+        request: MemorySearchRequest,
+    ) -> bool:
+        if entry.workspace_id != request.workspace_id:
+            return False
+        if request.tier is not None and entry.tier != request.tier:
+            return False
+        if request.scope is not None and entry.scope != request.scope:
+            return False
+        if request.session_id is not None and entry.session_id != request.session_id:
+            return False
+        if request.role_id is not None and entry.role_id != request.role_id:
+            return False
+        if request.kind is not None and entry.kind != request.kind:
+            return False
+        if request.status is not None and entry.status != request.status:
+            return False
+        if entry.confidence_score < request.min_confidence:
+            return False
+        if request.tags and not all(tag in entry.tags for tag in request.tags):
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # FTS5 indexing integration
