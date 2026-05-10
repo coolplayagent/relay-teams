@@ -1,13 +1,17 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from relay_teams.agents.tasks.models import VerificationReport
+from relay_teams.agents.tasks.enums import VerificationLayer
+from relay_teams.agents.tasks.models import VerificationCheckResult, VerificationReport
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.memory.models import (
+    CreateMemoryEntryRequest,
+    MemoryContent,
     MemoryEntryKind,
     MemoryEntryStatus,
     MemoryEntrySummary,
@@ -18,7 +22,12 @@ from relay_teams.memory.models import (
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
-from relay_teams.roles.memory_models import RolePerformanceMetrics
+from relay_teams.roles.memory_models import (
+    PerformanceTrendPoint,
+    RolePerformanceMetrics,
+    RoleTaskCounts,
+    VerificationPassRate,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -148,6 +157,153 @@ class TestOnTaskCompleted:
         assert entry.kind == MemoryEntryKind.INSIGHT
         assert entry.scope == MemoryScope.ROLE
         assert "role-performance" in entry.tags
+
+    async def test_updates_existing_role_performance_and_trims_trend(
+        self,
+        handler: MemoryEventHandler,
+        memory_bank_service: MemoryBankService,
+    ) -> None:
+        now = datetime.now(tz=timezone.utc)
+        seed = RolePerformanceMetrics(
+            role_id="role-1",
+            workspace_id="ws-1",
+            verification_pass_rate=VerificationPassRate(
+                total_verifications=20,
+                passed_verifications=10,
+                pass_rate=0.5,
+            ),
+            task_counts=RoleTaskCounts(
+                total_tasks=20,
+                successful_tasks=10,
+                failed_tasks=10,
+            ),
+            average_verification_score=2.5,
+            trend=tuple(
+                PerformanceTrendPoint(
+                    recorded_at=now - timedelta(minutes=20 - index),
+                    verification_pass_rate=0.5,
+                    average_verification_score=2.5,
+                    total_tasks_at_point=index + 1,
+                )
+                for index in range(20)
+            ),
+        )
+        created = await memory_bank_service.create_entry_async(
+            CreateMemoryEntryRequest(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.ROLE,
+                workspace_id="ws-1",
+                role_id="role-1",
+                kind=MemoryEntryKind.INSIGHT,
+                content=MemoryContent(
+                    title="Role performance for role-1",
+                    body=seed.model_dump_json(),
+                ),
+                tags=("role-performance",),
+                source=MemorySourceKind.MANUAL,
+            )
+        )
+
+        await handler.on_task_completed_async(
+            workspace_id="ws-1",
+            role_id="role-1",
+            session_id="sess-1",
+            run_id="run-1",
+            task_id="task-2",
+            objective="Test",
+            result="OK",
+            verification_report=VerificationReport(
+                task_id="task-2",
+                passed=True,
+                checks=(
+                    VerificationCheckResult(
+                        layer=VerificationLayer.STRUCTURE,
+                        name="structure",
+                        passed=True,
+                    ),
+                    VerificationCheckResult(
+                        layer=VerificationLayer.BEHAVIOR,
+                        name="behavior",
+                        passed=False,
+                    ),
+                ),
+            ),
+        )
+
+        updated = await memory_bank_service.get_entry_async(created.id)
+        assert updated is not None
+        metrics = RolePerformanceMetrics.model_validate_json(updated.content.body)
+        assert metrics.task_counts.total_tasks == 21
+        assert metrics.task_counts.successful_tasks == 11
+        assert metrics.verification_pass_rate.total_verifications == 21
+        assert metrics.verification_pass_rate.passed_verifications == 11
+        assert metrics.average_verification_score == 2.5
+        assert len(metrics.trend) == 20
+        assert metrics.trend[0].total_tasks_at_point == 2
+        assert metrics.trend[-1].total_tasks_at_point == 21
+
+    async def test_skips_invalid_role_performance_memory(
+        self,
+        handler: MemoryEventHandler,
+        memory_bank_service: MemoryBankService,
+    ) -> None:
+        await memory_bank_service.create_entry_async(
+            CreateMemoryEntryRequest(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.ROLE,
+                workspace_id="ws-1",
+                role_id="role-1",
+                kind=MemoryEntryKind.INSIGHT,
+                content=MemoryContent(
+                    title="Broken role performance",
+                    body="not-json",
+                ),
+                tags=("role-performance",),
+                source=MemorySourceKind.MANUAL,
+            )
+        )
+
+        await handler.on_task_completed_async(
+            workspace_id="ws-1",
+            role_id="role-1",
+            session_id="sess-1",
+            run_id="run-1",
+            task_id="task-3",
+            objective="Test",
+            result="OK",
+            verification_report=VerificationReport(
+                task_id="task-3",
+                passed=True,
+                checks=(),
+            ),
+        )
+
+        result = await memory_bank_service.list_entries_async(
+            MemoryQuery(
+                workspace_id="ws-1",
+                scope=MemoryScope.ROLE,
+                role_id="role-1",
+                kind=MemoryEntryKind.INSIGHT,
+                tags=("role-performance",),
+                limit=10,
+            )
+        )
+        valid_metrics: list[RolePerformanceMetrics] = []
+        invalid_bodies: list[str] = []
+        for summary in result.items:
+            entry = await memory_bank_service.get_entry_async(summary.id)
+            assert entry is not None
+            try:
+                valid_metrics.append(
+                    RolePerformanceMetrics.model_validate_json(entry.content.body)
+                )
+            except ValueError:
+                invalid_bodies.append(entry.content.body)
+
+        assert result.total_count == 2
+        assert invalid_bodies == ["not-json"]
+        assert len(valid_metrics) == 1
+        assert valid_metrics[0].task_counts.successful_tasks == 1
 
 
 class TestOnRunCompleted:
