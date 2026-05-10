@@ -20,7 +20,6 @@ from relay_teams.agents.execution.conversation_microcompact import (
 )
 from relay_teams.agents.execution.agent_llm_session import AgentLlmSession
 from relay_teams.agents.execution.message_repository import MessageRepository
-from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.agent_runtimes.instances.instance_repository import (
     AgentInstanceRepository,
 )
@@ -57,7 +56,6 @@ from relay_teams.providers.provider_contracts import (
 )
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
 from relay_teams.reminders.service import SystemReminderService
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.event_log import EventLog
@@ -114,8 +112,6 @@ class OpenAICompatibleProvider(LLMProvider):
         monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
         media_asset_service: MediaAssetService,
-        role_memory_service: RoleMemoryService | None,
-        subagent_reflection_service: SubagentReflectionService | None,
         tool_registry: ToolRegistry,
         mcp_registry: McpRegistry,
         skill_registry: SkillRegistry,
@@ -170,8 +166,6 @@ class OpenAICompatibleProvider(LLMProvider):
             monitor_service=monitor_service,
             workspace_manager=workspace_manager,
             media_asset_service=media_asset_service,
-            role_memory_service=role_memory_service,
-            subagent_reflection_service=subagent_reflection_service,
             conversation_compaction_service=ConversationCompactionService(
                 config=config,
                 profile_name=profile_name,

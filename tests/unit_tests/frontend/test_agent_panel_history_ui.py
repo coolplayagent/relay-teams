@@ -65,8 +65,8 @@ function createPanelElement() {
             ['.agent-panel-runtime-prompt-body', createNode()],
             ['.agent-panel-runtime-tools-meta', createNode()],
             ['.agent-panel-runtime-tools-body', createNode()],
-            ['.agent-panel-reflection-meta', createNode()],
-            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-memory-meta', createNode()],
+            ['.agent-panel-memory-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
             ['.agent-panel-summary-updated', createNode()],
             ['.agent-panel-summary-tasks', createNode()],
@@ -134,8 +134,8 @@ function createPanelElement() {
             ['.agent-panel-runtime-prompt-body', createNode()],
             ['.agent-panel-runtime-tools-meta', createNode()],
             ['.agent-panel-runtime-tools-body', createNode()],
-            ['.agent-panel-reflection-meta', createNode()],
-            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-memory-meta', createNode()],
+            ['.agent-panel-memory-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
             ['.agent-panel-summary-updated', createNode()],
             ['.agent-panel-summary-tasks', createNode()],
@@ -218,8 +218,8 @@ function createPanelElement() {
             ['.agent-panel-runtime-prompt-body', createNode()],
             ['.agent-panel-runtime-tools-meta', createNode()],
             ['.agent-panel-runtime-tools-body', createNode()],
-            ['.agent-panel-reflection-meta', createNode()],
-            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-memory-meta', createNode()],
+            ['.agent-panel-memory-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
             ['.agent-panel-summary-updated', createNode()],
             ['.agent-panel-summary-tasks', createNode()],
@@ -298,8 +298,8 @@ function createPanelElement() {
             ['.agent-panel-runtime-prompt-body', createNode()],
             ['.agent-panel-runtime-tools-meta', createNode()],
             ['.agent-panel-runtime-tools-body', createNode()],
-            ['.agent-panel-reflection-meta', createNode()],
-            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-memory-meta', createNode()],
+            ['.agent-panel-memory-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
             ['.agent-panel-summary-updated', createNode()],
             ['.agent-panel-summary-tasks', createNode()],
@@ -348,8 +348,8 @@ export async function fetchAgentMessages() {
     ];
 }
 
-export async function fetchAgentReflection() {
-    throw new Error('reflection unavailable');
+export async function fetchMemories() {
+    throw new Error('memory unavailable');
 }
 
 export async function fetchRunTokenUsage() {
@@ -400,8 +400,8 @@ function createPanelElement() {
             ['.agent-panel-runtime-prompt-body', createNode()],
             ['.agent-panel-runtime-tools-meta', createNode()],
             ['.agent-panel-runtime-tools-body', createNode()],
-            ['.agent-panel-reflection-meta', createNode()],
-            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-memory-meta', createNode()],
+            ['.agent-panel-memory-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
             ['.agent-panel-summary-updated', createNode()],
             ['.agent-panel-summary-tasks', createNode()],
@@ -446,8 +446,8 @@ export async function fetchAgentMessages() {
     ];
 }
 
-export async function fetchAgentReflection() {
-    return { summary: 'Reflection', updated_at: '2026-03-16T08:30:00Z' };
+export async function fetchMemories() {
+    return { summary: 'Memory', updated_at: '2026-03-16T08:30:00Z' };
 }
 
 export async function fetchRunTokenUsage() {
@@ -497,8 +497,8 @@ function createPanelElement() {
             ['.agent-panel-runtime-prompt-body', createNode()],
             ['.agent-panel-runtime-tools-meta', createNode()],
             ['.agent-panel-runtime-tools-body', createNode()],
-            ['.agent-panel-reflection-meta', createNode()],
-            ['.agent-panel-reflection-body', createNode()],
+            ['.agent-panel-memory-meta', createNode()],
+            ['.agent-panel-memory-body', createNode()],
             ['.agent-panel-summary-status', createNode()],
             ['.agent-panel-summary-updated', createNode()],
             ['.agent-panel-summary-tasks', createNode()],
@@ -565,8 +565,8 @@ export async function fetchAgentMessages() {
     return [];
 }
 
-export async function fetchAgentReflection() {
-    return { summary: 'Reflection', updated_at: '2026-03-16T08:30:00Z' };
+export async function fetchMemories() {
+    return { summary: 'Memory', updated_at: '2026-03-16T08:30:00Z' };
 }
 
 export async function fetchRunTokenUsage() {
@@ -626,8 +626,8 @@ const translations = {
     "subagent.prompt_lines": "{count} lines",
     "subagent.tools_count": "{count} tools",
     "subagent.json_snapshot": "JSON snapshot",
-    "subagent.no_reflection": "No reflection yet",
-    "subagent.no_reflection_memory": "No reflection memory yet.",
+    "subagent.memory_count": "{count} memories",
+    "subagent.memory_empty": "No memory yet.",
     "subagent.no_tasks": "No delegated tasks yet.",
     "subagent.task": "Task",
     "subagent.spec": "Spec",

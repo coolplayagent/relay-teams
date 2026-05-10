@@ -36,7 +36,6 @@ from relay_teams.agents.execution.recovery_flow import (
     FallbackAttemptStatus,
 )
 from relay_teams.agents.execution.stream_events import StreamEventService
-from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.agents.execution.tool_args_recovery import ToolArgsRecoveryService
 from relay_teams.agents.execution.tool_result_state import ToolResultStateService
 from relay_teams.agent_runtimes.instances.instance_repository import (
@@ -66,7 +65,6 @@ from relay_teams.providers.model_fallback import (
 )
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.providers.token_usage_repo import TokenUsageRepository
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.background_tasks.service import BackgroundTaskService
 from relay_teams.sessions.runs.event_log import EventLog
@@ -114,8 +112,6 @@ class AgentLlmSessionMixinBase:  # pragma: no cover
     _monitor_service: MonitorService | None
     _workspace_manager: WorkspaceManager
     _media_asset_service: MediaAssetService | None
-    _role_memory_service: RoleMemoryService | None
-    _subagent_reflection_service: SubagentReflectionService | None
     _conversation_compaction_service: ConversationCompactionService | None
     _conversation_microcompact_service: ConversationMicrocompactService | None
     _tool_registry: ToolRegistry

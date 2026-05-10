@@ -27,7 +27,6 @@ from relay_teams.notifications import NotificationService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.providers.model_config import ModelCapabilities
 from relay_teams.reminders.service import SystemReminderService
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
 from relay_teams.sessions.runs.event_log import EventLog
@@ -151,7 +150,6 @@ class ToolDeps(BaseModel):
     run_event_hub: Annotated[RunEventHub, _SKIP_VALIDATION]
     agent_repo: Annotated[AgentInstanceRepository, _SKIP_VALIDATION]
     workspace: Annotated[WorkspaceHandle, _SKIP_VALIDATION]
-    role_memory: Annotated[RoleMemoryService | None, _SKIP_VALIDATION] = None
     media_asset_service: Annotated[MediaAssetService | None, _SKIP_VALIDATION] = None
     computer_runtime: Annotated[ComputerRuntime | None, _SKIP_VALIDATION] = None
     background_task_service: Annotated[

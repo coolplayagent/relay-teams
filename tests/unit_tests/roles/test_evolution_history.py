@@ -57,7 +57,7 @@ def _make_memory_entry(
             body=body,
             context=context,
         ),
-        source=MemorySourceKind.REFLECTION,
+        source=MemorySourceKind.CONSOLIDATION,
         source_ref=f"rev-{entry_id}",
         created_at=now,
         updated_at=now,
@@ -86,7 +86,7 @@ def _make_memory_summary(
         content_body_preview="Applied strategy improvement",
         tags=("role_evolution",),
         confidence_score=0.5,
-        source=MemorySourceKind.REFLECTION,
+        source=MemorySourceKind.CONSOLIDATION,
         version=1,
         created_at=now,
         updated_at=now,
@@ -122,7 +122,7 @@ async def test_record_event_creates_memory_entry() -> None:
     call_args = mock_bank.create_entry_async.call_args[0][0]
     assert call_args.scope == MemoryScope.ROLE
     assert call_args.kind == MemoryEntryKind.INSIGHT
-    assert call_args.source == MemorySourceKind.REFLECTION
+    assert call_args.source == MemorySourceKind.CONSOLIDATION
 
 
 async def test_get_timeline_returns_events() -> None:

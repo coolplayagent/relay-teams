@@ -7,8 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.agents.orchestration.llm_evaluator import LLMEvaluator
 from relay_teams.agents.orchestration.llm_evaluator_models import LLMEvaluationResult
+from relay_teams.memory.models import (
+    MemoryEntryKind,
+    MemoryEntryStatus,
+    MemoryQuery,
+    MemoryScope,
+)
+from relay_teams.memory.service import MemoryBankService
 from relay_teams.roles.memory_models import RolePerformanceMetrics
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.validation import RequiredIdentifierStr
 
 
@@ -48,11 +54,11 @@ class RoleSelfAssessmentService:
         self,
         *,
         llm_evaluator: LLMEvaluator,
-        role_memory_service: RoleMemoryService,
+        memory_bank_service: MemoryBankService,
         config: SelfAssessmentConfig | None = None,
     ) -> None:
         self._llm_evaluator = llm_evaluator
-        self._role_memory_service = role_memory_service
+        self._memory_bank_service = memory_bank_service
         self._config = config if config is not None else SelfAssessmentConfig()
 
     async def maybe_assess(
@@ -69,16 +75,13 @@ class RoleSelfAssessmentService:
         if run_count_since_last < self._config.trigger_every_n_runs:
             return None
 
-        record = await self._role_memory_service.get_reflection_record_async(
+        performance = await self._get_role_performance_async(
             role_id=role_id,
             workspace_id=workspace_id,
         )
-        if record.performance is None:
+        if performance is None:
             return None
-        if (
-            record.performance.task_counts.total_tasks
-            < self._config.min_tasks_for_assessment
-        ):
+        if performance.task_counts.total_tasks < self._config.min_tasks_for_assessment:
             return None
 
         eval_result: LLMEvaluationResult
@@ -86,7 +89,7 @@ class RoleSelfAssessmentService:
             eval_result = await self._llm_evaluator.evaluate_role_performance(
                 role_id=role_id,
                 current_system_prompt=current_system_prompt,
-                performance=record.performance,
+                performance=performance,
             )
         except (ValueError, KeyError, TypeError, OSError):
             eval_result = _fallback_performance_result()
@@ -101,8 +104,34 @@ class RoleSelfAssessmentService:
             generated_at=generated_at,
             overall_assessment=overall_assessment,
             recommendations=recommendations,
-            metrics_snapshot=record.performance,
+            metrics_snapshot=performance,
         )
+
+    async def _get_role_performance_async(
+        self,
+        *,
+        role_id: str,
+        workspace_id: str,
+    ) -> RolePerformanceMetrics | None:
+        query = MemoryQuery(
+            workspace_id=workspace_id,
+            scope=MemoryScope.ROLE,
+            role_id=role_id,
+            kind=MemoryEntryKind.INSIGHT,
+            status=MemoryEntryStatus.ACTIVE,
+            tags=("role-performance",),
+            limit=20,
+        )
+        result = await self._memory_bank_service.list_entries_async(query)
+        for summary in result.items:
+            entry = await self._memory_bank_service.get_entry_async(summary.id)
+            if entry is None:
+                continue
+            try:
+                return RolePerformanceMetrics.model_validate_json(entry.content.body)
+            except ValueError:
+                continue
+        return None
 
 
 def _parse_recommendations(

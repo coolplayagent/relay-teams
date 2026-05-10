@@ -2618,8 +2618,8 @@ export async function runAutomationProject() {
     )
 
     assert payload["firstChildClassName"] == "home-feature-section"
-    assert payload["featureCount"] == 3
-    assert payload["featureIds"] == ["skills", "automation", "gateway"]
+    assert payload["featureCount"] == 4
+    assert payload["featureIds"] == ["skills", "automation", "gateway", "memory"]
     assert payload["workspaceCardCount"] == 1
 
 
@@ -2632,6 +2632,7 @@ def test_projects_sidebar_uses_distinct_feature_icon_variants() -> None:
     assert "home-feature-icon-svg-skills" in sidebar_source
     assert "home-feature-icon-svg-automation" in sidebar_source
     assert "home-feature-icon-svg-gateway" in sidebar_source
+    assert "home-feature-icon-svg-memory" in sidebar_source
 
 
 def test_projects_sidebar_opens_home_feature_views_from_feature_navigation(
@@ -2652,6 +2653,7 @@ const featureItems = featureSection.querySelectorAll(".home-feature-item");
 featureItems[0]?.onclick?.();
 featureItems[1]?.onclick?.();
 featureItems[2]?.onclick?.();
+featureItems[3]?.onclick?.();
 await flushTasks();
 await flushTasks();
 
@@ -2659,6 +2661,7 @@ console.log(JSON.stringify({
     openedSkillsFeatureCount: globalThis.__openedSkillsFeatureCount || 0,
     openedAutomationProjectIds: globalThis.__openedAutomationProjectIds,
     openedGatewayFeatureCount: globalThis.__openedGatewayFeatureCount || 0,
+    openedMemoryFeatureCount: globalThis.__openedMemoryFeatureCount || 0,
     fetchWorkspacesCalls: globalThis.__fetchWorkspacesCalls || 0,
     fetchSessionsCalls: globalThis.__fetchSessionsCalls || 0,
     fetchAutomationProjectsCalls: globalThis.__fetchAutomationProjectsCalls || 0,
@@ -2742,6 +2745,7 @@ export async function enableAutomationProject() {
     assert payload["openedSkillsFeatureCount"] == 1
     assert payload["openedAutomationProjectIds"] == [""]
     assert payload["openedGatewayFeatureCount"] == 1
+    assert payload["openedMemoryFeatureCount"] == 1
     assert payload["fetchWorkspacesCalls"] == 1
     assert payload["fetchSessionsCalls"] == 1
     assert payload["fetchAutomationProjectsCalls"] == 1
@@ -4258,6 +4262,7 @@ def _run_sidebar_script(
     mock_agent_panel_path = tmp_path / "mockAgentPanel.mjs"
     mock_context_indicators_path = tmp_path / "mockContextIndicators.mjs"
     mock_project_view_path = tmp_path / "mockProjectView.mjs"
+    mock_memory_view_path = tmp_path / "mockMemoryView.mjs"
     mock_subagent_sessions_path = tmp_path / "mockSubagentSessions.mjs"
     mock_new_session_draft_path = tmp_path / "mockNewSessionDraft.mjs"
     mock_rounds_timeline_path = tmp_path / "mockRoundsTimeline.mjs"
@@ -4686,6 +4691,7 @@ const translations = {
     "sidebar.feature_skills": "Skills",
     "sidebar.feature_automation": "Automation",
     "sidebar.feature_gateway": "IM Gateway",
+    "sidebar.feature_memory": "Memory",
     "sidebar.select_workspace_for_session": "Choose a workspace for the new session.",
     "sidebar.new_automation": "New automation",
     "sidebar.fork": "Fork",
@@ -5048,6 +5054,17 @@ export function hideProjectView() {
 """.strip(),
         encoding="utf-8",
     )
+    mock_memory_view_path.write_text(
+        """
+import { state } from "./mockState.mjs";
+
+export async function openMemoryFeatureView() {
+    globalThis.__openedMemoryFeatureCount = (globalThis.__openedMemoryFeatureCount || 0) + 1;
+    state.currentMainView = "project";
+}
+""".strip(),
+        encoding="utf-8",
+    )
     mock_subagent_sessions_path.write_text(
         """
 function readRows(sessionId) {
@@ -5190,6 +5207,7 @@ export function syncSessionDebugBadge() {
         .replace("./agentPanel.js", "./mockAgentPanel.mjs")
         .replace("./contextIndicators.js", "./mockContextIndicators.mjs")
         .replace("./projectView.js", "./mockProjectView.mjs")
+        .replace("./memoryView.js", "./mockMemoryView.mjs")
         .replace("./subagentSessions.js", "./mockSubagentSessions.mjs")
         .replace("./newSessionDraft.js", "./mockNewSessionDraft.mjs")
         .replace("./rounds/timeline.js", "./mockRoundsTimeline.mjs")

@@ -1,6 +1,6 @@
 /**
  * utils/backendStatus.js
- * Tracks backend availability and reflects it in the sidebar status indicator.
+ * Tracks backend availability and updates the sidebar status indicator.
  */
 import { els } from './dom.js';
 import { t } from './i18n.js';

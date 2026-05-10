@@ -32,7 +32,6 @@ from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.roles.memory_injection import build_role_with_memory_async
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -68,7 +67,6 @@ class TaskPromptHarness(BaseModel):
     prompt_builder: RuntimePromptBuilder
     tool_harness: TaskToolHarness
     skill_runtime_service: object | None = None
-    role_memory_service: RoleMemoryService | None = None
     memory_bank_service: MemoryBankService | None = None
     runtime_role_resolver: RuntimeRoleResolver | None = None
     run_intent_repo: RunIntentRepository | None = None
@@ -102,7 +100,6 @@ class TaskPromptHarness(BaseModel):
     ) -> RoleDefinition:
         return await build_role_with_memory_async(
             role_registry=self.role_registry,
-            role_memory_service=self.role_memory_service,
             memory_bank_service=self.memory_bank_service,
             role=role,
             role_id=role_id,

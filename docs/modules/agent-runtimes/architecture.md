@@ -25,8 +25,7 @@ the shared prompt path must prepare the role prompt and history in this order:
 
 ```text
 resolve role
--> inject legacy reflection memory when still available
--> inject Memory Bank project memory
+-> inject Memory Bank role/project memory
 -> load session history
 -> prune to a safe tool-call boundary
 -> inject existing compaction summary
@@ -40,8 +39,8 @@ resolve role
 `MemoryBankService` is the long-term memory system for the unified runtime. It
 owns three tiers, Working, Medium-term, and Persistent, and the six memory
 operations: consolidation, updating, indexing, forgetting, retrieval, and
-condensation. `role_memories` remains only a legacy reflection-memory
-compatibility layer during migration.
+condensation. Legacy `role_memories` rows are startup migration input only; the
+runtime reads and writes durable memory through Memory Bank.
 
 `ConversationMicrocompactService` and `ConversationCompactionService` are short
 term session context controls. Microcompact changes only the prompt view sent to

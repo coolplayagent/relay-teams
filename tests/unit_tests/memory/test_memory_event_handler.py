@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from relay_teams.agents.tasks.models import VerificationReport
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.memory.models import (
     MemoryEntryKind,
@@ -18,7 +18,6 @@ from relay_teams.memory.models import (
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
-from relay_teams.roles.memory_service import RoleMemoryService
 
 pytestmark = pytest.mark.asyncio
 
@@ -39,18 +38,6 @@ def handler(
 ) -> MemoryEventHandler:
     return MemoryEventHandler(
         memory_bank_service=memory_bank_service,
-        role_memory_service=None,
-    )
-
-
-@pytest.fixture
-def handler_with_dual_write(
-    memory_bank_service: MemoryBankService,
-) -> MemoryEventHandler:
-    mock_role_memory = MagicMock(spec=RoleMemoryService)
-    return MemoryEventHandler(
-        memory_bank_service=memory_bank_service,
-        role_memory_service=mock_role_memory,
     )
 
 
@@ -91,54 +78,31 @@ class TestOnTaskCompleted:
         assert e.status == MemoryEntryStatus.ACTIVE
         assert "Fix login bug" in e.content_title
 
-    async def test_dual_writes_to_role_memories(
+    async def test_includes_verification_outcome_in_memory_entry(
         self,
-        handler_with_dual_write: MemoryEventHandler,
-    ) -> None:
-        await handler_with_dual_write.on_task_completed_async(
-            workspace_id="ws-1",
-            role_id="role-1",
-            session_id="sess-1",
-            run_id="run-1",
-            task_id="task-1",
-            objective="Build feature",
-            result="Implemented feature X",
-        )
-        rm = handler_with_dual_write._role_memory_service
-        assert rm is not None
-        rm.record_task_result_async.assert_awaited_once_with(  # type: ignore[attr-defined]
-            role_id="role-1",
-            workspace_id="ws-1",
-            session_id="sess-1",
-            task_id="task-1",
-            objective="Build feature",
-            result="Implemented feature X",
-            transcript_lines=(),
-        )
-
-    async def test_dual_write_failure_does_not_block_entry(
-        self,
+        handler: MemoryEventHandler,
         memory_bank_service: MemoryBankService,
     ) -> None:
-        mock_rm = MagicMock(spec=RoleMemoryService)
-        mock_rm.record_task_result_async = AsyncMock(
-            side_effect=RuntimeError("db error")
-        )
-        h = MemoryEventHandler(
-            memory_bank_service=memory_bank_service,
-            role_memory_service=mock_rm,
-        )
-        await h.on_task_completed_async(
+        await handler.on_task_completed_async(
             workspace_id="ws-1",
             role_id="role-1",
             session_id="sess-1",
             run_id="run-1",
-            task_id="task-2",
+            task_id="task-1",
             objective="Test",
             result="OK",
+            verification_report=VerificationReport(
+                task_id="task-1",
+                passed=True,
+                checks=(),
+            ),
         )
-        entries = await _list_entries(memory_bank_service, "ws-1", MemoryTier.WORKING)
-        assert len(entries) == 1
+        result = await memory_bank_service.list_entries_async(
+            MemoryQuery(workspace_id="ws-1", tier=MemoryTier.WORKING, limit=10)
+        )
+        entry = await memory_bank_service.get_entry_async(result.items[0].id)
+        assert entry is not None
+        assert entry.content.outcome == "completed verification=passed"
 
 
 class TestOnRunCompleted:

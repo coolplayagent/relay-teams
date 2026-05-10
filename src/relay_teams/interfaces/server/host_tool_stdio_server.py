@@ -60,7 +60,6 @@ async def _run_stdio_server() -> None:
         monitor_service=container.monitor_service,
         workspace_manager=container.workspace_manager,
         media_asset_service=container.media_asset_service,
-        role_memory_service=container.role_memory_service,
         tool_registry=container.tool_registry,
         message_repo=container.message_repo,
         get_mcp_registry=lambda: container.mcp_registry,

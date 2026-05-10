@@ -96,15 +96,11 @@ from relay_teams.workspace import (
 import asyncio
 
 if TYPE_CHECKING:
-    from relay_teams.agents.execution.subagent_reflection import (
-        SubagentReflectionService,
-    )
     from relay_teams.agents.orchestration.settings_service import (
         OrchestrationSettingsService,
     )
     from relay_teams.media import MediaAssetService
     from relay_teams.mcp.mcp_registry import McpRegistry
-    from relay_teams.roles.memory_service import RoleMemoryService
     from relay_teams.roles.role_registry import RoleRegistry
     from relay_teams.sessions.runs.run_intent_repo import RunIntentRepository
     from relay_teams.skills.skill_registry import SkillRegistry
@@ -181,8 +177,6 @@ class SessionService:
         workspace_manager: WorkspaceManager | None = None,
         workspace_service: WorkspaceService | None = None,
         external_session_binding_repo: ExternalSessionBindingRepository | None = None,
-        role_memory_service: RoleMemoryService | None = None,
-        subagent_reflection_service: SubagentReflectionService | None = None,
         role_registry: RoleRegistry | None = None,
         skill_registry: SkillRegistry | None = None,
         mcp_registry: McpRegistry | None = None,
@@ -212,8 +206,6 @@ class SessionService:
         self._workspace_manager = workspace_manager
         self._workspace_service = workspace_service
         self._external_session_binding_repo = external_session_binding_repo
-        self._role_memory_service = role_memory_service
-        self._subagent_reflection_service = subagent_reflection_service
         self._role_registry = role_registry
         self._skill_registry = skill_registry
         self._mcp_registry = mcp_registry
@@ -228,12 +220,6 @@ class SessionService:
 
     def replace_role_registry(self, role_registry: RoleRegistry | None) -> None:
         self._role_registry = role_registry
-
-    def replace_subagent_reflection_service(
-        self,
-        subagent_reflection_service: SubagentReflectionService | None,
-    ) -> None:
-        self._subagent_reflection_service = subagent_reflection_service
 
     def create_session(
         self,
@@ -1350,71 +1336,6 @@ class SessionService:
             )
         return tuple(projections)
 
-    async def get_agent_reflection_async(
-        self,
-        session_id: str,
-        instance_id: str,
-    ) -> dict[str, object]:
-        agent = await self._require_session_agent_async(session_id, instance_id)
-        return await self._reflection_projection_async(agent)
-
-    async def refresh_subagent_reflection(
-        self,
-        session_id: str,
-        instance_id: str,
-    ) -> dict[str, object]:
-        if self._subagent_reflection_service is None or self._role_registry is None:
-            raise RuntimeError("Subagent reflection is not available")
-        agent = await self._require_session_agent_async(session_id, instance_id)
-        if self._role_registry.is_coordinator_role(agent.role_id):
-            raise RuntimeError("Coordinator reflection refresh is not supported")
-        role = self._role_registry.get(agent.role_id)
-        record = await self._subagent_reflection_service.refresh_reflection(
-            role=role,
-            workspace_id=agent.workspace_id,
-            conversation_id=agent.conversation_id,
-        )
-        return await self._reflection_projection_async(
-            agent,
-            role_record=record,
-            source="manual",
-        )
-
-    async def update_agent_reflection_async(
-        self,
-        session_id: str,
-        instance_id: str,
-        *,
-        summary: str,
-    ) -> dict[str, object]:
-        if self._role_memory_service is None:
-            raise RuntimeError("Subagent reflection is not available")
-        agent = await self._require_session_agent_async(session_id, instance_id)
-        record = await self._role_memory_service.update_reflection_memory_async(
-            role_id=agent.role_id,
-            workspace_id=agent.workspace_id,
-            content_markdown=summary,
-        )
-        return await self._reflection_projection_async(
-            agent,
-            role_record=record,
-            source="manual_edit",
-        )
-
-    async def delete_agent_reflection_async(
-        self,
-        session_id: str,
-        instance_id: str,
-    ) -> dict[str, object]:
-        if self._role_memory_service is None:
-            raise RuntimeError("Subagent reflection is not available")
-        agent = await self._require_session_agent_async(session_id, instance_id)
-        await self._role_memory_service.delete_reflection_memory_async(
-            role_id=agent.role_id,
-            workspace_id=agent.workspace_id,
-        )
-        return await self._reflection_projection_async(agent, source="manual_delete")
-
     def get_agent_messages(
         self, session_id: str, instance_id: str
     ) -> list[dict[str, object]]:
@@ -2355,23 +2276,13 @@ class SessionService:
         return agent
 
     def _agent_projection(self, record: AgentRuntimeRecord) -> dict[str, object]:
-        reflection = self._reflection_projection(record)
-        return {
-            **record.model_dump(mode="json"),
-            "reflection_summary_preview": reflection["preview"],
-            "reflection_updated_at": reflection["updated_at"],
-        }
+        return record.model_dump(mode="json")
 
     async def _agent_projection_async(
         self,
         record: AgentRuntimeRecord,
     ) -> dict[str, object]:
-        reflection = await self._reflection_projection_async(record)
-        return {
-            **record.model_dump(mode="json"),
-            "reflection_summary_preview": reflection["preview"],
-            "reflection_updated_at": reflection["updated_at"],
-        }
+        return record.model_dump(mode="json")
 
     def _normal_mode_subagent_projection(
         self,
@@ -2434,38 +2345,6 @@ class SessionService:
         )
         projected["stream_connected"] = stream_connected
         return projected
-
-    @staticmethod
-    def _reflection_projection(
-        record: AgentRuntimeRecord,
-        *,
-        source: str = "stored",
-        role_record: object | None = None,
-    ) -> dict[str, object]:
-        return _build_reflection_projection(
-            record=record,
-            source=source,
-            memory=role_record,
-        )
-
-    async def _reflection_projection_async(
-        self,
-        record: AgentRuntimeRecord,
-        *,
-        source: str = "stored",
-        role_record: object | None = None,
-    ) -> dict[str, object]:
-        memory = role_record
-        if memory is None and self._role_memory_service is not None:
-            memory = await self._role_memory_service.get_reflection_record_async(
-                role_id=record.role_id,
-                workspace_id=record.workspace_id,
-            )
-        return _build_reflection_projection(
-            record=record,
-            source=source,
-            memory=memory,
-        )
 
     def _public_phase(
         self,
@@ -2596,40 +2475,6 @@ class SessionService:
         return session.session_mode == SessionMode.NORMAL and str(
             record.run_id
         ).strip().startswith("subagent_run_")
-
-
-def _build_reflection_projection(
-    *,
-    record: AgentRuntimeRecord,
-    source: str,
-    memory: object | None,
-) -> dict[str, object]:
-    if memory is None:
-        return {
-            "instance_id": record.instance_id,
-            "role_id": record.role_id,
-            "summary": "",
-            "preview": "",
-            "updated_at": None,
-            "source": source,
-        }
-    updated_at = getattr(memory, "updated_at", None)
-    summary = str(getattr(memory, "content_markdown", "") or "").strip()
-    return {
-        "instance_id": record.instance_id,
-        "role_id": record.role_id,
-        "summary": summary,
-        "preview": _reflection_preview_from_text(summary),
-        "updated_at": updated_at.isoformat() if updated_at is not None else None,
-        "source": source,
-    }
-
-
-def _reflection_preview_from_text(text: str, *, max_chars: int = 180) -> str:
-    normalized = " ".join(text.split())
-    if len(normalized) <= max_chars:
-        return normalized
-    return normalized[: max_chars - 3].rstrip() + "..."
 
 
 def _history_marker_label(marker: SessionHistoryMarkerRecord) -> str:

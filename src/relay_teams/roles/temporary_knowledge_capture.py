@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict
 
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.prompt_adjustment_engine import SystemPromptAdjustmentEngine
 from relay_teams.roles.self_assessment_service import PromptAdjustmentRecommendation
 from relay_teams.roles.temporary_role_repository import TemporaryRoleRepository
@@ -29,12 +28,10 @@ class TemporaryRoleKnowledgeCaptureService:
         *,
         adjustment_engine: SystemPromptAdjustmentEngine,
         temporary_role_repository: TemporaryRoleRepository,
-        role_memory_service: RoleMemoryService,
         min_diff_chars: int = 50,
     ) -> None:
         self._adjustment_engine = adjustment_engine
         self._temporary_role_repository = temporary_role_repository
-        self._role_memory_service = role_memory_service
         self._min_diff_chars = min_diff_chars
 
     async def capture_on_subagent_stop(

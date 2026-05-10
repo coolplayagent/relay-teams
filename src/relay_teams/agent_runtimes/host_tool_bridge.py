@@ -44,7 +44,6 @@ from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.providers.model_config import ModelCapabilities, ModelEndpointConfig
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.reminders.service import SystemReminderService
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_role_resolver import RuntimeRoleResolver
@@ -192,7 +191,6 @@ class ExternalAcpHostToolBridge:
         todo_service: TodoService | None = None,
         monitor_service: MonitorService | None = None,
         workspace_manager: WorkspaceManager,
-        role_memory_service: RoleMemoryService | None,
         tool_registry: ToolRegistry,
         message_repo: MessageRepository,
         get_mcp_registry: Callable[[], McpRegistry],
@@ -234,7 +232,6 @@ class ExternalAcpHostToolBridge:
         self._monitor_service = monitor_service
         self._workspace_manager = workspace_manager
         self._media_asset_service = media_asset_service
-        self._role_memory_service = role_memory_service
         self._tool_registry = tool_registry
         self._message_repo = message_repo
         self._get_mcp_registry = get_mcp_registry
@@ -593,7 +590,6 @@ class ExternalAcpHostToolBridge:
             run_event_hub=self._run_event_hub,
             agent_repo=self._agent_repo,
             workspace=workspace,
-            role_memory=self._role_memory_service,
             media_asset_service=self._media_asset_service,
             computer_runtime=self._computer_runtime,
             background_task_service=self._background_task_service,

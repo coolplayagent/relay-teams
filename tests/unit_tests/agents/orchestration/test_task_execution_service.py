@@ -52,8 +52,6 @@ from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import ReminderStateRepository
 from relay_teams.reminders.service import SystemReminderService
 from relay_teams.retrieval import RetrievalService, SqliteFts5RetrievalStore
-from relay_teams.roles.memory_repository import RoleMemoryRepository
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.run_models import (
@@ -1826,7 +1824,7 @@ async def test_build_runtime_tools_snapshot_skips_mcp_servers_that_fail_to_load(
 
 
 @pytest.mark.asyncio
-async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) -> None:
+async def test_execute_injects_memory_bank_entries(tmp_path: Path) -> None:
     provider = _CapturingProvider()
     project_root = tmp_path / "project"
     project_root.mkdir()
@@ -1840,29 +1838,39 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
     )
     role_registry = RoleRegistry()
     role_registry.register(role)
-    db_path = tmp_path / "task_execution_service_role_memory.db"
+    db_path = tmp_path / "task_execution_service_memory_bank.db"
     task_repo = TaskRepository(db_path)
     agent_repo = AgentInstanceRepository(db_path)
     message_repo = MessageRepository(db_path)
     shared_store = SharedStateRepository(db_path)
-    role_memory_service = RoleMemoryService(repository=RoleMemoryRepository(db_path))
-    await role_memory_service.record_task_result_async(
-        role_id="time",
-        workspace_id="default",
-        session_id="seed-session",
-        task_id="seed-task",
-        objective="Be concise",
-        result="Prefer concise output.",
-        transcript_lines=(),
+    memory_bank_service = MemoryBankService(repository=MemoryBankRepository(db_path))
+    await memory_bank_service.create_entry_async(
+        CreateMemoryEntryRequest(
+            tier=MemoryTier.PERSISTENT,
+            scope=MemoryScope.ROLE,
+            workspace_id="default",
+            role_id="time",
+            kind=MemoryEntryKind.INSIGHT,
+            content=MemoryContent(
+                title="Concise output",
+                body="Prefer concise output.",
+            ),
+            source=MemorySourceKind.MANUAL,
+        )
     )
-    await role_memory_service.record_task_result_async(
-        role_id="time",
-        workspace_id="other-workspace",
-        session_id="other-session",
-        task_id="other-task",
-        objective="Use other cwd",
-        result="Refer to /d/workspace/aider.",
-        transcript_lines=(),
+    await memory_bank_service.create_entry_async(
+        CreateMemoryEntryRequest(
+            tier=MemoryTier.PERSISTENT,
+            scope=MemoryScope.ROLE,
+            workspace_id="other-workspace",
+            role_id="time",
+            kind=MemoryEntryKind.INSIGHT,
+            content=MemoryContent(
+                title="Other workspace",
+                body="Refer to /d/workspace/aider.",
+            ),
+            source=MemorySourceKind.MANUAL,
+        )
     )
     service = TaskExecutionService(
         role_registry=role_registry,
@@ -1884,7 +1892,7 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
         tool_registry=build_default_registry(),
         skill_registry=SkillRegistry.from_config_dirs(app_config_dir=db_path.parent),
         mcp_registry=McpRegistry(),
-        role_memory_service=role_memory_service,
+        memory_bank_service=memory_bank_service,
     )
     task, instance_id = _seed_task(
         task_repo=task_repo,
@@ -1900,13 +1908,6 @@ async def test_execute_injects_memory_and_records_role_memory(tmp_path: Path) ->
 
     assert result.output == "ok"
     assert provider.system_prompts
-    assert "## Reflection Memory" in provider.system_prompts[0]
-    assert "Prefer concise output." in provider.system_prompts[0]
+    assert "## Project Memory" in provider.system_prompts[0]
+    assert "Concise output" in provider.system_prompts[0]
     assert "/d/workspace/aider" not in provider.system_prompts[0]
-    durable = await role_memory_service.build_injected_memory_async(
-        role_id="time",
-        workspace_id="default",
-    )
-    assert "Prefer concise output." in durable
-    assert "query time: ok" not in durable
-    assert "Refer to /d/workspace/aider." not in durable

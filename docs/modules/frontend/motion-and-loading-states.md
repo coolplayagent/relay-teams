@@ -331,7 +331,7 @@
 - 顶部 subagents toggle 展开/收起 rail。
 - subagent session 加载、选择、删除。
 - run event 更新 agent、task、role 状态。
-- reflection refresh 或 stop 操作改变按钮 busy/disabled。
+- Memory Bank 加载或 stop 操作改变按钮 busy/disabled。
 
 维护要点：
 
@@ -361,4 +361,3 @@
 - 深浅主题下都要可读，动画不能只依赖单一颜色。
 - 动效不能遮挡 approval、delete、stop、save 等关键按钮。
 - 新增页面或功能视图时，要在 `pages-and-layout.md` 或 `features.md` 描述页面表现，并在本文档补充动效入口。
-

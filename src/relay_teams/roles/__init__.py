@@ -17,11 +17,8 @@ from relay_teams.roles.role_models import (
 )
 from relay_teams.roles.memory_models import (
     MemoryProfile,
-    RoleMemoryRecord,
     default_memory_profile,
 )
-from relay_teams.roles.memory_repository import RoleMemoryRepository
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_contracts import (
     RoleContract,
     RoleContractInvariant,
@@ -72,9 +69,6 @@ __all__ = [
     "RoleDocumentSummary",
     "RoleMode",
     "RoleLoader",
-    "RoleMemoryRecord",
-    "RoleMemoryRepository",
-    "RoleMemoryService",
     "RoleRegistry",
     "SystemRolesUnavailableError",
     "RoleSkillOption",

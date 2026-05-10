@@ -1236,18 +1236,6 @@ async def test_sdk_misc_endpoint_wrappers_cover_async_primitives(monkeypatch) ->
     assert await client.inject_subagent_message("run-1", "agent-1", "hello") == {
         "status": "ok"
     }
-    assert await client.get_subagent_reflection("session-1", "agent-1") == {
-        "status": "ok"
-    }
-    assert await client.refresh_subagent_reflection("session-1", "agent-1") == {
-        "status": "ok"
-    }
-    assert await client.update_subagent_reflection(
-        "session-1", "agent-1", "summary"
-    ) == {"status": "ok"}
-    assert await client.delete_subagent_reflection("session-1", "agent-1") == {
-        "status": "ok"
-    }
     assert await client.get_workspace_snapshot("workspace-1") == {"status": "ok"}
     assert await client.list_automation_projects() == [
         {"automation_project_id": "auto-1"}

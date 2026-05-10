@@ -58,7 +58,6 @@ from relay_teams.tools.runtime.persisted_state import (
 from relay_teams.tools.registry import ToolRegistry
 from relay_teams.mcp.mcp_registry import McpRegistry
 from relay_teams.roles.role_registry import RoleRegistry
-from relay_teams.roles import RoleMemoryService
 from relay_teams.skills.skill_registry import SkillRegistry
 from relay_teams.agents.orchestration.task_execution_service import TaskExecutionService
 from relay_teams.roles.role_models import RoleDefinition
@@ -172,8 +171,6 @@ def _provider_with_hub(hub: _FakeRunEventHub) -> OpenAICompatibleProvider:
             shared_store=shared_store,
         ),
         media_asset_service=cast(MediaAssetService, object()),
-        role_memory_service=cast(RoleMemoryService | None, None),
-        subagent_reflection_service=None,
         tool_registry=cast(ToolRegistry, object()),
         mcp_registry=cast(McpRegistry, object()),
         skill_registry=cast(SkillRegistry, object()),

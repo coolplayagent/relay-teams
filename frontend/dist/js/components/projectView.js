@@ -3848,6 +3848,28 @@ export function hideProjectView() {
     setProjectViewVisible(false);
 }
 
+export function prepareExternalFeatureView(featureId) {
+    const safeFeatureId = String(featureId || '').trim();
+    if (!safeFeatureId) {
+        return;
+    }
+    abortCurrentFeatureRequest();
+    currentFeatureRequestToken += 1;
+    cacheProjectViewState();
+    currentWorkspace = null;
+    currentAutomationProject = null;
+    currentProjectViewMode = 'feature';
+    currentFeatureViewId = safeFeatureId;
+    currentSnapshotWorkspaceId = null;
+    state.currentFeatureViewId = safeFeatureId;
+    state.currentMainView = 'project';
+    state.currentProjectViewWorkspaceId = `feature:${safeFeatureId}`;
+    state.currentWorkspaceId = null;
+    state.currentSessionId = null;
+    currentLoadToken += 1;
+    setProjectViewVisible(true);
+}
+
 function resetProjectViewState(workspaceId) {
     currentSnapshot = null;
     currentSnapshotWorkspaceId = workspaceId;

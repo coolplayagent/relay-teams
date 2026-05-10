@@ -80,7 +80,6 @@ class TestEnums:
         assert {e.value for e in MemorySourceKind} == {
             "consolidation",
             "manual",
-            "reflection",
             "condensation",
             "task_result",
         }

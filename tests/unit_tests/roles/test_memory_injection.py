@@ -20,7 +20,6 @@ from relay_teams.roles.memory_injection import (
     _build_project_memory_section_async,
     build_role_with_memory_async,
 )
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import MemoryProfile, RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 
@@ -63,7 +62,6 @@ class TestBuildRoleWithMemory:
         role = _make_role()
         result = await build_role_with_memory_async(
             role_registry=registry,
-            role_memory_service=None,
             role=role,
             role_id="coordinator",
             workspace_id="ws-1",
@@ -76,7 +74,6 @@ class TestBuildRoleWithMemory:
         role = _make_role(memory_profile=MemoryProfile(enabled=False))
         result = await build_role_with_memory_async(
             role_registry=registry,
-            role_memory_service=None,
             role=role,
             role_id="crafter",
             workspace_id="ws-1",
@@ -89,30 +86,12 @@ class TestBuildRoleWithMemory:
         role = _make_role()
         result = await build_role_with_memory_async(
             role_registry=registry,
-            role_memory_service=None,
             memory_bank_service=None,
             role=role,
             role_id="crafter",
             workspace_id="ws-1",
         )
         assert result.system_prompt == role.system_prompt
-
-    async def test_appends_reflection_memory(self, tmp_path: Path) -> None:
-        registry = create_autospec(RoleRegistry, instance=True)
-        registry.is_coordinator_role.return_value = False
-        role = _make_role()
-        mock_role_memory = create_autospec(RoleMemoryService, instance=True)
-        mock_role_memory.build_injected_memory_async.return_value = "Past lessons"
-        mock_role_memory.get_performance_metrics_async.return_value = None
-        result = await build_role_with_memory_async(
-            role_registry=registry,
-            role_memory_service=mock_role_memory,
-            role=role,
-            role_id="crafter",
-            workspace_id="ws-1",
-        )
-        assert "Reflection Memory" in result.system_prompt
-        assert "Past lessons" in result.system_prompt
 
     async def test_appends_project_memory(self, tmp_path: Path) -> None:
         registry = create_autospec(RoleRegistry, instance=True)
@@ -123,7 +102,6 @@ class TestBuildRoleWithMemory:
         await _create_entry(service, MemoryTier.PERSISTENT)
         result = await build_role_with_memory_async(
             role_registry=registry,
-            role_memory_service=None,
             memory_bank_service=service,
             role=role,
             role_id="crafter",
@@ -135,12 +113,11 @@ class TestBuildRoleWithMemory:
         registry = create_autospec(RoleRegistry, instance=True)
         registry.is_coordinator_role.return_value = False
         role = _make_role()
-        mock_role_memory = create_autospec(RoleMemoryService, instance=True)
-        mock_role_memory.build_injected_memory_async.return_value = ""
-        mock_role_memory.get_performance_metrics_async.return_value = None
+        repo = MemoryBankRepository(tmp_path / "empty.db")
+        service = MemoryBankService(repository=repo)
         result = await build_role_with_memory_async(
             role_registry=registry,
-            role_memory_service=mock_role_memory,
+            memory_bank_service=service,
             role=role,
             role_id="crafter",
             workspace_id="ws-1",

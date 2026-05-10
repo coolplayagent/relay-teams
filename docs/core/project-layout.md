@@ -15,7 +15,7 @@
   - `env/`: runtime env loading, proxy support, web connectivity, and env CLI
   - `hooks/`: runtime hook models, loader, matcher, service, executors, state, and event integration
   - `interfaces/`: external interfaces
-    - `interfaces/cli/`: Typer commands for server, prompts, approvals, triggers, reflection, hooks, and skills
+    - `interfaces/cli/`: Typer commands for server, prompts, approvals, triggers, memory, hooks, and skills
     - `interfaces/server/`: FastAPI app, DI container, config services, and `/api/*` routers
     - `interfaces/sdk/`: HTTP client SDK
   - `logger/`: runtime logging
@@ -25,7 +25,7 @@
   - `persistence/`: DB access and shared persistence models/repos
   - `plugins/`: plugin manifests, registry, component source resolution, and plugin-provided MCP source loading
   - `providers/`: provider contracts, model config, HTTP client factory, OpenAI-compatible adapters, token usage
-  - `reflection/`: reflection config, models, repository, service, and CLI
+  - `memory/`: Memory Bank models, repository, service, event handler, consolidation, and retrieval integration
   - `roles/`: role models, registry, settings, and CLI
   - `sessions/`: session models, repository, service, round projection
     - `sessions/runs/`: active run registry, control, runtime config, event log/stream, injection queue, state repos

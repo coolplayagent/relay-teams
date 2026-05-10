@@ -9,6 +9,7 @@ import pytest
 
 from relay_teams.memory.models import (
     CreateMemoryEntryRequest,
+    GlobalMemorySearchRequest,
     MemoryContent,
     MemoryConsolidationRequest,
     MemoryEntryKind,
@@ -214,6 +215,65 @@ class TestSearch:
             )
         )
         assert result.total_count == 0
+
+    async def test_global_search_finds_entries_across_workspaces(
+        self, service: MemoryBankService
+    ) -> None:
+        await service.create_entry_async(
+            _create_request(
+                workspace_id="ws-alpha",
+                content=MemoryContent(
+                    title="Shared constraint",
+                    body="Prefer explicit Pydantic models for contracts",
+                ),
+            )
+        )
+        await service.create_entry_async(
+            _create_request(
+                workspace_id="ws-beta",
+                content=MemoryContent(
+                    title="Runtime note",
+                    body="Pydantic validation should stay strict",
+                ),
+            )
+        )
+
+        result = await service.search_global_async(
+            GlobalMemorySearchRequest(text_query="pydantic", limit=10)
+        )
+
+        assert result.total_count == 2
+        assert {hit.entry.workspace_id for hit in result.items} == {
+            "ws-alpha",
+            "ws-beta",
+        }
+
+    async def test_global_search_delegates_when_workspace_is_supplied(
+        self, service: MemoryBankService
+    ) -> None:
+        await service.create_entry_async(
+            _create_request(
+                workspace_id="ws-alpha",
+                content=MemoryContent(title="Alpha note", body="Alpha Pydantic rule"),
+            )
+        )
+        await service.create_entry_async(
+            _create_request(
+                workspace_id="ws-beta",
+                content=MemoryContent(title="Beta note", body="Beta Pydantic rule"),
+            )
+        )
+
+        result = await service.search_global_async(
+            GlobalMemorySearchRequest(
+                workspace_id="ws-alpha",
+                text_query="pydantic",
+                limit=10,
+            )
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.workspace_id == "ws-alpha"
 
 
 # ---------------------------------------------------------------------------

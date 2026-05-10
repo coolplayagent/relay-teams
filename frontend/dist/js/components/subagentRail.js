@@ -110,8 +110,6 @@ export function rememberLiveSubagent(instanceId, roleId) {
         status: 'running',
         created_at: existingIndex >= 0 ? nextAgents[existingIndex].created_at : nowIso,
         updated_at: nowIso,
-        reflection_summary_preview: existingIndex >= 0 ? nextAgents[existingIndex].reflection_summary_preview : '',
-        reflection_updated_at: existingIndex >= 0 ? nextAgents[existingIndex].reflection_updated_at : '',
         runtime_system_prompt: existingIndex >= 0 ? nextAgents[existingIndex].runtime_system_prompt : '',
         runtime_tools_json: existingIndex >= 0 ? nextAgents[existingIndex].runtime_tools_json : '',
     };
@@ -316,8 +314,6 @@ function normalizeSessionAgents(payload) {
             status: String(item.status || 'idle'),
             created_at: String(item.created_at || ''),
             updated_at: String(item.updated_at || item.created_at || ''),
-            reflection_summary_preview: String(item.reflection_summary_preview || ''),
-            reflection_updated_at: String(item.reflection_updated_at || ''),
             runtime_system_prompt: String(item.runtime_system_prompt || ''),
             runtime_tools_json: String(item.runtime_tools_json || ''),
         };

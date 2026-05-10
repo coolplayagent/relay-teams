@@ -55,7 +55,7 @@ class RoleEvolutionTimeline(BaseModel):
 
 
 _EVOLUTION_EVENT_KIND = MemoryEntryKind.INSIGHT
-_EVOLUTION_EVENT_SOURCE = MemorySourceKind.REFLECTION
+_EVOLUTION_EVENT_SOURCE = MemorySourceKind.CONSOLIDATION
 _EVOLUTION_TAG = "role_evolution"
 
 

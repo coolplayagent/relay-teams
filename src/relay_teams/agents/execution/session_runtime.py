@@ -460,7 +460,6 @@ class SessionRuntimeMixin(AgentLlmSessionMixinBase):
                 run_event_hub=self._run_event_hub,
                 agent_repo=self._agent_repo,
                 workspace=workspace,
-                role_memory=self._role_memory_service,
                 media_asset_service=self._media_asset_service,
                 computer_runtime=self._computer_runtime,
                 background_task_service=self._background_task_service,

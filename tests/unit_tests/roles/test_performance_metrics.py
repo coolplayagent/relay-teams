@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from relay_teams.roles.memory_models import (
     PerformanceTrendPoint,
-    RoleMemoryRecord,
     RolePerformanceMetrics,
     RoleTaskCounts,
     VerificationPassRate,
@@ -85,15 +84,3 @@ def test_role_performance_metrics_defaults() -> None:
     assert rpm.average_verification_score == 0.0
     assert rpm.trend == ()
     assert rpm.last_evaluated_at is None
-
-
-def test_role_memory_record_backward_compatible() -> None:
-    record = RoleMemoryRecord(
-        role_id="test-role",
-        workspace_id="ws-1",
-        content_markdown="- Learn: be concise",
-    )
-    assert record.role_id == "test-role"
-    assert record.workspace_id == "ws-1"
-    assert record.content_markdown == "- Learn: be concise"
-    assert record.performance is None

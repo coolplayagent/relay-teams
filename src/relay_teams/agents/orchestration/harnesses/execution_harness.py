@@ -49,7 +49,6 @@ from relay_teams.memory.service import MemoryBankService
 from relay_teams.persistence.shared_state_repo import SharedStateRepository
 from relay_teams.reminders import ReminderDecision
 from relay_teams.reminders.service import SystemReminderService
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.memory.event_handler import MemoryEventHandler
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
@@ -115,7 +114,6 @@ class ExecutionHarness(BaseModel):
     mcp_registry: McpRegistry
     runtime_mcp_schema_loader: RuntimeMcpSchemaLoader | None = None
     run_control_manager: object | None = None
-    role_memory_service: RoleMemoryService | None = None
     memory_bank_service: MemoryBankService | None = None
     memory_event_handler: MemoryEventHandler | None = None
     run_intent_repo: RunIntentRepository | None = None
@@ -146,7 +144,6 @@ class ExecutionHarness(BaseModel):
             prompt_builder=self.prompt_builder,
             tool_harness=self._tool_harness(),
             skill_runtime_service=self.skill_runtime_service,
-            role_memory_service=self.role_memory_service,
             memory_bank_service=self.memory_bank_service,
             runtime_role_resolver=self.runtime_role_resolver,
             run_intent_repo=self.run_intent_repo,
@@ -668,7 +665,6 @@ class ExecutionHarness(BaseModel):
     ) -> RoleDefinition:
         return await TaskPromptHarness.model_construct(
             role_registry=self.role_registry,
-            role_memory_service=self.role_memory_service,
             memory_bank_service=self.memory_bank_service,
         ).role_with_memory_async(role=role, role_id=role_id, workspace_id=workspace_id)
 

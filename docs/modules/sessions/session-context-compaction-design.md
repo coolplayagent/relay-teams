@@ -20,7 +20,7 @@
 本文只讨论单 session 的短期上下文压缩，不覆盖：
 
 - 跨 session 长期记忆
-- 角色级 reflection memory
+- Memory Bank 的长期记忆生命周期
 - RAG / 检索式记忆
 - 新的用户命令或新的 `/api/*` 入口
 
@@ -189,7 +189,6 @@ prompt/history：
 长期 memory 与短期压缩的职责保持分离：
 
 - Memory Bank 负责跨 run/session 的 Working、Medium-term、Persistent 记忆。
-- legacy reflection memory 只是迁移期 markdown summary 兼容层。
 - `microcompact` 只治理当前 prompt view。
 - full compaction 只治理当前 session transcript 和 rolling summary。
 

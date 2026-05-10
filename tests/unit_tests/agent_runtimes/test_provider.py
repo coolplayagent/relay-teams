@@ -53,7 +53,6 @@ from relay_teams.providers.model_config import (
 from relay_teams.providers.provider_contracts import LLMRequest
 from relay_teams.reminders import render_system_reminder
 from relay_teams.reminders.delivery import SystemReminderDeliveryMode
-from relay_teams.roles.memory_service import RoleMemoryService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.sessions.runs.enums import InjectionSource, RunEventType
@@ -569,7 +568,6 @@ def _build_manager(
         run_runtime_repo=cast(RunRuntimeRepository, object()),
         run_intent_repo=cast(RunIntentRepository, object()),
         background_task_service=None,
-        role_memory_service=cast(RoleMemoryService | None, None),
         tool_registry=cast(ToolRegistry, object()),
         get_mcp_registry=lambda: McpRegistry(),
         get_skill_registry=lambda: cast(SkillRegistry, object()),

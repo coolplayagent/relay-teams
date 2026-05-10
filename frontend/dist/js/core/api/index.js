@@ -6,7 +6,6 @@ export {
     deleteSessionSubagent,
     deleteSession,
     fetchAgentMessages,
-    fetchAgentReflection,
     fetchSessionAgents,
     fetchSessionHistory,
     fetchSessionRecovery,
@@ -18,12 +17,16 @@ export {
     invalidateSessionRecovery,
     markSessionTerminalRunViewed,
     updateSessionTopology,
-    refreshAgentReflection,
-    updateAgentReflection,
-    deleteAgentReflection,
     startNewSession,
     updateSession,
 } from './sessions.js';
+
+export {
+    fetchMemories,
+    getMemory,
+    invalidateMemoryCache,
+    searchMemories,
+} from './memories.js';
 
 export {
     answerUserQuestion,

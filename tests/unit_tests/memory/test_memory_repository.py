@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -28,8 +29,6 @@ pytestmark = pytest.mark.asyncio
 
 
 def _make_entry(**overrides: object) -> MemoryEntry:
-    from datetime import datetime, timezone
-
     now = datetime.now(tz=timezone.utc)
     base: dict[str, object] = {
         "id": generate_memory_id(),
@@ -87,6 +86,77 @@ class TestSchemaInit:
             "idx_memory_entries_source_ref",
         }
         assert expected == index_names
+
+    async def test_legacy_role_memories_are_migrated_and_dropped(
+        self, tmp_path: Path
+    ) -> None:
+        db_file = tmp_path / "legacy_memory.db"
+        with sqlite3.connect(db_file) as conn:
+            conn.execute(
+                """CREATE TABLE role_memories (
+                    role_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    content_markdown TEXT NOT NULL,
+                    performance_json TEXT NOT NULL DEFAULT '',
+                    assessment_state_json TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO role_memories (
+                    role_id,
+                    workspace_id,
+                    content_markdown,
+                    performance_json,
+                    assessment_state_json,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    "writer",
+                    "ws-legacy",
+                    "Prefer concise summaries.",
+                    '{"total_tasks": 4}',
+                    '{"needs": "examples"}',
+                    "2026-03-15T08:30:00+00:00",
+                ),
+            )
+            conn.commit()
+
+        migrated_repo = MemoryBankRepository(db_file)
+        result = await migrated_repo.query_entries_async(
+            MemoryQuery(
+                workspace_id="ws-legacy",
+                scope=MemoryScope.ROLE,
+                role_id="writer",
+                limit=10,
+            )
+        )
+        table_row = await migrated_repo._run_async_read(
+            lambda conn: async_fetchone(
+                conn,
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='role_memories'",
+            )
+        )
+
+        assert table_row is None
+        assert result.total_count == 3
+        assert {item.kind for item in result.items} == {
+            MemoryEntryKind.SUMMARY,
+            MemoryEntryKind.INSIGHT,
+        }
+        assert {item.source for item in result.items} == {
+            MemorySourceKind.CONSOLIDATION
+        }
+        assert all(item.tier == MemoryTier.PERSISTENT for item in result.items)
+        assert all(item.scope == MemoryScope.ROLE for item in result.items)
+        assert all(item.confidence_score == 0.8 for item in result.items)
+        assert {tag for item in result.items for tag in item.tags} >= {
+            "legacy",
+            "role-memory",
+            "role-performance",
+            "role-assessment",
+        }
 
 
 # ---------------------------------------------------------------------------

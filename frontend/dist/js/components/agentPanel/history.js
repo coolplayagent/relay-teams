@@ -2,7 +2,7 @@
  * components/agentPanel/history.js
  * Subagent history loading into an existing panel.
  */
-import { fetchAgentMessages, fetchAgentReflection, fetchRunTokenUsage } from '../../core/api.js';
+import { fetchAgentMessages, fetchMemories, fetchRunTokenUsage } from '../../core/api.js';
 import { state } from '../../core/state.js';
 import { t } from '../../utils/i18n.js';
 import {
@@ -151,19 +151,44 @@ function countRuntimeTools(payload) {
     return localTools + skillTools + mcpTools;
 }
 
-function renderReflection(panelEl, reflection) {
-    const metaEl = panelEl.querySelector('.agent-panel-reflection-meta');
-    const bodyEl = panelEl.querySelector('.agent-panel-reflection-body');
+function renderScopedMemoryEntries(panelEl, result) {
+    const metaEl = panelEl.querySelector('.agent-panel-memory-meta');
+    const bodyEl = panelEl.querySelector('.agent-panel-memory-body');
     if (!metaEl || !bodyEl) return;
 
-    const updatedAt = String(reflection?.updated_at || '').trim();
-    const summary = String(reflection?.summary || '').trim();
-    metaEl.textContent = updatedAt ? new Date(updatedAt).toLocaleString() : t('subagent.no_reflection');
-    bodyEl.dataset.summary = summary;
-    bodyEl.dataset.updatedAt = updatedAt;
-    bodyEl.dataset.source = String(reflection?.source || 'stored');
-    if (bodyEl.dataset.mode === 'editing') return;
-    bodyEl.textContent = summary || t('subagent.no_reflection_memory');
+    const items = Array.isArray(result?.items) ? result.items : [];
+    metaEl.textContent = items.length > 0
+        ? formatMessage('subagent.memory_count', { count: String(items.length) })
+        : t('subagent.memory_empty');
+    if (items.length === 0) {
+        bodyEl.textContent = t('subagent.memory_empty');
+        return;
+    }
+    bodyEl.innerHTML = `
+        <div class="agent-panel-memory-list">
+            ${items.map(renderScopedMemoryEntry).join('')}
+        </div>
+    `;
+}
+
+function renderScopedMemoryEntry(item) {
+    const title = String(item?.content_title || item?.id || '').trim();
+    const preview = String(item?.content_body_preview || '').trim();
+    const tags = Array.isArray(item?.tags) ? item.tags : [];
+    const updatedAt = formatTimestamp(item?.updated_at || '');
+    const kind = String(item?.kind || '').trim();
+    return `
+        <article class="agent-panel-memory-item">
+            <div class="agent-panel-memory-item-head">
+                <strong>${escapeHtml(title)}</strong>
+                <span>${escapeHtml(updatedAt || kind)}</span>
+            </div>
+            <p>${escapeHtml(preview || title)}</p>
+            <div class="agent-panel-memory-tags">
+                ${tags.slice(0, 4).map(tag => `<span>${escapeHtml(tag)}</span>`).join('')}
+            </div>
+        </article>
+    `;
 }
 
 function renderPanelSummary(panelEl, instanceId, roleId) {
@@ -555,12 +580,12 @@ export async function loadAgentHistory(instanceId, roleId = null) {
         syncAgentPanelState(instanceId, roleId);
         return;
     }
-    const [runUsage, reflection] = await Promise.all([
+    const [runUsage, scopedMemoryEntries] = await Promise.all([
         fetchRunUsageForPanel(state.currentSessionId, runId),
-        fetchReflectionForPanel(state.currentSessionId, instanceId),
+        fetchScopedMemoryEntriesForPanel(roleId),
     ]);
     renderTokenBadge(panel.panelEl, instanceId, runUsage);
-    renderReflection(panel.panelEl, reflection);
+    renderScopedMemoryEntries(panel.panelEl, scopedMemoryEntries);
 }
 
 async function fetchRunUsageForPanel(sessionId, runId) {
@@ -574,9 +599,19 @@ async function fetchRunUsageForPanel(sessionId, runId) {
     }
 }
 
-async function fetchReflectionForPanel(sessionId, instanceId) {
+async function fetchScopedMemoryEntriesForPanel(roleId) {
+    const safeRoleId = String(roleId || '').trim();
+    if (!safeRoleId) {
+        return null;
+    }
     try {
-        return await fetchAgentReflection(sessionId, instanceId);
+        return await fetchMemories({
+            workspaceId: state.currentWorkspaceId,
+            scope: 'role',
+            roleId: safeRoleId,
+            status: 'active',
+            limit: 8,
+        });
     } catch {
         return null;
     }

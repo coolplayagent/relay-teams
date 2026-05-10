@@ -35,8 +35,6 @@ from relay_teams.providers.model_fallback import (
 )
 from relay_teams.providers.openai_compatible import OpenAICompatibleProvider
 from relay_teams.providers.provider_registry import create_default_provider_registry
-from relay_teams.roles.memory_service import RoleMemoryService
-from relay_teams.agents.execution.subagent_reflection import SubagentReflectionService
 from relay_teams.roles.role_models import RoleDefinition
 from relay_teams.roles.role_registry import RoleRegistry
 from relay_teams.roles.runtime_tools import runtime_tools_for_role
@@ -100,8 +98,6 @@ def create_provider_factory(
     monitor_service: MonitorService | None = None,
     workspace_manager: WorkspaceManager,
     media_asset_service: MediaAssetService,
-    role_memory_service: RoleMemoryService | None = None,
-    subagent_reflection_service: SubagentReflectionService | None = None,
     tool_registry: ToolRegistry,
     mcp_registry: McpRegistry,
     skill_registry: SkillRegistry,
@@ -227,8 +223,6 @@ def create_provider_factory(
                 workspace_manager=workspace_manager,
                 media_asset_service=media_asset_service,
                 computer_runtime=computer_runtime,
-                role_memory_service=role_memory_service,
-                subagent_reflection_service=subagent_reflection_service,
                 tool_registry=tool_registry,
                 mcp_registry=mcp_registry,
                 mcp_discovery_service=mcp_discovery_service,
