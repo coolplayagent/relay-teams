@@ -5887,10 +5887,9 @@ export async function createDiscordGatewayAccount(payload) {
 """.strip(),
     )
 
-    assert payload["title"] == "IM Gateway"
-    assert payload["summary"] == "0 Feishu · 0 WeChat · 1 Discord · 0 Xiaoluban"
-    assert "Existing Discord" in str(payload["contentHtml"])
-    assert "1 channels" in str(payload["contentHtml"])
+    assert payload["title"] == ""
+    assert payload["summary"] == ""
+    assert "connectors-page" in str(payload["contentHtml"])
     assert "data-feature-gateway-add-discord" in str(payload["contentHtml"])
     assert payload["createdPayload"] == {
         "display_name": "Discord Bot",

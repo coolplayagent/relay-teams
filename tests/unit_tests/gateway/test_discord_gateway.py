@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -986,6 +986,65 @@ async def test_discord_service_start_queued_record_failure_paths(
     assert started_without_ingress.run_id == "run-1"
     assert fake_run_service.created_intents[0].session_id == "session-1"
     assert fake_run_service.started_run_ids == ["run-1"]
+    failing_queue_repo = DiscordInboundQueueRepository(
+        tmp_path / "discord-failing-queue.db"
+    )
+    failing_service = _build_service(
+        tmp_path,
+        repository=repository,
+        inbound_queue_repo=failing_queue_repo,
+        run_service=_FailingRunService("storage unavailable"),
+        gateway_session_service=fake_gateway_sessions,
+    )
+    start_failure_record, _ = await failing_queue_repo.create_or_get(
+        _queue_record(
+            inbound_queue_id="queue-start-failure",
+            message_key="mid:start-failure",
+            status=DiscordInboundQueueStatus.STARTING,
+        )
+    )
+    start_failure_result = await failing_service._start_queued_record(
+        start_failure_record
+    )
+    requeued_after_failure = await failing_queue_repo.get("queue-start-failure")
+
+    assert start_failure_result is False
+    assert requeued_after_failure is not None
+    assert requeued_after_failure.status == DiscordInboundQueueStatus.QUEUED
+    assert requeued_after_failure.last_error == "storage unavailable"
+
+
+@pytest.mark.asyncio
+async def test_discord_service_uses_recovery_snapshot_without_ingress(
+    tmp_path: Path,
+) -> None:
+    repository = DiscordAccountRepository(tmp_path / "discord.db")
+    inbound_queue_repo = DiscordInboundQueueRepository(tmp_path / "discord-queue.db")
+    await repository.upsert_account(_discord_account())
+    queued_record, _ = await inbound_queue_repo.create_or_get(
+        _queue_record(
+            inbound_queue_id="queue-recovery-active",
+            message_key="mid:recovery-active",
+            status=DiscordInboundQueueStatus.QUEUED,
+        )
+    )
+    fake_run_service = _FakeUnboundRunService(())
+    fake_recovery_service = _FakeSessionRecoveryService(active_run_id="run-external")
+    service = _build_service(
+        tmp_path,
+        repository=repository,
+        inbound_queue_repo=inbound_queue_repo,
+        run_service=fake_run_service,
+        session_recovery_service=fake_recovery_service,
+    )
+
+    await service._drain_inbound_queue()
+    requeued = await inbound_queue_repo.get(queued_record.inbound_queue_id)
+
+    assert fake_recovery_service.session_ids == ["session-1"]
+    assert fake_run_service.created_intents == []
+    assert requeued is not None
+    assert requeued.status == DiscordInboundQueueStatus.QUEUED
 
 
 @pytest.mark.asyncio
@@ -1345,6 +1404,7 @@ def _build_service(
     secret_store: _FakeSecretStore | None = None,
     gateway_session_service: _FakeGatewaySessionService | None = None,
     session_ingress_service: _FakeIngressService | None = None,
+    session_recovery_service: "_FakeSessionRecoveryService | None" = None,
     run_service: _FakeRunService | None = None,
     im_tool_service: _FakeImToolService | None = None,
     im_command_service: _FakeImCommandService | None = None,
@@ -1374,6 +1434,7 @@ def _build_service(
             GatewaySessionIngressService | None,
             session_ingress_service,
         ),
+        session_recovery_service=session_recovery_service,
     )
 
 
@@ -1571,6 +1632,21 @@ class _FakeIngressService:
         )
 
 
+class _FakeSessionRecoveryService:
+    def __init__(self, *, active_run_id: str | None) -> None:
+        self._active_run_id = active_run_id
+        self.session_ids: list[str] = []
+
+    async def get_recovery_snapshot_async(
+        self,
+        session_id: str,
+    ) -> Mapping[str, object]:
+        self.session_ids.append(session_id)
+        if self._active_run_id is None:
+            return {"active_run": None}
+        return {"active_run": {"run_id": self._active_run_id}}
+
+
 class _FakeRunEvent:
     def __init__(self, *, event_type: RunEventType, payload_json: str) -> None:
         self.event_type = event_type
@@ -1604,6 +1680,16 @@ class _FakeRunService:
     async def _iter_events(self) -> AsyncIterator[_FakeRunEvent]:
         for event in self._events:
             yield event
+
+
+class _FailingRunService(_FakeRunService):
+    def __init__(self, error_message: str) -> None:
+        super().__init__(())
+        self._error_message = error_message
+
+    async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        self.created_intents.append(intent)
+        raise RuntimeError(self._error_message)
 
 
 class _FakeUnboundRunService(_FakeRunService):
