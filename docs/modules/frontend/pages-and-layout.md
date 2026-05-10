@@ -84,7 +84,7 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 - 选择 session 会触发 `agent-teams-select-session` 或直接调用注册的 `selectSession` handler。
 - 可按最近或名称排序。
 - 可新建 session、删除 subagent session、fork/remove workspace。
-- feature navigation 可进入 Skills、Automation、Gateway 等 project feature view。
+- feature navigation 可进入 Skills、Automation、Connectors 等 project feature view。
 
 依赖 API：
 
@@ -308,7 +308,7 @@ CSS 中 `base.css` 定义主题 token，`layout.css` 定义 shell、sidebar、wo
 - workspace snapshot：文件树、挂载点、workspace 信息。
 - diff 视图：文件变更列表、diff 内容。
 - open workspace/root 操作。
-- feature navigation：Skills、Automation、Gateway。
+- feature navigation：Skills、Automation、Connectors。
 - workspace tree、diff、feature navigation 和 feature loading 的动效入口见动效文档。
 
 空态、加载态、错误态：

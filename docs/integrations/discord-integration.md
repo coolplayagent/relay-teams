@@ -124,7 +124,7 @@ Responses expose `secret_status.bot_token_configured` instead of the token.
 
 ## Frontend
 
-The IM Gateway feature view includes a Discord section with:
+The Connectors feature view includes a Discord connector card with:
 
 - account list and runtime status
 - create/edit form

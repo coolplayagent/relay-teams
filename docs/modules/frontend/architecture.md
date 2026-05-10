@@ -90,7 +90,7 @@ flowchart TD
 - `newSessionDraft*.js`：新会话草稿页、快捷卡片、workspace 选择、mention 和 aside。
 - `messageRenderer/`、`messageTimeline/`：历史消息和流式消息渲染、timeline store、copy action、scroll controller。
 - `rounds/`：round timeline、navigator、paging、todo、retry、scroll。
-- `projectView.js`：workspace 视图和 feature view 的主要实现，包含 Skills、Automation、Gateway 等入口。
+- `projectView.js`：workspace 视图和 feature view 的主要实现，包含 Skills、Automation、Connectors 等入口。
 - `settings/`：设置弹窗 shell 和各 tab panel。
 - `subagentRail.js`、`subagentSessions.js`、`agentPanel/`：右侧 subagent rail、subagent session、agent drawer。
 - `observability.js`：观测视图。
@@ -116,4 +116,3 @@ flowchart TD
 - 后端真相通过 API 拉取后写入 `state`。
 - 跨组件 UI 同步可以通过 `state` helper 或 DOM `CustomEvent`。
 - 组件不应绕过 `core/api` 直接拼散落的请求逻辑。
-

@@ -79,6 +79,12 @@ class _RunEventSource(Protocol):
     def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
         raise NotImplementedError  # pragma: no cover
 
+    async def create_run_async(self, intent: IntentInput) -> tuple[str, str]:
+        raise NotImplementedError  # pragma: no cover
+
+    async def ensure_run_started_async(self, run_id: str) -> None:
+        raise NotImplementedError  # pragma: no cover
+
     def stream_run_events(self, run_id: str) -> AsyncIterator["_RunEventRecord"]:
         raise NotImplementedError  # pragma: no cover
 
@@ -568,7 +574,9 @@ class DiscordGatewayService:
                 )
             )
             return result.run_id
-        return None
+        run_id, _ = await self._run_service.create_run_async(intent)
+        await self._run_service.ensure_run_started_async(run_id)
+        return run_id
 
     async def _active_run_id(self, session_id: str) -> str | None:
         if self._session_ingress_service is not None:

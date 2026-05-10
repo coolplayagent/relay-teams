@@ -88,6 +88,6 @@ CLI management lives under:
 - `agent-teams gateway wechat delete`
 - `agent-teams gateway wechat reload`
 
-Frontend management lives under the IM Gateway feature view.
+Frontend management lives under the Connectors feature view.
 
 Related architecture: [IM Gateway Architecture](../modules/gateway/im-gateway-architecture.md).

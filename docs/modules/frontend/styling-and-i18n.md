@@ -23,7 +23,7 @@
 - `session-search.css`：会话搜索。
 - `projects.css`：项目、workspace、文件树、diff 等。
 - `automation.css`：自动化页面和编辑器。
-- `gateway.css`：网关页面、Feishu/Discord/Xiaoluban/WeChat 配置。
+- `gateway.css`：Connectors 页面、Feishu/Discord/Xiaoluban/WeChat 配置。
 - `messages.css`：消息样式 facade，继续引入 messages 子模块。
 - `orchestration.css`：编排相关表现。
 - `feedback.css`：toast、confirm、form dialog 等。
