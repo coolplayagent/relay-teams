@@ -949,6 +949,7 @@ class ServerContainer:
             im_session_command_service=self.im_session_command_service,
             inbound_queue_repo=self.discord_inbound_queue_repo,
             session_ingress_service=self.session_ingress_service,
+            session_recovery_service=self.session_service,
         )
         self.wechat_gateway_service = WeChatGatewayService(
             config_dir=app_config_dir,

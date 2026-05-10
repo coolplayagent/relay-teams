@@ -5965,7 +5965,6 @@ function bindGatewayRecordHandlers(root = els.projectViewContent) {
             void handleStartWeChatFeatureLogin();
         });
     });
-    root.querySelectorAll('[data-feature-feishu-edit]').forEach(button => {
     root.querySelectorAll('[data-feature-gateway-add-discord]').forEach(button => {
         button.addEventListener('click', () => {
             void handleCreateDiscordFeatureAccount();

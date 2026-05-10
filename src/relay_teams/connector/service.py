@@ -219,9 +219,7 @@ class ConnectorService:
         )
         last_error = _first_error(account.last_error for account in accounts)
         configured = tuple(
-            account
-            for account in enabled
-            if account.secret_status.bot_token_configured
+            account for account in enabled if account.secret_status.bot_token_configured
         )
         return ConnectorItem(
             connector_id="discord",
@@ -452,7 +450,9 @@ class ConnectorService:
             account.secret_status.bot_token_configured for account in accounts
         )
         running = any(
-            account.running for account in accounts if account.status == DiscordAccountStatus.ENABLED
+            account.running
+            for account in accounts
+            if account.status == DiscordAccountStatus.ENABLED
         )
         checks = (
             ConnectorHealthCheck(

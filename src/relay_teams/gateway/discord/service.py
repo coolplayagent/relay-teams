@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Coroutine, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
 from datetime import datetime, timedelta, timezone
@@ -117,6 +117,14 @@ class _ImToolService(Protocol):
         raise NotImplementedError  # pragma: no cover
 
 
+class _SessionRecoveryLookup(Protocol):
+    async def get_recovery_snapshot_async(
+        self,
+        session_id: str,
+    ) -> Mapping[str, object]:
+        raise NotImplementedError  # pragma: no cover
+
+
 class DiscordGatewaySnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -144,6 +152,7 @@ class DiscordGatewayService:
         im_session_command_service: _ImSessionCommandService,
         inbound_queue_repo: DiscordInboundQueueRepository,
         session_ingress_service: GatewaySessionIngressService | None = None,
+        session_recovery_service: _SessionRecoveryLookup | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._repository = repository
@@ -159,6 +168,7 @@ class DiscordGatewayService:
         self._im_session_command_service = im_session_command_service
         self._inbound_queue_repo = inbound_queue_repo
         self._session_ingress_service = session_ingress_service
+        self._session_recovery_service = session_recovery_service
         self._status_lock = Lock()
         self._status_by_account: dict[str, DiscordGatewaySnapshot] = {}
         self._workers: dict[str, DiscordGatewayWorker] = {}
@@ -509,7 +519,28 @@ class DiscordGatewayService:
                 im_reply_to_message_id=record.reply_to_message_id,
             ),
         )
-        result = await self._start_session_ingress_run(intent)
+        try:
+            result = await self._start_session_ingress_run(intent)
+        except Exception as exc:
+            log_event(
+                LOGGER,
+                logging.WARNING,
+                event="discord.inbound_queue.start_failed",
+                message="Failed to start Discord inbound queue run",
+                payload={
+                    "inbound_queue_id": record.inbound_queue_id,
+                    "account_id": record.account_id,
+                    "gateway_session_id": record.gateway_session_id,
+                    "session_id": record.session_id,
+                    "error": str(exc),
+                },
+                exc_info=exc,
+            )
+            _ = await self._inbound_queue_repo.requeue_if_starting(
+                inbound_queue_id=record.inbound_queue_id,
+                last_error=str(exc),
+            )
+            return False
         if result is None:
             _ = await self._inbound_queue_repo.requeue_if_starting(
                 inbound_queue_id=record.inbound_queue_id
@@ -581,6 +612,17 @@ class DiscordGatewayService:
     async def _active_run_id(self, session_id: str) -> str | None:
         if self._session_ingress_service is not None:
             return await self._session_ingress_service.active_run_id_async(session_id)
+        if self._session_recovery_service is None:
+            return None
+        recovery_snapshot = (
+            await self._session_recovery_service.get_recovery_snapshot_async(session_id)
+        )
+        active_run = recovery_snapshot.get("active_run")
+        if not isinstance(active_run, Mapping):
+            return None
+        run_id = active_run.get("run_id")
+        if isinstance(run_id, str) and run_id.strip():
+            return run_id.strip()
         return None
 
     def _start_run_watcher(
