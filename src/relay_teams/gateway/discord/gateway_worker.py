@@ -15,7 +15,7 @@ from relay_teams.logger import get_logger, log_event
 LOGGER = get_logger(__name__)
 
 
-class DiscordGatewayWorker:
+class DiscordGatewayWorker:  # pragma: no cover - wraps discord.py network loop
     def __init__(
         self,
         *,
@@ -85,7 +85,7 @@ class DiscordGatewayWorker:
             )
 
 
-class _DiscordMessageClient(discord.Client):
+class _DiscordMessageClient(discord.Client):  # pragma: no cover - discord.py callbacks
     def __init__(
         self,
         *,

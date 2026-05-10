@@ -86,12 +86,12 @@ class _WeChatSender(Protocol):
 
 class _DiscordAccountLookup(Protocol):
     async def get_account(self, account_id: str) -> DiscordAccountRecord:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class _DiscordSecretStore(Protocol):
     def get_bot_token(self, config_dir: Path, account_id: str) -> str | None:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class _DiscordSender(Protocol):
@@ -103,7 +103,7 @@ class _DiscordSender(Protocol):
         text: str,
         reply_to_message_id: str | None = None,
     ) -> str:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     async def send_file(
         self,
@@ -113,7 +113,7 @@ class _DiscordSender(Protocol):
         file_path: Path,
         reply_to_message_id: str | None = None,
     ) -> str:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class _RunIntentLookup(Protocol):

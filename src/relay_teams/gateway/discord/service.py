@@ -77,10 +77,10 @@ LOGGER = get_logger(__name__)
 class _RunEventSource(Protocol):
     @property
     def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
     def stream_run_events(self, run_id: str) -> AsyncIterator["_RunEventRecord"]:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class _RunEventRecord(Protocol):
@@ -96,7 +96,7 @@ class _ImSessionCommandService(Protocol):
         gateway_session_id: str,
         text: str,
     ) -> ImSessionCommandResult | None:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class _ImToolService(Protocol):
@@ -108,7 +108,7 @@ class _ImToolService(Protocol):
         text: str,
         reply_to_message_id: str | None,
     ) -> None:
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
 
 class DiscordGatewaySnapshot(BaseModel):
