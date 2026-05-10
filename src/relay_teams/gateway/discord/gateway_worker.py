@@ -137,7 +137,11 @@ class _DiscordMessageClient(discord.Client):  # pragma: no cover - discord.py ca
             mentions_bot = any(user.id == bot_user_id for user in message.mentions)
         guild_id = str(message.guild.id) if message.guild is not None else None
         channel_id = str(message.channel.id)
-        thread_id = channel_id if isinstance(message.channel, discord.Thread) else None
+        thread_id: str | None = None
+        if isinstance(message.channel, discord.Thread):
+            thread_id = str(message.channel.id)
+            if message.channel.parent_id is not None:
+                channel_id = str(message.channel.parent_id)
         return DiscordInboundMessage(
             message_id=str(message.id),
             channel_id=channel_id,

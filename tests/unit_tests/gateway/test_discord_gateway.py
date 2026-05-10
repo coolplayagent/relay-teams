@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 import aiosqlite
+import discord
 import httpx
 from pydantic import BaseModel, JsonValue
 import pytest
@@ -34,7 +35,10 @@ from relay_teams.gateway.discord import (
 )
 from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
-from relay_teams.gateway.discord.gateway_worker import DiscordGatewayWorker
+from relay_teams.gateway.discord.gateway_worker import (
+    DiscordGatewayWorker,
+    _DiscordMessageClient,
+)
 from relay_teams.gateway.im.command_service import (
     ImSessionCommandResult,
     ImSessionCommandService,
@@ -583,6 +587,68 @@ def test_discord_secret_store_normalizes_and_deletes_tokens(tmp_path: Path) -> N
     assert store.get_bot_token(tmp_path, "bot-1") is None
     assert store.can_persist_token() is True
     assert isinstance(get_discord_secret_store(), DiscordSecretStore)
+
+
+def test_discord_gateway_worker_preserves_thread_parent_channel_id() -> None:
+    class FakeDiscordUser:
+        def __init__(self, *, user_id: int, name: str) -> None:
+            self.id = user_id
+            self.name = name
+            self.bot = False
+
+    class FakeDiscordGuild:
+        def __init__(self, *, guild_id: int) -> None:
+            self.id = guild_id
+
+    class FakeDiscordMessage:
+        def __init__(
+            self,
+            *,
+            message_id: int,
+            channel: discord.Thread,
+            author: FakeDiscordUser,
+            guild: FakeDiscordGuild,
+            content: str,
+        ) -> None:
+            self.id = message_id
+            self.channel = channel
+            self.author = author
+            self.guild = guild
+            self.content = content
+            self.mentions: list[FakeDiscordUser] = []
+
+    async def handle_message(account_id: str, inbound: DiscordInboundMessage) -> None:
+        _ = (account_id, inbound)
+
+    def set_running(running: bool, error: str | None) -> None:
+        _ = (running, error)
+
+    loop = asyncio.new_event_loop()
+    try:
+        client = _DiscordMessageClient(
+            account_id="bot-1",
+            target_loop=loop,
+            handle_message=handle_message,
+            set_running=set_running,
+        )
+        thread = object.__new__(discord.Thread)
+        thread.id = 123
+        thread.parent_id = 456
+        message = FakeDiscordMessage(
+            message_id=789,
+            channel=thread,
+            author=FakeDiscordUser(user_id=111, name="alice"),
+            guild=FakeDiscordGuild(guild_id=222),
+            content="hello",
+        )
+
+        inbound = client._to_inbound_message(cast(discord.Message, message))
+
+        assert inbound.channel_id == "456"
+        assert inbound.thread_id == "123"
+        assert inbound.guild_id == "222"
+    finally:
+        loop.close()
 
 
 def test_discord_message_acceptance_and_terminal_text_helpers() -> None:
