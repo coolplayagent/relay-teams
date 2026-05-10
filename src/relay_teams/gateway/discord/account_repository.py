@@ -185,8 +185,8 @@ class DiscordAccountRepository(SharedSqliteRepository):
             operation=operation,
         )
 
+    @staticmethod
     def _to_record(
-        self,
         row: sqlite3.Row,
         *,
         fallback_invalid_timestamps: bool = False,

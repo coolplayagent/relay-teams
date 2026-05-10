@@ -701,8 +701,8 @@ class DiscordGatewayService:
             ):
                 return
 
+    @staticmethod
     def _handle_reply_future(
-        self,
         *,
         account_id: str,
         gateway_session_id: str,
