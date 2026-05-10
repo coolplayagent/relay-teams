@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+import time
+import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import RLock
-from typing import TypeVar, cast
+from queue import Empty, Full, Queue
+from threading import Event, Lock, RLock, Thread
+from typing import Literal, TypeVar, cast
 
 import aiosqlite
+from pydantic import BaseModel, ConfigDict
 
 from relay_teams.agents.tasks.enums import TaskArtifactPhase
-from relay_teams.logger import get_logger
 from relay_teams.agents.tasks.models import (
     TaskArtifact,
     TaskArtifactEntry,
@@ -23,12 +27,16 @@ from relay_teams.persistence.db import (
     BlockingSqliteConnection,
     SQLITE_BUSY_TIMEOUT_MS,
     SQLITE_TIMEOUT_SECONDS,
+    is_retryable_sqlite_error,
     open_async_sqlite,
     run_async_sqlite_write_with_retry,
     run_sqlite_write_with_retry,
 )
+from relay_teams.logger import get_logger, log_event
 from relay_teams.persistence.sqlite_repository import async_fetchall, async_fetchone
 
+TASK_ARTIFACT_WRITE_QUEUE_MAXSIZE = 2000
+LOGGER = get_logger(__name__)
 ResultT = TypeVar("ResultT")
 
 _CREATE_TABLES_SQL = """\
@@ -64,13 +72,306 @@ CREATE INDEX IF NOT EXISTS idx_artifact_entries_event_type
 """
 
 
+class TaskArtifactWriteMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enqueued: int = 0
+    completed: int = 0
+    dropped: int = 0
+    failed: int = 0
+    sqlite_lock_timeout_count: int = 0
+    total_wait_ms: int = 0
+    total_duration_ms: int = 0
+    queue_length: int = 0
+
+
+class _TaskArtifactWriteJob(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operation: Literal["ensure", "append", "update_summary", "update_evidence_bundle"]
+    task_id: str
+    enqueued_monotonic: float
+    spec_artifact_id: str = ""
+    entry: TaskArtifactEntry | None = None
+    summary: str = ""
+    evidence_bundle: VerificationEvidenceBundle | None = None
+
+
 class TaskArtifactRepository:
     """Persist and query task artifacts and entries."""
 
     def __init__(self, db_path: Path | str) -> None:
         self._db_path = Path(db_path)
         self._lock = RLock()
+        self._queue: Queue[_TaskArtifactWriteJob] = Queue(
+            maxsize=TASK_ARTIFACT_WRITE_QUEUE_MAXSIZE
+        )
+        self._worker_stop = Event()
+        self._worker: Thread | None = None
+        self._worker_lock = RLock()
+        self._closed = False
+        self._metrics_lock = Lock()
+        self._metrics = TaskArtifactWriteMetrics()
         self._init_tables()
+
+    def enqueue_ensure_artifact(self, *, task_id: str, spec_artifact_id: str) -> bool:
+        return self._enqueue(
+            _TaskArtifactWriteJob(
+                operation="ensure",
+                task_id=task_id,
+                spec_artifact_id=spec_artifact_id,
+                enqueued_monotonic=time.perf_counter(),
+            )
+        )
+
+    def enqueue_append_entry(self, *, task_id: str, entry: TaskArtifactEntry) -> bool:
+        return self._enqueue(
+            _TaskArtifactWriteJob(
+                operation="append",
+                task_id=task_id,
+                entry=entry,
+                enqueued_monotonic=time.perf_counter(),
+            )
+        )
+
+    def enqueue_update_summary(self, *, task_id: str, summary: str) -> bool:
+        return self._enqueue(
+            _TaskArtifactWriteJob(
+                operation="update_summary",
+                task_id=task_id,
+                summary=summary,
+                enqueued_monotonic=time.perf_counter(),
+            )
+        )
+
+    def enqueue_update_evidence_bundle(
+        self,
+        *,
+        task_id: str,
+        bundle: VerificationEvidenceBundle,
+    ) -> bool:
+        return self._enqueue(
+            _TaskArtifactWriteJob(
+                operation="update_evidence_bundle",
+                task_id=task_id,
+                evidence_bundle=bundle,
+                enqueued_monotonic=time.perf_counter(),
+            )
+        )
+
+    def write_metrics(self) -> TaskArtifactWriteMetrics:
+        with self._metrics_lock:
+            return self._metrics.model_copy(
+                update={"queue_length": self._queue.qsize()}
+            )
+
+    def drain_write_queue(self, *, timeout_seconds: float = 2.0) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            metrics = self.write_metrics()
+            if (
+                metrics.completed + metrics.failed >= metrics.enqueued
+                and self._queue.empty()
+            ):
+                return True
+            time.sleep(0.01)
+        metrics = self.write_metrics()
+        return (
+            metrics.completed + metrics.failed >= metrics.enqueued
+            and self._queue.empty()
+        )
+
+    def close(self, *, drain_timeout_seconds: float = 1.0) -> None:
+        with self._worker_lock:
+            self._closed = True
+            worker = self._worker
+
+        if worker is not None and worker.is_alive():
+            if not self.drain_write_queue(timeout_seconds=drain_timeout_seconds):
+                self._log_close_waiting_for_queued_writes(self.write_metrics())
+                self._queue.join()
+
+        self._worker_stop.set()
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=1.0)
+
+    async def close_async(self) -> None:
+        await asyncio.to_thread(self.close)
+
+    def _enqueue(self, job: _TaskArtifactWriteJob) -> bool:
+        with self._worker_lock:
+            if self._closed:
+                self._record_metrics(dropped=1)
+                self._log_queued_write_rejected_after_close(job)
+                return False
+            self._ensure_write_worker_started()
+            try:
+                self._queue.put_nowait(job)
+            except Full:
+                self._record_metrics(dropped=1)
+                self._log_queued_write_dropped(job)
+                return False
+        self._record_metrics(enqueued=1)
+        return True
+
+    def _ensure_write_worker_started(self) -> None:
+        with self._worker_lock:
+            self._ensure_write_worker_started_locked()
+
+    def _ensure_write_worker_started_locked(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            return
+        self._worker_stop.clear()
+        self._worker = Thread(
+            target=self._run_write_worker,
+            name="relay-teams-task-artifact-writer",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_write_worker(self) -> None:
+        while not self._worker_stop.is_set():
+            try:
+                job = self._queue.get(timeout=0.25)
+            except Empty:
+                continue
+            started = time.perf_counter()
+            wait_ms = int((started - job.enqueued_monotonic) * 1000)
+            try:
+                self._execute_queued_job(job)
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                self._record_metrics(
+                    completed=1,
+                    total_wait_ms=wait_ms,
+                    total_duration_ms=duration_ms,
+                )
+            except sqlite3.OperationalError as exc:
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                self._record_metrics(
+                    failed=1,
+                    sqlite_lock_timeout_count=(
+                        1 if is_retryable_sqlite_error(exc) else 0
+                    ),
+                    total_wait_ms=wait_ms,
+                    total_duration_ms=duration_ms,
+                )
+                self._log_queued_write_failure(job, exc)
+            except Exception as exc:
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                self._record_metrics(
+                    failed=1,
+                    total_wait_ms=wait_ms,
+                    total_duration_ms=duration_ms,
+                )
+                self._log_queued_write_failure(job, exc)
+            finally:
+                self._queue.task_done()
+
+    def _execute_queued_job(self, job: _TaskArtifactWriteJob) -> None:
+        if job.operation == "ensure":
+            self.ensure_artifact(
+                task_id=job.task_id,
+                spec_artifact_id=job.spec_artifact_id,
+            )
+            return
+        if job.operation == "append":
+            if job.entry is None:
+                raise ValueError("Queued artifact append missing entry")
+            self.append_entry(task_id=job.task_id, entry=job.entry)
+            return
+        if job.operation == "update_summary":
+            self.update_summary(task_id=job.task_id, summary=job.summary)
+            return
+        if job.evidence_bundle is None:
+            raise ValueError("Queued artifact evidence update missing bundle")
+        self.update_evidence_bundle(task_id=job.task_id, bundle=job.evidence_bundle)
+
+    def _record_metrics(
+        self,
+        *,
+        enqueued: int = 0,
+        completed: int = 0,
+        dropped: int = 0,
+        failed: int = 0,
+        sqlite_lock_timeout_count: int = 0,
+        total_wait_ms: int = 0,
+        total_duration_ms: int = 0,
+    ) -> None:
+        with self._metrics_lock:
+            self._metrics = TaskArtifactWriteMetrics(
+                enqueued=self._metrics.enqueued + enqueued,
+                completed=self._metrics.completed + completed,
+                dropped=self._metrics.dropped + dropped,
+                failed=self._metrics.failed + failed,
+                sqlite_lock_timeout_count=(
+                    self._metrics.sqlite_lock_timeout_count + sqlite_lock_timeout_count
+                ),
+                total_wait_ms=self._metrics.total_wait_ms + total_wait_ms,
+                total_duration_ms=self._metrics.total_duration_ms + total_duration_ms,
+                queue_length=self._queue.qsize(),
+            )
+
+    @staticmethod
+    def _log_queued_write_failure(
+        job: _TaskArtifactWriteJob,
+        exc: Exception,
+    ) -> None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="artifact.write_queue.failed",
+            message="Queued artifact write failed",
+            payload={
+                "task_id": job.task_id,
+                "operation": job.operation,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+
+    @staticmethod
+    def _log_queued_write_dropped(job: _TaskArtifactWriteJob) -> None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="artifact.write_queue.dropped",
+            message="Queued artifact write was dropped because the queue is full",
+            payload={
+                "task_id": job.task_id,
+                "operation": job.operation,
+            },
+        )
+
+    @staticmethod
+    def _log_queued_write_rejected_after_close(job: _TaskArtifactWriteJob) -> None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="artifact.write_queue.rejected_after_close",
+            message="Queued artifact write was rejected because the repository is closed",
+            payload={
+                "task_id": job.task_id,
+                "operation": job.operation,
+            },
+        )
+
+    @staticmethod
+    def _log_close_waiting_for_queued_writes(
+        metrics: TaskArtifactWriteMetrics,
+    ) -> None:
+        log_event(
+            LOGGER,
+            logging.WARNING,
+            event="artifact.write_queue.close_waiting",
+            message="Waiting for queued artifact writes to finish before close",
+            payload={
+                "queue_length": metrics.queue_length,
+                "enqueued": metrics.enqueued,
+                "completed": metrics.completed,
+                "failed": metrics.failed,
+            },
+        )
 
     def _init_tables(self) -> None:
         def operation(conn: sqlite3.Connection) -> None:

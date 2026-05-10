@@ -111,6 +111,48 @@ GATEWAY_OPERATION_FAILURES = MetricDefinition(
     description="Count of failed gateway ACP and MCP operations.",
     unit="calls",
 )
+SQLITE_WRITE_QUEUE_LENGTH = MetricDefinition(
+    name="relay_teams.sqlite.write_queue_length",
+    kind=MetricKind.GAUGE,
+    description="Current queued low-priority SQLite writes.",
+    unit="writes",
+)
+SQLITE_WRITE_DURATION_MS = MetricDefinition(
+    name="relay_teams.sqlite.write_duration_ms",
+    kind=MetricKind.HISTOGRAM,
+    description="Observed SQLite write duration in milliseconds.",
+    unit="ms",
+)
+SQLITE_WRITE_WAIT_MS = MetricDefinition(
+    name="relay_teams.sqlite.write_wait_ms",
+    kind=MetricKind.HISTOGRAM,
+    description="Observed time spent waiting for SQLite write coordination.",
+    unit="ms",
+)
+SQLITE_WRITE_RETRIES = MetricDefinition(
+    name="relay_teams.sqlite.write_retries",
+    kind=MetricKind.COUNTER,
+    description="Count of SQLite writes retried after lock contention.",
+    unit="retries",
+)
+SQLITE_LOCK_TIMEOUTS = MetricDefinition(
+    name="relay_teams.sqlite.lock_timeouts",
+    kind=MetricKind.COUNTER,
+    description="Count of SQLite lock timeout or lock contention observations.",
+    unit="timeouts",
+)
+SQLITE_WRITE_FAILURES = MetricDefinition(
+    name="relay_teams.sqlite.write_failures",
+    kind=MetricKind.COUNTER,
+    description="Count of SQLite writes that failed.",
+    unit="writes",
+)
+ARTIFACT_WRITE_QUEUE_DROPS = MetricDefinition(
+    name="relay_teams.artifact.write_queue_drops",
+    kind=MetricKind.COUNTER,
+    description="Count of low-priority artifact writes dropped before persistence.",
+    unit="writes",
+)
 
 DEFAULT_DEFINITIONS = (
     SESSION_STEPS,
@@ -131,4 +173,11 @@ DEFAULT_DEFINITIONS = (
     GATEWAY_OPERATIONS,
     GATEWAY_OPERATION_DURATION_MS,
     GATEWAY_OPERATION_FAILURES,
+    SQLITE_WRITE_QUEUE_LENGTH,
+    SQLITE_WRITE_DURATION_MS,
+    SQLITE_WRITE_WAIT_MS,
+    SQLITE_WRITE_RETRIES,
+    SQLITE_LOCK_TIMEOUTS,
+    SQLITE_WRITE_FAILURES,
+    ARTIFACT_WRITE_QUEUE_DROPS,
 )

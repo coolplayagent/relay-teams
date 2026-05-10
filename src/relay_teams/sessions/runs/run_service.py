@@ -316,6 +316,7 @@ class SessionRunService:
         self._pending_runs: dict[str, IntentInput] = {}
         self._running_run_ids: set[str] = set()
         self._resume_requested_runs: set[str] = set()
+        self._detached_notification_tasks: set[asyncio.Task[None]] = set()
         self._run_creation_lock = asyncio.Lock()
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._scheduler = RunScheduler(
@@ -1299,16 +1300,6 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
-            await self._emit_notification_async(
-                notification_type=notification_type,
-                session_id=session_id,
-                run_id=run_id,
-                trace_id=result.trace_id,
-                title=notification_title,
-                body=notification_body,
-                session_mode=notification_session_mode,
-                run_kind=notification_run_kind,
-            )
             await self._safe_publish_run_event_async(
                 RunEvent(
                     session_id=session_id,
@@ -1319,6 +1310,16 @@ class SessionRunService:
                     payload_json=dumps(result.model_dump()),
                 ),
                 failure_event="run.event.publish_failed",
+            )
+            await self._emit_terminal_notification_detached_async(
+                notification_type=notification_type,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=result.trace_id,
+                title=notification_title,
+                body=notification_body,
+                session_mode=notification_session_mode,
+                run_kind=notification_run_kind,
             )
             with bind_trace_context(
                 trace_id=run_id, run_id=run_id, session_id=session_id
@@ -1456,7 +1457,22 @@ class SessionRunService:
                 active_subagent_instance_id=None,
                 last_error=((result.error_message or output_text) if failed else None),
             )
-            await self._emit_notification_async(
+            await self._safe_publish_run_event_async(
+                RunEvent(
+                    session_id=session_id,
+                    run_id=run_id,
+                    trace_id=result.trace_id,
+                    task_id=result.root_task_id,
+                    event_type=(
+                        RunEventType.RUN_FAILED
+                        if failed
+                        else RunEventType.RUN_COMPLETED
+                    ),
+                    payload_json=dumps(result.model_dump()),
+                ),
+                failure_event="run.event.publish_failed",
+            )
+            await self._emit_terminal_notification_detached_async(
                 notification_type=(
                     NotificationType.RUN_FAILED
                     if failed
@@ -1481,21 +1497,6 @@ class SessionRunService:
                     if runtime_intent is not None
                     else "conversation"
                 ),
-            )
-            await self._safe_publish_run_event_async(
-                RunEvent(
-                    session_id=session_id,
-                    run_id=run_id,
-                    trace_id=result.trace_id,
-                    task_id=result.root_task_id,
-                    event_type=(
-                        RunEventType.RUN_FAILED
-                        if failed
-                        else RunEventType.RUN_COMPLETED
-                    ),
-                    payload_json=dumps(result.model_dump()),
-                ),
-                failure_event="run.event.publish_failed",
             )
             with bind_trace_context(
                 trace_id=run_id, run_id=run_id, session_id=session_id
@@ -1981,6 +1982,13 @@ class SessionRunService:
                 continue
             stopped_count += 1
         return stopped_count
+
+    async def drain_detached_notifications_async(self) -> None:
+        while self._detached_notification_tasks:
+            await asyncio.gather(
+                *tuple(self._detached_notification_tasks),
+                return_exceptions=True,
+            )
 
     def _stop_run_local(self, run_id: str) -> None:
         self._scheduler.stop_run_local(run_id)
@@ -2721,6 +2729,71 @@ class SessionRunService:
             session_mode=session_mode,
             run_kind=run_kind,
         )
+
+    async def _emit_terminal_notification_detached_async(
+        self,
+        *,
+        notification_type: NotificationType,
+        session_id: str,
+        run_id: str,
+        trace_id: str,
+        title: str,
+        body: str,
+        session_mode: str = "normal",
+        run_kind: str = "conversation",
+    ) -> None:
+        task = asyncio.create_task(
+            self._emit_notification_async(
+                notification_type=notification_type,
+                session_id=session_id,
+                run_id=run_id,
+                trace_id=trace_id,
+                title=title,
+                body=body,
+                session_mode=session_mode,
+                run_kind=run_kind,
+            )
+        )
+        self._detached_notification_tasks.add(task)
+        task.add_done_callback(self._detached_notification_tasks.discard)
+        task.add_done_callback(
+            lambda completed: self._log_detached_notification_failure(
+                completed,
+                trace_id=trace_id,
+                run_id=run_id,
+                session_id=session_id,
+                notification_type=notification_type,
+            )
+        )
+        await asyncio.sleep(0)
+
+    @staticmethod
+    def _log_detached_notification_failure(
+        task: asyncio.Task[None],
+        *,
+        trace_id: str,
+        run_id: str,
+        session_id: str,
+        notification_type: NotificationType,
+    ) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            with bind_trace_context(
+                trace_id=trace_id,
+                run_id=run_id,
+                session_id=session_id,
+            ):
+                log_event(
+                    logger,
+                    logging.ERROR,
+                    event="run.notification.detached_failed",
+                    message="Detached run notification failed",
+                    payload={"notification_type": notification_type.value},
+                    exc_info=exc,
+                )
 
     def _safe_runtime_update(self, run_id: str, **changes: object) -> None:
         self._event_publisher.safe_runtime_update(run_id, **changes)

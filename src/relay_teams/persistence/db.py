@@ -6,11 +6,12 @@ import logging
 import sqlite3
 import time
 from pathlib import Path
-from threading import Condition, Event, RLock, Thread, get_ident
+from threading import Condition, Event, Lock, RLock, Thread, get_ident
 from typing import Awaitable, Callable, Protocol, TypeVar
 from weakref import WeakKeyDictionary
 
 import aiosqlite
+from pydantic import BaseModel, ConfigDict
 
 from relay_teams.logger import get_logger, log_event
 
@@ -32,7 +33,65 @@ _ASYNC_WRITE_COORDINATORS: dict[
 ] = {}
 _RESOLVED_DB_PATH_KEYS: dict[str, str] = {}
 _ASYNC_BLOCKING_RUNNER: _AsyncBlockingRunner | None = None
+_SQLITE_WRITE_METRICS: SqliteWriteMetrics | None = None
+_SQLITE_WRITE_METRICS_LOCK = Lock()
 ResultT = TypeVar("ResultT")
+
+
+class SqliteWriteMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    queued: int = 0
+    completed: int = 0
+    failed: int = 0
+    retry_count: int = 0
+    sqlite_lock_timeout_count: int = 0
+    total_wait_ms: int = 0
+    total_duration_ms: int = 0
+
+
+def sqlite_write_metrics() -> SqliteWriteMetrics:
+    with _SQLITE_WRITE_METRICS_LOCK:
+        return _current_sqlite_write_metrics()
+
+
+def reset_sqlite_write_metrics() -> None:
+    global _SQLITE_WRITE_METRICS
+    with _SQLITE_WRITE_METRICS_LOCK:
+        _SQLITE_WRITE_METRICS = SqliteWriteMetrics()
+
+
+def _current_sqlite_write_metrics() -> SqliteWriteMetrics:
+    global _SQLITE_WRITE_METRICS
+    if _SQLITE_WRITE_METRICS is None:
+        _SQLITE_WRITE_METRICS = SqliteWriteMetrics()
+    return _SQLITE_WRITE_METRICS
+
+
+def _record_sqlite_write_metrics(
+    *,
+    queued: int = 0,
+    completed: int = 0,
+    failed: int = 0,
+    retry_count: int = 0,
+    sqlite_lock_timeout_count: int = 0,
+    total_wait_ms: int = 0,
+    total_duration_ms: int = 0,
+) -> None:
+    global _SQLITE_WRITE_METRICS
+    with _SQLITE_WRITE_METRICS_LOCK:
+        current = _current_sqlite_write_metrics()
+        _SQLITE_WRITE_METRICS = SqliteWriteMetrics(
+            queued=current.queued + queued,
+            completed=current.completed + completed,
+            failed=current.failed + failed,
+            retry_count=current.retry_count + retry_count,
+            sqlite_lock_timeout_count=(
+                current.sqlite_lock_timeout_count + sqlite_lock_timeout_count
+            ),
+            total_wait_ms=current.total_wait_ms + total_wait_ms,
+            total_duration_ms=current.total_duration_ms + total_duration_ms,
+        )
 
 
 class BlockingSqliteCursor(Protocol):
@@ -257,10 +316,15 @@ async def run_async_sqlite_write_with_retry(
     delay = SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS
     cross_write_lock = _cross_write_coordinator_for(db_path)
     write_lock = _async_write_coordinator_for(db_path)
+    write_started = time.perf_counter()
+    accumulated_wait_ms = 0
+    _record_sqlite_write_metrics(queued=1)
     for attempt in range(max_retries + 1):
         operation_started = False
         try:
+            wait_started = time.perf_counter()
             cross_write_token = await cross_write_lock.acquire_async()
+            accumulated_wait_ms += int((time.perf_counter() - wait_started) * 1000)
             try:
                 async with write_lock:
                     if lock is not None:
@@ -268,17 +332,43 @@ async def run_async_sqlite_write_with_retry(
                             operation_started = True
                             result = await operation()
                             await conn.commit()
+                            _record_sqlite_write_metrics(
+                                completed=1,
+                                total_wait_ms=accumulated_wait_ms,
+                                total_duration_ms=int(
+                                    (time.perf_counter() - write_started) * 1000
+                                ),
+                            )
                             return result
                     operation_started = True
                     result = await operation()
                     await conn.commit()
+                    _record_sqlite_write_metrics(
+                        completed=1,
+                        total_wait_ms=accumulated_wait_ms,
+                        total_duration_ms=int(
+                            (time.perf_counter() - write_started) * 1000
+                        ),
+                    )
                     return result
             finally:
                 cross_write_lock.release(cross_write_token)
         except sqlite3.OperationalError as exc:
             await _async_rollback_quietly(conn)
             if not is_retryable_sqlite_error(exc) or attempt >= max_retries:
+                _record_sqlite_write_metrics(
+                    failed=1,
+                    sqlite_lock_timeout_count=(
+                        1 if is_retryable_sqlite_error(exc) else 0
+                    ),
+                    total_wait_ms=accumulated_wait_ms,
+                    total_duration_ms=int((time.perf_counter() - write_started) * 1000),
+                )
                 raise
+            _record_sqlite_write_metrics(
+                retry_count=1,
+                sqlite_lock_timeout_count=1,
+            )
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -297,6 +387,11 @@ async def run_async_sqlite_write_with_retry(
         except BaseException:
             if operation_started:
                 await _async_rollback_quietly(conn)
+                _record_sqlite_write_metrics(
+                    failed=1,
+                    total_wait_ms=accumulated_wait_ms,
+                    total_duration_ms=int((time.perf_counter() - write_started) * 1000),
+                )
             raise
     raise RuntimeError(
         f"SQLite write helper exhausted retries for {repository_name}.{operation_name}"
@@ -317,10 +412,15 @@ def run_sqlite_write_with_retry(
     delay = SQLITE_WRITE_RETRY_INITIAL_DELAY_SECONDS
     cross_write_lock = _cross_write_coordinator_for(db_path)
     write_lock = _write_coordinator_for(db_path)
+    write_started = time.perf_counter()
+    accumulated_wait_ms = 0
+    _record_sqlite_write_metrics(queued=1)
     for attempt in range(max_retries + 1):
         operation_started = False
         try:
+            wait_started = time.perf_counter()
             cross_write_token = cross_write_lock.acquire_sync()
+            accumulated_wait_ms += int((time.perf_counter() - wait_started) * 1000)
             try:
                 with write_lock:
                     if lock is not None:
@@ -328,17 +428,43 @@ def run_sqlite_write_with_retry(
                             operation_started = True
                             result = operation()
                             conn.commit()
+                            _record_sqlite_write_metrics(
+                                completed=1,
+                                total_wait_ms=accumulated_wait_ms,
+                                total_duration_ms=int(
+                                    (time.perf_counter() - write_started) * 1000
+                                ),
+                            )
                             return result
                     operation_started = True
                     result = operation()
                     conn.commit()
+                    _record_sqlite_write_metrics(
+                        completed=1,
+                        total_wait_ms=accumulated_wait_ms,
+                        total_duration_ms=int(
+                            (time.perf_counter() - write_started) * 1000
+                        ),
+                    )
                     return result
             finally:
                 cross_write_lock.release(cross_write_token)
         except sqlite3.OperationalError as exc:
             _rollback_quietly(conn)
             if not is_retryable_sqlite_error(exc) or attempt >= max_retries:
+                _record_sqlite_write_metrics(
+                    failed=1,
+                    sqlite_lock_timeout_count=(
+                        1 if is_retryable_sqlite_error(exc) else 0
+                    ),
+                    total_wait_ms=accumulated_wait_ms,
+                    total_duration_ms=int((time.perf_counter() - write_started) * 1000),
+                )
                 raise
+            _record_sqlite_write_metrics(
+                retry_count=1,
+                sqlite_lock_timeout_count=1,
+            )
             log_event(
                 LOGGER,
                 logging.WARNING,
@@ -357,6 +483,11 @@ def run_sqlite_write_with_retry(
         except BaseException:
             if operation_started:
                 _rollback_quietly(conn)
+                _record_sqlite_write_metrics(
+                    failed=1,
+                    total_wait_ms=accumulated_wait_ms,
+                    total_duration_ms=int((time.perf_counter() - write_started) * 1000),
+                )
             raise
     raise RuntimeError(
         f"SQLite write helper exhausted retries for {repository_name}.{operation_name}"

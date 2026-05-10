@@ -41,6 +41,56 @@ async def test_event_log_async_methods_share_persisted_state(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_event_log_emits_run_events_in_one_ordered_batch(
+    tmp_path: Path,
+) -> None:
+    event_log = EventLog(tmp_path / "event_log_batch.db")
+    events = tuple(
+        RunEvent(
+            session_id="session-1",
+            run_id="run-1",
+            trace_id="run-1",
+            task_id="task-1",
+            instance_id="instance-1",
+            event_type=event_type,
+            payload_json="{}",
+        )
+        for event_type in (
+            RunEventType.RUN_STARTED,
+            RunEventType.MODEL_STEP_STARTED,
+            RunEventType.RUN_COMPLETED,
+        )
+    )
+
+    try:
+        event_ids = await event_log.emit_run_events_async(events)
+        by_trace = await event_log.list_by_trace_with_ids_async("run-1")
+    finally:
+        await event_log.close_async()
+
+    assert event_ids == tuple(range(event_ids[0], event_ids[0] + len(events)))
+    assert tuple(row["id"] for row in by_trace) == event_ids
+    assert tuple(row["event_type"] for row in by_trace) == (
+        RunEventType.RUN_STARTED.value,
+        RunEventType.MODEL_STEP_STARTED.value,
+        RunEventType.RUN_COMPLETED.value,
+    )
+
+
+@pytest.mark.asyncio
+async def test_event_log_emit_run_events_async_returns_empty_for_empty_batch(
+    tmp_path: Path,
+) -> None:
+    event_log = EventLog(tmp_path / "event_log_empty_batch.db")
+    try:
+        event_ids = await event_log.emit_run_events_async(())
+    finally:
+        await event_log.close_async()
+
+    assert event_ids == ()
+
+
+@pytest.mark.asyncio
 async def test_event_log_async_hot_paths_do_not_reinitialize_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

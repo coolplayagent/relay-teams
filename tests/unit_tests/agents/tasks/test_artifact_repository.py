@@ -3,13 +3,17 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from queue import Queue
 import sqlite3
+from threading import Event
+import time
 from typing import cast
 
 import pytest
 
 from relay_teams.agents.tasks.artifact_repository import (
     TaskArtifactRepository,
+    _TaskArtifactWriteJob,
     _enable_wal_if_available,
     _last_insert_row_id,
 )
@@ -233,6 +237,169 @@ def test_concurrent_append_entry_uses_sqlite_retry_coordination(tmp_path: Path) 
     assert all(row_id > 0 for row_id in row_ids)
     assert total == 36
     assert len(entries) == 36
+
+
+def test_queued_artifact_writes_are_persisted(repo: TaskArtifactRepository) -> None:
+    accepted = repo.enqueue_ensure_artifact(
+        task_id="task-queued",
+        spec_artifact_id="spec-queued",
+    )
+    accepted_entry = repo.enqueue_append_entry(
+        task_id="task-queued",
+        entry=TaskArtifactEntry(
+            entry_id="entry-queued",
+            phase=TaskArtifactPhase.EXECUTION,
+            timestamp="2024-01-01T00:00:00",
+            event_type="tool_call",
+            description="Queued write",
+        ),
+    )
+
+    drained = repo.drain_write_queue(timeout_seconds=2.0)
+    artifact = repo.get_artifact("task-queued")
+    metrics = repo.write_metrics()
+
+    assert accepted is True
+    assert accepted_entry is True
+    assert drained is True
+    assert artifact is not None
+    assert artifact.spec_artifact_id == "spec-queued"
+    assert tuple(entry.entry_id for entry in artifact.entries) == ("entry-queued",)
+    assert metrics.enqueued == 2
+    assert metrics.completed == 2
+
+
+def test_queued_artifact_summary_and_evidence_updates_are_persisted(
+    repo: TaskArtifactRepository,
+) -> None:
+    repo.ensure_artifact("task-queued-evidence", "spec-queued")
+    bundle = VerificationEvidenceBundle(
+        task_id="task-queued-evidence",
+        items=(
+            VerificationEvidenceItem(
+                evidence_id="ev-queued",
+                kind=VerificationEvidenceKind.TASK_RESULT,
+                summary="Queued evidence",
+            ),
+        ),
+    )
+
+    accepted_summary = repo.enqueue_update_summary(
+        task_id="task-queued-evidence",
+        summary="Queued summary",
+    )
+    accepted_evidence = repo.enqueue_update_evidence_bundle(
+        task_id="task-queued-evidence",
+        bundle=bundle,
+    )
+    repo.close()
+
+    artifact = repo.get_artifact("task-queued-evidence")
+    metrics = repo.write_metrics()
+
+    assert accepted_summary is True
+    assert accepted_evidence is True
+    assert artifact is not None
+    assert artifact.summary == "Queued summary"
+    assert artifact.evidence_bundle is not None
+    assert artifact.evidence_bundle.items[0].evidence_id == "ev-queued"
+    assert metrics.completed == 2
+
+
+def test_close_drains_accepted_artifact_writes_before_stopping_worker(
+    repo: TaskArtifactRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_execute = repo._execute_queued_job
+    first_job_started = Event()
+
+    def slow_execute(job: _TaskArtifactWriteJob) -> None:
+        first_job_started.set()
+        time.sleep(0.05)
+        original_execute(job)
+
+    monkeypatch.setattr(repo, "_execute_queued_job", slow_execute)
+
+    accepted_first = repo.enqueue_ensure_artifact(
+        task_id="task-close-first",
+        spec_artifact_id="spec-close",
+    )
+    accepted_second = repo.enqueue_ensure_artifact(
+        task_id="task-close-second",
+        spec_artifact_id="spec-close",
+    )
+
+    assert first_job_started.wait(timeout=1.0) is True
+    repo.close(drain_timeout_seconds=0.001)
+
+    metrics = repo.write_metrics()
+    assert accepted_first is True
+    assert accepted_second is True
+    assert repo.get_artifact("task-close-first") is not None
+    assert repo.get_artifact("task-close-second") is not None
+    assert metrics.completed == 2
+
+
+def test_queued_artifact_write_failure_is_recorded(
+    repo: TaskArtifactRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_job(_job: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repo, "_execute_queued_job", fail_job)
+
+    accepted = repo.enqueue_ensure_artifact(
+        task_id="task-failed",
+        spec_artifact_id="",
+    )
+    drained = repo.drain_write_queue(timeout_seconds=2.0)
+    metrics = repo.write_metrics()
+
+    assert accepted is True
+    assert drained is True
+    assert metrics.failed == 1
+    assert metrics.sqlite_lock_timeout_count == 1
+
+
+def test_queued_artifact_write_drop_is_recorded(
+    repo: TaskArtifactRepository,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(repo, "_queue", Queue(maxsize=1))
+    monkeypatch.setattr(repo, "_ensure_write_worker_started", lambda: None)
+
+    first = repo.enqueue_ensure_artifact(task_id="task-1", spec_artifact_id="")
+    second = repo.enqueue_ensure_artifact(task_id="task-2", spec_artifact_id="")
+    metrics = repo.write_metrics()
+
+    assert first is True
+    assert second is False
+    assert metrics.enqueued == 1
+    assert metrics.dropped == 1
+    assert metrics.queue_length == 1
+
+
+def test_queued_artifact_job_validation_failures_are_recorded(
+    repo: TaskArtifactRepository,
+) -> None:
+    with pytest.raises(ValueError, match="missing entry"):
+        repo._execute_queued_job(
+            _TaskArtifactWriteJob(
+                operation="append",
+                task_id="task-invalid-append",
+                enqueued_monotonic=0.0,
+            )
+        )
+
+    with pytest.raises(ValueError, match="missing bundle"):
+        repo._execute_queued_job(
+            _TaskArtifactWriteJob(
+                operation="update_evidence_bundle",
+                task_id="task-invalid-evidence",
+                enqueued_monotonic=0.0,
+            )
+        )
 
 
 def test_get_artifact_with_entries(repo: TaskArtifactRepository):

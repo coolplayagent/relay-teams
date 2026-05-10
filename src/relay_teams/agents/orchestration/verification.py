@@ -2218,10 +2218,32 @@ def _resolve_verification_path(
 ) -> Path | None:
     if workspace_root is None:
         return path if path.is_absolute() else None
-    root = workspace_root.resolve()
-    candidate = (path if path.is_absolute() else root / path).resolve()
+    root = _normalize_path_without_drive_injection(workspace_root).resolve(strict=False)
+    candidate = _normalize_path_without_drive_injection(
+        path if path.is_absolute() else root / path
+    ).resolve(strict=False)
     try:
-        candidate.relative_to(root)
+        _ = candidate.relative_to(root)
     except ValueError:
         return None
     return candidate
+
+
+def _normalize_path_without_drive_injection(path: Path) -> Path:
+    anchor = path.anchor
+    normalized_parts: list[str] = []
+    for part in path.parts[1 if anchor else 0 :]:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if normalized_parts and normalized_parts[-1] != "..":
+                _ = normalized_parts.pop()
+                continue
+            if anchor:
+                continue
+        normalized_parts.append(part)
+    if anchor:
+        return Path(anchor, *normalized_parts)
+    if not normalized_parts:
+        return Path(".")
+    return Path(*normalized_parts)

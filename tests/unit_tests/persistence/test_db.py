@@ -15,11 +15,13 @@ from relay_teams.persistence.db import (
     async_sqlite_supports_fts5,
     is_retryable_sqlite_error,
     open_async_sqlite,
+    reset_sqlite_write_metrics,
     run_async_blocking,
     run_async_sqlite_write_with_retry,
     run_sqlite_write_with_retry,
     sqlite_compile_options,
     sqlite_supports_fts5,
+    sqlite_write_metrics,
 )
 from relay_teams.persistence.sqlite_repository import SharedSqliteRepository
 
@@ -64,6 +66,25 @@ def test_sqlite_compile_options_reports_fts5_support(tmp_path: Path) -> None:
         assert sqlite_supports_fts5(repo._conn) is True
     finally:
         run_async_blocking(repo.close_async())
+
+
+def test_sqlite_write_metrics_record_success(tmp_path: Path) -> None:
+    reset_sqlite_write_metrics()
+    repo = SharedSqliteRepository(tmp_path / "metrics.db")
+    try:
+        repo._run_write(
+            operation_name="create_table",
+            operation=lambda: repo._conn.execute(
+                "CREATE TABLE metric_items(value TEXT NOT NULL)"
+            ),
+        )
+        metrics = sqlite_write_metrics()
+    finally:
+        run_async_blocking(repo.close_async())
+
+    assert metrics.queued >= 1
+    assert metrics.completed >= 1
+    assert metrics.failed == 0
 
 
 def test_is_retryable_sqlite_error_matches_lock_contention() -> None:

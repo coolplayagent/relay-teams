@@ -145,6 +145,17 @@ class RunEventHub:
             _ = await task
             raise
 
+    async def publish_many_async(self, events: tuple[RunEvent, ...]) -> tuple[int, ...]:
+        if not events:
+            return ()
+        await self._acquire_publish_lock_async()
+        task = asyncio.create_task(self._publish_many_async_with_lock(events))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            _ = await task
+            raise
+
     async def _publish_async_with_lock(self, event: RunEvent) -> int:
         try:
             event_id = 0
@@ -166,6 +177,38 @@ class RunEventHub:
             for queue in session_listeners:
                 queue.put_nowait(event)
             return event_id
+        finally:
+            self._publish_lock.release()
+
+    async def _publish_many_async_with_lock(
+        self, events: tuple[RunEvent, ...]
+    ) -> tuple[int, ...]:
+        try:
+            event_ids: tuple[int, ...] = tuple(0 for _event in events)
+            if self._event_log:
+                event_ids = await self._event_log.emit_run_events_async(events)
+            if self._run_state_repo is not None and any(
+                event_id > 0 for event_id in event_ids
+            ):
+                await self._run_state_repo.apply_events_async(
+                    event_ids=event_ids,
+                    events=events,
+                )
+
+            published_events = tuple(
+                event.model_copy(update={"event_id": event_id})
+                if event_id > 0
+                else event
+                for event, event_id in zip(events, event_ids, strict=True)
+            )
+            for event in published_events:
+                listeners = self._subscribers.get(event.run_id, [])
+                for queue in listeners:
+                    queue.put_nowait(event)
+                session_listeners = self._session_subscribers.get(event.session_id, [])
+                for queue in session_listeners:
+                    queue.put_nowait(event)
+            return event_ids
         finally:
             self._publish_lock.release()
 

@@ -408,26 +408,29 @@ class TaskExecutionService(BaseModel):
         )
 
         # OP-3: Create artifact container (spec phase).
+        artifact_writes_enabled = False
         if self.artifact_repo is not None:
             try:
-                await self.artifact_repo.ensure_artifact_async(
+                artifact_writes_enabled = self.artifact_repo.enqueue_ensure_artifact(
                     task_id=task.task_id,
                     spec_artifact_id=task.spec_artifact_id or "",
                 )
-                await self.artifact_repo.append_entry_async(
-                    task_id=task.task_id,
-                    entry=TaskArtifactEntry(
-                        entry_id=f"start-{task.task_id}",
-                        phase=TaskArtifactPhase.SPEC,
-                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
-                        role_id=role_id,
-                        instance_id=instance_id,
-                        event_type="task_started",
-                        description="Task execution started",
-                        payload_json=task.model_dump_json(),
-                    ),
-                )
+                if artifact_writes_enabled:
+                    _ = self.artifact_repo.enqueue_append_entry(
+                        task_id=task.task_id,
+                        entry=TaskArtifactEntry(
+                            entry_id=f"start-{task.task_id}",
+                            phase=TaskArtifactPhase.SPEC,
+                            timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                            role_id=role_id,
+                            instance_id=instance_id,
+                            event_type="task_started",
+                            description="Task execution started",
+                            payload_json=task.model_dump_json(),
+                        ),
+                    )
             except Exception as exc:
+                artifact_writes_enabled = False
                 log_event(
                     LOGGER,
                     logging.WARNING,
@@ -449,9 +452,9 @@ class TaskExecutionService(BaseModel):
 
         try:
             # OP-3: Append implementation phase entry.
-            if self.artifact_repo is not None:
+            if artifact_writes_enabled and self.artifact_repo is not None:
                 try:
-                    await self.artifact_repo.append_entry_async(
+                    _ = self.artifact_repo.enqueue_append_entry(
                         task_id=task.task_id,
                         entry=TaskArtifactEntry(
                             entry_id=f"impl-{task.task_id}",
@@ -553,9 +556,9 @@ class TaskExecutionService(BaseModel):
             )
 
             # OP-3: Append verification phase entry.
-            if self.artifact_repo is not None:
+            if artifact_writes_enabled and self.artifact_repo is not None:
                 try:
-                    await self.artifact_repo.append_entry_async(
+                    _ = self.artifact_repo.enqueue_append_entry(
                         task_id=task.task_id,
                         entry=TaskArtifactEntry(
                             entry_id=f"verify-{task.task_id}",
@@ -578,9 +581,9 @@ class TaskExecutionService(BaseModel):
                     )
 
             # OP-3: Append delivery phase entry and update summary.
-            if self.artifact_repo is not None:
+            if artifact_writes_enabled and self.artifact_repo is not None:
                 try:
-                    await self.artifact_repo.append_entry_async(
+                    _ = self.artifact_repo.enqueue_append_entry(
                         task_id=task.task_id,
                         entry=TaskArtifactEntry(
                             entry_id=f"delivery-{task.task_id}",
@@ -593,7 +596,7 @@ class TaskExecutionService(BaseModel):
                             payload_json="{}",
                         ),
                     )
-                    await self.artifact_repo.update_summary_async(
+                    _ = self.artifact_repo.enqueue_update_summary(
                         task_id=task.task_id,
                         summary=result,
                     )

@@ -27,7 +27,11 @@ from relay_teams.agents.tasks.artifact_repository import TaskArtifactRepository
 from relay_teams.agents.tasks.enums import TaskStatus
 from relay_teams.agents.tasks.enums import TaskArtifactPhase
 from relay_teams.agents.tasks.events import EventType
-from relay_teams.agents.tasks.models import TaskEnvelope, VerificationPlan
+from relay_teams.agents.tasks.models import (
+    TaskArtifactEntry,
+    TaskEnvelope,
+    VerificationPlan,
+)
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.hooks import HookDecisionBundle, HookDecisionType, HookService
 from relay_teams.media import (
@@ -573,16 +577,79 @@ async def test_execute_records_task_artifact_entries(
         task=task,
     )
 
+    assert artifact_repo.drain_write_queue(timeout_seconds=2.0) is True
     artifact = artifact_repo.get_artifact(task.task_id)
+    metrics = artifact_repo.write_metrics()
     assert result.output == "ok"
     assert artifact is not None
     assert artifact.summary == "ok"
+    assert metrics.enqueued >= 5
+    assert metrics.completed == metrics.enqueued
     assert tuple(entry.phase for entry in artifact.entries) == (
         TaskArtifactPhase.SPEC,
         TaskArtifactPhase.EXECUTION,
         TaskArtifactPhase.VERIFICATION,
         TaskArtifactPhase.DELIVERY,
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_skips_artifact_entries_when_container_enqueue_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "task_execution_service_artifact_queue_full.db"
+    artifact_repo = TaskArtifactRepository(tmp_path / "task_artifacts.db")
+    appended_entries: list[str] = []
+
+    def fail_artifact_container_enqueue(
+        *,
+        task_id: str,
+        spec_artifact_id: str,
+    ) -> bool:
+        _ = task_id
+        _ = spec_artifact_id
+        return False
+
+    def record_artifact_append(
+        *,
+        task_id: str,
+        entry: TaskArtifactEntry,
+    ) -> bool:
+        _ = task_id
+        appended_entries.append(entry.entry_id)
+        return True
+
+    monkeypatch.setattr(
+        artifact_repo,
+        "enqueue_ensure_artifact",
+        fail_artifact_container_enqueue,
+    )
+    monkeypatch.setattr(
+        artifact_repo,
+        "enqueue_append_entry",
+        record_artifact_append,
+    )
+    provider = _CapturingProvider()
+    service, task_repo, agent_repo, message_repo = _build_service(
+        db_path,
+        provider,
+        artifact_repo=artifact_repo,
+    )
+    task, instance_id = _seed_task(
+        task_repo=task_repo,
+        agent_repo=agent_repo,
+        message_repo=message_repo,
+    )
+
+    result = await service.execute(
+        instance_id=instance_id,
+        role_id="time",
+        task=task,
+    )
+
+    assert result.output == "ok"
+    assert appended_entries == []
 
 
 @pytest.mark.asyncio
