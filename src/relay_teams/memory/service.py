@@ -39,6 +39,7 @@ from relay_teams.retrieval.retrieval_models import (
 from relay_teams.retrieval.retrieval_service import RetrievalService
 
 LOGGER = get_logger(__name__)
+GLOBAL_SEARCH_BATCH_SIZE = 100
 
 
 class MemoryBankService:
@@ -374,42 +375,60 @@ class MemoryBankService:
                 )
             )
 
-        query = MemoryQuery(
-            tier=request.tier,
-            scope=request.scope,
-            session_id=request.session_id,
-            role_id=request.role_id,
-            kind=request.kind,
-            status=MemoryEntryStatus.ACTIVE,
-            tags=request.tags,
-            min_confidence=request.min_confidence,
-            limit=100,
-            offset=0,
-        )
-        result = await self._repo.query_entries_async(query)
         text_lower = request.text_query.lower()
         items: list[MemorySearchHit] = []
+        total_matches = 0
         rank = 1
-        for summary in result.items:
-            body_lower = summary.content_body_preview.lower()
-            title_lower = summary.content_title.lower()
-            if text_lower not in title_lower and text_lower not in body_lower:
-                continue
-            items.append(
-                MemorySearchHit(
-                    entry=summary,
-                    score=1.0,
-                    rank=rank,
-                    snippet=self._build_snippet(
-                        summary.content_body_preview,
-                        text_lower,
-                    ),
-                )
+        offset = 0
+        while True:
+            query = MemoryQuery(
+                tier=request.tier,
+                scope=request.scope,
+                session_id=request.session_id,
+                role_id=request.role_id,
+                kind=request.kind,
+                status=MemoryEntryStatus.ACTIVE,
+                tags=request.tags,
+                min_confidence=request.min_confidence,
+                limit=GLOBAL_SEARCH_BATCH_SIZE,
+                offset=offset,
             )
-            rank += 1
-            if len(items) >= request.limit:
+            result = await self._repo.query_entries_async(query)
+            if not result.items:
                 break
-        return MemorySearchResult(items=tuple(items), total_count=len(items))
+
+            for summary in result.items:
+                entry = await self._repo.get_by_id_async(summary.id)
+                if entry is None:
+                    continue
+                searchable_text = "\n".join(
+                    (
+                        entry.content.title,
+                        entry.content.body,
+                        entry.content.context,
+                        entry.content.outcome,
+                    )
+                )
+                if text_lower not in searchable_text.lower():
+                    continue
+                total_matches += 1
+                if len(items) < request.limit:
+                    items.append(
+                        MemorySearchHit(
+                            entry=summary,
+                            score=1.0,
+                            rank=rank,
+                            snippet=self._build_snippet(
+                                entry.content.body,
+                                text_lower,
+                            ),
+                        )
+                    )
+                rank += 1
+            offset += GLOBAL_SEARCH_BATCH_SIZE
+            if offset >= result.total_count:
+                break
+        return MemorySearchResult(items=tuple(items), total_count=total_matches)
 
     async def _search_fts_async(
         self, request: MemorySearchRequest

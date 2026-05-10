@@ -702,7 +702,10 @@ def _parse_dt_or_default(value: object) -> datetime:
                 return parsed.replace(tzinfo=timezone.utc)
             return parsed
     except ValueError:
-        pass
+        LOGGER.debug(
+            "Failed to parse legacy memory timestamp %r; using current UTC time",
+            value,
+        )
     return datetime.now(tz=timezone.utc)
 
 
