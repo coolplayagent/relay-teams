@@ -76,9 +76,11 @@ LOGGER = get_logger(__name__)
 
 class _RunEventSource(Protocol):
     @property
-    def bound_event_loop(self) -> asyncio.AbstractEventLoop | None: ...
+    def bound_event_loop(self) -> asyncio.AbstractEventLoop | None:
+        raise NotImplementedError
 
-    def stream_run_events(self, run_id: str) -> AsyncIterator["_RunEventRecord"]: ...
+    def stream_run_events(self, run_id: str) -> AsyncIterator["_RunEventRecord"]:
+        raise NotImplementedError
 
 
 class _RunEventRecord(Protocol):
@@ -93,7 +95,8 @@ class _ImSessionCommandService(Protocol):
         session_id: str,
         gateway_session_id: str,
         text: str,
-    ) -> ImSessionCommandResult | None: ...
+    ) -> ImSessionCommandResult | None:
+        raise NotImplementedError
 
 
 class _ImToolService(Protocol):
@@ -104,7 +107,8 @@ class _ImToolService(Protocol):
         channel_id: str,
         text: str,
         reply_to_message_id: str | None,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
 
 class DiscordGatewaySnapshot(BaseModel):
@@ -972,7 +976,10 @@ class DiscordGatewayService:
     def _start_account_worker(self, account_id: str) -> None:
         worker = self._workers.get(account_id)
         if worker is not None:
-            return
+            if worker.is_alive():
+                return
+            worker.stop()
+            self._workers.pop(account_id, None)
         token = self._secret_store.get_bot_token(self._config_dir, account_id)
         if token is None:
             self._set_status(account_id, running=False, last_error="missing_token")
@@ -996,10 +1003,18 @@ class DiscordGatewayService:
         worker.start(token=token)
 
     def _stop_account_worker(self, account_id: str) -> None:
-        worker = self._workers.pop(account_id, None)
+        worker = self._workers.get(account_id)
         if worker is not None:
             worker.stop()
-        self._set_status(account_id, running=False)
+            if not worker.is_alive():
+                self._workers.pop(account_id, None)
+        self._set_status(
+            account_id,
+            running=False,
+            last_error=(
+                "stop_timeout" if worker is not None and worker.is_alive() else None
+            ),
+        )
 
     async def _handle_worker_message(
         self,

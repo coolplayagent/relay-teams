@@ -55,12 +55,20 @@ class DiscordGatewayWorker:
     def stop(self) -> None:
         with self._lock:
             thread = self._thread
-            self._thread = None
         if thread is None:
             return
         self._client.request_close()
         thread.join(timeout=5.0)
-        self._set_running(False, None)
+        stopped = not thread.is_alive()
+        with self._lock:
+            if stopped and self._thread is thread:
+                self._thread = None
+        self._set_running(False, None if stopped else "stop_timeout")
+
+    def is_alive(self) -> bool:
+        with self._lock:
+            thread = self._thread
+        return thread is not None and thread.is_alive()
 
     def _run(self, *, token: str) -> None:
         try:
@@ -111,14 +119,15 @@ class _DiscordMessageClient(discord.Client):
         )
 
     def request_close(self) -> None:
-        if not self.is_ready():
-            return
         try:
+            loop = self.loop
+            if loop.is_closed():
+                return
             self._close_future = asyncio.run_coroutine_threadsafe(
                 self.close(),
-                self.loop,
+                loop,
             )
-        except RuntimeError:
+        except (AttributeError, RuntimeError):
             return
 
     def _to_inbound_message(self, message: discord.Message) -> DiscordInboundMessage:

@@ -28,7 +28,8 @@ class _FeishuSender(Protocol):
         message_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
     async def send_text_message(
         self,
@@ -36,7 +37,8 @@ class _FeishuSender(Protocol):
         chat_id: str,
         text: str,
         environment: FeishuEnvironment | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
     async def send_file(
         self,
@@ -44,15 +46,18 @@ class _FeishuSender(Protocol):
         chat_id: str,
         file_path: Path,
         environment: FeishuEnvironment | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
 
 class _WeChatAccountLookup(Protocol):
-    def get_account(self, account_id: str) -> WeChatAccountRecord: ...
+    def get_account(self, account_id: str) -> WeChatAccountRecord:
+        raise NotImplementedError
 
 
 class _WeChatSecretStore(Protocol):
-    def get_bot_token(self, config_dir: Path, account_id: str) -> str | None: ...
+    def get_bot_token(self, config_dir: Path, account_id: str) -> str | None:
+        raise NotImplementedError
 
 
 class _WeChatSender(Protocol):
@@ -64,7 +69,8 @@ class _WeChatSender(Protocol):
         to_user_id: str,
         text: str,
         context_token: str | None,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
     async def send_file(
         self,
@@ -74,15 +80,18 @@ class _WeChatSender(Protocol):
         to_user_id: str,
         file_path: Path,
         context_token: str | None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
 
 class _DiscordAccountLookup(Protocol):
-    async def get_account(self, account_id: str) -> DiscordAccountRecord: ...
+    async def get_account(self, account_id: str) -> DiscordAccountRecord:
+        raise NotImplementedError
 
 
 class _DiscordSecretStore(Protocol):
-    def get_bot_token(self, config_dir: Path, account_id: str) -> str | None: ...
+    def get_bot_token(self, config_dir: Path, account_id: str) -> str | None:
+        raise NotImplementedError
 
 
 class _DiscordSender(Protocol):
@@ -93,7 +102,8 @@ class _DiscordSender(Protocol):
         channel_id: str,
         text: str,
         reply_to_message_id: str | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
     async def send_file(
         self,
@@ -102,15 +112,18 @@ class _DiscordSender(Protocol):
         channel_id: str,
         file_path: Path,
         reply_to_message_id: str | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
 
 class _RunIntentLookup(Protocol):
-    def get(self, run_id: str) -> IntentInput: ...
+    def get(self, run_id: str) -> IntentInput:
+        raise NotImplementedError
 
 
 class _AutomationDeliveryLookup(Protocol):
-    def get_by_run_id(self, run_id: str) -> AutomationRunDeliveryRecord: ...
+    def get_by_run_id(self, run_id: str) -> AutomationRunDeliveryRecord:
+        raise NotImplementedError
 
 
 class ImToolService:

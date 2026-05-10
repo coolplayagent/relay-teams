@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import cast
 
@@ -28,6 +28,7 @@ from relay_teams.gateway.discord import (
 )
 from relay_teams.gateway.gateway_models import GatewayChannelType, GatewaySessionRecord
 from relay_teams.gateway.gateway_session_service import GatewaySessionService
+from relay_teams.gateway.discord.gateway_worker import DiscordGatewayWorker
 from relay_teams.gateway.im.command_service import ImSessionCommandResult
 from relay_teams.gateway.session_ingress_service import (
     GatewaySessionIngressRequest,
@@ -207,6 +208,37 @@ async def test_discord_client_maps_status_errors_to_runtime_error(
 
     with pytest.raises(RuntimeError, match="Discord API request failed: 401"):
         await DiscordClient().fetch_current_bot_identity(token="bad-token")
+
+
+@pytest.mark.asyncio
+async def test_start_account_worker_replaces_stale_cached_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_secret_store = _FakeSecretStore()
+    fake_secret_store.tokens["bot-1"] = "bot-token"
+    service = _build_service(tmp_path, secret_store=fake_secret_store)
+    stale_worker = _FakeDiscordGatewayWorker(
+        account_id="bot-1",
+        target_loop=asyncio.get_running_loop(),
+        handle_message=None,
+        set_running=lambda running, error: None,
+    )
+    stale_worker.alive = False
+    service._workers["bot-1"] = cast(DiscordGatewayWorker, stale_worker)
+    _FAKE_DISCORD_WORKERS.clear()
+
+    monkeypatch.setattr(
+        "relay_teams.gateway.discord.service.DiscordGatewayWorker",
+        _FakeDiscordGatewayWorker,
+    )
+    service._start_account_worker("bot-1")
+
+    assert stale_worker.stop_calls == 1
+    assert len(_FAKE_DISCORD_WORKERS) == 1
+    replacement = _FAKE_DISCORD_WORKERS[0]
+    assert replacement.start_tokens == ["bot-token"]
+    assert service._workers["bot-1"] is replacement
 
 
 def _discord_account() -> DiscordAccountRecord:
@@ -468,3 +500,37 @@ class _FakeImCommandService:
     ) -> ImSessionCommandResult | None:
         _ = (session_id, gateway_session_id, text)
         return None
+
+
+_FAKE_DISCORD_WORKERS: list["_FakeDiscordGatewayWorker"] = []
+
+
+class _FakeDiscordGatewayWorker:
+    def __init__(
+        self,
+        *,
+        account_id: str,
+        target_loop: asyncio.AbstractEventLoop,
+        handle_message: object,
+        set_running: Callable[[bool, str | None], None],
+    ) -> None:
+        _ = (target_loop, handle_message)
+        self.account_id = account_id
+        self.set_running = set_running
+        self.alive = False
+        self.stop_calls = 0
+        self.start_tokens: list[str] = []
+        _FAKE_DISCORD_WORKERS.append(self)
+
+    def start(self, *, token: str) -> None:
+        self.start_tokens.append(token)
+        self.alive = True
+        self.set_running(True, None)
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self.alive = False
+        self.set_running(False, None)
+
+    def is_alive(self) -> bool:
+        return self.alive
