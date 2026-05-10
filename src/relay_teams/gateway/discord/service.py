@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Coroutine, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future as ConcurrentFuture
@@ -1154,7 +1155,10 @@ class DiscordGatewayService:
         if message.is_dm:
             return text
         if message.mentions_bot:
-            stripped_text = _strip_discord_bot_mentions(text)
+            stripped_text = _strip_discord_bot_mentions(
+                text,
+                bot_user_id=account.bot_user_id,
+            )
             return stripped_text or None
         if (
             account.allow_channel_messages
@@ -1224,10 +1228,8 @@ class DiscordGatewayService:
         return "Run paused.\nSend resume to continue."
 
 
-def _strip_discord_bot_mentions(text: str) -> str:
-    parts: list[str] = []
-    for raw_part in text.split():
-        if raw_part.startswith("<@") and raw_part.endswith(">"):
-            continue
-        parts.append(raw_part)
-    return " ".join(parts).strip()
+def _strip_discord_bot_mentions(text: str, *, bot_user_id: str | None) -> str:
+    if bot_user_id is None:
+        return text.strip()
+    mention_pattern = re.compile(rf"<@!?{re.escape(bot_user_id)}>")
+    return " ".join(mention_pattern.sub(" ", text).split()).strip()
