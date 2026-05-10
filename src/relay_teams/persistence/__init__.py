@@ -6,6 +6,7 @@ from relay_teams.persistence.db import (
     SQLITE_BUSY_TIMEOUT_MS,
     SQLITE_TIMEOUT_SECONDS,
     SQLITE_WRITE_RETRY_ATTEMPTS,
+    SqliteWriteMetrics,
     async_sqlite_compile_options,
     async_sqlite_supports_fts5,
     is_retryable_sqlite_error,
@@ -13,8 +14,10 @@ from relay_teams.persistence.db import (
     run_async_blocking,
     run_async_sqlite_write_with_retry,
     run_sqlite_write_with_retry,
+    reset_sqlite_write_metrics,
     sqlite_compile_options,
     sqlite_supports_fts5,
+    sqlite_write_metrics,
 )
 from relay_teams.persistence.scope_models import ScopeRef, ScopeType, StateMutation
 from relay_teams.persistence.sqlite_repository import (
@@ -41,6 +44,7 @@ __all__ = [
     "ScopeType",
     "SharedSqliteRepository",
     "SharedStateRepository",
+    "SqliteWriteMetrics",
     "StateMutation",
     "async_fetchall",
     "async_fetchone",
@@ -53,6 +57,8 @@ __all__ = [
     "run_async_blocking",
     "run_async_sqlite_write_with_retry",
     "run_sqlite_write_with_retry",
+    "reset_sqlite_write_metrics",
     "sqlite_compile_options",
     "sqlite_supports_fts5",
+    "sqlite_write_metrics",
 ]

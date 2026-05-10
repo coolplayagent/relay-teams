@@ -32,6 +32,14 @@ class _SequencedEventLog:
             self._next_event_id += 1
             return self._next_event_id
 
+    async def emit_run_events_async(
+        self, events: tuple[RunEvent, ...]
+    ) -> tuple[int, ...]:
+        with self._lock:
+            first_event_id = self._next_event_id + 1
+            self._next_event_id += len(events)
+            return tuple(range(first_event_id, self._next_event_id + 1))
+
 
 class _ObservedRunStateRepository:
     def __init__(self) -> None:
@@ -61,6 +69,17 @@ class _ObservedRunStateRepository:
             return self._state_record(event_id=event_id, event=event)
         finally:
             self._finish_update()
+
+    async def apply_events_async(
+        self,
+        *,
+        event_ids: tuple[int, ...],
+        events: tuple[RunEvent, ...],
+    ) -> RunStateRecord | None:
+        result: RunStateRecord | None = None
+        for event_id, event in zip(event_ids, events, strict=True):
+            result = await self.apply_event_async(event_id=event_id, event=event)
+        return result
 
     def _begin_update(self, event_id: int) -> None:
         with self._lock:
@@ -117,6 +136,78 @@ async def test_run_event_hub_publish_async_serializes_state_updates() -> None:
     assert published_event_ids == [1, 2]
     assert first.event_id == 1
     assert second.event_id == 2
+
+
+@pytest.mark.asyncio
+async def test_run_event_hub_publish_many_persists_state_and_delivers_in_order() -> (
+    None
+):
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    run_queue = hub.subscribe("run-1")
+    session_queue = hub.subscribe_session("session-1")
+
+    event_ids = await hub.publish_many_async(
+        (
+            _event(RunEventType.RUN_STARTED),
+            _event(RunEventType.MODEL_STEP_STARTED),
+            _event(RunEventType.RUN_COMPLETED),
+        )
+    )
+
+    assert event_ids == (1, 2, 3)
+    assert run_state_repo.applied_event_ids == [1, 2, 3]
+    assert tuple(run_queue.get_nowait().event_id for _index in range(3)) == event_ids
+    assert (
+        tuple(session_queue.get_nowait().event_id for _index in range(3)) == event_ids
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_event_hub_publish_many_returns_empty_for_empty_batch() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+
+    event_ids = await hub.publish_many_async(())
+
+    assert event_ids == ()
+    assert run_state_repo.applied_event_ids == []
+
+
+@pytest.mark.asyncio
+async def test_run_event_hub_publish_many_finishes_when_cancelled() -> None:
+    event_log = _SequencedEventLog()
+    run_state_repo = _ObservedRunStateRepository()
+    hub = RunEventHub(
+        event_log=cast(EventLog, event_log),
+        run_state_repo=cast(RunStateRepository, run_state_repo),
+    )
+    queue = hub.subscribe("run-1")
+
+    task = asyncio.create_task(
+        hub.publish_many_async(
+            (
+                _event(RunEventType.RUN_STARTED),
+                _event(RunEventType.MODEL_STEP_STARTED),
+            )
+        )
+    )
+    await run_state_repo.async_update_entered.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+
+    assert run_state_repo.applied_event_ids == [1, 2]
+    assert tuple(queue.get_nowait().event_id for _index in range(2)) == (1, 2)
 
 
 @pytest.mark.asyncio

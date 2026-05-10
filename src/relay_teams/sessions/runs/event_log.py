@@ -213,6 +213,53 @@ class EventLog(SharedSqliteRepository):
             raise RuntimeError("Failed to persist run event id")
         return int(lastrowid)
 
+    async def emit_run_events_async(
+        self,
+        events: tuple[RunEvent, ...],
+    ) -> tuple[int, ...]:
+        if not events:
+            return ()
+
+        async def operation() -> tuple[int, ...]:
+            conn = await self._get_async_conn()
+            event_ids: list[int] = []
+            chunk_size = max(1, _SQLITE_SAFE_VARIABLE_LIMIT // 7)
+            for index in range(0, len(events), chunk_size):
+                chunk = events[index : index + chunk_size]
+                placeholders = ", ".join("(?, ?, ?, ?, ?, ?, ?)" for _event in chunk)
+                parameters: list[str | None] = []
+                for event in chunk:
+                    parameters.extend(
+                        (
+                            event.event_type.value,
+                            event.trace_id,
+                            event.session_id,
+                            event.task_id,
+                            event.instance_id,
+                            event.payload_json,
+                            event.occurred_at.isoformat(),
+                        )
+                    )
+                cursor = await conn.execute(
+                    f"""
+                    INSERT INTO events(event_type, trace_id, session_id, task_id, instance_id, payload_json, occurred_at)
+                    VALUES {placeholders}
+                    """,
+                    tuple(parameters),
+                )
+                lastrowid = cursor.lastrowid
+                await cursor.close()
+                if lastrowid is None:
+                    raise RuntimeError("Failed to persist run event ids")
+                firstrowid = int(lastrowid) - len(chunk) + 1
+                event_ids.extend(range(firstrowid, int(lastrowid) + 1))
+            return tuple(event_ids)
+
+        return await self._run_async_write(
+            operation_name="emit_run_events_async",
+            operation=lambda _conn: operation(),
+        )
+
     def list_by_trace(self, trace_id: str) -> tuple[dict[str, JsonValue], ...]:
         with self._lock:
             rows = self._conn.execute(

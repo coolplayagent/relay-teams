@@ -1127,6 +1127,7 @@ class ServerContainer:
         )
         self._async_closeables: tuple[AsyncCloseableRepository, ...] = (
             self.task_repo,
+            self.artifact_repo,
             self.audit_repository,
             self.shared_store,
             self.workspace_repo,
@@ -1422,6 +1423,7 @@ class ServerContainer:
                 message="Requested active runs to stop during server shutdown",
                 payload={"stopped_run_count": stopped_runs},
             )
+        await self.run_service.drain_detached_notifications_async()
         await self.external_acp_session_manager.close()
         await self.background_task_manager.close()
         await self.mcp_config_file_watcher.stop()

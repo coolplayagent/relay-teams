@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from typing import cast
 
@@ -485,6 +486,112 @@ def test_completed_notification_uses_final_run_output() -> None:
 
     assert notification_payload is not None
     assert notification_payload["body"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_terminal_notification_is_emitted_detached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = SessionRunService.__new__(SessionRunService)
+    manager._detached_notification_tasks = set()
+    calls: list[dict[str, object]] = []
+
+    async def fake_emit_notification_async(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        manager,
+        "_emit_notification_async",
+        fake_emit_notification_async,
+    )
+
+    await manager._emit_terminal_notification_detached_async(
+        notification_type=NotificationType.RUN_COMPLETED,
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="trace-1",
+        title="Run Completed",
+        body="done",
+    )
+    await asyncio.sleep(0)
+
+    assert calls == [
+        {
+            "notification_type": NotificationType.RUN_COMPLETED,
+            "session_id": "session-1",
+            "run_id": "run-1",
+            "trace_id": "trace-1",
+            "title": "Run Completed",
+            "body": "done",
+            "session_mode": "normal",
+            "run_kind": "conversation",
+        }
+    ]
+    assert manager._detached_notification_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_drain_detached_notifications_waits_for_pending_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = SessionRunService.__new__(SessionRunService)
+    manager._detached_notification_tasks = set()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[dict[str, object]] = []
+
+    async def fake_emit_notification_async(**kwargs: object) -> None:
+        started.set()
+        await release.wait()
+        calls.append(kwargs)
+
+    monkeypatch.setattr(
+        manager,
+        "_emit_notification_async",
+        fake_emit_notification_async,
+    )
+
+    await manager._emit_terminal_notification_detached_async(
+        notification_type=NotificationType.RUN_COMPLETED,
+        session_id="session-1",
+        run_id="run-1",
+        trace_id="trace-1",
+        title="Run Completed",
+        body="done",
+    )
+    await started.wait()
+    drain_task = asyncio.create_task(manager.drain_detached_notifications_async())
+    await asyncio.sleep(0)
+
+    assert drain_task.done() is False
+
+    release.set()
+    await asyncio.wait_for(drain_task, timeout=1.0)
+
+    assert calls
+    assert manager._detached_notification_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_detached_notification_failure_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fail_notification() -> None:
+        raise RuntimeError("delivery failed")
+
+    task = asyncio.create_task(fail_notification())
+    await asyncio.sleep(0)
+
+    with caplog.at_level(logging.ERROR):
+        SessionRunService._log_detached_notification_failure(
+            task,
+            trace_id="trace-1",
+            run_id="run-1",
+            session_id="session-1",
+            notification_type=NotificationType.RUN_FAILED,
+        )
+
+    assert "Detached run notification failed" in caplog.text
 
 
 def test_assistant_error_notification_uses_failed_channel() -> None:

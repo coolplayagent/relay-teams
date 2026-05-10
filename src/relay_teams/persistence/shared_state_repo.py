@@ -54,15 +54,11 @@ class SharedStateRepository(SharedSqliteRepository):
     async def manage_state_async(
         self, mutation: StateMutation, ttl_seconds: int | None = None
     ) -> None:
-        expires_at: str | None = None
-        if ttl_seconds is not None:
-            expires_at = (
-                datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)
-            ).isoformat()
+        expires_at = _expires_at(ttl_seconds)
 
         async def operation() -> None:
             conn = await self._get_async_conn()
-            await conn.execute(
+            cursor = await conn.execute(
                 """
                 INSERT INTO shared_state(scope_type, scope_id, state_key, value_json, updated_at, expires_at)
                 VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
@@ -78,9 +74,39 @@ class SharedStateRepository(SharedSqliteRepository):
                     expires_at,
                 ),
             )
+            await cursor.close()
 
         await self._run_async_write(
             operation_name="manage_state",
+            operation=lambda _conn: operation(),
+        )
+
+    async def manage_states_async(
+        self,
+        mutations: tuple[StateMutation, ...],
+        ttl_seconds: int | None = None,
+    ) -> None:
+        if not mutations:
+            return
+        expires_at = _expires_at(ttl_seconds)
+        parameters = _state_mutation_parameters(mutations, expires_at)
+
+        async def operation() -> None:
+            conn = await self._get_async_conn()
+            cursor = await conn.executemany(
+                """
+                INSERT INTO shared_state(scope_type, scope_id, state_key, value_json, updated_at, expires_at)
+                VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                ON CONFLICT(scope_type, scope_id, state_key)
+                DO UPDATE SET value_json=excluded.value_json, updated_at=CURRENT_TIMESTAMP,
+                              expires_at=COALESCE(excluded.expires_at, expires_at)
+                """,
+                parameters,
+            )
+            await cursor.close()
+
+        await self._run_async_write(
+            operation_name="manage_states",
             operation=lambda _conn: operation(),
         )
 
@@ -92,11 +118,7 @@ class SharedStateRepository(SharedSqliteRepository):
         update: Callable[[str | None], str],
         ttl_seconds: int | None = None,
     ) -> str:
-        expires_at: str | None = None
-        if ttl_seconds is not None:
-            expires_at = (
-                datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)
-            ).isoformat()
+        expires_at = _expires_at(ttl_seconds)
 
         async def operation() -> str:
             conn = await self._get_async_conn()
@@ -152,6 +174,44 @@ class SharedStateRepository(SharedSqliteRepository):
         if row is None:
             return None
         return str(row["value_json"])
+
+    async def get_states_async(
+        self,
+        scope: ScopeRef,
+        keys: tuple[str, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        normalized_keys = tuple(
+            dict.fromkeys(key.strip() for key in keys if key.strip())
+        )
+        if not normalized_keys:
+            return ()
+        rows_by_key: dict[str, str] = {}
+        chunk_size = 250
+        for index in range(0, len(normalized_keys), chunk_size):
+            key_chunk = normalized_keys[index : index + chunk_size]
+            placeholders = ", ".join("?" for _key in key_chunk)
+            rows = await self._run_async_read(
+                lambda conn, chunk=key_chunk, chunk_placeholders=placeholders: (
+                    async_fetchall(
+                        conn,
+                        f"""
+                        SELECT state_key, value_json FROM shared_state
+                        WHERE scope_type=? AND scope_id=? AND state_key IN ({chunk_placeholders})
+                          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                        """,
+                        (
+                            scope.scope_type.value,
+                            scope.scope_id,
+                            *chunk,
+                        ),
+                    )
+                )
+            )
+            for row in rows:
+                rows_by_key[str(row["state_key"])] = str(row["value_json"])
+        return tuple(
+            (key, rows_by_key[key]) for key in normalized_keys if key in rows_by_key
+        )
 
     def snapshot(self, scope: ScopeRef) -> tuple[tuple[str, str], ...]:
         return run_async_blocking(self.snapshot_async(scope))
@@ -393,3 +453,26 @@ class SharedStateRepository(SharedSqliteRepository):
 
 def build_global_scope_ref() -> ScopeRef:
     return ScopeRef(scope_type=ScopeType.GLOBAL, scope_id="global")
+
+
+def _expires_at(ttl_seconds: int | None) -> str | None:
+    if ttl_seconds is None:
+        return None
+    expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=ttl_seconds)
+    return expires_at.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _state_mutation_parameters(
+    mutations: tuple[StateMutation, ...],
+    expires_at: str | None,
+) -> tuple[tuple[str, str, str, str, str | None], ...]:
+    return tuple(
+        (
+            mutation.scope.scope_type.value,
+            mutation.scope.scope_id,
+            mutation.key,
+            mutation.value_json,
+            expires_at,
+        )
+        for mutation in mutations
+    )

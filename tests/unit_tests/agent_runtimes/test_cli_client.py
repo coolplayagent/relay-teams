@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import cast
@@ -17,11 +19,16 @@ from relay_teams.agent_runtimes.clients.cli import (
     _StdioCliJsonRpcClient,
     _build_command_args,
     _cli_command_exists,
+    _resolve_cli_command_path,
+    _resolve_cli_process_command,
+    _resolve_windows_pathext_candidate,
+    _read_next_blocking_stdio_message,
     _read_next_stdio_message,
     _start_cli_thread,
     _start_cli_turn,
     _stdio_transport,
     _wait_for_cli_turn_output,
+    _write_blocking_stdio_message,
     probe_cli_agent,
     run_cli_agent_prompt,
 )
@@ -135,6 +142,53 @@ for raw_line in sys.stdin:
             flush=True,
         )
 """
+
+
+class _BlockingPipe:
+    def __init__(self, initial: bytes = b"") -> None:
+        self._reader = BytesIO(initial)
+        self.written = bytearray()
+
+    def readline(self) -> bytes:
+        return self._reader.readline()
+
+    def read(self, size: int = -1) -> bytes:
+        return self._reader.read(size)
+
+    def write(self, payload: bytes) -> int:
+        self.written.extend(payload)
+        return len(payload)
+
+    def flush(self) -> None:
+        return None
+
+
+class _FakeBlockingProcess:
+    def __init__(
+        self,
+        *,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+    ) -> None:
+        self.stdin: _BlockingPipe | None = _BlockingPipe()
+        self.stdout: _BlockingPipe | None = _BlockingPipe(stdout)
+        self.stderr: _BlockingPipe | None = _BlockingPipe(stderr)
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return 0 if self.terminated or self.killed else None
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self) -> int:
+        self.terminated = True
+        return 0
+
 
 _JSON_RPC_ITEM_COMPLETED_RUNTIME_SCRIPT = r"""
 import json
@@ -608,6 +662,150 @@ def test_cli_command_exists_checks_windows_pathext(
     assert tmp_path / "runtime-agent.EXE" in checked_paths
 
 
+def test_cli_command_lookup_prefers_windows_pathext_wrapper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_paths: list[Path] = []
+
+    def fake_executable_path_exists(path: Path) -> bool:
+        checked_paths.append(path)
+        return path.name == "runtime-agent.CMD"
+
+    monkeypatch.setattr(
+        cli_client_module,
+        "_executable_path_exists",
+        fake_executable_path_exists,
+    )
+    monkeypatch.setattr(cli_client_module, "Path", type(tmp_path))
+    monkeypatch.setattr(cli_client_module.os, "name", "nt")
+
+    result = _resolve_cli_command_path(
+        "runtime-agent",
+        env={"PATH": str(tmp_path), "PATHEXT": ".EXE;.CMD"},
+    )
+
+    assert result == tmp_path / "runtime-agent.CMD"
+    assert checked_paths[:2] == [
+        tmp_path / "runtime-agent.EXE",
+        tmp_path / "runtime-agent.CMD",
+    ]
+    assert tmp_path / "runtime-agent" not in checked_paths
+
+
+def test_cli_command_lookup_uses_default_windows_pathext(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_paths: list[Path] = []
+
+    def fake_executable_path_exists(path: Path) -> bool:
+        checked_paths.append(path)
+        return path.name == "runtime-agent.CMD"
+
+    monkeypatch.setattr(
+        cli_client_module,
+        "_executable_path_exists",
+        fake_executable_path_exists,
+    )
+    monkeypatch.setattr(cli_client_module, "Path", type(tmp_path))
+    monkeypatch.setattr(cli_client_module.os, "name", "nt")
+
+    result = _resolve_cli_command_path(
+        "runtime-agent",
+        env={"PATH": str(tmp_path)},
+    )
+
+    assert result == tmp_path / "runtime-agent.CMD"
+    assert checked_paths == [
+        tmp_path / "runtime-agent.COM",
+        tmp_path / "runtime-agent.EXE",
+        tmp_path / "runtime-agent.BAT",
+        tmp_path / "runtime-agent.CMD",
+    ]
+
+
+def test_cli_direct_command_lookup_checks_windows_pathext_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_paths: list[Path] = []
+
+    def fake_executable_path_exists(path: Path) -> bool:
+        checked_paths.append(path)
+        return path.name == "runtime-agent.CMD"
+
+    monkeypatch.setattr(
+        cli_client_module,
+        "_executable_path_exists",
+        fake_executable_path_exists,
+    )
+    monkeypatch.setattr(cli_client_module, "Path", type(tmp_path))
+    monkeypatch.setattr(cli_client_module.os, "name", "nt")
+
+    result = _resolve_cli_command_path(
+        "./runtime-agent",
+        runtime_cwd=tmp_path,
+        env={"PATHEXT": ".CMD"},
+    )
+
+    assert result == tmp_path / "runtime-agent.CMD"
+    assert checked_paths == [tmp_path / "runtime-agent.CMD"]
+
+
+def test_windows_pathext_candidate_ignores_empty_suffixes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checked_paths: list[Path] = []
+
+    def fake_executable_path_exists(path: Path) -> bool:
+        checked_paths.append(path)
+        return path.name == "runtime-agent.CMD"
+
+    monkeypatch.setattr(
+        cli_client_module,
+        "_executable_path_exists",
+        fake_executable_path_exists,
+    )
+    monkeypatch.setattr(cli_client_module, "Path", type(tmp_path))
+
+    result = _resolve_windows_pathext_candidate(
+        tmp_path,
+        "runtime-agent",
+        {"pathext": ".EXE;;.CMD"},
+    )
+
+    assert result == tmp_path / "runtime-agent.CMD"
+    assert checked_paths == [
+        tmp_path / "runtime-agent.EXE",
+        tmp_path / "runtime-agent.CMD",
+    ]
+
+
+def test_windows_pathext_candidate_skips_commands_with_suffix(tmp_path: Path) -> None:
+    result = _resolve_windows_pathext_candidate(
+        tmp_path,
+        "runtime-agent.exe",
+        {"PATHEXT": ".CMD"},
+    )
+
+    assert result is None
+
+
+def test_cli_process_command_returns_original_when_lookup_missing(
+    tmp_path: Path,
+) -> None:
+    command, args = _resolve_cli_process_command(
+        "missing-runtime",
+        runtime_cwd=None,
+        env={"PATH": str(tmp_path), "PATHEXT": ".CMD"},
+    )
+
+    assert command == "missing-runtime"
+    assert args == ()
+
+
 def test_codex_command_uses_app_server_stdio_runtime() -> None:
     args = _build_command_args(
         transport=StdioTransportConfig(command="codex", args=()),
@@ -916,3 +1114,110 @@ async def test_read_next_stdio_message_rejects_invalid_content_length() -> None:
 
     with pytest.raises(CliAgentError, match="Invalid Content-Length"):
         await _read_next_stdio_message(reader)
+
+
+@pytest.mark.asyncio
+async def test_stdio_client_uses_blocking_process_fallback_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    created_processes: list[_FakeBlockingProcess] = []
+
+    async def fake_create_subprocess_exec(*args: object, **kwargs: object) -> object:
+        _ = (args, kwargs)
+        raise NotImplementedError
+
+    def fake_popen(
+        args: tuple[str, ...],
+        *,
+        stdin: int,
+        stdout: int,
+        stderr: int,
+        cwd: Path | None,
+        env: dict[str, str],
+    ) -> _FakeBlockingProcess:
+        _ = (args, stdin, stdout, stderr, cwd, env)
+        process = _FakeBlockingProcess(stderr=b"runtime warning\n")
+        created_processes.append(process)
+        return process
+
+    monkeypatch.setattr(
+        cli_client_module.asyncio,
+        "create_subprocess_exec",
+        fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(cli_client_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(cli_client_module.os, "name", "nt")
+
+    client = _StdioCliJsonRpcClient(
+        command=sys.executable,
+        args=("-c", "print('unused')"),
+        runtime_cwd=tmp_path,
+        transport=StdioTransportConfig(command=sys.executable),
+    )
+
+    await client.start()
+    await client._send_raw({"jsonrpc": "2.0", "method": "initialized"})
+    await client.close()
+
+    process = created_processes[0]
+    assert process.stdin is not None
+    assert b'"method":"initialized"' in process.stdin.written
+    assert process.terminated is True
+
+
+@pytest.mark.asyncio
+async def test_blocking_stdout_loop_delivers_json_rpc_response() -> None:
+    client = _StdioCliJsonRpcClient(
+        command="runtime",
+        args=(),
+        runtime_cwd=None,
+        transport=StdioTransportConfig(command="runtime"),
+    )
+    process = _FakeBlockingProcess(stdout=b'{"id":1,"result":{"ok":true}}\n')
+    client._blocking_process = cast(subprocess.Popen[bytes], process)
+    future: asyncio.Future[dict[str, JsonValue]] = (
+        asyncio.get_running_loop().create_future()
+    )
+    client._pending[1] = future
+
+    await client._read_blocking_stdout_loop()
+
+    assert await future == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_blocking_stderr_loop_drains_lines() -> None:
+    client = _StdioCliJsonRpcClient(
+        command="runtime",
+        args=(),
+        runtime_cwd=None,
+        transport=StdioTransportConfig(command="runtime"),
+    )
+    client._blocking_process = cast(
+        subprocess.Popen[bytes],
+        _FakeBlockingProcess(stderr=b"\nruntime warning\n"),
+    )
+
+    await client._drain_blocking_stderr_loop()
+
+
+def test_read_next_blocking_stdio_message_supports_content_length() -> None:
+    stream = BytesIO(b"Content-Length: 5\r\n\r\nhello")
+
+    assert _read_next_blocking_stdio_message(stream) == b"hello"
+
+
+def test_read_next_blocking_stdio_message_rejects_short_payload() -> None:
+    stream = BytesIO(b"Content-Length: 5\r\n\r\nhi")
+
+    with pytest.raises(CliAgentError, match="closed stdout"):
+        _ = _read_next_blocking_stdio_message(stream)
+
+
+def test_write_blocking_stdio_message_flushes_payload() -> None:
+    stream = BytesIO()
+
+    _write_blocking_stdio_message(stream, b'{"jsonrpc":"2.0"}\n')
+
+    assert stream.getvalue() == b'{"jsonrpc":"2.0"}\n'

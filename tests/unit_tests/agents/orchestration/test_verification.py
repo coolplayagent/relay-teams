@@ -1293,6 +1293,51 @@ def test_verify_task_required_file_rejects_workspace_escape(
     assert "escapes the workspace" in structure_check.details
 
 
+def test_verify_task_required_file_rejects_symlink_workspace_escape(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "verification_required_file_symlink_escape.db"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_file = outside_dir / "artifact.txt"
+    outside_file.write_text("not task evidence", encoding="utf-8")
+    link = workspace / "linked"
+    try:
+        link.symlink_to(outside_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable: {exc}")
+    task_repo = TaskRepository(db_path)
+    event_log = EventLog(db_path)
+    task = TaskEnvelope(
+        task_id="task-1",
+        session_id="session-1",
+        trace_id="run-1",
+        objective="Return artifact",
+        verification=VerificationPlan(
+            required_files=(Path("linked") / outside_file.name,)
+        ),
+    )
+    _ = task_repo.create(task)
+    task_repo.update_status(task.task_id, TaskStatus.COMPLETED, result="done")
+
+    result = verify_task(
+        task_repo,
+        event_log,
+        task.task_id,
+        workspace_root=workspace,
+    )
+
+    assert result.passed is False
+    assert result.report is not None
+    structure_check = next(
+        check for check in result.report.checks if check.name.endswith("artifact.txt")
+    )
+    assert structure_check.passed is False
+    assert "escapes the workspace" in structure_check.details
+
+
 def test_verify_task_reports_incomplete_task(tmp_path: Path) -> None:
     db_path = tmp_path / "verification_incomplete.db"
     task_repo = TaskRepository(db_path)
@@ -2266,7 +2311,7 @@ def test_resolve_command_cwd_returns_none_when_no_cwd_and_no_workspace() -> None
 def test_resolve_command_cwd_resolves_custom_cwd() -> None:
     cmd = VerificationCommand(command=("echo", "hi"), cwd=Path("subdir"))
     result = verification_module._resolve_command_cwd(cmd, workspace_root=Path("/ws"))
-    assert result == Path("/ws/subdir").resolve()
+    assert result == (Path("/ws") / "subdir").resolve(strict=False)
 
 
 def test_wrap_cross_evaluation_evaluator_returns_none_when_no_evaluator() -> None:

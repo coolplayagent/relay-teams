@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.messages import (
@@ -221,12 +222,13 @@ def render_spec_checkpoint(
         lines.extend(
             _format_nested_items(
                 "Proof Artifacts",
-                tuple(path.as_posix() for path in formal.proof_artifacts),
+                tuple(_format_spec_path(path) for path in formal.proof_artifacts),
             )
         )
         if formal.counterexample_path is not None:
             lines.append(
-                f"  - Counterexample Path: {formal.counterexample_path.as_posix()}"
+                "  - Counterexample Path: "
+                f"{_format_spec_path(formal.counterexample_path)}"
             )
         if formal.replay_command is not None:
             lines.append(
@@ -322,6 +324,10 @@ def _format_nested_items(label: str, items: tuple[str, ...]) -> list[str]:
     if not items:
         return []
     return [f"  - {label}:"] + [f"    - {_clip_item(item)}" for item in items]
+
+
+def _format_spec_path(path: Path) -> str:
+    return path.as_posix()
 
 
 def _clip_item(item: str) -> str:
