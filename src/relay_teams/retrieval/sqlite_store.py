@@ -223,6 +223,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 "scope_kind": query.scope_kind.value,
                 "scope_id": query.scope_id,
                 "limit": query.limit,
+                "offset": query.offset,
             },
         ):
             config = self._run_read(
@@ -258,6 +259,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                     WHERE scope_kind = ? AND scope_id = ? AND {table_name} MATCH ?
                     ORDER BY rank_score ASC, document_id ASC
                     LIMIT ?
+                    OFFSET ?
                     """,
                     (
                         config.title_weight,
@@ -267,6 +269,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                         query.scope_id,
                         match_expression,
                         query.limit,
+                        query.offset,
                     ),
                 ).fetchall()
             )
@@ -278,7 +281,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                     title=str(row["title"]),
                     snippet=str(row["snippet"]),
                 )
-                for index, row in enumerate(rows, start=1)
+                for index, row in enumerate(rows, start=query.offset + 1)
             )
 
     async def search_async(self, *, query: RetrievalQuery) -> tuple[RetrievalHit, ...]:
@@ -290,6 +293,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                 "scope_kind": query.scope_kind.value,
                 "scope_id": query.scope_id,
                 "limit": query.limit,
+                "offset": query.offset,
             },
         ):
             config = await self._run_async_read(
@@ -327,6 +331,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                     WHERE scope_kind = ? AND scope_id = ? AND {table_name} MATCH ?
                     ORDER BY rank_score ASC, document_id ASC
                     LIMIT ?
+                    OFFSET ?
                     """,
                     (
                         config.title_weight,
@@ -336,6 +341,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                         query.scope_id,
                         match_expression,
                         query.limit,
+                        query.offset,
                     ),
                 )
             )
@@ -347,7 +353,7 @@ class SqliteFts5RetrievalStore(SharedSqliteRepository):
                     title=str(row["title"]),
                     snippet=str(row["snippet"]),
                 )
-                for index, row in enumerate(rows, start=1)
+                for index, row in enumerate(rows, start=query.offset + 1)
             )
 
     def rebuild_scope(

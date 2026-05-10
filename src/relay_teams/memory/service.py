@@ -42,6 +42,7 @@ from relay_teams.retrieval.retrieval_service import RetrievalService
 LOGGER = get_logger(__name__)
 GLOBAL_SEARCH_BATCH_SIZE = 100
 INDEX_BACKFILL_BATCH_SIZE = 100
+FTS_SEARCH_BATCH_SIZE = 100
 
 
 class MemoryBankService:
@@ -476,38 +477,59 @@ class MemoryBankService:
     ) -> MemorySearchResult:
         """Query the FTS5 retrieval index and cross-reference with the memory table."""
         assert self._retrieval_service is not None
-        fts_hits = await self._retrieval_service.search_async(
-            query=RetrievalQuery(
-                scope_kind=RetrievalScopeKind.MEMORY,
-                scope_id=request.workspace_id,
-                text=request.text_query,
-                limit=request.limit,
-            ),
-        )
-        if not fts_hits:
-            return MemorySearchResult(items=(), total_count=0)
-
         items: list[MemorySearchHit] = []
-        for hit in fts_hits:
-            entry = await self._repo.get_by_id_async(hit.document_id)
-            if entry is None or not self._entry_matches_search_request(entry, request):
-                continue
-            summary = _entry_to_summary(entry)
-            items.append(
-                MemorySearchHit(
-                    entry=summary,
-                    score=hit.score,
-                    rank=hit.rank,
-                    snippet=hit.snippet
-                    or self._build_snippet(
-                        summary.content_body_preview, request.text_query.lower()
-                    ),
-                )
+        total_matches = 0
+        offset = 0
+        seen_document_ids: set[str] = set()
+        while True:
+            fts_hits = await self._retrieval_service.search_async(
+                query=RetrievalQuery(
+                    scope_kind=RetrievalScopeKind.MEMORY,
+                    scope_id=request.workspace_id,
+                    text=request.text_query,
+                    limit=FTS_SEARCH_BATCH_SIZE,
+                    offset=offset,
+                ),
             )
+            if not fts_hits:
+                break
+
+            new_hit_seen = False
+            for hit in fts_hits:
+                if hit.document_id in seen_document_ids:
+                    continue
+                seen_document_ids.add(hit.document_id)
+                new_hit_seen = True
+
+                entry = await self._repo.get_by_id_async(hit.document_id)
+                if entry is None or not self._entry_matches_search_request(
+                    entry, request
+                ):
+                    continue
+                total_matches += 1
+                if len(items) >= request.limit:
+                    continue
+
+                summary = _entry_to_summary(entry)
+                items.append(
+                    MemorySearchHit(
+                        entry=summary,
+                        score=hit.score,
+                        rank=hit.rank,
+                        snippet=hit.snippet
+                        or self._build_snippet(
+                            summary.content_body_preview, request.text_query.lower()
+                        ),
+                    )
+                )
+
+            offset += len(fts_hits)
+            if len(fts_hits) < FTS_SEARCH_BATCH_SIZE or not new_hit_seen:
+                break
 
         return MemorySearchResult(
             items=tuple(items),
-            total_count=len(items),
+            total_count=total_matches,
         )
 
     async def _search_fallback_async(

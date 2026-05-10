@@ -237,6 +237,101 @@ def test_sqlite_store_applies_title_weight_to_ranking(tmp_path: Path) -> None:
     assert hits[0].document_id == "title-match"
 
 
+def test_sqlite_store_search_supports_offset(tmp_path: Path) -> None:
+    store = SqliteFts5RetrievalStore(tmp_path / "offset.db")
+    store.replace_scope(
+        config=RetrievalScopeConfig(
+            scope_kind=RetrievalScopeKind.MEMORY,
+            scope_id="workspace",
+        ),
+        documents=(
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.MEMORY,
+                scope_id="workspace",
+                document_id="routing-a",
+                title="Routing",
+                body="shared routing text",
+            ),
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.MEMORY,
+                scope_id="workspace",
+                document_id="routing-b",
+                title="Routing",
+                body="shared routing text",
+            ),
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.MEMORY,
+                scope_id="workspace",
+                document_id="routing-c",
+                title="Routing",
+                body="shared routing text",
+            ),
+        ),
+    )
+
+    first_page = store.search(
+        query=RetrievalQuery(
+            scope_kind=RetrievalScopeKind.MEMORY,
+            scope_id="workspace",
+            text="routing",
+            limit=1,
+        )
+    )
+    second_page = store.search(
+        query=RetrievalQuery(
+            scope_kind=RetrievalScopeKind.MEMORY,
+            scope_id="workspace",
+            text="routing",
+            limit=1,
+            offset=1,
+        )
+    )
+
+    assert [hit.document_id for hit in first_page] == ["routing-a"]
+    assert [hit.document_id for hit in second_page] == ["routing-b"]
+    assert second_page[0].rank == 2
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_search_async_supports_offset(tmp_path: Path) -> None:
+    store = SqliteFts5RetrievalStore(tmp_path / "async-offset.db")
+    store.replace_scope(
+        config=RetrievalScopeConfig(
+            scope_kind=RetrievalScopeKind.MEMORY,
+            scope_id="workspace",
+        ),
+        documents=(
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.MEMORY,
+                scope_id="workspace",
+                document_id="routing-a",
+                title="Routing",
+                body="shared routing text",
+            ),
+            RetrievalDocument(
+                scope_kind=RetrievalScopeKind.MEMORY,
+                scope_id="workspace",
+                document_id="routing-b",
+                title="Routing",
+                body="shared routing text",
+            ),
+        ),
+    )
+
+    second_page = await store.search_async(
+        query=RetrievalQuery(
+            scope_kind=RetrievalScopeKind.MEMORY,
+            scope_id="workspace",
+            text="routing",
+            limit=1,
+            offset=1,
+        )
+    )
+
+    assert [hit.document_id for hit in second_page] == ["routing-b"]
+    assert second_page[0].rank == 2
+
+
 def test_sqlite_store_unicode61_search_handles_cjk_prompt_without_phrase_query(
     tmp_path: Path,
 ) -> None:

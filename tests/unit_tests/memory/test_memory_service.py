@@ -24,7 +24,7 @@ from relay_teams.memory.models import (
 )
 from relay_teams.memory.repository import MemoryBankRepository
 from relay_teams.memory.service import MemoryBankService
-from relay_teams.retrieval.retrieval_models import RetrievalHit
+from relay_teams.retrieval.retrieval_models import RetrievalHit, RetrievalQuery
 
 pytestmark = pytest.mark.asyncio
 
@@ -617,6 +617,73 @@ class TestSearchFTS5:
 
         assert result.total_count == 1
         assert result.items[0].entry.id == keep.id
+
+    async def test_search_fts_pages_before_applying_filters(
+        self, service: MemoryBankService
+    ) -> None:
+        skip_entries = []
+        for index in range(100):
+            skip_entries.append(
+                await service.create_entry_async(
+                    _create_request(
+                        tier=MemoryTier.PERSISTENT,
+                        scope=MemoryScope.WORKSPACE,
+                        session_id=None,
+                        run_id=None,
+                        content=MemoryContent(
+                            title=f"Skip {index}",
+                            body="shared retrieval body",
+                        ),
+                        tags=("skip",),
+                    )
+                )
+            )
+        keep = await service.create_entry_async(
+            _create_request(
+                tier=MemoryTier.PERSISTENT,
+                scope=MemoryScope.WORKSPACE,
+                session_id=None,
+                run_id=None,
+                content=MemoryContent(title="Keep", body="shared retrieval body"),
+                tags=("keep",),
+            )
+        )
+        raw_hits = tuple(
+            RetrievalHit(
+                document_id=entry.id,
+                title=entry.content.title,
+                snippet="shared",
+                score=1.0 - (index * 0.001),
+                rank=index + 1,
+            )
+            for index, entry in enumerate((*skip_entries, keep))
+        )
+        captured_queries: list[RetrievalQuery] = []
+
+        async def search_async(
+            *,
+            query: RetrievalQuery,
+        ) -> tuple[RetrievalHit, ...]:
+            captured_queries.append(query)
+            return raw_hits[query.offset : query.offset + query.limit]
+
+        mock_retrieval = MagicMock()
+        mock_retrieval.search_async = AsyncMock(side_effect=search_async)
+        service._retrieval_service = mock_retrieval
+
+        result = await service.search_async(
+            MemorySearchRequest(
+                workspace_id="ws-test",
+                text_query="shared",
+                tags=("keep",),
+                limit=1,
+            )
+        )
+
+        assert result.total_count == 1
+        assert result.items[0].entry.id == keep.id
+        assert [query.offset for query in captured_queries] == [0, 100]
+        assert {query.limit for query in captured_queries} == {100}
 
     async def test_search_fts_no_hits_returns_empty(
         self, service: MemoryBankService

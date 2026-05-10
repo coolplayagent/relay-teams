@@ -149,6 +149,7 @@ class RetrievalService:
                 "scope_kind": query.scope_kind.value,
                 "scope_id": query.scope_id,
                 "limit": query.limit,
+                "offset": query.offset,
                 "query_term_count": _query_term_count(query.text),
             },
         ):
@@ -179,6 +180,7 @@ class RetrievalService:
                 "scope_kind": query.scope_kind.value,
                 "scope_id": query.scope_id,
                 "limit": query.limit,
+                "offset": query.offset,
                 "query_term_count": _query_term_count(query.text),
             },
         ):
