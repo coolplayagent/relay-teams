@@ -47,7 +47,14 @@ import {
 } from './scrollController.js';
 import { roundsState } from './state.js';
 import { areRoundTodoSnapshotsEqual, normalizeRoundTodoSnapshot } from './todo.js';
-import { roundSectionId, esc, roundStateLabel, roundStateTone } from './utils.js';
+import {
+    effectiveRoundStatus,
+    roundIsRunning,
+    roundSectionId,
+    esc,
+    roundStateLabel,
+    roundStateTone,
+} from './utils.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 
@@ -1893,7 +1900,7 @@ function renderRoundSection(round, index) {
             <div class="round-detail-mainline">
                 <div class="round-detail-meta">
                     <div class="round-detail-time">${time}</div>
-                    ${round.run_status === 'running' ? '<span class="live-badge">LIVE</span>' : ''}
+                    ${roundIsRunning(round) ? '<span class="live-badge">LIVE</span>' : ''}
                     <div class="round-detail-token-host"></div>
                 </div>
             </div>
@@ -1923,7 +1930,7 @@ function renderRoundSection(round, index) {
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
             runId: round.run_id,
-            runStatus: round.run_status,
+            runStatus: effectiveRoundStatus(round),
             runPhase: round.run_phase,
             hasFinalOutput: round.has_final_output === true,
             isLatestRound,
@@ -1937,7 +1944,7 @@ function renderRoundSection(round, index) {
             pendingToolApprovals: pendingCoordinatorApprovals,
             primaryRoleLabel,
             runId: round.run_id,
-            runStatus: round.run_status,
+            runStatus: effectiveRoundStatus(round),
             runPhase: round.run_phase,
             hasFinalOutput: round.has_final_output === true,
             isLatestRound,
@@ -2965,13 +2972,13 @@ function patchRoundHeader(round, _roundIndex) {
 
     const metaEl = section.querySelector('.round-detail-meta');
     const liveBadge = metaEl?.querySelector?.('.live-badge');
-    if (metaEl && round.run_status === 'running' && !liveBadge) {
+    if (metaEl && roundIsRunning(round) && !liveBadge) {
         const badge = document.createElement('span');
         badge.className = 'live-badge';
         badge.textContent = 'LIVE';
         const tokenHost = metaEl.querySelector('.round-detail-token-host');
         metaEl.insertBefore(badge, tokenHost || null);
-    } else if (liveBadge && round.run_status !== 'running') {
+    } else if (liveBadge && !roundIsRunning(round)) {
         liveBadge.remove();
     }
 

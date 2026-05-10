@@ -431,7 +431,11 @@ export function handleModelStepFinished(eventMeta, instanceId, roleIdOverride = 
         }
     }
     finalizeStream(key, isPrimary ? getRunPrimaryRoleId(runId) : roleId, { runId });
-    if (instanceId && !isPrimary) {
+    if (
+        instanceId
+        && !isPrimary
+        && !isOrchestrationDelegatedSubagent(roleId, runId)
+    ) {
         markSubagentStatus(instanceId, 'completed');
     }
     if (!instanceId || state.activeAgentInstanceId === instanceId) {
@@ -795,6 +799,15 @@ function isNormalModeSubagentRun(runId, roleId) {
         && safeRunId.startsWith('subagent_run_')
         && safeRoleId
         && !isRunPrimaryRoleId(safeRoleId, safeRunId)
+    );
+}
+
+function isOrchestrationDelegatedSubagent(roleId, runId) {
+    const safeRoleId = String(roleId || '').trim();
+    return !!(
+        state.currentSessionMode === 'orchestration'
+        && safeRoleId
+        && !isRunPrimaryRoleId(safeRoleId, runId)
     );
 }
 

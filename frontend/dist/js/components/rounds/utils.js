@@ -3,6 +3,7 @@
  * Shared utility helpers for rounds timeline rendering.
  */
 import { t } from '../../utils/i18n.js';
+import { state } from '../../core/state.js';
 
 export function roundSectionId(runId) {
     return `round-${String(runId).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
@@ -17,7 +18,7 @@ export function esc(text) {
 
 export function roundStateTone(round) {
     const phase = String(round?.run_phase || '');
-    const status = String(round?.run_status || '');
+    const status = effectiveRoundStatus(round);
     if (
         phase === 'awaiting_tool_approval'
         || phase === 'awaiting_subagent_followup'
@@ -41,7 +42,7 @@ export function roundStateTone(round) {
 
 export function roundStateLabel(round) {
     const phase = String(round?.run_phase || '');
-    const status = String(round?.run_status || '');
+    const status = effectiveRoundStatus(round);
     if (phase === 'awaiting_tool_approval') return t('rounds.state.awaiting_approval');
     if (phase === 'awaiting_manual_action') return t('rounds.state.awaiting_manual_action');
     if (phase === 'awaiting_subagent_followup') return t('rounds.state.awaiting_followup');
@@ -61,4 +62,33 @@ export function roundStateLabel(round) {
         default:
             return '';
     }
+}
+
+export function roundIsRunning(round) {
+    return effectiveRoundStatus(round) === 'running';
+}
+
+export function effectiveRoundStatus(round) {
+    if (hasRunningDelegatedTask(round)) {
+        return 'running';
+    }
+    return String(round?.run_status || '');
+}
+
+function hasRunningDelegatedTask(round) {
+    const runId = String(round?.run_id || '').trim();
+    if (!runId) {
+        return false;
+    }
+    const tasks = Array.isArray(state.sessionTasks) ? state.sessionTasks : [];
+    return tasks.some(task => {
+        if (!task || typeof task !== 'object') {
+            return false;
+        }
+        return (
+            String(task.run_id || '').trim() === runId
+            && String(task.status || '').trim().toLowerCase() === 'running'
+            && !!String(task.assigned_instance_id || task.instance_id || '').trim()
+        );
+    });
 }
