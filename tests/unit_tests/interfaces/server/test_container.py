@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 import pytest
@@ -776,6 +777,115 @@ async def test_container_binds_background_completion_sink_during_start(
     assert container.background_task_service._completion_sink is container.run_service
     assert start_calls == [
         "wechat",
+        "feishu-subscription",
+        "feishu-message-pool",
+        "automation-delivery",
+        "automation-bound-session",
+        "github-trigger-action",
+        "scheduler",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_container_start_continues_when_memory_reindex_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    _clear_proxy_env(monkeypatch)
+    config_dir = tmp_path / ".agent-teams"
+    _write_model_config(config_dir, api_key="initial-secret")
+    container = ServerContainer(config_dir=config_dir)
+
+    start_calls: list[str] = []
+
+    async def _fail_reindex() -> int:
+        raise RuntimeError("retrieval unavailable")
+
+    def _fake_start_warmup(_registry: object) -> None:
+        start_calls.append("mcp-warmup")
+
+    def _fake_sync_start(name: str):
+        def _start() -> None:
+            start_calls.append(name)
+
+        return _start
+
+    async def _fake_async_start(name: str) -> None:
+        start_calls.append(name)
+
+    monkeypatch.setattr(
+        container.memory_bank_service,
+        "reindex_active_entries_async",
+        _fail_reindex,
+    )
+    monkeypatch.setattr(
+        container.mcp_discovery_service,
+        "start_warmup",
+        _fake_start_warmup,
+    )
+    monkeypatch.setattr(
+        container.app_env_file_watcher,
+        "start",
+        _fake_sync_start("app-env-watcher"),
+    )
+    monkeypatch.setattr(
+        container.mcp_config_file_watcher,
+        "start",
+        _fake_sync_start("mcp-config-watcher"),
+    )
+    monkeypatch.setattr(
+        container.wechat_gateway_service,
+        "start",
+        _fake_sync_start("wechat"),
+    )
+    monkeypatch.setattr(
+        container.xiaoluban_im_listener_service,
+        "start",
+        _fake_sync_start("xiaoluban"),
+    )
+    monkeypatch.setattr(
+        container.feishu_subscription_service,
+        "start",
+        _fake_sync_start("feishu-subscription"),
+    )
+    monkeypatch.setattr(
+        container.feishu_message_pool_service,
+        "start",
+        lambda: _fake_async_start("feishu-message-pool"),
+    )
+    monkeypatch.setattr(
+        container.automation_delivery_worker,
+        "start",
+        lambda: _fake_async_start("automation-delivery"),
+    )
+    monkeypatch.setattr(
+        container.automation_bound_session_queue_worker,
+        "start",
+        lambda: _fake_async_start("automation-bound-session"),
+    )
+    monkeypatch.setattr(
+        container.github_trigger_action_worker,
+        "start",
+        lambda: _fake_async_start("github-trigger-action"),
+    )
+    monkeypatch.setattr(
+        container.automation_scheduler_service,
+        "start",
+        lambda: _fake_async_start("scheduler"),
+    )
+
+    caplog.set_level(logging.WARNING)
+
+    await container.start()
+
+    assert "Failed to reindex active Memory Bank entries during startup" in caplog.text
+    assert start_calls == [
+        "mcp-warmup",
+        "app-env-watcher",
+        "mcp-config-watcher",
+        "wechat",
+        "xiaoluban",
         "feishu-subscription",
         "feishu-message-pool",
         "automation-delivery",
