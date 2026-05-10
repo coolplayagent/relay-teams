@@ -172,7 +172,7 @@ def test_sanitize_replayed_messages_drops_duplicate_late_tool_results() -> None:
     assert sanitized[2].parts[0].content == "optimize it"
 
 
-def test_sanitize_replayed_messages_drops_thinking_only_response() -> None:
+def test_sanitize_replayed_messages_keeps_thinking_only_response() -> None:
     messages = [
         ModelRequest(parts=[UserPromptPart(content="continue")]),
         ModelResponse(parts=[ThinkingPart(content="internal notes")]),
@@ -183,10 +183,51 @@ def test_sanitize_replayed_messages_drops_thinking_only_response() -> None:
 
     sanitized = RecoverableOpenAIChatModel._sanitize_replayed_messages(messages)
 
-    assert len(sanitized) == 2
+    assert len(sanitized) == 3
     assert isinstance(sanitized[0], ModelRequest)
     assert isinstance(sanitized[1], ModelResponse)
-    assert isinstance(sanitized[1].parts[0], ToolCallPart)
+    assert isinstance(sanitized[1].parts[0], ThinkingPart)
+    assert isinstance(sanitized[2], ModelResponse)
+    assert isinstance(sanitized[2].parts[0], ToolCallPart)
+
+
+@pytest.mark.asyncio
+async def test_map_messages_replays_deepseek_reasoning_content() -> None:
+    http_client = httpx.AsyncClient(trust_env=False)
+    try:
+        model = RecoverableOpenAIChatModel(
+            "deepseek-v4-pro",
+            provider=OpenAIProvider(
+                base_url="https://api.deepseek.example/v1",
+                api_key="test",
+                http_client=http_client,
+            ),
+        )
+        messages = [
+            ModelRequest(parts=[UserPromptPart(content="continue")]),
+            ModelResponse(
+                parts=[
+                    ThinkingPart(
+                        id="reasoning_content",
+                        content="internal notes",
+                        provider_name=model.system,
+                    )
+                ]
+            ),
+        ]
+
+        mapped = await model._map_messages(messages, ModelRequestParameters())
+    finally:
+        await http_client.aclose()
+
+    assistant_messages = [
+        message
+        for message in mapped
+        if isinstance(message, dict) and message.get("role") == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0].get("reasoning_content") == "internal notes"
+    assert assistant_messages[0].get("content") == ""
 
 
 @pytest.mark.asyncio

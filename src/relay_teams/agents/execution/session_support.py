@@ -20,8 +20,6 @@ from pydantic_ai.messages import (
     PartEndEvent,
     PartStartEvent,
     RetryPromptPart,
-    TextPart,
-    ThinkingPart,
     ToolCallPart,
     ToolCallPartDelta,
     ToolReturnPart,
@@ -336,14 +334,6 @@ def _tool_result_error_code(result: dict[str, JsonValue]) -> str:
     if isinstance(visible_result, dict):
         return _tool_result_error_code(visible_result)
     return ""
-
-
-def _is_thinking_only_response(message: ModelResponse) -> bool:
-    if not message.parts:
-        return False
-    if any(isinstance(part, (TextPart, ToolCallPart)) for part in message.parts):
-        return False
-    return all(isinstance(part, ThinkingPart) for part in message.parts)
 
 
 def _tool_args_from_preview(value: str) -> dict[str, JsonValue] | str:
@@ -921,23 +911,7 @@ class SessionSupportMixin(AgentLlmSessionMixinBase):
     def _filter_model_messages(
         self, messages: Sequence[ModelRequest | ModelResponse]
     ) -> list[ModelRequest | ModelResponse]:
-        filtered: list[ModelRequest | ModelResponse] = []
-        for message in messages:
-            if isinstance(message, ModelResponse) and _is_thinking_only_response(
-                message
-            ):
-                log_event(
-                    LOGGER,
-                    logging.WARNING,
-                    event="llm.history.dropped_thinking_only_response",
-                    message=(
-                        "Dropped thinking-only assistant response before prompt replay"
-                    ),
-                    payload={},
-                )
-                continue
-            filtered.append(message)
-        return filtered
+        return list(messages)
 
     def _collect_pending_tool_calls(
         self, messages: Sequence[ModelRequest | ModelResponse]
