@@ -5,6 +5,13 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from relay_teams.gateway.discord import (
+    DiscordAccountCreateInput,
+    DiscordAccountRecord,
+    DiscordAccountStatus,
+    DiscordAccountUpdateInput,
+    DiscordSecretStatus,
+)
 from relay_teams.gateway.xiaoluban import (
     XiaolubanAccountCreateInput,
     XiaolubanAccountRecord,
@@ -16,6 +23,7 @@ from relay_teams.gateway.xiaoluban import (
     XiaolubanTokenRevealResponse,
 )
 from relay_teams.interfaces.server.deps import (
+    get_discord_gateway_service,
     get_wechat_gateway_service,
     get_xiaoluban_gateway_service,
     get_xiaoluban_im_listener_service,
@@ -150,6 +158,98 @@ class _FakeWeChatGatewayService:
 
     async def reload_async(self) -> None:
         self.reload()
+
+
+class _FakeDiscordGatewayService:
+    def __init__(self) -> None:
+        self.created_payloads: list[DiscordAccountCreateInput] = []
+        self.updated_payloads: list[tuple[str, DiscordAccountUpdateInput]] = []
+        self.enabled_payloads: list[tuple[str, bool]] = []
+        self.deleted_account_ids: list[tuple[str, bool]] = []
+        self.reload_calls = 0
+        self.create_error: Exception | None = None
+        self.update_error: Exception | None = None
+        self.delete_error: Exception | None = None
+        self.enable_error: Exception | None = None
+
+    async def list_accounts(self) -> tuple[DiscordAccountRecord, ...]:
+        return (self._record(),)
+
+    async def create_account(
+        self,
+        request: DiscordAccountCreateInput,
+    ) -> DiscordAccountRecord:
+        if self.create_error is not None:
+            raise self.create_error
+        self.created_payloads.append(request)
+        return self._record().model_copy(
+            update={
+                "display_name": request.display_name or self._record().display_name,
+                "status": (
+                    DiscordAccountStatus.ENABLED
+                    if request.enabled
+                    else DiscordAccountStatus.DISABLED
+                ),
+            }
+        )
+
+    async def update_account(
+        self,
+        account_id: str,
+        request: DiscordAccountUpdateInput,
+    ) -> DiscordAccountRecord:
+        if self.update_error is not None:
+            raise self.update_error
+        self.updated_payloads.append((account_id, request))
+        return self._record().model_copy(
+            update={
+                "account_id": account_id,
+                "display_name": request.display_name or self._record().display_name,
+            }
+        )
+
+    async def set_account_enabled(
+        self,
+        account_id: str,
+        enabled: bool,
+    ) -> DiscordAccountRecord:
+        if self.enable_error is not None:
+            raise self.enable_error
+        self.enabled_payloads.append((account_id, enabled))
+        return self._record().model_copy(
+            update={
+                "account_id": account_id,
+                "status": (
+                    DiscordAccountStatus.ENABLED
+                    if enabled
+                    else DiscordAccountStatus.DISABLED
+                ),
+            }
+        )
+
+    async def delete_account(self, account_id: str, *, force: bool = False) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted_account_ids.append((account_id, force))
+
+    async def reload_async(self) -> None:
+        self.reload_calls += 1
+
+    @staticmethod
+    def _record() -> DiscordAccountRecord:
+        return DiscordAccountRecord(
+            account_id="discord_123",
+            display_name="Discord Main",
+            status=DiscordAccountStatus.ENABLED,
+            bot_user_id="discord_123",
+            application_id="app_123",
+            allowed_channel_ids=("channel_123",),
+            allow_channel_messages=True,
+            workspace_id="default",
+            secret_status=DiscordSecretStatus(bot_token_configured=True),
+            running=True,
+            last_event_at=datetime(2026, 4, 25, 1, 0, tzinfo=UTC),
+        )
 
 
 class _FakeXiaolubanGatewayService:
@@ -330,12 +430,16 @@ def _client(
     fake_service: _FakeWeChatGatewayService,
     fake_xiaoluban_service: _FakeXiaolubanGatewayService | None = None,
     *,
+    fake_discord_service: _FakeDiscordGatewayService | None = None,
     base_url: str = "http://testserver",
     xiaoluban_im_listener: _FakeXiaolubanImListenerService | None = None,
 ) -> TestClient:
     app = FastAPI()
     app.include_router(gateway.router, prefix="/api")
     app.dependency_overrides[get_wechat_gateway_service] = lambda: fake_service
+    app.dependency_overrides[get_discord_gateway_service] = lambda: (
+        fake_discord_service or _FakeDiscordGatewayService()
+    )
     app.dependency_overrides[get_xiaoluban_gateway_service] = lambda: (
         fake_xiaoluban_service or _FakeXiaolubanGatewayService()
     )
@@ -417,6 +521,102 @@ def test_wechat_account_routes_run_service_calls_in_threadpool() -> None:
     ]
 
     assert [response.status_code for response in requests] == [200] * len(requests)
+
+
+def test_discord_account_routes_return_records_and_forward_payloads() -> None:
+    fake_discord_service = _FakeDiscordGatewayService()
+    client = _client(
+        _FakeWeChatGatewayService(),
+        fake_discord_service=fake_discord_service,
+    )
+
+    responses = [
+        client.get("/api/gateway/discord/accounts"),
+        client.post(
+            "/api/gateway/discord/accounts",
+            json={
+                "display_name": "Discord Main",
+                "bot_token": "discord-token",
+                "allowed_channel_ids": ["channel_123"],
+                "allow_channel_messages": True,
+            },
+        ),
+        client.patch(
+            "/api/gateway/discord/accounts/discord_123",
+            json={"display_name": "Discord Updated"},
+        ),
+        client.post("/api/gateway/discord/accounts/discord_123:enable"),
+        client.post("/api/gateway/discord/accounts/discord_123:disable"),
+        client.request(
+            "DELETE",
+            "/api/gateway/discord/accounts/discord_123",
+            json={"force": True},
+        ),
+        client.post("/api/gateway/discord/reload"),
+    ]
+
+    assert [response.status_code for response in responses] == [200] * len(responses)
+    assert responses[0].json()[0]["account_id"] == "discord_123"
+    assert fake_discord_service.created_payloads[0].bot_token == "discord-token"
+    assert fake_discord_service.updated_payloads[0][0] == "discord_123"
+    assert fake_discord_service.enabled_payloads == [
+        ("discord_123", True),
+        ("discord_123", False),
+    ]
+    assert fake_discord_service.deleted_account_ids == [("discord_123", True)]
+    assert fake_discord_service.reload_calls == 1
+
+
+def test_discord_account_routes_map_service_errors() -> None:
+    fake_discord_service = _FakeDiscordGatewayService()
+    client = _client(
+        _FakeWeChatGatewayService(),
+        fake_discord_service=fake_discord_service,
+    )
+
+    fake_discord_service.create_error = RuntimeError("invalid token")
+    create_response = client.post(
+        "/api/gateway/discord/accounts",
+        json={"bot_token": "bad-token"},
+    )
+    fake_discord_service.create_error = ValueError("workspace_id is required")
+    create_validation_response = client.post(
+        "/api/gateway/discord/accounts",
+        json={"bot_token": "bad-token"},
+    )
+    fake_discord_service.update_error = ValueError(
+        "orchestration_preset_id is required"
+    )
+    update_response = client.patch(
+        "/api/gateway/discord/accounts/discord_123",
+        json={"display_name": "Discord Updated"},
+    )
+    fake_discord_service.update_error = RuntimeError("Discord API unavailable")
+    update_runtime_response = client.patch(
+        "/api/gateway/discord/accounts/discord_123",
+        json={"display_name": "Discord Updated"},
+    )
+    fake_discord_service.enable_error = ValueError("workspace_id is required")
+    enable_response = client.post("/api/gateway/discord/accounts/discord_123:enable")
+    fake_discord_service.enable_error = KeyError("Unknown Discord account_id")
+    disable_response = client.post("/api/gateway/discord/accounts/discord_123:disable")
+    fake_discord_service.delete_error = KeyError("Unknown Discord account_id")
+    delete_missing_response = client.delete("/api/gateway/discord/accounts/missing")
+    fake_discord_service.delete_error = RuntimeError(
+        "Cannot delete enabled Discord account without force"
+    )
+    delete_conflict_response = client.delete(
+        "/api/gateway/discord/accounts/discord_123"
+    )
+
+    assert create_response.status_code == 400
+    assert create_validation_response.status_code == 422
+    assert update_response.status_code == 422
+    assert update_runtime_response.status_code == 400
+    assert enable_response.status_code == 422
+    assert disable_response.status_code == 404
+    assert delete_missing_response.status_code == 404
+    assert delete_conflict_response.status_code == 409
 
 
 def test_list_xiaoluban_accounts_route_returns_accounts() -> None:

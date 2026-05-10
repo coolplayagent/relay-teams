@@ -29,6 +29,7 @@ from relay_teams.gateway import (
     GatewayChannelType,
     GatewaySessionRecord,
 )
+from relay_teams.gateway.discord import DiscordAccountRecord
 from relay_teams.media import content_parts_from_text
 from relay_teams.sessions.runs.run_models import (
     IntentInput,
@@ -59,6 +60,8 @@ _SESSION_ID = "session-1"
 _AUTOMATION_PROJECT_ID = "aut-1"
 _WECHAT_ACCOUNT_ID = "wx-account-1"
 _WECHAT_PEER_ID = "wx-peer-1"
+_DISCORD_ACCOUNT_ID = "discord-account-1"
+_DISCORD_CHANNEL_ID = "discord-channel-1"
 
 
 def _make_session(
@@ -259,6 +262,59 @@ class _FakeWeChatClient:
         return f"file sent ({file_path.name})"
 
 
+class _FakeDiscordAccountRepo:
+    def __init__(self) -> None:
+        self._accounts = {
+            _DISCORD_ACCOUNT_ID: DiscordAccountRecord(
+                account_id=_DISCORD_ACCOUNT_ID,
+                display_name="Discord Account",
+                bot_user_id=_DISCORD_ACCOUNT_ID,
+            )
+        }
+
+    async def get_account(self, account_id: str) -> DiscordAccountRecord:
+        if account_id not in self._accounts:
+            raise KeyError(account_id)
+        return self._accounts[account_id]
+
+
+class _FakeDiscordSecretStore:
+    def __init__(self, token: str | None = "discord-token") -> None:
+        self._token = token
+
+    def get_bot_token(self, config_dir: Path, account_id: str) -> str | None:
+        _ = (config_dir, account_id)
+        return self._token
+
+
+class _FakeDiscordClient:
+    def __init__(self) -> None:
+        self.sent_texts: list[tuple[str, str, str, str | None]] = []
+        self.sent_files: list[tuple[str, str, Path, str | None]] = []
+
+    async def send_text_message(
+        self,
+        *,
+        token: str,
+        channel_id: str,
+        text: str,
+        reply_to_message_id: str | None = None,
+    ) -> str:
+        self.sent_texts.append((token, channel_id, text, reply_to_message_id))
+        return "discord-message-1"
+
+    async def send_file(
+        self,
+        *,
+        token: str,
+        channel_id: str,
+        file_path: Path,
+        reply_to_message_id: str | None = None,
+    ) -> str:
+        self.sent_files.append((token, channel_id, file_path, reply_to_message_id))
+        return f"discord file sent ({file_path.name})"
+
+
 def _build_service(
     *,
     sessions: dict[str, SessionRecord] | None = None,
@@ -268,11 +324,14 @@ def _build_service(
     gateway_sessions: dict[str, GatewaySessionRecord] | None = None,
     run_intents: dict[str, IntentInput] | None = None,
     wechat_token: str | None = "wechat-token",
+    discord_token: str | None = "discord-token",
     feishu_client: _FakeFeishuClient | None = None,
     wechat_client: _FakeWeChatClient | None = None,
+    discord_client: _FakeDiscordClient | None = None,
 ) -> tuple[ImToolService, _FakeFeishuClient, _FakeWeChatClient]:
     resolved_feishu_client = feishu_client or _FakeFeishuClient()
     resolved_wechat_client = wechat_client or _FakeWeChatClient()
+    resolved_discord_client = discord_client or _FakeDiscordClient()
     service = ImToolService(
         config_dir=Path("C:/config"),
         session_repo=_FakeSessionRepo(sessions),
@@ -285,6 +344,9 @@ def _build_service(
         wechat_account_repo=_FakeWeChatAccountRepo(),
         wechat_secret_store=_FakeWeChatSecretStore(wechat_token),
         wechat_client=resolved_wechat_client,
+        discord_account_repo=_FakeDiscordAccountRepo(),
+        discord_secret_store=_FakeDiscordSecretStore(discord_token),
+        discord_client=resolved_discord_client,
     )
     return service, resolved_feishu_client, resolved_wechat_client
 
@@ -411,6 +473,28 @@ def _wechat_gateway_session(
     )
 
 
+def _discord_gateway_session(
+    *,
+    session_id: str = _SESSION_ID,
+    account_id: str = _DISCORD_ACCOUNT_ID,
+    channel_id: str = _DISCORD_CHANNEL_ID,
+    reply_to_message_id: str | None = "discord-message-1",
+) -> GatewaySessionRecord:
+    return GatewaySessionRecord(
+        gateway_session_id="gws-discord-1",
+        channel_type=GatewayChannelType.DISCORD,
+        external_session_id=f"discord:{account_id}:dm:user-1",
+        internal_session_id=session_id,
+        peer_user_id="discord-user-1",
+        peer_chat_id=channel_id,
+        channel_state={
+            "account_id": account_id,
+            "channel_id": channel_id,
+            "reply_to_message_id": reply_to_message_id,
+        },
+    )
+
+
 async def test_resolver_returns_im_tool_for_feishu_session() -> None:
     resolver = _build_context_resolver(
         sessions=_default_sessions(),
@@ -428,6 +512,19 @@ async def test_resolver_returns_im_tool_for_wechat_session() -> None:
     resolver = _build_context_resolver(
         configs=_default_configs(),
         gateway_sessions={_SESSION_ID: _wechat_gateway_session()},
+    )
+
+    resolved = resolver.resolve_implicit_tools(
+        ToolResolutionContext(session_id=_SESSION_ID)
+    )
+
+    assert resolved == ("im_send",)
+
+
+async def test_resolver_returns_im_tool_for_discord_session() -> None:
+    resolver = _build_context_resolver(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _discord_gateway_session()},
     )
 
     resolved = resolver.resolve_implicit_tools(
@@ -555,6 +652,63 @@ async def test_send_text_success_for_wechat() -> None:
     assert wechat_client.sent_texts == [
         (_WECHAT_ACCOUNT_ID, "wechat-token", _WECHAT_PEER_ID, "ctx-1")
     ]
+
+
+async def test_send_text_success_for_discord() -> None:
+    discord_client = _FakeDiscordClient()
+    service, feishu_client, wechat_client = _build_service(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _discord_gateway_session()},
+        discord_client=discord_client,
+    )
+
+    result = await service.send_text(session_id=_SESSION_ID, text="hello")
+
+    assert result == "Message sent."
+    assert feishu_client.sent_texts == []
+    assert wechat_client.sent_texts == []
+    assert discord_client.sent_texts == [
+        (
+            "discord-token",
+            _DISCORD_CHANNEL_ID,
+            "hello",
+            "discord-message-1",
+        )
+    ]
+
+
+async def test_send_file_success_for_discord(tmp_path: Path) -> None:
+    discord_client = _FakeDiscordClient()
+    service, _, _ = _build_service(
+        configs=_default_configs(),
+        gateway_sessions={_SESSION_ID: _discord_gateway_session()},
+        discord_client=discord_client,
+    )
+    file_path = tmp_path / "report.txt"
+    file_path.write_text("hello", encoding="utf-8")
+
+    result = await service.send_file(session_id=_SESSION_ID, file_path=file_path)
+
+    assert result == "discord file sent (report.txt)"
+    assert discord_client.sent_files == [
+        (
+            "discord-token",
+            _DISCORD_CHANNEL_ID,
+            file_path,
+            "discord-message-1",
+        )
+    ]
+
+
+async def test_send_text_to_discord_channel_requires_token() -> None:
+    service, _, _ = _build_service(discord_token=None)
+
+    with pytest.raises(RuntimeError, match="Discord send is unavailable"):
+        await service.send_text_to_discord_channel(
+            account_id=_DISCORD_ACCOUNT_ID,
+            channel_id=_DISCORD_CHANNEL_ID,
+            text="hello",
+        )
 
 
 async def test_send_text_no_im_session() -> None:
