@@ -11,7 +11,9 @@ import subprocess
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from relay_teams.binary_tools import BinaryToolService, BinaryToolUnavailableError
 from relay_teams.env.clawhub_cli import (
+    ClawHubCliInstallResult,
     install_clawhub_via_npm,
     resolve_existing_clawhub_path,
 )
@@ -81,9 +83,11 @@ class ClawHubConnectivityProbeService:
         *,
         config_dir: Path,
         get_clawhub_config: Callable[[], ClawHubConfig],
+        binary_tool_service: BinaryToolService | None = None,
     ) -> None:
         self._config_dir = config_dir
         self._get_clawhub_config = get_clawhub_config
+        self._binary_tool_service = binary_tool_service
 
     def probe(
         self,
@@ -133,14 +137,36 @@ class ClawHubConnectivityProbeService:
                     error_code="clawhub_install_timeout",
                     error_message="ClawHub CLI installation timed out.",
                 )
-            install_result = install_clawhub_via_npm(
-                timeout_seconds=install_timeout_seconds,
-                base_env=build_clawhub_subprocess_env(
-                    None,
-                    config_dir=self._config_dir,
-                    base_env=os.environ,
-                ),
+            install_env = build_clawhub_subprocess_env(
+                None,
+                config_dir=self._config_dir,
+                base_env=os.environ,
             )
+            if self._binary_tool_service is None:
+                install_result = install_clawhub_via_npm(
+                    timeout_seconds=install_timeout_seconds,
+                    base_env=install_env,
+                )
+                installation_attempted = install_result.attempted
+                if not install_result.ok or install_result.clawhub_path is None:
+                    return self._build_result(
+                        ok=False,
+                        checked_at=checked_at,
+                        started=started,
+                        binary_available=False,
+                        token_configured=True,
+                        installation_attempted=installation_attempted,
+                        installed_during_probe=installed_during_probe,
+                        error_code=install_result.error_code or "clawhub_unavailable",
+                        error_message=install_result.error_message
+                        or "ClawHub CLI is not available on PATH.",
+                    )
+            else:
+                install_result = _install_clawhub_with_binary_service(
+                    self._binary_tool_service,
+                    install_env=install_env,
+                    timeout_seconds=install_timeout_seconds,
+                )
             installation_attempted = install_result.attempted
             if install_result.ok and install_result.clawhub_path is not None:
                 clawhub_path = Path(install_result.clawhub_path)
@@ -464,6 +490,31 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     if existing_path:
         path_parts.append(existing_path)
     return pathsep.join(path_parts)
+
+
+def _install_clawhub_with_binary_service(
+    service: BinaryToolService,
+    *,
+    install_env: dict[str, str],
+    timeout_seconds: float,
+) -> ClawHubCliInstallResult:
+    try:
+        path = service.install_clawhub_for_probe(
+            install_env=install_env,
+            timeout_seconds=timeout_seconds,
+        )
+    except BinaryToolUnavailableError as exc:
+        return ClawHubCliInstallResult(
+            ok=False,
+            attempted=True,
+            error_code="clawhub_unavailable",
+            error_message=str(exc) or "ClawHub CLI is not available on PATH.",
+        )
+    return ClawHubCliInstallResult(
+        ok=True,
+        attempted=True,
+        clawhub_path=str(path),
+    )
 
 
 def _read_clawhub_version(

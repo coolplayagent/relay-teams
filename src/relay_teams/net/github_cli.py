@@ -4,36 +4,34 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import platform
-import shutil
 import tarfile
 import zipfile
 from pathlib import Path
 
+from relay_teams.binary_tools import (
+    BinaryToolId,
+    BinaryToolService,
+)
+from relay_teams.binary_tools.service import (
+    GITHUB_CLI_PLATFORM_MAP,
+    GITHUB_CLI_VERSION,
+    get_platform_key,
+)
 from relay_teams.logger import get_logger
-from relay_teams.net.clients import create_async_http_client
 from relay_teams.paths import get_app_bin_dir
 from relay_teams.net.github_cli_errors import (
-    DownloadFailedError,
     ExtractionFailedError,
     GitHubCliNotFoundError,
-    UnsupportedPlatformError,
 )
 
 LOGGER = get_logger(__name__)
 
-VERSION = "2.88.1"
+VERSION = GITHUB_CLI_VERSION
 BIN_DIR: Path | None = None
 _gh_path_cache: Path | None = None
 _gh_path_lock = asyncio.Lock()
 
-PLATFORM_MAP = {
-    "arm64-darwin": {"platform": "macOS_arm64", "extension": "zip"},
-    "arm64-linux": {"platform": "linux_arm64", "extension": "tar.gz"},
-    "x64-darwin": {"platform": "macOS_amd64", "extension": "zip"},
-    "x64-linux": {"platform": "linux_amd64", "extension": "tar.gz"},
-    "x64-windows": {"platform": "windows_amd64", "extension": "zip"},
-}
+PLATFORM_MAP = GITHUB_CLI_PLATFORM_MAP
 
 _ARCH_ALIASES = {
     "x86_64": "x64",
@@ -51,19 +49,7 @@ _SYSTEM_ALIASES = {
 
 
 def _get_platform_key() -> str:
-    raw_arch = platform.machine().strip().lower()
-    raw_system = platform.system().strip().lower()
-
-    arch = _ARCH_ALIASES.get(raw_arch, raw_arch)
-    system = _SYSTEM_ALIASES.get(raw_system, raw_system)
-    if (
-        system.startswith("mingw")
-        or system.startswith("msys")
-        or system.startswith("cygwin")
-    ):
-        system = "windows"
-
-    return f"{arch}-{system}"
+    return get_platform_key()
 
 
 async def get_gh_path() -> Path:
@@ -99,34 +85,27 @@ def resolve_existing_gh_path() -> Path | None:
     try:
         if _gh_path_cache and _gh_path_cache.is_file():
             return _gh_path_cache
-
-        system_path = resolve_system_gh_path()
-        if system_path is not None:
-            LOGGER.info("Using system GitHub CLI at %s", system_path)
-            _gh_path_cache = system_path
-            return system_path
-
-        local_path = get_bundled_gh_path()
-        if local_path is not None:
-            _gh_path_cache = local_path
-            return local_path
+        path = _build_binary_tool_service().resolve_existing_tool_path(
+            BinaryToolId.GITHUB_CLI
+        )
+        if path is not None:
+            _gh_path_cache = path
+            return path
     except Exception:
         return None
     return None
 
 
 def resolve_system_gh_path() -> Path | None:
-    system_gh = shutil.which("gh")
-    if not system_gh:
-        return None
-    system_path = Path(system_gh)
-    if not system_path.is_file():
-        return None
-    return system_path
+    return _build_binary_tool_service().resolve_system_tool_path(
+        BinaryToolId.GITHUB_CLI
+    )
 
 
 def get_bundled_gh_path() -> Path | None:
-    local_path = _bundled_gh_target_path()
+    local_path = _build_binary_tool_service().managed_target_path(
+        BinaryToolId.GITHUB_CLI
+    )
     if local_path.is_file():
         return local_path
     return None
@@ -141,27 +120,10 @@ def _bundled_gh_target_path(*, ensure_parent: bool = False) -> Path:
 
 
 async def _download_gh(target: Path) -> None:
-    key = _get_platform_key()
-    config = PLATFORM_MAP.get(key)
-    if config is None:
-        raise UnsupportedPlatformError(key)
-
-    filename = f"gh_{VERSION}_{config['platform']}.{config['extension']}"
-    url = f"https://github.com/cli/cli/releases/download/v{VERSION}/{filename}"
-
-    async with create_async_http_client(follow_redirects=True) as client:
-        response = await client.get(url)
-        if response.status_code != 200:
-            raise DownloadFailedError(url, response.status_code)
-        content = response.content
-
-    if config["extension"] == "tar.gz":
-        _extract_tarball(content, target)
-    else:
-        _extract_zip(content, target)
-
-    if os.name != "nt":
-        os.chmod(target, 0o755)  # nosec B103 - executable permission needed for downloaded binary
+    await _build_binary_tool_service().download_tool_to_path(
+        BinaryToolId.GITHUB_CLI,
+        target,
+    )
 
 
 def _extract_tarball(content: bytes, target: Path) -> None:
@@ -186,3 +148,7 @@ def _extract_zip(content: bytes, target: Path) -> None:
                     target.write_bytes(source_handle.read())
                 return
         raise ExtractionFailedError("gh not found in zip")
+
+
+def _build_binary_tool_service() -> BinaryToolService:
+    return BinaryToolService(bin_dir=BIN_DIR)

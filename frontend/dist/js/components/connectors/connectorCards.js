@@ -72,6 +72,8 @@ const CONNECT_ACTION_LABEL_KEYS = Object.freeze({
 
 export function renderConnectorsCardPageMarkup({
     connectorsResponse,
+    runtimeToolsResponse,
+    runtimeToolJobs = {},
     searchQuery = '',
     statusFilter = 'all',
 } = {}) {
@@ -109,7 +111,35 @@ export function renderConnectorsCardPageMarkup({
             </section>
             ${renderConnectorGroup('official', grouped.official)}
             ${renderConnectorGroup('internal', grouped.internal)}
+            ${renderRuntimeToolsGroup(runtimeToolsResponse, runtimeToolJobs)}
             ${filteredItems.length === 0 ? renderEmptyState() : ''}
+        </div>
+    `;
+}
+
+export function renderRuntimeToolsModalMarkup({
+    runtimeToolsResponse,
+    runtimeToolJobs = {},
+} = {}) {
+    const items = getRuntimeToolItems(runtimeToolsResponse);
+    return `
+        <div class="modal gateway-feature-modal connectors-runtime-modal" data-runtime-tools-modal>
+            <div class="modal-content gateway-feature-modal-content connectors-runtime-modal-content" role="dialog" aria-modal="true" aria-labelledby="runtime-tools-modal-title">
+                <div class="modal-header gateway-feature-modal-header">
+                    <div class="gateway-feature-modal-heading">
+                        <h3 id="runtime-tools-modal-title">${escapeHtml(t('feature.connectors.runtime_tools.modal_title'))}</h3>
+                    </div>
+                    <button class="icon-btn" type="button" aria-label="${escapeHtml(t('settings.action.cancel'))}" data-runtime-tools-modal-close>
+                        <span aria-hidden="true">×</span>
+                    </button>
+                </div>
+                <div class="gateway-feature-modal-body connectors-runtime-modal-body">
+                    ${items.length > 0
+                        ? renderRuntimeToolsList(items, runtimeToolJobs)
+                        : `<p class="connectors-runtime-empty">${escapeHtml(t('feature.connectors.runtime_tools.empty'))}</p>`
+                    }
+                </div>
+            </div>
         </div>
     `;
 }
@@ -217,6 +247,168 @@ function renderConnectorCard(item) {
             </div>
         </article>
     `;
+}
+
+function renderRuntimeToolsGroup(runtimeToolsResponse, runtimeToolJobs) {
+    const items = getRuntimeToolItems(runtimeToolsResponse);
+    if (items.length === 0) {
+        return '';
+    }
+    const summary = summarizeRuntimeTools(items, runtimeToolJobs);
+    return `
+        <section class="connectors-section connectors-runtime-tools">
+            <h3>${escapeHtml(t('feature.connectors.runtime_tools.group_title'))}</h3>
+            <div class="connectors-card-grid connectors-runtime-card-grid">
+                <article class="connectors-card connectors-runtime-card" data-runtime-tools-card>
+                    <div class="connectors-card-main">
+                        <div class="connectors-runtime-card-icon" aria-hidden="true">CLI</div>
+                        <div class="connectors-card-title">
+                            <h4>${escapeHtml(t('feature.connectors.runtime_tools.title'))}</h4>
+                            <p>${escapeHtml(formatRuntimeToolSummary(summary))}</p>
+                        </div>
+                    </div>
+                    <div class="connectors-card-footer">
+                        <span class="connectors-card-status">
+                            <span class="connectors-status-dot is-${escapeHtml(summary.error > 0 ? 'error' : summary.missing > 0 ? 'needs_config' : 'connected')}"></span>
+                            ${escapeHtml(formatRuntimeToolCardStatus(summary))}
+                        </span>
+                        <button class="connectors-card-action" type="button" data-runtime-tools-open>
+                            ${escapeHtml(t('feature.connectors.runtime_tools.open'))}
+                        </button>
+                    </div>
+                </article>
+            </div>
+        </section>
+    `;
+}
+
+function renderRuntimeToolsList(items, runtimeToolJobs) {
+    return `
+        <div class="connectors-runtime-list">
+            ${items.map(item => renderRuntimeToolRow(item, runtimeToolJobs)).join('')}
+        </div>
+    `;
+}
+
+function renderRuntimeToolRow(item, runtimeToolJobs) {
+    const toolId = String(item?.tool_id || '').trim();
+    const status = String(item?.status || 'missing').trim();
+    const jobId = String(item?.download_job_id || '').trim();
+    const job = jobId && runtimeToolJobs && typeof runtimeToolJobs === 'object'
+        ? runtimeToolJobs[jobId]
+        : null;
+    const jobStatus = String(job?.status || '').trim();
+    const isBusy = status === 'downloading' || jobStatus === 'running' || jobStatus === 'queued';
+    const isReady = status === 'ready' || jobStatus === 'succeeded';
+    const path = String(job?.path || item?.path || '').trim();
+    const version = String(item?.version || '').trim();
+    const source = formatRuntimeToolSource(item?.path_source);
+    const detail = [version ? formatMessage('feature.connectors.runtime_tools.version', { version }) : '', source, path]
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .join(' · ');
+    return `
+        <article class="connectors-runtime-row" data-runtime-tool="${escapeHtml(toolId)}">
+            <div class="connectors-runtime-main">
+                <strong>${escapeHtml(item?.display_name || toolId)}</strong>
+                <span class="connectors-runtime-status is-${escapeHtml(isReady ? 'ready' : status)}">${escapeHtml(formatRuntimeToolStatus(isReady ? 'ready' : status))}</span>
+                ${detail ? `<p>${escapeHtml(detail)}</p>` : ''}
+                ${renderRuntimeToolProgress(job)}
+                ${job?.error_message || item?.error_message ? `<p class="connectors-runtime-error">${escapeHtml(job?.error_message || item?.error_message)}</p>` : ''}
+            </div>
+            <div class="connectors-runtime-actions">
+                ${isReady ? '' : `
+                    <button class="connectors-card-action" type="button" data-runtime-tool-download="${escapeHtml(toolId)}"${isBusy ? ' disabled' : ''}>
+                        ${escapeHtml(isBusy ? t('feature.connectors.runtime_tools.downloading') : t('feature.connectors.runtime_tools.download'))}
+                    </button>
+                `}
+            </div>
+        </article>
+    `;
+}
+
+function getRuntimeToolItems(runtimeToolsResponse) {
+    return Array.isArray(runtimeToolsResponse?.items)
+        ? runtimeToolsResponse.items
+        : [];
+}
+
+function summarizeRuntimeTools(items, runtimeToolJobs) {
+    return items.reduce((summary, item) => {
+        const jobId = String(item?.download_job_id || '').trim();
+        const job = jobId && runtimeToolJobs && typeof runtimeToolJobs === 'object'
+            ? runtimeToolJobs[jobId]
+            : null;
+        const jobStatus = String(job?.status || '').trim();
+        const status = jobStatus === 'running' || jobStatus === 'queued'
+            ? 'downloading'
+            : jobStatus === 'failed'
+                ? 'error'
+                : String(item?.status || 'missing').trim();
+        if (status === 'ready' || jobStatus === 'succeeded') {
+            summary.ready += 1;
+        } else if (status === 'downloading') {
+            summary.downloading += 1;
+        } else if (status === 'error') {
+            summary.error += 1;
+        } else {
+            summary.missing += 1;
+        }
+        return summary;
+    }, { ready: 0, missing: 0, downloading: 0, error: 0 });
+}
+
+function formatRuntimeToolSummary(summary) {
+    return formatMessage('feature.connectors.runtime_tools.summary', {
+        ready: summary.ready,
+        missing: summary.missing,
+        downloading: summary.downloading,
+        error: summary.error,
+    });
+}
+
+function formatRuntimeToolCardStatus(summary) {
+    if (summary.downloading > 0) {
+        return t('feature.connectors.runtime_tools.status.downloading');
+    }
+    if (summary.error > 0) {
+        return t('feature.connectors.runtime_tools.status.error');
+    }
+    if (summary.missing > 0) {
+        return t('feature.connectors.runtime_tools.status.missing');
+    }
+    return t('feature.connectors.runtime_tools.status.ready');
+}
+
+function renderRuntimeToolProgress(job) {
+    if (!job || typeof job !== 'object') {
+        return '';
+    }
+    const status = String(job.status || '').trim();
+    if (!['queued', 'running', 'failed'].includes(status)) {
+        return '';
+    }
+    const rawPercent = Number(job.progress_percent);
+    const percent = Number.isFinite(rawPercent) ? Math.max(0, Math.min(100, rawPercent)) : 10;
+    return `
+        <div class="connectors-runtime-progress" aria-label="${escapeHtml(t('feature.connectors.runtime_tools.progress'))}">
+            <span style="width:${escapeHtml(percent)}%"></span>
+        </div>
+        <p>${escapeHtml(job.message || t('feature.connectors.runtime_tools.downloading'))}</p>
+    `;
+}
+
+function formatRuntimeToolStatus(status) {
+    const value = String(status || '').trim();
+    return t(`feature.connectors.runtime_tools.status.${value}`) || value;
+}
+
+function formatRuntimeToolSource(value) {
+    const source = String(value || '').trim();
+    if (!source) {
+        return '';
+    }
+    return t(`feature.connectors.runtime_tools.source.${source}`) || source;
 }
 
 function formatCardActionLabel(provider, status, accountCount) {

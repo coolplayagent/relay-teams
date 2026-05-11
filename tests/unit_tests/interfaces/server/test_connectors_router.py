@@ -5,6 +5,17 @@ from datetime import UTC, datetime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from relay_teams.binary_tools import (
+    BinaryToolDownloadJob,
+    BinaryToolDownloadStatus,
+    BinaryToolId,
+    BinaryToolItem,
+    BinaryToolListResponse,
+    BinaryToolPathSource,
+    BinaryToolSourceKind,
+    BinaryToolStatus,
+    UnsupportedBinaryToolError,
+)
 from relay_teams.connector import (
     ConnectorAuthType,
     ConnectorCategory,
@@ -16,7 +27,10 @@ from relay_teams.connector import (
     ConnectorSummary,
     ConnectorTestResult,
 )
-from relay_teams.interfaces.server.deps import get_connector_service
+from relay_teams.interfaces.server.deps import (
+    get_binary_tool_service,
+    get_connector_service,
+)
 from relay_teams.interfaces.server.routers import connectors
 
 
@@ -70,6 +84,43 @@ class _FakeConnectorService:
         )
 
 
+class _FakeBinaryToolService:
+    def __init__(self) -> None:
+        self.job = BinaryToolDownloadJob(
+            job_id="bin_test",
+            tool_id=BinaryToolId.RIPGREP,
+            status=BinaryToolDownloadStatus.RUNNING,
+            progress_percent=25,
+            message="Downloading archive.",
+        )
+
+    async def list_tools(self) -> BinaryToolListResponse:
+        return BinaryToolListResponse(
+            items=(
+                BinaryToolItem(
+                    tool_id=BinaryToolId.RIPGREP,
+                    display_name="ripgrep",
+                    version="14.1.1",
+                    source_kind=BinaryToolSourceKind.GITHUB_RELEASE,
+                    status=BinaryToolStatus.READY,
+                    path_source=BinaryToolPathSource.MANAGED,
+                    path="/tmp/rg",
+                    executable_name="rg",
+                ),
+            )
+        )
+
+    async def start_download(self, tool_id: str) -> BinaryToolDownloadJob:
+        if tool_id != "rg":
+            raise UnsupportedBinaryToolError(tool_id)
+        return self.job
+
+    def get_download_job(self, job_id: str) -> BinaryToolDownloadJob:
+        if job_id != self.job.job_id:
+            raise KeyError(job_id)
+        return self.job
+
+
 def test_list_connectors_router_returns_summary_and_real_items() -> None:
     client = _client()
 
@@ -104,10 +155,50 @@ def test_test_connector_router_returns_404_for_unknown_connector() -> None:
     assert response.status_code == 404
 
 
+def test_list_runtime_tools_router_returns_items() -> None:
+    client = _client()
+
+    response = client.get("/api/connectors/runtime-tools")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["items"][0]["tool_id"] == "rg"
+    assert payload["items"][0]["status"] == "ready"
+
+
+def test_download_runtime_tool_router_returns_job() -> None:
+    client = _client()
+
+    response = client.post("/api/connectors/runtime-tools/rg:download")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job_id"] == "bin_test"
+    assert payload["progress_percent"] == 25
+
+
+def test_download_runtime_tool_router_returns_404_for_unknown_tool() -> None:
+    client = _client()
+
+    response = client.post("/api/connectors/runtime-tools/nope:download")
+
+    assert response.status_code == 404
+
+
+def test_get_runtime_tool_download_router_returns_job() -> None:
+    client = _client()
+
+    response = client.get("/api/connectors/runtime-tools/downloads/bin_test")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+
+
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(connectors.router, prefix="/api")
     app.dependency_overrides[get_connector_service] = _FakeConnectorService
+    app.dependency_overrides[get_binary_tool_service] = _FakeBinaryToolService
     return TestClient(app)
 
 

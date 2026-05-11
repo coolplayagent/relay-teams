@@ -3254,6 +3254,57 @@ subscription runtime state. WeChat returns account running, login, and recent
 error state. Xiaoluban checks token configuration, listener state, and IM
 workspace configuration. Unknown connector ids return `404`.
 
+### `GET /connectors/runtime-tools`
+
+Lists project-managed runtime CLI tools shown on the Connectors page. This
+endpoint only reports status and never starts a download or installation.
+
+Response fields:
+- `items[]`
+  - `tool_id`: `rg`, `gh`, or `clawhub`
+  - `display_name`
+  - `version`, when the executable can be probed
+  - `source_kind`: `github_release` or `npm_global`
+  - `status`: `ready`, `missing`, `downloading`, or `error`
+  - `path_source`: `managed`, `system`, or `npm_global`
+  - `path`
+  - `executable_name`
+  - `download_job_id`, when a download is currently running
+  - `error_message`
+
+Notes:
+- `rg` and `gh` are downloaded from their pinned GitHub release assets into the
+  app bin directory when manually downloaded or first needed by runtime paths.
+- `clawhub` is installed with npm and reports system or npm global paths.
+- System tools such as `git`, `npm`, and shell binaries are intentionally not
+  listed because the project probes them but does not download them.
+
+### `POST /connectors/runtime-tools/{tool_id}:download`
+
+Starts a manual runtime tool download or installation, or returns the existing
+running job for the same tool. If the tool is already available, the response is
+an immediately completed job. Unknown tool ids return `404`.
+
+Response fields:
+- `job_id`
+- `tool_id`
+- `status`: `queued`, `running`, `succeeded`, or `failed`
+- `started_at`
+- `updated_at`
+- `downloaded_bytes`
+- `total_bytes`
+- `progress_percent`
+- `message`
+- `path`
+- `error_message`
+
+### `GET /connectors/runtime-tools/downloads/{job_id}`
+
+Returns the latest status for a runtime tool download job. Direct release
+downloads report byte progress when the server supplies `Content-Length`.
+ClawHub npm installs report stage-based progress because npm does not provide a
+stable byte count. Unknown job ids return `404`.
+
 ## Gateway APIs
 
 ### `GET /gateway/feishu/accounts`

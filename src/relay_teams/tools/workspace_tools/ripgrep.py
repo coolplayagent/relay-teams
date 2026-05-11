@@ -3,40 +3,38 @@ from __future__ import annotations
 
 import asyncio
 import io
-import os
-import platform
 import shutil
 import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
 
+from relay_teams.binary_tools import (
+    BinaryToolId,
+    BinaryToolService,
+)
+from relay_teams.binary_tools.service import (
+    RIPGREP_PLATFORM_MAP,
+    RIPGREP_VERSION,
+    get_platform_key,
+)
 from relay_teams.logger import get_logger
-from relay_teams.net.clients import create_async_http_client
 from relay_teams.paths import get_app_bin_dir
 from relay_teams.tools.workspace_tools.ripgrep_errors import (
-    DownloadFailedError,
     ExtractionFailedError,
     RipgrepExecutionError,
     RipgrepNotFoundError,
-    UnsupportedPlatformError,
 )
 from relay_teams.tools.workspace_tools.ripgrep_types import GrepMatch, GrepResult
 
 LOGGER = get_logger(__name__)
 
-VERSION = "14.1.1"
+VERSION = RIPGREP_VERSION
 BIN_DIR: Path | None = None
 _rg_path_cache: Path | None = None
 _rg_path_lock = asyncio.Lock()
 
-PLATFORM_MAP = {
-    "arm64-darwin": {"platform": "aarch64-apple-darwin", "extension": "tar.gz"},
-    "arm64-linux": {"platform": "aarch64-unknown-linux-gnu", "extension": "tar.gz"},
-    "x64-darwin": {"platform": "x86_64-apple-darwin", "extension": "tar.gz"},
-    "x64-linux": {"platform": "x86_64-unknown-linux-musl", "extension": "tar.gz"},
-    "x64-windows": {"platform": "x86_64-pc-windows-msvc", "extension": "zip"},
-}
+PLATFORM_MAP = RIPGREP_PLATFORM_MAP
 
 _ARCH_ALIASES = {
     "x86_64": "x64",
@@ -54,19 +52,7 @@ _SYSTEM_ALIASES = {
 
 
 def _get_platform_key() -> str:
-    raw_arch = platform.machine().strip().lower()
-    raw_system = platform.system().strip().lower()
-
-    arch = _ARCH_ALIASES.get(raw_arch, raw_arch)
-    system = _SYSTEM_ALIASES.get(raw_system, raw_system)
-    if (
-        system.startswith("mingw")
-        or system.startswith("msys")
-        or system.startswith("cygwin")
-    ):
-        system = "windows"
-
-    return f"{arch}-{system}"
+    return get_platform_key()
 
 
 async def get_rg_path() -> Path:
@@ -85,8 +71,7 @@ async def get_rg_path() -> Path:
 
     bin_dir = BIN_DIR if BIN_DIR is not None else get_app_bin_dir()
     bin_dir.mkdir(parents=True, exist_ok=True)
-    extension = ".exe" if os.name == "nt" else ""
-    local_path = bin_dir / f"rg{extension}"
+    local_path = _build_binary_tool_service().managed_target_path(BinaryToolId.RIPGREP)
 
     if local_path.is_file():
         _rg_path_cache = local_path
@@ -105,7 +90,6 @@ async def get_rg_path() -> Path:
         except Exception as exc:
             LOGGER.warning("Failed to download bundled ripgrep: %s", exc)
 
-    # Fall back to system rg only when the bundled binary is unavailable.
     system_rg = shutil.which("rg")
     if system_rg:
         system_path = Path(system_rg)
@@ -123,29 +107,10 @@ def clear_rg_path_cache() -> None:
 
 
 async def _download_rg(target: Path) -> None:
-    key = _get_platform_key()
-    config = PLATFORM_MAP.get(key)
-    if config is None:
-        raise UnsupportedPlatformError(key)
-
-    filename = f"ripgrep-{VERSION}-{config['platform']}.{config['extension']}"
-    url = (
-        f"https://github.com/BurntSushi/ripgrep/releases/download/{VERSION}/{filename}"
+    await _build_binary_tool_service().download_tool_to_path(
+        BinaryToolId.RIPGREP,
+        target,
     )
-
-    async with create_async_http_client(follow_redirects=True) as client:
-        response = await client.get(url)
-        if response.status_code != 200:
-            raise DownloadFailedError(url, response.status_code)
-        content = response.content
-
-    if config["extension"] == "tar.gz":
-        _extract_tarball(content, target)
-    else:
-        _extract_zip(content, target)
-
-    if os.name != "nt":
-        os.chmod(target, 0o755)  # nosec B103 - executable permission needed for downloaded binary
 
 
 def _extract_tarball(content: bytes, target: Path) -> None:
@@ -167,6 +132,10 @@ def _extract_zip(content: bytes, target: Path) -> None:
                 extracted.replace(target)
                 return
         raise ExtractionFailedError("rg.exe not found in zip")
+
+
+def _build_binary_tool_service() -> BinaryToolService:
+    return BinaryToolService(bin_dir=BIN_DIR)
 
 
 async def grep_search(
