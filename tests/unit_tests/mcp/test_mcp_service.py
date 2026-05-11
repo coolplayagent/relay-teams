@@ -1454,6 +1454,52 @@ def test_service_raises_when_config_manager_is_unavailable() -> None:
             "filesystem",
             McpServerEnabledUpdateRequest(enabled=False),
         )
+    with pytest.raises(RuntimeError, match="MCP config manager is not available"):
+        service.delete_server("filesystem")
+
+
+def test_delete_server_rejects_plugin_managed_server(tmp_path: Path) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    plugin_spec = McpServerSpec(
+        name="quality:docs",
+        config={"mcpServers": {"quality:docs": {"command": "uvx"}}},
+        server_config={"command": "uvx"},
+        source=McpConfigScope.PLUGIN,
+    )
+    service = McpService(
+        registry=manager.load_registry(extra_specs=(plugin_spec,)),
+        config_manager=manager,
+        extra_specs=(plugin_spec,),
+    )
+
+    with pytest.raises(ValueError, match="managed by plugin"):
+        service.delete_server("quality:docs")
+
+
+def test_delete_server_returns_disabled_summary_for_disabled_server(
+    tmp_path: Path,
+) -> None:
+    from relay_teams.mcp.mcp_config_manager import McpConfigManager
+
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(
+        '{"mcpServers":{"disabled-docs":{"command":"uvx","enabled":false}}}',
+        encoding="utf-8",
+    )
+    manager = McpConfigManager(app_config_dir=app_config_dir)
+    service = McpService(registry=manager.load_registry(), config_manager=manager)
+
+    summary = service.delete_server("disabled-docs")
+
+    assert summary.name == "disabled-docs"
+    assert summary.enabled is False
+    assert summary.discovery_status == McpDiscoveryStatus.DISABLED
 
 
 def test_registry_resolve_server_names_can_preserve_wildcard() -> None:
