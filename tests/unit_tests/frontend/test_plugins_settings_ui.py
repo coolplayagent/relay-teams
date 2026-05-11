@@ -22,13 +22,101 @@ def test_plugins_settings_marketplace_update_uses_version_select() -> None:
     ).read_text(encoding="utf-8")
 
     assert "async function promptAndUpdateMarketplacePlugin(plugin)" in source
-    assert "await fetchPluginMarketplace(plugin.source.marketplace)" in source
+    assert "pluginMarketplaceRequestOptions(plugin)" in source
     assert "type: 'select'" in source
     assert "settings.plugins.version_latest" in source
     assert "await updatePlugin(plugin.name, {" in source
     assert "function renderMarketplaceVersionDetails(version)" in source
     assert "settings.plugins.marketplace_version_details" in source
     assert "source.ref" in source
+
+
+def test_plugins_settings_marketplace_update_excludes_unsupported_versions(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={
+            "plugins": [
+                {
+                    "name": "quality",
+                    "version": "1.0.0",
+                    "scope": "user",
+                    "enabled": True,
+                    "source": {
+                        "kind": "marketplace",
+                        "value": "quality",
+                        "marketplace": "claude-plugins-official",
+                        "marketplace_provider": "claude",
+                        "marketplace_source": "",
+                    },
+                    "manifest": {},
+                    "user_config": {},
+                    "component_counts": {},
+                }
+            ],
+            "diagnostics": [],
+        },
+        marketplace={
+            "plugins": [
+                {
+                    "name": "quality",
+                    "latest": "2.0.0",
+                    "versions": [
+                        {
+                            "version": "1.0.0",
+                            "source": {
+                                "kind": "local",
+                                "value": "C:/plugins/quality",
+                            },
+                        },
+                        {
+                            "version": "2.0.0",
+                            "unsupported_reason": "npm is not supported",
+                            "source": {
+                                "kind": "unsupported",
+                                "value": "@example/plugin",
+                            },
+                        },
+                    ],
+                }
+            ]
+        },
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+globalThis.__dialogResult = { version: "1.0.0" };
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+await root.dispatch("click", root.findButton("update", "user:quality"));
+await flush();
+
+console.log(JSON.stringify({
+    dialogOptions: globalThis.__dialogPayloads[0].fields[0].options,
+    marketplaceRequest: globalThis.__marketplaceRequests[0],
+    updatePayload: globalThis.__updatePayloads[0],
+}));
+""".strip(),
+    )
+
+    assert payload["dialogOptions"] == [
+        {"value": "1.0.0", "label": "1.0.0"},
+    ]
+    assert payload["marketplaceRequest"] == {
+        "marketplacePath": "claude-plugins-official",
+        "options": {
+            "marketplace_provider": "claude",
+            "marketplace_source": "",
+            "marketplace_ref": "",
+            "refresh": True,
+        },
+    }
+    assert payload["updatePayload"] == {
+        "name": "quality",
+        "payload": {"scope": "user", "version": "1.0.0"},
+    }
 
 
 def test_plugins_settings_config_fields_preserve_declared_types() -> None:
@@ -179,12 +267,14 @@ console.log(JSON.stringify({ localHtml, gitHtml, marketplaceHtml }));
     assert 'name="marketplace"' not in str(payload["localHtml"])
     assert 'name="version"' not in str(payload["localHtml"])
     assert 'name="enabled"' not in str(payload["localHtml"])
+    assert 'data-plugin-action="validate-install-source"' in str(payload["localHtml"])
     assert "settings.plugins.marketplace_path" not in str(payload["gitHtml"])
     assert "settings.plugins.version" not in str(payload["gitHtml"])
     assert "settings.plugins.enabled_after_install" not in str(payload["gitHtml"])
     assert 'name="marketplace"' not in str(payload["gitHtml"])
     assert 'name="version"' not in str(payload["gitHtml"])
     assert 'name="enabled"' not in str(payload["gitHtml"])
+    assert 'data-plugin-action="validate-install-source"' in str(payload["gitHtml"])
     assert "settings.plugins.git_ref" in str(payload["gitHtml"])
     assert "settings.plugins.marketplace_path" in str(payload["marketplaceHtml"])
     assert "settings.plugins.version" in str(payload["marketplaceHtml"])
@@ -194,6 +284,9 @@ console.log(JSON.stringify({ localHtml, gitHtml, marketplaceHtml }));
     assert 'name="marketplace"' in str(payload["marketplaceHtml"])
     assert 'name="version"' in str(payload["marketplaceHtml"])
     assert 'name="enabled"' not in str(payload["marketplaceHtml"])
+    assert 'data-plugin-action="validate-install-source"' not in str(
+        payload["marketplaceHtml"]
+    )
 
 
 def test_plugins_settings_install_submits_local_and_git_payloads(
@@ -324,6 +417,197 @@ console.log(JSON.stringify({
     }
     assert "v1.2.0" in str(payload["htmlBeforeSubmit"])
     assert any(item.get("tone") == "success" for item in notifications)
+
+
+def test_plugins_settings_claude_marketplace_submits_provider_payload(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={"plugins": [], "diagnostics": []},
+        marketplace={
+            "plugins": [
+                {
+                    "name": "github",
+                    "latest": "1.0.0",
+                    "versions": [
+                        {
+                            "version": "1.0.0",
+                            "source": {
+                                "kind": "git",
+                                "value": "https://github.com/anthropics/github.git",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+document.getElementById("install-plugin-btn").onclick();
+let form = document.getElementById("plugin-install-form");
+form.elements.source_kind.value = "marketplace";
+await root.dispatch("change", form.elements.source_kind);
+form = document.getElementById("plugin-install-form");
+form.elements.marketplace_provider.value = "claude";
+await root.dispatch("change", form.elements.marketplace_provider);
+
+form = document.getElementById("plugin-install-form");
+await root.dispatch("click", root.findButton("load-marketplace"));
+await flush();
+
+form = document.getElementById("plugin-install-form");
+const htmlBeforeSubmit = root.innerHTML;
+await root.dispatch("submit", form);
+await flush();
+
+console.log(JSON.stringify({
+    installPayload: globalThis.__installPayloads[0],
+    marketplaceRequest: globalThis.__marketplaceRequests[0],
+    htmlBeforeSubmit,
+}));
+""".strip(),
+    )
+
+    assert payload["marketplaceRequest"] == {
+        "marketplacePath": "claude-plugins-official",
+        "options": {
+            "marketplace_provider": "claude",
+            "marketplace_source": "anthropics/claude-plugins-official",
+            "marketplace_ref": "",
+            "refresh": True,
+        },
+    }
+    assert payload["installPayload"] == {
+        "source": "github",
+        "scope": "user",
+        "enabled": True,
+        "marketplace": "claude-plugins-official",
+        "version": None,
+        "marketplace_provider": "claude",
+        "marketplace_source": "anthropics/claude-plugins-official",
+        "marketplace_ref": "",
+    }
+    assert "settings.plugins.source_type_claude_marketplace" not in str(
+        payload["htmlBeforeSubmit"]
+    )
+    assert "settings.plugins.marketplace_provider" in str(payload["htmlBeforeSubmit"])
+    assert "settings.plugins.marketplace_source" in str(payload["htmlBeforeSubmit"])
+
+
+def test_plugins_settings_blocks_unsupported_marketplace_source(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={"plugins": [], "diagnostics": []},
+        marketplace={
+            "plugins": [
+                {
+                    "name": "npm-plugin",
+                    "latest": "1.0.0",
+                    "versions": [
+                        {
+                            "version": "1.0.0",
+                            "unsupported_reason": "npm is not supported",
+                            "source": {
+                                "kind": "unsupported",
+                                "value": "@example/plugin",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+document.getElementById("install-plugin-btn").onclick();
+let form = document.getElementById("plugin-install-form");
+form.elements.source_kind.value = "marketplace";
+await root.dispatch("change", form.elements.source_kind);
+form = document.getElementById("plugin-install-form");
+form.elements.marketplace_provider.value = "claude";
+await root.dispatch("change", form.elements.marketplace_provider);
+
+form = document.getElementById("plugin-install-form");
+await root.dispatch("click", root.findButton("load-marketplace"));
+await flush();
+
+form = document.getElementById("plugin-install-form");
+const htmlBeforeSubmit = root.innerHTML;
+await root.dispatch("submit", form);
+await flush();
+
+console.log(JSON.stringify({
+    installPayloads: globalThis.__installPayloads,
+    notifications: globalThis.__notifications,
+    htmlBeforeSubmit,
+}));
+""".strip(),
+    )
+
+    assert payload["installPayloads"] == []
+    assert "npm is not supported" in str(payload["htmlBeforeSubmit"])
+    assert "settings.plugins.unsupported" in str(payload["htmlBeforeSubmit"])
+    assert any(
+        item.get("tone") == "warning" and item.get("message") == "npm is not supported"
+        for item in cast(list[dict[str, JsonValue]], payload["notifications"])
+    )
+
+
+def test_plugins_settings_loads_claude_marketplace_with_refresh(
+    tmp_path: Path,
+) -> None:
+    payload = _run_plugins_settings_script(
+        tmp_path=tmp_path,
+        fetch_registry={"plugins": [], "diagnostics": []},
+        marketplace={"plugins": []},
+        runner_source="""
+import { bindPluginsSettingsHandlers, loadPluginsSettingsPanel } from "./pluginsSettings.mjs";
+
+const root = installGlobals();
+bindPluginsSettingsHandlers();
+await loadPluginsSettingsPanel();
+
+document.getElementById("install-plugin-btn").onclick();
+let form = document.getElementById("plugin-install-form");
+form.elements.source_kind.value = "marketplace";
+await root.dispatch("change", form.elements.source_kind);
+form = document.getElementById("plugin-install-form");
+form.elements.marketplace_provider.value = "claude";
+await root.dispatch("change", form.elements.marketplace_provider);
+
+form = document.getElementById("plugin-install-form");
+await root.dispatch("click", root.findButton("load-marketplace"));
+await flush();
+
+console.log(JSON.stringify({
+    marketplaceRequest: globalThis.__marketplaceRequests[0],
+    html: root.innerHTML,
+}));
+""".strip(),
+    )
+
+    assert payload["marketplaceRequest"] == {
+        "marketplacePath": "claude-plugins-official",
+        "options": {
+            "marketplace_provider": "claude",
+            "marketplace_source": "anthropics/claude-plugins-official",
+            "marketplace_ref": "",
+            "refresh": True,
+        },
+    }
+    assert "settings.plugins.marketplace_ref" not in str(payload["html"])
 
 
 def test_plugins_settings_marketplace_without_latest_uses_semantic_version_details(
@@ -1003,7 +1287,8 @@ export async function fetchPluginsRuntime() {
     return registry;
 }
 
-export async function fetchPluginMarketplace() {
+export async function fetchPluginMarketplace(marketplacePath, options = {}) {
+    globalThis.__marketplaceRequests.push({ marketplacePath, options });
     return marketplace;
 }
 
@@ -1034,7 +1319,8 @@ export async function validatePlugin() {
     )
     mock_feedback_path.write_text(
         """
-export async function showFormDialog() {
+export async function showFormDialog(payload) {
+    globalThis.__dialogPayloads.push(payload);
     return globalThis.__dialogResult;
 }
 
@@ -1243,8 +1529,10 @@ function installGlobals() {{
     root.__elements = elements;
     globalThis.__notifications = [];
     globalThis.__installPayloads = [];
+    globalThis.__marketplaceRequests = [];
     globalThis.__configurePayloads = [];
     globalThis.__updatePayloads = [];
+    globalThis.__dialogPayloads = [];
     globalThis.__dialogResult = null;
     globalThis.__textInputResult = null;
     return root;

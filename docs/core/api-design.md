@@ -476,20 +476,27 @@ settings schema, and JSON-compatible plugin component configs.
 
 ### `POST /system/configs/plugins/marketplace`
 
-Loads a local marketplace JSON index so clients can browse available plugins and
-versions before installing.
+Loads a marketplace index so clients can browse available plugins and versions
+before installing. `marketplace_provider` defaults to `local_json`; `claude`
+loads a Claude official marketplace repository or local checkout.
 
 Request:
 
 ```json
 {
-  "marketplace": "C:/plugins/marketplace.json"
+  "marketplace": "C:/plugins/marketplace.json",
+  "marketplace_provider": "local_json",
+  "marketplace_source": "",
+  "marketplace_ref": "",
+  "refresh": false
 }
 ```
 
 The response is a marketplace index with plugin names, descriptions, latest
-versions, and version entries. The frontend uses this endpoint instead of reading
-marketplace files directly.
+versions, and version entries. Version entries may include `warnings` and
+`unsupported_reason`; unsupported versions remain visible for browsing but cannot
+be installed. The frontend uses this endpoint instead of reading marketplace
+files directly.
 
 ### `POST /system/configs/plugins:install`
 
@@ -505,6 +512,9 @@ Request:
   "source_kind": "local",
   "source_ref": "",
   "marketplace": null,
+  "marketplace_provider": "local_json",
+  "marketplace_source": "",
+  "marketplace_ref": "",
   "version": null
 }
 ```
@@ -515,10 +525,24 @@ server infers git sources from common git URL forms. For direct git installs,
 Persisted git sources reuse the same `source_ref` on update: commit and tag refs
 therefore remain pinned, while an empty ref or a branch can resolve to newer
 source content on later updates.
-`source` may also be a marketplace plugin name when `marketplace` points at a
-marketplace JSON file. Marketplace version entries may include `sha256`,
-`dependencies`, and git source `ref`; when present, the backend verifies the
-materialized source and installed copy before updating plugin state.
+`source` may also be a marketplace plugin name when `marketplace` identifies a
+marketplace. For local JSON marketplaces, `marketplace` is the JSON file path.
+For Claude marketplaces, `marketplace` is the marketplace name and
+`marketplace_source` is a Git URL, GitHub `owner/repo` shorthand, or local
+checkout path. Marketplace version entries may include `sha256`, `dependencies`,
+and git source `ref` or `sha`; when present, the backend verifies the
+materialized source and installed copy before updating plugin state. Claude
+marketplace `npm` sources are currently reported as unsupported instead of being
+installed. Git-backed marketplace loads and installs reuse the saved proxy
+environment when launching git. Claude agent front matter is normalized during
+install so official agent files can be loaded as plugin roles; Claude-specific
+tool names are not mapped to Relay tools.
+Use `marketplace_ref` to pin the marketplace repository to a branch, tag, or
+commit. Use `refresh: true` on marketplace browsing requests to discard the
+cached checkout and fetch the marketplace again. The manual verification script
+`scripts/verify_claude_marketplace_plugins.py` can parse the official Claude
+marketplace and optionally install every listed plugin into a temporary config
+directory.
 
 ### `POST /system/configs/plugins/{name}:configure`
 

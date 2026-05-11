@@ -30,7 +30,9 @@ class PluginScope(str, Enum):
 class PluginInstallSourceKind(str, Enum):
     LOCAL = "local"
     GIT = "git"
+    GIT_SUBDIR = "git_subdir"
     MARKETPLACE = "marketplace"
+    UNSUPPORTED = "unsupported"
 
 
 class PluginDiagnosticSeverity(str, Enum):
@@ -189,7 +191,13 @@ class PluginInstallSource(BaseModel):
     kind: PluginInstallSourceKind = PluginInstallSourceKind.LOCAL
     value: str
     ref: str = ""
+    subdir: str = ""
+    sha: str = ""
+    adapter: str = ""
     marketplace: str = ""
+    marketplace_provider: str = ""
+    marketplace_source: str = ""
+    marketplace_ref: str = ""
     requested_version: str | None = None
 
 

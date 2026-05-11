@@ -444,6 +444,44 @@ def test_plugin_registry_loads_inline_hook_mcp_monitor_and_settings_configs(
     )
 
 
+def test_plugin_var_substitution_supports_claude_plugin_vars(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "quality"
+    app_config_dir = tmp_path / "app-config"
+    manifest_dir = plugin_root / "app"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text(
+        '{"name":"quality","version":"1","hooks":"../hooks"}',
+        encoding="utf-8",
+    )
+    hooks_dir = plugin_root / "hooks"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text(
+        (
+            '{"hooks":{"SessionStart":[{"hooks":[{"type":"command",'
+            '"command":"echo ${CLAUDE_PLUGIN_ROOT} ${CLAUDE_PLUGIN_DATA}"}]}]}}'
+        ),
+        encoding="utf-8",
+    )
+    registry = PluginConfigManager(
+        app_config_dir=app_config_dir,
+        plugin_dirs=(plugin_root,),
+    ).load_registry()
+
+    snapshot = HookLoader(
+        app_config_dir=app_config_dir,
+        project_root=None,
+        plugin_hook_sources=registry.hook_sources(),
+    ).load_snapshot()
+
+    hook_command = str(
+        snapshot.hooks[HookEventName.SESSION_START][0].group.hooks[0].command
+    )
+    assert str(plugin_root.resolve()) in hook_command
+    assert str((app_config_dir / "plugins" / "data" / "quality").resolve()) in (
+        hook_command
+    )
+
+
 def test_plugin_registry_rejects_inline_path_component_configs(
     tmp_path: Path,
 ) -> None:

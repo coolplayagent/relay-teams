@@ -23,6 +23,10 @@ from relay_teams.plugins.manifest_loader import (
     reload_plugin_settings_source,
 )
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
+from relay_teams.plugins.marketplace_models import (
+    PluginMarketplaceProviderKind,
+    PluginMarketplaceSource,
+)
 from relay_teams.plugins.plugin_models import (
     PluginComponentCounts,
     PluginComponentSource,
@@ -247,15 +251,40 @@ class PluginConfigManager:
         scope: PluginScope,
         version: str | None = None,
         enabled: bool = True,
+        marketplace_provider: PluginMarketplaceProviderKind = (
+            PluginMarketplaceProviderKind.LOCAL_JSON
+        ),
+        marketplace_source: str = "",
+        marketplace_ref: str = "",
     ) -> PluginStateRecord:
-        marketplace_path = marketplace.expanduser().resolve()
-        index = PluginMarketplaceService().load_index(marketplace_path)
+        marketplace_reference = (
+            str(marketplace.expanduser().resolve())
+            if marketplace_provider == PluginMarketplaceProviderKind.LOCAL_JSON
+            else str(marketplace)
+        )
+        marketplace_source_reference = self._marketplace_source_reference(
+            provider=marketplace_provider,
+            marketplace_source=marketplace_source,
+        )
+        source = self._marketplace_source(
+            provider=marketplace_provider,
+            marketplace=marketplace_reference,
+            marketplace_source=marketplace_source_reference,
+            marketplace_ref=marketplace_ref,
+        )
+        index = PluginMarketplaceService().load_provider_index(
+            source=source,
+            app_config_dir=self._app_config_dir,
+        )
         entry = index.get_plugin(name)
         selected = entry.selected_version(version)
         persisted_source = PluginInstallSource(
             kind=PluginInstallSourceKind.MARKETPLACE,
             value=entry.name,
-            marketplace=str(marketplace_path),
+            marketplace=marketplace_reference,
+            marketplace_provider=source.provider.value,
+            marketplace_source=source.value,
+            marketplace_ref=source.ref,
             requested_version=selected.version,
         )
         return self.install_from_source(
@@ -1397,8 +1426,8 @@ class PluginConfigManager:
             )
         )
 
-    @staticmethod
     def _resolve_update_install_source(
+        self,
         *,
         source: PluginInstallSource,
         version: str | None,
@@ -1408,7 +1437,17 @@ class PluginConfigManager:
                 raise ValueError(
                     "Marketplace plugin source is missing marketplace path"
                 )
-            index = PluginMarketplaceService().load_index(Path(source.marketplace))
+            provider = _marketplace_provider_from_string(source.marketplace_provider)
+            index = PluginMarketplaceService().load_provider_index(
+                source=self._marketplace_source(
+                    provider=provider,
+                    marketplace=source.marketplace,
+                    marketplace_source=source.marketplace_source,
+                    marketplace_ref=source.marketplace_ref,
+                    refresh=provider == PluginMarketplaceProviderKind.CLAUDE,
+                ),
+                app_config_dir=self._app_config_dir,
+            )
             selected = index.get_plugin(source.value).selected_version(version)
             return selected.source, selected.sha256, selected.dependencies
         if version is not None:
@@ -1468,7 +1507,19 @@ class PluginConfigManager:
 
     def _materialize_validation_source(self, source: PluginInstallSource) -> Path:
         if source.kind == PluginInstallSourceKind.LOCAL:
-            return Path(source.value).expanduser().resolve()
+            if not source.adapter.strip():
+                return Path(source.value).expanduser().resolve()
+            cache_root = self._app_config_dir / "plugins" / "cache" / "validation"
+            cache_root.mkdir(parents=True, exist_ok=True)
+            target_dir = cache_root / self._cache_dir_name(source.value)
+            if target_dir.exists():
+                self._remove_directory_under(parent=cache_root, target=target_dir)
+            install_plugin_source(
+                source=source,
+                app_config_dir=self._app_config_dir,
+                target_dir=target_dir,
+            )
+            return target_dir
         if source.kind == PluginInstallSourceKind.GIT:
             cache_root = self._app_config_dir / "plugins" / "cache" / "validation"
             cache_root.mkdir(parents=True, exist_ok=True)
@@ -1481,9 +1532,67 @@ class PluginConfigManager:
                 target_dir=target_dir,
             )
             return target_dir
+        if source.kind == PluginInstallSourceKind.GIT_SUBDIR:
+            cache_root = self._app_config_dir / "plugins" / "cache" / "validation"
+            cache_root.mkdir(parents=True, exist_ok=True)
+            target_dir = cache_root / self._cache_dir_name(
+                f"{source.value}:{source.subdir}"
+            )
+            if target_dir.exists():
+                self._remove_directory_under(parent=cache_root, target=target_dir)
+            install_plugin_source(
+                source=source,
+                app_config_dir=self._app_config_dir,
+                target_dir=target_dir,
+            )
+            return target_dir
+        if source.kind == PluginInstallSourceKind.UNSUPPORTED:
+            raise ValueError(f"Unsupported plugin source kind: {source.value}")
         raise ValueError(
             f"Unsupported plugin source for validation: {source.kind.value}"
         )
+
+    @staticmethod
+    def _marketplace_source(
+        *,
+        provider: PluginMarketplaceProviderKind,
+        marketplace: str,
+        marketplace_source: str,
+        marketplace_ref: str = "",
+        refresh: bool = False,
+    ) -> PluginMarketplaceSource:
+        if provider == PluginMarketplaceProviderKind.LOCAL_JSON:
+            return PluginMarketplaceSource(
+                provider=provider,
+                name=Path(marketplace).stem,
+                value=marketplace,
+            )
+        return PluginMarketplaceSource(
+            provider=provider,
+            name=marketplace,
+            value=PluginConfigManager._marketplace_source_reference(
+                provider=provider,
+                marketplace_source=marketplace_source,
+            ),
+            ref=marketplace_ref,
+            refresh=refresh,
+        )
+
+    @staticmethod
+    def _marketplace_source_reference(
+        *,
+        provider: PluginMarketplaceProviderKind,
+        marketplace_source: str,
+    ) -> str:
+        if provider != PluginMarketplaceProviderKind.CLAUDE:
+            return marketplace_source
+        normalized = marketplace_source.strip()
+        if not normalized:
+            return ""
+        local_path = Path(normalized).expanduser()
+        if local_path.exists():
+            return str(local_path.resolve())
+        return normalized
 
     def _dependency_state_for_mutation(self) -> PluginStateFile:
         runtime_records_by_name = {
@@ -1609,7 +1718,7 @@ class PluginConfigManager:
     @staticmethod
     def _cache_dir_name(value: str) -> str:
         readable = "".join(char if char.isalnum() else "_" for char in value).strip("_")
-        prefix = readable[:48].strip("_") or "git"
+        prefix = readable[:16].strip("_") or "git"
         digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
         return f"{prefix}_{digest}"
 
@@ -1624,6 +1733,16 @@ def _plugin_dirs_from_env() -> tuple[Path, ...]:
         if normalized:
             paths.append(Path(normalized))
     return tuple(paths)
+
+
+def _marketplace_provider_from_string(value: str) -> PluginMarketplaceProviderKind:
+    normalized = value.strip()
+    if not normalized:
+        return PluginMarketplaceProviderKind.LOCAL_JSON
+    try:
+        return PluginMarketplaceProviderKind(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported plugin marketplace provider: {value}") from exc
 
 
 def _sources_with_user_config(

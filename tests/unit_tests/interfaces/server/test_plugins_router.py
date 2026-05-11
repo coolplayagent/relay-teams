@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import JsonValue
+import pytest
 
 from relay_teams.interfaces.server.deps import get_container
 from relay_teams.interfaces.server.routers import system
@@ -22,6 +23,7 @@ from relay_teams.plugins.plugin_models import (
     PluginInstallSource,
     PluginInstallSourceKind,
 )
+from relay_teams.plugins.marketplace_models import PluginMarketplaceProviderKind
 
 
 class _FakePluginConfigManager:
@@ -30,7 +32,17 @@ class _FakePluginConfigManager:
         self.installed: tuple[str, PluginScope, bool] | None = None
         self.git_installed: tuple[str, PluginScope, str, bool] | None = None
         self.marketplace_installed: (
-            tuple[str, str, PluginScope, str | None, bool] | None
+            tuple[
+                str,
+                str,
+                PluginScope,
+                str | None,
+                bool,
+                PluginMarketplaceProviderKind | str,
+                str,
+                str,
+            ]
+            | None
         ) = None
         self.uninstalled: tuple[str, PluginScope, bool] | None = None
         self.enabled: tuple[str, PluginScope, bool] | None = None
@@ -70,10 +82,22 @@ class _FakePluginConfigManager:
         scope: PluginScope,
         version: str | None = None,
         enabled: bool = True,
+        marketplace_provider: PluginMarketplaceProviderKind | str = "local_json",
+        marketplace_source: str = "",
+        marketplace_ref: str = "",
     ) -> PluginStateRecord:
         if self.marketplace_error is not None:
             raise self.marketplace_error
-        self.marketplace_installed = (name, str(marketplace), scope, version, enabled)
+        self.marketplace_installed = (
+            name,
+            str(marketplace),
+            scope,
+            version,
+            enabled,
+            marketplace_provider,
+            marketplace_source,
+            marketplace_ref,
+        )
         return _plugin_state_record(self.root_dir, scope=scope, enabled=enabled)
 
     def validate_plugin(
@@ -140,6 +164,7 @@ class _FakePluginConfigManager:
 
 class _FakeContainer:
     def __init__(self, root_dir: Path) -> None:
+        self.config_dir = root_dir.parent
         self.plugin_config_manager = _FakePluginConfigManager(root_dir)
         self.plugin_registry = PluginRegistry()
         self.reload_count = 0
@@ -209,6 +234,9 @@ def test_plugin_install_api_supports_git_and_marketplace_sources(
         PluginScope.PROJECT,
         "2.0.0",
         True,
+        PluginMarketplaceProviderKind.LOCAL_JSON,
+        "",
+        "",
     )
     assert container.reload_count == 2
 
@@ -275,6 +303,55 @@ def test_plugin_validate_and_marketplace_api(tmp_path: Path) -> None:
     assert validate_response.json()["diagnostics"][0]["message"] == "validated"
     assert marketplace_response.status_code == 200
     assert marketplace_response.json()["plugins"] == []
+
+
+def test_plugin_marketplace_api_accepts_claude_ref_and_refresh(tmp_path: Path) -> None:
+    container = _FakeContainer(tmp_path / "quality")
+    client = _create_client(container)
+
+    response = client.post(
+        "/api/system/configs/plugins/marketplace",
+        json={
+            "marketplace": "claude-plugins-official",
+            "marketplace_provider": "claude",
+            "marketplace_source": str(tmp_path),
+            "marketplace_ref": "main",
+            "refresh": True,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Claude marketplace file not found" in response.text
+
+
+def test_plugin_marketplace_source_preserves_empty_claude_default() -> None:
+    source = system._plugin_marketplace_source(
+        system.PluginMarketplaceRequest(
+            marketplace="claude-plugins-official",
+            marketplace_provider=PluginMarketplaceProviderKind.CLAUDE,
+        )
+    )
+
+    assert source.value == ""
+
+
+def test_plugin_marketplace_source_resolves_local_claude_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    marketplace_root.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    source = system._plugin_marketplace_source(
+        system.PluginMarketplaceRequest(
+            marketplace="local-claude",
+            marketplace_provider=PluginMarketplaceProviderKind.CLAUDE,
+            marketplace_source="claude-marketplace",
+        )
+    )
+
+    assert source.value == str(marketplace_root.resolve())
 
 
 def test_plugin_enable_disable_update_api_reload_runtime(tmp_path: Path) -> None:
