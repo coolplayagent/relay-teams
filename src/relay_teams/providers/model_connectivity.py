@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 from time import perf_counter
-from typing import Literal, cast
+from typing import Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -40,6 +40,7 @@ from relay_teams.providers.model_config import (
     DEFAULT_MAAS_DISCOVERY_PLUGIN_NAME,
     DEFAULT_MAAS_DISCOVERY_PLUGIN_VERSION,
     DEFAULT_MAAS_DISCOVERY_URL,
+    ModelAuthSource,
     ModelCapabilities,
     MaaSAuthConfig,
     ModelEndpointConfig,
@@ -59,6 +60,7 @@ from relay_teams.providers.model_capabilities import (
 )
 from relay_teams.providers.openai_support import build_model_request_headers
 from relay_teams.sessions.runs.runtime_config import RuntimeConfig
+from relay_teams.providers.w3_auth_source import require_w3_credentials
 
 
 _INVALID_RESPONSE_PAYLOAD = object()
@@ -487,8 +489,10 @@ class ModelConnectivityProbeService:
                 base_url=override_base_url,
                 api_key=override.api_key,
                 headers=override.headers,
-                maas_auth=override.maas_auth,
-                codeagent_auth=override.codeagent_auth,
+                maas_auth=self._resolve_maas_auth_source(override.maas_auth),
+                codeagent_auth=self._resolve_codeagent_auth_source(
+                    override.codeagent_auth
+                ),
                 ssl_verify=override.ssl_verify,
                 capabilities=resolve_model_capabilities(
                     provider=override_provider,
@@ -563,22 +567,26 @@ class ModelConnectivityProbeService:
                 raise ValueError(
                     f"Override config is missing required fields: {joined_fields}."
                 )
-            return ModelDiscoveryResolvedConfig(
-                provider=override_provider,
-                base_url=(
-                    DEFAULT_CODEAGENT_BASE_URL
-                    if override_provider == ProviderType.CODEAGENT
-                    else DEFAULT_ANTHROPIC_BASE_URL
-                    if override_provider == ProviderType.ANTHROPIC
-                    and override.base_url is None
-                    else cast(str, override.base_url)
-                ),
-                api_key=override.api_key,
-                headers=override.headers,
-                maas_auth=override.maas_auth,
-                codeagent_auth=override.codeagent_auth,
-                ssl_verify=override.ssl_verify,
-                connect_timeout_seconds=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+            return self._validate_model_discovery_config(
+                ModelDiscoveryResolvedConfig(
+                    provider=override_provider,
+                    base_url=(
+                        DEFAULT_CODEAGENT_BASE_URL
+                        if override_provider == ProviderType.CODEAGENT
+                        else DEFAULT_ANTHROPIC_BASE_URL
+                        if override_provider == ProviderType.ANTHROPIC
+                        and override.base_url is None
+                        else cast(str, override.base_url)
+                    ),
+                    api_key=override.api_key,
+                    headers=override.headers,
+                    maas_auth=self._resolve_maas_auth_source(override.maas_auth),
+                    codeagent_auth=self._resolve_codeagent_auth_source(
+                        override.codeagent_auth
+                    ),
+                    ssl_verify=override.ssl_verify,
+                    connect_timeout_seconds=DEFAULT_LLM_CONNECT_TIMEOUT_SECONDS,
+                )
             )
 
         resolved_override = override or ModelConnectivityProbeOverride()
@@ -594,26 +602,43 @@ class ModelConnectivityProbeService:
             )
             else resolved_override.base_url or base_config.base_url
         )
-        return ModelDiscoveryResolvedConfig(
-            provider=resolved_provider,
-            base_url=resolved_base_url,
-            api_key=resolved_override.api_key or base_config.api_key,
-            headers=resolved_override.headers or base_config.headers,
-            maas_auth=self._merge_maas_auth(
-                base_maas_auth=base_config.maas_auth,
-                override_maas_auth=resolved_override.maas_auth,
-            ),
-            codeagent_auth=self._merge_codeagent_auth(
-                base_codeagent_auth=base_config.codeagent_auth,
-                override_codeagent_auth=resolved_override.codeagent_auth,
-            ),
-            ssl_verify=(
-                resolved_override.ssl_verify
-                if resolved_override.ssl_verify is not None
-                else base_config.ssl_verify
-            ),
-            connect_timeout_seconds=base_config.connect_timeout_seconds,
+        return self._validate_model_discovery_config(
+            ModelDiscoveryResolvedConfig(
+                provider=resolved_provider,
+                base_url=resolved_base_url,
+                api_key=resolved_override.api_key or base_config.api_key,
+                headers=resolved_override.headers or base_config.headers,
+                maas_auth=self._merge_maas_auth(
+                    base_maas_auth=base_config.maas_auth,
+                    override_maas_auth=resolved_override.maas_auth,
+                ),
+                codeagent_auth=self._merge_codeagent_auth(
+                    base_codeagent_auth=base_config.codeagent_auth,
+                    override_codeagent_auth=resolved_override.codeagent_auth,
+                ),
+                ssl_verify=(
+                    resolved_override.ssl_verify
+                    if resolved_override.ssl_verify is not None
+                    else base_config.ssl_verify
+                ),
+                connect_timeout_seconds=base_config.connect_timeout_seconds,
+            )
         )
+
+    @staticmethod
+    def _validate_model_discovery_config(
+        config: ModelDiscoveryResolvedConfig,
+    ) -> ModelDiscoveryResolvedConfig:
+        if config.provider != ProviderType.MAAS:
+            return config
+        maas_auth = config.maas_auth
+        if maas_auth is None:
+            raise ValueError("MAAS model discovery requires maas_auth configuration.")
+        if not maas_auth.username or not maas_auth.password:
+            raise ValueError(
+                "MAAS model discovery requires maas_auth.username and maas_auth.password."
+            )
+        return config
 
     def _merge_config(
         self,
@@ -696,6 +721,7 @@ class ModelConnectivityProbeService:
     ) -> MaaSAuthConfig | None:
         if override_maas_auth is None:
             return base_maas_auth
+        override_maas_auth = self._resolve_maas_auth_source(override_maas_auth)
         if base_maas_auth is None:
             return override_maas_auth
         return MaaSAuthConfig(
@@ -715,6 +741,9 @@ class ModelConnectivityProbeService:
     ) -> CodeAgentAuthConfig | None:
         if override_codeagent_auth is None:
             return base_codeagent_auth
+        override_codeagent_auth = self._resolve_codeagent_auth_source(
+            override_codeagent_auth
+        )
         if base_codeagent_auth is None:
             return override_codeagent_auth
         if override_codeagent_auth.auth_method == CodeAgentAuthMethod.PASSWORD:
@@ -813,6 +842,61 @@ class ModelConnectivityProbeService:
         return auth_config.with_secret_owner(
             config_dir=config_dir,
             owner_id=owner_id,
+        )
+
+    @overload
+    def _resolve_maas_auth_source(
+        self,
+        auth_config: None,
+    ) -> None:
+        pass
+
+    @overload
+    def _resolve_maas_auth_source(
+        self,
+        auth_config: MaaSAuthConfig,
+    ) -> MaaSAuthConfig:
+        pass
+
+    def _resolve_maas_auth_source(
+        self,
+        auth_config: MaaSAuthConfig | None,
+    ) -> MaaSAuthConfig | None:
+        if auth_config is None or auth_config.auth_source != ModelAuthSource.W3:
+            return auth_config
+        credentials = require_w3_credentials(self._get_runtime().paths.config_dir)
+        return MaaSAuthConfig(
+            auth_source=ModelAuthSource.W3,
+            username=credentials.username,
+            password=credentials.password,
+        )
+
+    @overload
+    def _resolve_codeagent_auth_source(
+        self,
+        auth_config: None,
+    ) -> None:
+        pass
+
+    @overload
+    def _resolve_codeagent_auth_source(
+        self,
+        auth_config: CodeAgentAuthConfig,
+    ) -> CodeAgentAuthConfig:
+        pass
+
+    def _resolve_codeagent_auth_source(
+        self,
+        auth_config: CodeAgentAuthConfig | None,
+    ) -> CodeAgentAuthConfig | None:
+        if auth_config is None or auth_config.auth_source != ModelAuthSource.W3:
+            return auth_config
+        credentials = require_w3_credentials(self._get_runtime().paths.config_dir)
+        return CodeAgentAuthConfig(
+            auth_method=CodeAgentAuthMethod.PASSWORD,
+            auth_source=ModelAuthSource.W3,
+            username=credentials.username,
+            password=credentials.password,
         )
 
     def _resolve_timeout_ms(

@@ -122,7 +122,7 @@ class MaaSTokenService:
     @staticmethod
     def _cache_key(auth_config: MaaSAuthConfig) -> str:
         password = auth_config.password or ""
-        raw = "\0".join((auth_config.username, password))
+        raw = "\0".join((auth_config.username or "", password))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     @staticmethod
@@ -279,7 +279,7 @@ def clear_maas_token_service_cache() -> None:
 def _maas_login_payload(auth_config: MaaSAuthConfig) -> dict[str, str]:
     return {
         "requireUserInfo": "true",
-        "user": auth_config.username,
+        "user": auth_config.username or "",
         "password": auth_config.password or "",
     }
 

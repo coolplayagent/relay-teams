@@ -69,6 +69,10 @@ export async function fetchModelFallbackConfig() {
     };
 }
 
+export async function fetchW3Connector() {
+    return null;
+}
+
 export async function fetchModelCatalog() {
     globalThis.__fetchModelCatalogCount = (globalThis.__fetchModelCatalogCount || 0) + 1;
     return {
@@ -3425,7 +3429,96 @@ export async function deleteModelProfile(name) {
     assert payload["passwordPlaceholder"] == "************"
     assert payload["toggleDisplay"] == "inline-flex"
     assert saved_maas_auth == {
+        "auth_source": "profile",
         "username": "saved-user",
+    }
+
+
+def test_edit_profile_auth_source_stays_profile_when_w3_is_available(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+await loadModelProfilesPanel();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "maas-profile").onclick();
+await document.getElementById("save-profile-btn").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    saves: globalThis.__savedProfiles || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "maas-profile": {
+            provider: "maas",
+            model: "maas-chat",
+            base_url: "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/",
+            maas_auth: {
+                auth_source: "profile",
+                username: "saved-maas-user",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                auth_method: "password",
+                auth_source: "profile",
+                username: "saved-codeagent-user",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchW3Connector() {
+    return { status: "connected", username: "w3-user", has_password: true };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfiles = globalThis.__savedProfiles || [];
+    globalThis.__savedProfiles.push({ name, profile });
+}
+""".strip(),
+    )
+
+    saves = cast(list[dict[str, JsonValue]], payload["saves"])
+    maas_profile = cast(dict[str, JsonValue], saves[0]["profile"])
+    codeagent_profile = cast(dict[str, JsonValue], saves[1]["profile"])
+
+    assert cast(dict[str, JsonValue], maas_profile["maas_auth"]) == {
+        "auth_source": "profile",
+        "username": "saved-maas-user",
+    }
+    assert cast(dict[str, JsonValue], codeagent_profile["codeagent_auth"]) == {
+        "auth_method": "password",
+        "auth_source": "profile",
+        "username": "saved-codeagent-user",
     }
 
 
@@ -3508,6 +3601,7 @@ export async function deleteModelProfile(name) {
     saved_maas_auth = cast(dict[str, JsonValue], saved_profile_body["maas_auth"])
     assert payload["toggleDisplay"] == "inline-flex"
     assert saved_maas_auth == {
+        "auth_source": "profile",
         "username": "saved-user",
         "password": "replacement-maas-password",
     }
@@ -4562,11 +4656,13 @@ export async function discoverModelCatalog(payload) {
 
     assert cast(dict[str, JsonValue], probe_override["codeagent_auth"]) == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "saved-user",
         "password": "fresh-password",
     }
     assert cast(dict[str, JsonValue], discover_override["codeagent_auth"]) == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "saved-user",
         "password": "fresh-password",
     }
@@ -4656,15 +4752,126 @@ export async function discoverModelCatalog(payload) {
 
     assert cast(dict[str, JsonValue], probe_override["codeagent_auth"]) == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "saved-user",
         "password": "same-password",
     }
     assert cast(dict[str, JsonValue], discover_override["codeagent_auth"]) == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "saved-user",
         "password": "same-password",
     }
     assert payload["authStatus"] == "Credentials ready"
+
+
+def test_codeagent_w3_auth_source_bypasses_stale_reauth_required_state(
+    tmp_path: Path,
+) -> None:
+    payload = _run_model_profiles_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import { bindModelProfileHandlers, loadModelProfilesPanel } from "./modelProfiles.mjs";
+
+const notifications = [];
+const elements = createElements();
+installGlobals(elements, notifications);
+bindModelProfileHandlers();
+
+await loadModelProfilesPanel();
+document.getElementById("profiles-list").querySelectorAll(".edit-profile-btn").find(btn => btn.dataset.name === "codeagent-profile").onclick();
+await Promise.resolve();
+await Promise.resolve();
+
+document.getElementById("profile-codeagent-auth-source").value = "w3";
+document.getElementById("profile-codeagent-auth-source").onchange();
+await document.getElementById("test-profile-btn").onclick();
+await document.getElementById("fetch-profile-models-btn").onclick();
+await document.getElementById("save-profile-btn").onclick();
+
+console.log(JSON.stringify({
+    probePayload: globalThis.__probePayload || null,
+    discoverPayload: globalThis.__discoverPayload || null,
+    savedProfile: globalThis.__savedProfile || null,
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchModelProfiles() {
+    return {
+        "codeagent-profile": {
+            provider: "codeagent",
+            model: "codeagent-chat",
+            base_url: "https://codeagentcli.rnd.huawei.com/codeAgentPro",
+            codeagent_auth: {
+                auth_method: "password",
+                username: "saved-user",
+                has_password: true,
+            },
+            is_default: false,
+            temperature: 0.7,
+            top_p: 1.0,
+            connect_timeout_seconds: 15,
+        },
+    };
+}
+
+export async function fetchModelFallbackConfig() {
+    return { policies: [] };
+}
+
+export async function fetchW3Connector() {
+    return { status: "error", username: "w3-user", has_password: true };
+}
+
+export async function verifyCodeAgentAuth(profileName) {
+    globalThis.__codeAgentAuthVerifyCalls = globalThis.__codeAgentAuthVerifyCalls || [];
+    globalThis.__codeAgentAuthVerifyCalls.push(profileName);
+    return {
+        status: "reauth_required",
+        checked_at: "2026-04-27T02:00:00Z",
+        detail: "expired credentials",
+    };
+}
+
+export async function probeModelConnection(payload) {
+    globalThis.__probePayload = payload;
+    return { ok: true, latency_ms: 42, token_usage: { total_tokens: 9 } };
+}
+
+export async function discoverModelCatalog(payload) {
+    globalThis.__discoverPayload = payload;
+    return { ok: true, latency_ms: 37, models: ["codeagent-chat"] };
+}
+
+export async function saveModelProfile(name, profile) {
+    globalThis.__savedProfile = { name, profile };
+}
+
+export async function reloadModelConfig() {
+    globalThis.__reloadCalled = true;
+}
+""".strip(),
+    )
+
+    probe_payload = cast(dict[str, JsonValue], payload["probePayload"])
+    discover_payload = cast(dict[str, JsonValue], payload["discoverPayload"])
+    saved_profile = cast(dict[str, JsonValue], payload["savedProfile"])
+    probe_override = cast(dict[str, JsonValue], probe_payload["override"])
+    discover_override = cast(dict[str, JsonValue], discover_payload["override"])
+    saved_body = cast(dict[str, JsonValue], saved_profile["profile"])
+
+    assert cast(dict[str, JsonValue], probe_override["codeagent_auth"]) == {
+        "auth_method": "password",
+        "auth_source": "w3",
+    }
+    assert cast(dict[str, JsonValue], discover_override["codeagent_auth"]) == {
+        "auth_method": "password",
+        "auth_source": "w3",
+    }
+    assert cast(dict[str, JsonValue], saved_body["codeagent_auth"]) == {
+        "auth_method": "password",
+        "auth_source": "w3",
+    }
 
 
 def test_codeagent_password_auth_discovery_uses_username_and_password(
@@ -4722,6 +4929,7 @@ export async function discoverModelCatalog(payload) {
 
     assert codeagent_auth == {
         "auth_method": "password",
+        "auth_source": "profile",
         "username": "relay-user",
         "password": "relay-password",
     }
@@ -4910,6 +5118,7 @@ console.log(JSON.stringify({
         == "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
     )
     assert maas_auth == {
+        "auth_source": "profile",
         "username": "relay-user",
         "password": "relay-password",
     }
@@ -4980,6 +5189,7 @@ console.log(JSON.stringify({
         "http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/"
     )
     assert maas_auth == {
+        "auth_source": "profile",
         "username": "relay-user",
         "password": "relay-password",
     }
@@ -5057,6 +5267,7 @@ export async function deleteModelProfile(name) {
     maas_auth = cast(dict[str, JsonValue], discover_override["maas_auth"])
     assert discover_payload["profile_name"] == "maas-profile"
     assert maas_auth == {
+        "auth_source": "profile",
         "username": "saved-user",
     }
 
@@ -5098,6 +5309,13 @@ def _run_model_profiles_script(
             f"{resolved_mock_api_source}\n\n"
             "export async function fetchModelProfiles() {\n"
             "    return {};\n"
+            "}\n"
+        )
+    if "fetchW3Connector" not in resolved_mock_api_source:
+        resolved_mock_api_source = (
+            f"{resolved_mock_api_source}\n\n"
+            "export async function fetchW3Connector() {\n"
+            "    return null;\n"
             "}\n"
         )
     if "fetchModelCatalog" not in resolved_mock_api_source:
@@ -5492,9 +5710,13 @@ function createElements() {{
             ["toggle-profile-api-key-btn", createElement("none", "toggle-profile-api-key-btn")],
             ["profile-maas-auth-fields", createElement("none", "profile-maas-auth-fields")],
             ["profile-maas-model-slot", createElement("block", "profile-maas-model-slot")],
+            ["profile-maas-auth-source-group", createElement("none", "profile-maas-auth-source-group")],
+            ["profile-maas-auth-source", createElement("block", "profile-maas-auth-source")],
             ["profile-codeagent-auth-fields", createElement("none", "profile-codeagent-auth-fields")],
             ["profile-codeagent-model-slot", createElement("block", "profile-codeagent-model-slot")],
             ["profile-codeagent-auth-method", createElement("block", "profile-codeagent-auth-method")],
+            ["profile-codeagent-auth-source-group", createElement("none", "profile-codeagent-auth-source-group")],
+            ["profile-codeagent-auth-source", createElement("block", "profile-codeagent-auth-source")],
             ["profile-codeagent-sso-group", createElement("block", "profile-codeagent-sso-group")],
             ["profile-codeagent-login-status", createElement("block", "profile-codeagent-login-status")],
             ["profile-codeagent-login-status-message", createElement("none", "profile-codeagent-login-status-message")],
@@ -5534,8 +5756,12 @@ function createElements() {{
         elements.get("profile-primary-credentials-row")?.appendChild(elements.get("profile-api-key-group"));
         elements.get("profile-model-field-home")?.appendChild(elements.get("profile-model-group"));
         elements.get("profile-maas-auth-fields")?.appendChild(elements.get("profile-maas-model-slot"));
+        elements.get("profile-maas-auth-fields")?.appendChild(elements.get("profile-maas-auth-source-group"));
+        elements.get("profile-maas-auth-source-group")?.appendChild(elements.get("profile-maas-auth-source"));
         elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-model-slot"));
         elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-auth-method"));
+        elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-auth-source-group"));
+        elements.get("profile-codeagent-auth-source-group")?.appendChild(elements.get("profile-codeagent-auth-source"));
         elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-sso-group"));
         elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-username-group"));
         elements.get("profile-codeagent-auth-fields")?.appendChild(elements.get("profile-codeagent-password-group"));

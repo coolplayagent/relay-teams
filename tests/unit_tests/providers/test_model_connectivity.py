@@ -1638,6 +1638,25 @@ async def test_discover_models_requires_codeagent_auth_for_codeagent_override() 
 
 
 @pytest.mark.asyncio
+async def test_discover_models_requires_profile_maas_username_and_password() -> None:
+    service = ModelConnectivityProbeService(get_runtime=_runtime_config)
+
+    with pytest.raises(
+        ValueError,
+        match="maas_auth.username and maas_auth.password",
+    ):
+        await service.discover_models_async(
+            ModelDiscoveryRequest(
+                override=ModelConnectivityProbeOverride(
+                    provider=ProviderType.MAAS,
+                    base_url="https://maas.example/api/v2",
+                    maas_auth=MaaSAuthConfig(),
+                )
+            )
+        )
+
+
+@pytest.mark.asyncio
 async def test_discover_models_codeagent_override_reports_missing_codeagent_auth() -> (
     None
 ):

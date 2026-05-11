@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 
 from relay_teams.binary_tools import (
     BinaryToolDownloadJob,
@@ -15,6 +15,12 @@ from relay_teams.connector import (
     ConnectorListResponse,
     ConnectorService,
     ConnectorTestResult,
+    W3ConnectorSaveRequest,
+    W3ConnectorSaveResponse,
+    W3ConnectorStatusResponse,
+    W3ConnectorSyncResponse,
+    W3ConnectorTestRequest,
+    W3ConnectorTestResponse,
 )
 from relay_teams.interfaces.server.deps import (
     get_binary_tool_service,
@@ -30,6 +36,36 @@ async def list_connectors(
     service: Annotated[ConnectorService, Depends(get_connector_service)],
 ) -> ConnectorListResponse:
     return await service.list_connectors()
+
+
+@router.get("/w3", response_model=W3ConnectorStatusResponse)
+async def get_w3_connector(
+    service: Annotated[ConnectorService, Depends(get_connector_service)],
+) -> W3ConnectorStatusResponse:
+    return service.get_w3_connector()
+
+
+@router.put("/w3", response_model=W3ConnectorSaveResponse)
+async def save_w3_connector(
+    request: W3ConnectorSaveRequest,
+    service: Annotated[ConnectorService, Depends(get_connector_service)],
+) -> W3ConnectorSaveResponse:
+    return await service.save_w3_connector(request)
+
+
+@router.post("/w3:test", response_model=W3ConnectorTestResponse)
+async def test_w3_connector(
+    service: Annotated[ConnectorService, Depends(get_connector_service)],
+    request: Annotated[W3ConnectorTestRequest | None, Body()] = None,
+) -> W3ConnectorTestResponse:
+    return await service.test_w3_connector(request)
+
+
+@router.post("/w3:sync-models", response_model=W3ConnectorSyncResponse)
+async def sync_w3_connector_models(
+    service: Annotated[ConnectorService, Depends(get_connector_service)],
+) -> W3ConnectorSyncResponse:
+    return await service.sync_w3_models()
 
 
 @router.post("/{connector_id}:test", response_model=ConnectorTestResult)

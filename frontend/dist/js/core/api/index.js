@@ -181,7 +181,10 @@ export {
     fetchRuntimeToolDownload,
     fetchRuntimeTools,
     startRuntimeToolDownload,
+    fetchW3Connector,
+    saveW3Connector,
     testConnector,
+    testW3Connector,
 } from './connectors.js';
 
 export {

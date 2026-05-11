@@ -3183,6 +3183,7 @@ def test_save_model_profile_accepts_maas_provider() -> None:
     assert saved_profile["provider"] == ProviderType.MAAS.value
     assert saved_profile["base_url"] == DEFAULT_MAAS_BASE_URL
     assert saved_profile["maas_auth"] == {
+        "auth_source": "profile",
         "username": "relay-user",
         "password": "relay-password",
     }

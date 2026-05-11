@@ -541,6 +541,54 @@
     font-size: 14px;
 }
 
+.connectors-w3-form {
+    display: grid;
+    gap: 14px;
+}
+
+.connectors-w3-form label {
+    display: grid;
+    gap: 6px;
+    color: var(--text-secondary, #475569);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.connectors-w3-form input {
+    width: 100%;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 6px;
+    color: var(--text-primary, #111827);
+    background: var(--bg-surface, #fff);
+    font: inherit;
+}
+
+.connectors-w3-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.connectors-w3-status {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.connectors-w3-status.is-success {
+    color: var(--success, #027a48);
+    background: rgba(2, 122, 72, 0.1);
+}
+
+.connectors-w3-status.is-danger {
+    color: var(--danger, #b42318);
+    background: rgba(229, 72, 77, 0.08);
+}
+
 .connectors-config-actions {
     display: flex;
     justify-content: flex-end;

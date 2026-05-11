@@ -271,6 +271,38 @@ def test_load_runtime_config_uses_first_profile_when_no_default_is_marked(
     assert resolved.default_model_profile == "alpha"
 
 
+def test_load_runtime_config_skips_w3_profile_when_connector_secret_is_missing(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / ".agent-teams"
+    config_dir.mkdir(parents=True)
+    (config_dir / "model.json").write_text(
+        json.dumps(
+            {
+                "w3-maas": {
+                    "provider": "maas",
+                    "model": "pangu",
+                    "base_url": DEFAULT_MAAS_BASE_URL,
+                    "maas_auth": {"auth_source": "w3"},
+                    "is_default": True,
+                },
+                "fallback": {
+                    "model": "fallback-model",
+                    "base_url": "https://fallback.example/v1",
+                    "api_key": "fallback-key",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = runtime_config.load_runtime_config(config_dir=config_dir)
+
+    assert set(resolved.llm_profiles) == {"fallback"}
+    assert resolved.default_model_profile == "fallback"
+    assert resolved.model_status.loaded is True
+
+
 def test_load_runtime_config_rejects_multiple_explicit_default_profiles(
     tmp_path: Path,
 ) -> None:

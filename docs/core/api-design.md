@@ -243,7 +243,7 @@ The response body is a root object whose keys are profile ids and whose values u
 Returns normalized model profiles.
 Each profile includes `has_api_key`, the currently stored `api_key` value so the web UI can mask it by default and reveal it on demand, `headers[]` for additional request headers, `is_default` to mark the runtime default profile, optional `context_window` for next-send context preview UI, optional `fallback_policy_id` to bind that profile to a fallback policy, `fallback_priority` to rank it as a fallback candidate, structured `capabilities.input/output.*`, and a derived `input_modalities[]` compatibility field so the UI can label profiles that accept direct media input.
 Profiles created from the shared model directory may also include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata. These fields are descriptive and do not change provider transport selection.
-`provider` currently supports `openai_compatible`, `anthropic`, `bigmodel`, `minimax`, `maas`, `codeagent`, and the internal/testing-only `echo`. `anthropic` means the profile uses an Anthropic Messages API-compatible transport, including marketplace providers such as MiniMax entries that publish an `/anthropic/v1` API. MAAS profiles return `maas_auth` with `username` and `has_password` so the web UI can preserve the stored password without echoing it back. CodeAgent profiles return `codeagent_auth`; `auth_method = "sso"` exposes `has_access_token` and `has_refresh_token`, while `auth_method = "password"` exposes `username` and `has_password`. The MaaS login endpoint and `app-id`, and the CodeAgent OAuth/login endpoints and inference base URL, are fixed by the backend.
+`provider` currently supports `openai_compatible`, `anthropic`, `bigmodel`, `minimax`, `maas`, `codeagent`, and the internal/testing-only `echo`. `anthropic` means the profile uses an Anthropic Messages API-compatible transport, including marketplace providers such as MiniMax entries that publish an `/anthropic/v1` API. MAAS profiles return `maas_auth` with `auth_source`, `username`, and `has_password` so the web UI can preserve the stored password without echoing it back. CodeAgent profiles return `codeagent_auth`; `auth_method = "sso"` exposes `has_access_token` and `has_refresh_token`, while `auth_method = "password"` exposes `auth_source`, `username`, and `has_password`. The MaaS login endpoint and `app-id`, and the CodeAgent OAuth/login endpoints and inference base URL, are fixed by the backend.
 When no profile is explicitly marked default, the backend resolves the default in this order: a profile named `default`, the only configured profile, then the first profile by name.
 
 ### `GET /system/configs/model/catalog`
@@ -284,8 +284,8 @@ Profiles may include optional `fallback_policy_id` to enable quota/rate-limit fa
 Profiles may include optional `catalog_provider_id`, `catalog_provider_name`, and `catalog_model_name` metadata when the UI prefilled the draft from `GET /system/configs/model/catalog`.
 Profiles may include `headers[]`, where each item has `name`, optional `value`, optional `secret`, and optional `configured`.
 Profiles must provide at least one auth source: `api_key`, one configured header, `maas_auth` for `provider = "maas"`, or `codeagent_auth` for `provider = "codeagent"`.
-When `provider = "maas"`, `maas_auth` must include `username`; `password` is accepted on write but persisted only in the unified secret store. The backend always authenticates against `http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`, always sends `app-id: RelayTeams`, and always uses `http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/` as the MAAS inference base URL.
-When `provider = "codeagent"`, `codeagent_auth.auth_method` must be either `sso` or `password`. `sso` accepts the saved-token flags plus an optional `oauth_session_id`; the backend persists the resulting CodeAgent tokens in the unified secret store. `password` accepts `username` and `password`; `username` remains in the profile, while `password` is persisted only in the unified secret store. CodeAgent password login reuses the MaaS secure-login endpoint and request/response contract, but it remains a CodeAgent-only auth flow under `codeagent_auth`. The backend always uses `https://codeagentcli.rnd.huawei.com/codeAgentPro` as the CodeAgent inference base URL. When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
+When `provider = "maas"`, `maas_auth.auth_source` may be `profile` or `w3` and defaults to `profile`. `profile` requires `username`; `password` is accepted on write but persisted only in the unified secret store. `w3` stores only the W3 reference in the profile and requires the W3 connector to already have a saved username/password. The backend always authenticates against `http://rnd-idea-api.huawei.com/ideaclientservice/login/v4/secureLogin`, always sends `app-id: RelayTeams`, and always uses `http://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/` as the MAAS inference base URL.
+When `provider = "codeagent"`, `codeagent_auth.auth_method` must be either `sso` or `password`. `sso` accepts the saved-token flags plus an optional `oauth_session_id`; the backend persists the resulting CodeAgent tokens in the unified secret store and does not support W3 auth source. `password` accepts `auth_source = "profile"` or `"w3"` and defaults to `profile`; profile credentials keep `username` in the profile and persist `password` only in the unified secret store, while W3 source stores only the W3 reference and resolves the saved W3 username/password on demand. CodeAgent password login reuses the MaaS secure-login endpoint and request/response contract, but it remains a CodeAgent-only auth flow under `codeagent_auth`. The backend always uses `https://codeagentcli.rnd.huawei.com/codeAgentPro` as the CodeAgent inference base URL. When `context_window` is omitted and the backend recognizes the provider/model pair, it may auto-fill a known context limit during save and runtime load.
 
 ### `GET /system/configs/model-fallback`
 
@@ -326,7 +326,7 @@ The backend implementation is async-only for provider network I/O; routes call
 the async model connectivity service directly rather than dispatching sync probe
 work through a thread bridge.
 Draft overrides may include optional `ssl_verify`; effective TLS verification resolves as `override.ssl_verify` -> global `SSL_VERIFY` -> default `false`.
-Draft overrides may include `headers[]` and may omit `api_key` when headers are provided. MAAS draft overrides use `maas_auth` instead of `api_key` and perform a login before probing `/chat/completions`. CodeAgent draft overrides use `codeagent_auth`; `sso` reuses the saved OAuth session/tokens, while `password` logs in with username/password before probing.
+Draft overrides may include `headers[]` and may omit `api_key` when headers are provided. MAAS draft overrides use `maas_auth` instead of `api_key` and perform a login before probing `/chat/completions`; `auth_source = "w3"` resolves saved W3 credentials instead of requiring profile username/password in the override. CodeAgent draft overrides use `codeagent_auth`; `sso` reuses the saved OAuth session/tokens, while `password` logs in with profile username/password or W3 credentials depending on `auth_source`.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 
 ### `POST /system/configs/model:discover`
@@ -334,7 +334,7 @@ If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeo
 Fetches the available model catalog for a saved profile and/or draft override.
 Catalog and provider discovery fetches use async HTTP clients. The public HTTP
 contract is unchanged, but there is no backend sync catalog fetch path.
-Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`. For `provider = "codeagent"`, the override must provide `codeagent_auth`; the backend still forces the fixed CodeAgent base URL.
+Draft overrides may omit `model`, but must provide `base_url` and `api_key` or `headers` when `profile_name` is omitted. For `provider = "maas"`, the override must provide `base_url` and `maas_auth`; `auth_source = "w3"` may omit profile username/password when W3 is configured. For `provider = "codeagent"`, the override must provide `codeagent_auth`; password auth may use `auth_source = "w3"`, and the backend still forces the fixed CodeAgent base URL.
 When `profile_name` is provided, the request may override `base_url`, `api_key`, `headers`, and `ssl_verify` while reusing the saved credentials for any omitted fields.
 If `timeout_ms` is omitted, the backend uses the resolved profile `connect_timeout_seconds` value, or `15s` when no saved profile is involved.
 Optional `metadata_policy = "endpoint_only"` disables built-in model-name inference for discovery metadata; this is used by custom endpoint drafts so only provider-returned model metadata is auto-filled. The default `metadata_policy = "allow_inference"` preserves the existing built-in fallback behavior.
@@ -3248,15 +3248,17 @@ display.
 
 ## Connector APIs
 
-Connector APIs are aggregation endpoints under `/api/*`. They do not own
-provider data and do not add connector persistence. GitHub state comes from
-`triggers`; Feishu, WeChat, and Xiaoluban state comes from `gateway`.
+Connector APIs are aggregation endpoints under `/api/*`. Most connectors derive
+state from their owning domain: GitHub state comes from `triggers`; Feishu,
+WeChat, Discord, and Xiaoluban state comes from `gateway`. W3 is the unified
+authentication connector exception: it stores non-sensitive connector metadata
+in a JSON config file and stores the password in the unified secret store.
 
 ### `GET /connectors`
 
 Returns only built-in connectors backed by existing implementations: GitHub,
-Feishu, WeChat, and Xiaoluban. Gmail, Slack, Jira, and other future providers
-are not returned until their backend capability exists.
+Discord, Feishu, WeChat, Xiaoluban, and W3. Gmail, Slack, Jira, and other future
+providers are not returned until their backend capability exists.
 
 Response shape:
 - `summary`: counts for `connected`, `needs_config`, `disabled`, `error`, and
@@ -3266,8 +3268,8 @@ Response shape:
   `enabled_count`, `last_activity_at`, `last_error`, and `capabilities`
 
 Enums:
-- `provider`: `github`, `feishu`, `wechat`, or `xiaoluban`
-- `category`: `development` or `im`
+- `provider`: `github`, `discord`, `feishu`, `wechat`, `xiaoluban`, or `w3`
+- `category`: `auth`, `development`, `im`, or `models`
 - `status`: `needs_config`, `connected`, `disabled`, or `error`
 
 ### `POST /connectors/{connector_id}:test`
@@ -3276,7 +3278,40 @@ Runs a lightweight health check for one built-in connector. GitHub uses the
 existing GitHub connectivity probe. Feishu checks account secret readiness and
 subscription runtime state. WeChat returns account running, login, and recent
 error state. Xiaoluban checks token configuration, listener state, and IM
-workspace configuration. Unknown connector ids return `404`.
+workspace configuration. W3 validates that its saved username/password can
+obtain a non-empty MaaS `cloudDragonTokens.authToken`. This token is also the
+W3 `WEB_TOKEN` and the `X-Auth-Token` used by MaaS/CodeMate and CodeAgent
+password auth. Unknown connector ids return `404`.
+
+### `GET /connectors/w3`
+
+Returns W3 connector state for the unified authentication connector:
+`username`, `has_password`, `status`, `updated_at`, `last_sync`, and
+`last_error`. The password and raw `WEB_TOKEN` / `X-Auth-Token` are never
+returned. `last_sync` is retained only for hidden maintenance compatibility and
+is not part of the normal W3 setup flow.
+
+### `PUT /connectors/w3`
+
+Accepts `username` and an optional `password`. The first save requires a
+password; later saves may omit it to keep the existing secret. The backend calls
+the existing MaaS secure-login path and treats a non-empty
+`cloudDragonTokens.authToken` as success. That token is the W3 `WEB_TOKEN` and
+the request-header `X-Auth-Token`. On success, it saves the connector
+credentials only. It does not discover models, create profiles, update existing
+profiles, or persist the raw token. MaaS and CodeAgent password profiles can
+reference W3 by saving `auth_source = "w3"` in their provider auth config.
+
+### `POST /connectors/w3:test`
+
+Validates request credentials or the saved W3 credentials. Success only means
+the backend can obtain a non-empty `X-Auth-Token`; it does not call an inference
+endpoint.
+
+Future MCP or gateway integrations that need a W3 token should resolve it from
+the saved W3 credentials on demand and map the resulting `WEB_TOKEN` to their
+own environment variable names, such as `PRIVATE_TOKEN`, instead of persisting
+the raw token.
 
 ### `GET /connectors/runtime-tools`
 

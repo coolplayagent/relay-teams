@@ -15,11 +15,14 @@ class ConnectorProvider(str, Enum):
     FEISHU = "feishu"
     WECHAT = "wechat"
     XIAOLUBAN = "xiaoluban"
+    W3 = "w3"
 
 
 class ConnectorCategory(str, Enum):
+    AUTH = "auth"
     DEVELOPMENT = "development"
     IM = "im"
+    MODELS = "models"
 
 
 class ConnectorStatus(str, Enum):
@@ -35,6 +38,7 @@ class ConnectorAuthType(str, Enum):
     API_TOKEN = "api_token"
     WEBHOOK = "webhook"
     QR_LOGIN = "qr_login"
+    USERNAME_PASSWORD = "username_password"
 
 
 class ConnectorSummary(BaseModel):

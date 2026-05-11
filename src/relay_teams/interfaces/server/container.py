@@ -44,7 +44,7 @@ from relay_teams.builtin import (
 )
 from relay_teams.boards import BoardTodoRepository, BoardTodoService
 from relay_teams.commands import CommandRegistry
-from relay_teams.connector import ConnectorService
+from relay_teams.connector import ConnectorService, W3ConnectorService
 from relay_teams.computer import build_default_computer_runtime
 from relay_teams.agents.orchestration.meta_agent import MetaAgent
 from relay_teams.agents.orchestration.settings_config_manager import (
@@ -1112,19 +1112,6 @@ class ServerContainer:
         self.github_trigger_service.replace_board_todo_service(self.board_todo_service)
         self.run_service.replace_board_todo_service(self.board_todo_service)
         self.session_service.replace_board_todo_service(self.board_todo_service)
-        self.connector_service = ConnectorService(
-            github_trigger_service=self.github_trigger_service,
-            github_connectivity_probe_service=self.github_connectivity_probe_service,
-            feishu_gateway_service=self.feishu_gateway_service,
-            feishu_subscription_service=self.feishu_subscription_service,
-            discord_gateway_service=self.discord_gateway_service,
-            wechat_gateway_service=self.wechat_gateway_service,
-            xiaoluban_gateway_service=self.xiaoluban_gateway_service,
-            xiaoluban_im_listener_service=self.xiaoluban_im_listener_service,
-            get_shared_github_token=lambda: (
-                self.github_config_service.get_github_config().token
-            ),
-        )
         self.github_trigger_action_worker = GitHubTriggerActionWorker(
             trigger_service=self.github_trigger_service
         )
@@ -1147,6 +1134,24 @@ class ServerContainer:
             model_catalog_service=self.model_catalog_service,
             get_runtime=lambda: self.runtime,
             on_runtime_reloaded=self._on_runtime_reloaded,
+        )
+        self.w3_connector_service = W3ConnectorService(
+            config_dir=app_config_dir,
+            model_config_service=self.model_config_service,
+        )
+        self.connector_service = ConnectorService(
+            github_trigger_service=self.github_trigger_service,
+            github_connectivity_probe_service=self.github_connectivity_probe_service,
+            feishu_gateway_service=self.feishu_gateway_service,
+            feishu_subscription_service=self.feishu_subscription_service,
+            discord_gateway_service=self.discord_gateway_service,
+            wechat_gateway_service=self.wechat_gateway_service,
+            xiaoluban_gateway_service=self.xiaoluban_gateway_service,
+            xiaoluban_im_listener_service=self.xiaoluban_im_listener_service,
+            w3_connector_service=self.w3_connector_service,
+            get_shared_github_token=lambda: (
+                self.github_config_service.get_github_config().token
+            ),
         )
         self.notification_settings_service: NotificationSettingsService = (
             NotificationSettingsService(

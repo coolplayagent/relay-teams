@@ -43,3 +43,33 @@ export async function fetchRuntimeToolDownload(jobId) {
         'Failed to fetch runtime tool download',
     );
 }
+
+export async function fetchW3Connector(options = {}) {
+    return requestJson(
+        '/api/connectors/w3',
+        { signal: options.signal },
+        'Failed to fetch W3 connector',
+    );
+}
+
+export async function saveW3Connector(payload) {
+    return requestJson(
+        '/api/connectors/w3',
+        {
+            method: 'PUT',
+            body: JSON.stringify(payload || {}),
+        },
+        'Failed to save W3 connector',
+    );
+}
+
+export async function testW3Connector(payload = {}) {
+    return requestJson(
+        '/api/connectors/w3:test',
+        {
+            method: 'POST',
+            body: JSON.stringify(payload || {}),
+        },
+        'Failed to test W3 connector',
+    );
+}

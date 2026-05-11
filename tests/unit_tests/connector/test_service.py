@@ -5,6 +5,22 @@ from datetime import UTC, datetime
 import pytest
 
 from relay_teams.connector import ConnectorService, ConnectorStatus
+from relay_teams.connector.models import (
+    ConnectorAuthType,
+    ConnectorCategory,
+    ConnectorItem,
+    ConnectorProvider,
+    ConnectorTestResult,
+)
+from relay_teams.connector.w3_models import (
+    W3ConnectorSaveRequest,
+    W3ConnectorSaveResponse,
+    W3ConnectorStatusResponse,
+    W3ConnectorSyncResponse,
+    W3ConnectorTestRequest,
+    W3ConnectorTestResponse,
+    W3ModelSyncSummary,
+)
 from relay_teams.gateway.discord.models import (
     DiscordAccountRecord,
     DiscordAccountStatus,
@@ -120,6 +136,89 @@ class _XiaolubanListenerService:
         return self._running
 
 
+class _W3ConnectorService:
+    def __init__(self, status: ConnectorStatus = ConnectorStatus.NEEDS_CONFIG) -> None:
+        self._status = status
+
+    def get_status(self) -> W3ConnectorStatusResponse:
+        return W3ConnectorStatusResponse(
+            username="u" if self._status == ConnectorStatus.CONNECTED else None,
+            has_password=self._status == ConnectorStatus.CONNECTED,
+            status=self._status,
+        )
+
+    def connector_item(self) -> ConnectorItem:
+        return ConnectorItem(
+            connector_id="w3",
+            provider=ConnectorProvider.W3,
+            category=ConnectorCategory.AUTH,
+            display_name="W3",
+            description="Connect W3 unified authentication for WEB_TOKEN reuse.",
+            status=self._status,
+            auth_type=ConnectorAuthType.USERNAME_PASSWORD,
+            account_count=1 if self._status == ConnectorStatus.CONNECTED else 0,
+            enabled_count=1 if self._status == ConnectorStatus.CONNECTED else 0,
+            capabilities=("w3_auth", "web_token"),
+        )
+
+    async def save_credentials(
+        self,
+        request: W3ConnectorSaveRequest,
+    ) -> W3ConnectorSaveResponse:
+        return W3ConnectorSaveResponse(
+            ok=True,
+            status=ConnectorStatus.CONNECTED,
+            message="ok",
+            username=request.username,
+            has_password=True,
+            sync=None,
+        )
+
+    async def save_credentials_and_import(
+        self,
+        request: W3ConnectorSaveRequest,
+    ) -> W3ConnectorSaveResponse:
+        return await self.save_credentials(request)
+
+    async def test_connection(
+        self,
+        request: W3ConnectorTestRequest | None = None,
+        *,
+        force_refresh: bool = False,
+    ) -> W3ConnectorTestResponse:
+        _ = request
+        _ = force_refresh
+        return W3ConnectorTestResponse(
+            ok=self._status == ConnectorStatus.CONNECTED,
+            status="valid"
+            if self._status == ConnectorStatus.CONNECTED
+            else "needs_config",
+            message="ok" if self._status == ConnectorStatus.CONNECTED else "missing",
+            has_token=self._status == ConnectorStatus.CONNECTED,
+        )
+
+    async def test_connector_result(self) -> ConnectorTestResult:
+        item = self.connector_item()
+        return ConnectorTestResult(
+            connector_id="w3",
+            provider=ConnectorProvider.W3,
+            status=self._status,
+            ok=self._status == ConnectorStatus.CONNECTED,
+            message="ok" if self._status == ConnectorStatus.CONNECTED else "missing",
+            account_count=item.account_count,
+            enabled_count=item.enabled_count,
+            login_active=self._status == ConnectorStatus.CONNECTED,
+            capabilities=item.capabilities,
+        )
+
+    async def sync_models_with_saved_credentials(self) -> W3ConnectorSyncResponse:
+        return W3ConnectorSyncResponse(
+            ok=True,
+            message="ok",
+            sync=W3ModelSyncSummary(),
+        )
+
+
 @pytest.mark.asyncio
 async def test_connector_summary_uses_real_builtin_providers_only() -> None:
     service = _build_service(
@@ -129,6 +228,7 @@ async def test_connector_summary_uses_real_builtin_providers_only() -> None:
         wechat_accounts=(_wechat_account(),),
         xiaoluban_accounts=(_xiaoluban_account(),),
         feishu_running_ids=("fs_1",),
+        w3_status=ConnectorStatus.CONNECTED,
     )
 
     response = await service.list_connectors()
@@ -139,9 +239,10 @@ async def test_connector_summary_uses_real_builtin_providers_only() -> None:
         "feishu",
         "wechat",
         "xiaoluban",
+        "w3",
     ]
-    assert response.summary.total == 5
-    assert response.summary.connected == 5
+    assert response.summary.total == 6
+    assert response.summary.connected == 6
 
 
 @pytest.mark.asyncio
@@ -156,8 +257,9 @@ async def test_empty_accounts_need_config() -> None:
         "feishu": ConnectorStatus.NEEDS_CONFIG,
         "wechat": ConnectorStatus.NEEDS_CONFIG,
         "xiaoluban": ConnectorStatus.NEEDS_CONFIG,
+        "w3": ConnectorStatus.NEEDS_CONFIG,
     }
-    assert response.summary.needs_config == 5
+    assert response.summary.needs_config == 6
 
 
 @pytest.mark.asyncio
@@ -203,7 +305,19 @@ async def test_disabled_accounts_are_reported_disabled() -> None:
 
     response = await service.list_connectors()
 
-    assert all(item.status == ConnectorStatus.DISABLED for item in response.items)
+    statuses = {item.connector_id: item.status for item in response.items}
+    assert {
+        connector_id: status
+        for connector_id, status in statuses.items()
+        if connector_id != "w3"
+    } == {
+        "github": ConnectorStatus.DISABLED,
+        "discord": ConnectorStatus.DISABLED,
+        "feishu": ConnectorStatus.DISABLED,
+        "wechat": ConnectorStatus.DISABLED,
+        "xiaoluban": ConnectorStatus.DISABLED,
+    }
+    assert statuses["w3"] == ConnectorStatus.NEEDS_CONFIG
     assert response.summary.disabled == 5
 
 
@@ -243,12 +357,14 @@ async def test_provider_test_results_include_runtime_checks() -> None:
     feishu = await service.test_connector("feishu")
     wechat = await service.test_connector("wechat")
     xiaoluban = await service.test_connector("xiaoluban")
+    w3 = await service.test_connector("w3")
 
     assert github.ok is True
     assert discord.runtime_running is True
     assert feishu.runtime_running is True
     assert wechat.login_active is True
     assert xiaoluban.runtime_running is True
+    assert w3.ok is False
 
 
 @pytest.mark.asyncio
@@ -342,6 +458,7 @@ def _build_service(
     xiaoluban_accounts: tuple[XiaolubanAccountRecord, ...] = (),
     feishu_running_ids: tuple[str, ...] = (),
     shared_github_token: str | None = None,
+    w3_status: ConnectorStatus = ConnectorStatus.NEEDS_CONFIG,
 ) -> ConnectorService:
     resolved_github_tokens = (
         {
@@ -361,6 +478,7 @@ def _build_service(
         wechat_gateway_service=_WeChatService(wechat_accounts),
         xiaoluban_gateway_service=_XiaolubanService(xiaoluban_accounts),
         xiaoluban_im_listener_service=_XiaolubanListenerService(),
+        w3_connector_service=_W3ConnectorService(w3_status),
         get_shared_github_token=lambda: shared_github_token,
     )
 

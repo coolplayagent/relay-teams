@@ -13,6 +13,16 @@ from relay_teams.connector.models import (
     ConnectorTestResult,
 )
 from relay_teams.connector.service import ConnectorService
+from relay_teams.connector.w3_models import (
+    W3ConnectorSaveRequest,
+    W3ConnectorSaveResponse,
+    W3ConnectorStatusResponse,
+    W3ConnectorSyncResponse,
+    W3ConnectorTestRequest,
+    W3ConnectorTestResponse,
+    W3ModelSyncSummary,
+)
+from relay_teams.connector.w3_service import W3ConnectorService
 
 __all__ = [
     "ConnectorAuthType",
@@ -25,4 +35,12 @@ __all__ = [
     "ConnectorStatus",
     "ConnectorSummary",
     "ConnectorTestResult",
+    "W3ConnectorSaveRequest",
+    "W3ConnectorSaveResponse",
+    "W3ConnectorService",
+    "W3ConnectorStatusResponse",
+    "W3ConnectorSyncResponse",
+    "W3ConnectorTestRequest",
+    "W3ConnectorTestResponse",
+    "W3ModelSyncSummary",
 ]

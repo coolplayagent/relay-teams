@@ -29,9 +29,10 @@ let lastBackendStatusHintAt = 0;
 
 export async function requestJson(url, options, errorMessage) {
     const method = String(options?.method || 'GET').toUpperCase();
-    const requestOptions = (method === 'GET' || method === 'HEAD') && options?.cache == null
-        ? { ...options, cache: 'no-store' }
-        : options;
+    const jsonOptions = applyJsonContentType(options, method);
+    const requestOptions = (method === 'GET' || method === 'HEAD') && jsonOptions?.cache == null
+        ? { ...jsonOptions, cache: 'no-store' }
+        : jsonOptions;
     try {
         const res = await fetch(url, requestOptions);
         emitBackendStatusHint('online');
@@ -79,6 +80,48 @@ export async function requestJson(url, options, errorMessage) {
         );
         throw error;
     }
+}
+
+function applyJsonContentType(options, method) {
+    if (options?.body == null || method === 'GET' || method === 'HEAD') {
+        return options;
+    }
+    const headers = withJsonContentType(options.headers);
+    if (headers === options.headers) {
+        return options;
+    }
+    return {
+        ...options,
+        headers,
+    };
+}
+
+function withJsonContentType(headers) {
+    if (headers == null) {
+        return { 'Content-Type': 'application/json' };
+    }
+    if (typeof Headers === 'function' && headers instanceof Headers) {
+        if (headers.has('Content-Type')) {
+            return headers;
+        }
+        const nextHeaders = new Headers(headers);
+        nextHeaders.set('Content-Type', 'application/json');
+        return nextHeaders;
+    }
+    if (Array.isArray(headers)) {
+        const hasContentType = headers.some(([name]) => String(name || '').toLowerCase() === 'content-type');
+        return hasContentType
+            ? headers
+            : [...headers, ['Content-Type', 'application/json']];
+    }
+    if (typeof headers === 'object') {
+        const hasContentType = Object.keys(headers)
+            .some(name => String(name || '').toLowerCase() === 'content-type');
+        return hasContentType
+            ? headers
+            : { ...headers, 'Content-Type': 'application/json' };
+    }
+    return headers;
 }
 
 function emitBackendStatusHint(status) {
