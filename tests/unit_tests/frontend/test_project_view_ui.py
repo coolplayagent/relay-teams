@@ -4839,6 +4839,159 @@ console.log(JSON.stringify({
     assert payload["selectionEnd"] == 1
 
 
+def test_project_view_opens_runtime_tools_modal_from_group_card(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { els, flushTasks } from "./mockDom.mjs";
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await flushTasks();
+
+const beforeHtml = els.projectViewContent.innerHTML;
+document.querySelector("[data-runtime-tools-open]")?.onclick?.({ stopPropagation() {} });
+await flushTasks();
+const openedHtml = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+document.querySelector("[data-runtime-tool-download]")?.onclick?.();
+await flushTasks();
+document.querySelector("[data-runtime-tools-modal-close]")?.onclick?.();
+await flushTasks();
+const closedHtml = globalThis.__bodyChildren.map(node => node.innerHTML).join("\\n");
+
+console.log(JSON.stringify({
+    beforeHtml,
+    openedHtml,
+    closedHtml,
+    downloadRequests: globalThis.__runtimeToolDownloadRequests || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchRuntimeTools() {
+    return {
+        items: [
+            {
+                tool_id: "rg",
+                display_name: "ripgrep",
+                status: "missing",
+                download_job_id: "rg-job",
+            },
+        ],
+    };
+}
+""".strip(),
+    )
+
+    assert "data-runtime-tools-group" in str(payload["beforeHtml"])
+    assert "data-runtime-tool-download" not in str(payload["beforeHtml"])
+    assert "data-runtime-tools-modal" in str(payload["openedHtml"])
+    assert 'data-runtime-tool-download="rg"' in str(payload["openedHtml"])
+    assert payload["downloadRequests"] == ["rg"]
+    assert "data-runtime-tools-modal" not in str(payload["closedHtml"])
+
+
+def test_project_view_runtime_tool_polling_is_gateway_guarded() -> None:
+    source = Path("frontend/dist/js/components/projectView.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "currentFeatureViewId !== FEATURE_VIEW_IDS.gateway" in source
+    assert source.count("currentFeatureViewId !== FEATURE_VIEW_IDS.gateway") >= 2
+
+
+def test_project_view_runtime_tools_load_independently_from_connectors() -> None:
+    source = Path("frontend/dist/js/components/projectView.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "void loadGatewayRuntimeTools(request.token, request.signal);" in source
+    assert "const [connectorsResponse, runtimeToolsResponse" not in source
+    assert "await fetchRuntimeTools({ signal });" in source
+
+
+def test_project_view_runtime_tool_download_start_is_gateway_guarded() -> None:
+    source = Path("frontend/dist/js/components/projectView.js").read_text(
+        encoding="utf-8"
+    )
+
+    start_index = source.index("async function handleDownloadRuntimeTool")
+    poll_index = source.index("function pollRuntimeToolDownload")
+    handler_source = source[start_index:poll_index]
+
+    assert (
+        handler_source.count("currentFeatureViewId !== FEATURE_VIEW_IDS.gateway") >= 2
+    )
+
+
+def test_project_view_runtime_tool_poll_refresh_is_gateway_guarded() -> None:
+    source = Path("frontend/dist/js/components/projectView.js").read_text(
+        encoding="utf-8"
+    )
+
+    start_index = source.index("function scheduleRuntimeToolDownloadPoll")
+    end_index = source.index("function resumeRuntimeToolDownloadPolling")
+    poll_source = source[start_index:end_index]
+
+    assert "await refreshRuntimeToolsStatus();" in poll_source
+    assert (
+        "await refreshRuntimeToolsStatus();\n"
+        "            if (currentFeatureViewId !== FEATURE_VIEW_IDS.gateway)"
+        in poll_source
+    )
+
+
+def test_project_view_resumes_polling_existing_runtime_tool_jobs(
+    tmp_path: Path,
+) -> None:
+    payload = _run_project_view_script(
+        tmp_path=tmp_path,
+        runner_source="""
+import {
+    initializeProjectView,
+    openImFeatureView,
+} from "./projectView.mjs";
+import { flushTasks } from "./mockDom.mjs";
+
+const originalSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback, delay) => originalSetTimeout(callback, 0);
+globalThis.window = globalThis;
+window.setTimeout = globalThis.setTimeout;
+
+initializeProjectView();
+await openImFeatureView();
+await flushTasks();
+await new Promise(resolve => originalSetTimeout(resolve, 10));
+
+console.log(JSON.stringify({
+    polls: globalThis.__runtimeToolDownloadPolls || [],
+}));
+""".strip(),
+        mock_api_source="""
+export async function fetchRuntimeTools() {
+    return {
+        items: [
+            {
+                tool_id: "gh",
+                display_name: "GitHub CLI",
+                status: "downloading",
+                download_job_id: "gh-job",
+            },
+        ],
+    };
+}
+""".strip(),
+    )
+
+    assert payload["polls"] == ["gh-job"]
+
+
 def test_project_view_delays_feature_loading_state_and_uses_feature_copy(
     tmp_path: Path,
 ) -> None:
@@ -7517,6 +7670,45 @@ export async function fetchConnectors() {
     };
 }
 """.strip(),
+        "fetchRuntimeTools": """
+export async function fetchRuntimeTools() {
+    return { items: [] };
+}
+""".strip(),
+        "startRuntimeToolDownload": """
+export async function startRuntimeToolDownload(toolId) {
+    globalThis.__runtimeToolDownloadRequests =
+        globalThis.__runtimeToolDownloadRequests || [];
+    globalThis.__runtimeToolDownloadRequests.push(toolId);
+    return {
+        job_id: `${toolId}-job`,
+        tool_id: toolId,
+        status: "running",
+        progress_ratio: 0.5,
+        downloaded_bytes: 50,
+        total_bytes: 100,
+        stage: "downloading",
+        error: null,
+    };
+}
+""".strip(),
+        "fetchRuntimeToolDownload": """
+export async function fetchRuntimeToolDownload(jobId) {
+    globalThis.__runtimeToolDownloadPolls =
+        globalThis.__runtimeToolDownloadPolls || [];
+    globalThis.__runtimeToolDownloadPolls.push(jobId);
+    return {
+        job_id: jobId,
+        tool_id: String(jobId).replace(/-job$/, ""),
+        status: "succeeded",
+        progress_ratio: 1,
+        downloaded_bytes: 100,
+        total_bytes: 100,
+        stage: "complete",
+        error: null,
+    };
+}
+""".strip(),
         "testConnector": """
 export async function testConnector(connectorId) {
     return { connector_id: connectorId, ok: true, checks: [] };
@@ -8201,14 +8393,18 @@ export function renderGitHubAccessPanelMarkup() {
     mock_connector_cards_path.parent.mkdir(parents=True, exist_ok=True)
     mock_connector_cards_path.write_text(
         """
-export function renderConnectorsCardPageMarkup({ connectorsResponse, searchQuery = "" } = {}) {
+export function renderConnectorsCardPageMarkup({ connectorsResponse, runtimeToolsResponse, runtimeToolJobs = {}, searchQuery = "" } = {}) {
     const items = Array.isArray(connectorsResponse?.items) && connectorsResponse.items.length > 0
         ? connectorsResponse.items
         : [{ provider: "feishu" }];
+    const runtimeTools = Array.isArray(runtimeToolsResponse?.items)
+        ? runtimeToolsResponse.items
+        : [];
     return `
         <div class="connectors-page">
             <input type="search" value="${searchQuery}" data-connectors-search>
             ${items.map(item => `<button data-connector-open="${item.provider || item.connector_id}">Open Connector</button><button data-connector-manage="${item.provider || item.connector_id}">Manage Connector</button>`).join("")}
+            ${runtimeTools.length ? `<section data-runtime-tools-group><button data-runtime-tools-open>Runtime tools</button></section>` : ""}
             <button data-feature-gateway-add-feishu>Add Robot</button>
             <button data-feature-gateway-add-discord>Add Discord</button>
             <button data-feature-gateway-connect-wechat>Connect WeChat</button>
@@ -8222,6 +8418,18 @@ export function renderConnectorsCardPageMarkup({ connectorsResponse, searchQuery
             <button data-feature-xiaoluban-edit="xlb_1">Edit Xiaoluban</button>
             <button data-feature-xiaoluban-toggle="xlb_1">Toggle Xiaoluban</button>
             <button data-feature-xiaoluban-delete="xlb_1">Delete Xiaoluban</button>
+        </div>
+    `;
+}
+
+export function renderRuntimeToolsModalMarkup({ runtimeToolsResponse, runtimeToolJobs = {} } = {}) {
+    const runtimeTools = Array.isArray(runtimeToolsResponse?.items)
+        ? runtimeToolsResponse.items
+        : [];
+    return `
+        <div data-runtime-tools-modal>
+            <button data-runtime-tools-modal-close>Close</button>
+            ${runtimeTools.map(tool => `<button data-runtime-tool-download="${tool.tool_id}">${runtimeToolJobs[tool.download_job_id || `${tool.tool_id}-job`]?.status || tool.status}</button>`).join("")}
         </div>
     `;
 }

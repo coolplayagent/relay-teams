@@ -36,6 +36,7 @@ from relay_teams.automation.scheduler_service import AutomationSchedulerService
 from relay_teams.automation.xiaoluban_binding_service import (
     AutomationXiaolubanBindingService,
 )
+from relay_teams.binary_tools import BinaryToolService
 from relay_teams.builtin import (
     ensure_app_config_bootstrap,
     get_builtin_roles_dir,
@@ -361,6 +362,9 @@ class ServerContainer:
         self.github_config_service: GitHubConfigService = GitHubConfigService(
             config_dir=app_config_dir,
         )
+        self.binary_tool_service: BinaryToolService = BinaryToolService(
+            config_dir=app_config_dir
+        )
         self.localhost_run_tunnel_service = LocalhostRunTunnelService()
         self.clawhub_config_service: ClawHubConfigService = ClawHubConfigService(
             config_dir=app_config_dir
@@ -381,6 +385,7 @@ class ServerContainer:
         self.clawhub_connectivity_probe_service = ClawHubConnectivityProbeService(
             config_dir=app_config_dir,
             get_clawhub_config=self.clawhub_config_service.get_clawhub_config,
+            binary_tool_service=self.binary_tool_service,
         )
         self.ui_language_settings_service = UiLanguageSettingsService(
             config_dir=app_config_dir

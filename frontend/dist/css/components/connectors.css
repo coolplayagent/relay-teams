@@ -258,6 +258,125 @@
     color: var(--primary, #1f6b57);
 }
 
+.connectors-runtime-card {
+    cursor: pointer;
+}
+
+.connectors-runtime-card-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.connectors-runtime-card-icon {
+    display: inline-flex;
+    width: 42px;
+    height: 42px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    color: var(--text-primary, #111827);
+    background: var(--bg-surface-muted, #f8fafc);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.connectors-runtime-modal-content {
+    max-width: 760px;
+}
+
+.connectors-runtime-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.connectors-runtime-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    background: var(--bg-surface, #fff);
+}
+
+.connectors-runtime-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: center;
+    padding: 16px 18px;
+    border-top: 1px solid var(--border-color, #e2e8f0);
+}
+
+.connectors-runtime-row:first-child {
+    border-top: 0;
+}
+
+.connectors-runtime-main {
+    min-width: 0;
+}
+
+.connectors-runtime-main strong {
+    margin-right: 8px;
+    color: var(--text-primary, #111827);
+    font-size: 14px;
+}
+
+.connectors-runtime-main p {
+    margin: 7px 0 0;
+    color: var(--text-secondary, #64748b);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+.connectors-runtime-status {
+    color: var(--text-secondary, #64748b);
+    font-size: 13px;
+}
+
+.connectors-runtime-status.is-ready {
+    color: var(--success, #13795b);
+}
+
+.connectors-runtime-status.is-error,
+.connectors-runtime-error {
+    color: var(--danger, #b42318);
+}
+
+.connectors-runtime-progress {
+    width: min(360px, 100%);
+    height: 6px;
+    margin-top: 10px;
+    overflow: hidden;
+    border-radius: 6px;
+    background: var(--bg-surface-muted, #f1f5f9);
+}
+
+.connectors-runtime-progress span {
+    display: block;
+    height: 100%;
+    background: var(--primary, #1f6b57);
+}
+
+.connectors-runtime-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.connectors-runtime-actions .connectors-card-action:disabled {
+    cursor: default;
+    opacity: 0.64;
+}
+
+.connectors-runtime-empty {
+    margin: 0;
+    padding: 18px;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 8px;
+    color: var(--text-secondary, #64748b);
+    background: var(--bg-surface, #fff);
+}
+
 .connectors-config-modal-content {
     max-width: 720px;
 }
@@ -463,6 +582,9 @@ body:not(.light-theme) .connectors-search,
 body:not(.light-theme) .connectors-tabs,
 body:not(.light-theme) .connectors-card,
 body:not(.light-theme) .connectors-card-action,
+body:not(.light-theme) .connectors-runtime-card-icon,
+body:not(.light-theme) .connectors-runtime-empty,
+body:not(.light-theme) .connectors-runtime-list,
 body:not(.light-theme) .connectors-config-status-row,
 body:not(.light-theme) .connectors-config-details div,
 body:not(.light-theme) .connectors-account-management,
@@ -511,6 +633,15 @@ body:not(.light-theme) .connectors-summary-chip.is-error strong {
     color: #e3a39c;
 }
 
+body:not(.light-theme) .connectors-runtime-status.is-ready {
+    color: #8bcf9a;
+}
+
+body:not(.light-theme) .connectors-runtime-status.is-error,
+body:not(.light-theme) .connectors-runtime-error {
+    color: #e3a39c;
+}
+
 @media (max-width: 1280px) {
     .connectors-card-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -541,8 +672,17 @@ body:not(.light-theme) .connectors-summary-chip.is-error strong {
     }
 
     .connectors-card-grid,
+    .connectors-runtime-card-grid,
     .connectors-config-details {
         grid-template-columns: 1fr;
+    }
+
+    .connectors-runtime-row {
+        grid-template-columns: 1fr;
+    }
+
+    .connectors-runtime-actions {
+        justify-content: flex-start;
     }
 
     .connectors-account-row {

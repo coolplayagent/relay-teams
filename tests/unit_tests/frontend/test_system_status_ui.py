@@ -1436,6 +1436,7 @@ function installGlobals(elements) {{
                 }},
             }},
         }},
+        writable: true,
     }});
     globalThis.__fetchConfigStatusCalls = 0;
     globalThis.__reloadMcpCalls = 0;

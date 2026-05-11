@@ -17,6 +17,7 @@ from relay_teams.agents.tasks.spec_artifact_diff_service import (
 )
 from relay_teams.agents.tasks.task_repository import TaskRepository
 from relay_teams.automation.automation_service import AutomationService
+from relay_teams.binary_tools import BinaryToolService
 from relay_teams.boards import BoardTodoService
 from relay_teams.connector import ConnectorService
 from relay_teams.env.clawhub_config_service import ClawHubConfigService
@@ -125,6 +126,10 @@ def get_automation_service(request: Request) -> AutomationService:
 
 def get_connector_service(request: Request) -> ConnectorService:
     return get_container(request).connector_service
+
+
+def get_binary_tool_service(request: Request) -> BinaryToolService:
+    return get_container(request).binary_tool_service
 
 
 def get_board_todo_service(request: Request) -> BoardTodoService:

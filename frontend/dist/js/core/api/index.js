@@ -178,6 +178,9 @@ export {
 
 export {
     fetchConnectors,
+    fetchRuntimeToolDownload,
+    fetchRuntimeTools,
+    startRuntimeToolDownload,
     testConnector,
 } from './connectors.js';
 

@@ -40,6 +40,8 @@ import {
     fetchAutomationProjectSessions,
     fetchConfigStatus,
     fetchConnectors,
+    fetchRuntimeToolDownload,
+    fetchRuntimeTools,
     fetchGitHubAccountRepositories,
     fetchGitHubRepoSubscriptions,
     fetchGitHubTriggerAccounts,
@@ -60,6 +62,7 @@ import {
     openWorkspaceRoot,
     reloadSkillsConfig,
     runAutomationProject,
+    startRuntimeToolDownload,
     startWeChatGatewayLogin,
     updateWorkspace,
     updateAutomationProject,
@@ -88,6 +91,7 @@ import {
 import {
     renderConnectorConfigModalMarkup,
     renderConnectorsCardPageMarkup,
+    renderRuntimeToolsModalMarkup,
 } from './connectors/connectorCards.js';
 import { mountBoardTodoBoard, unmountBoardTodoBoard } from './boards/todoBoard.js';
 import { state } from '../core/state.js';
@@ -119,6 +123,7 @@ let currentFeatureLoadingTimer = null;
 let languageBound = false;
 let gatewayModalRoot = null;
 let automationEditorModalRoot = null;
+const runtimeToolPollingJobIds = new Set();
 let selectedTreePath = null;
 let currentDiffState = createInitialDiffState();
 const currentMountTrees = new Map();
@@ -235,6 +240,9 @@ function createInitialGatewayFeatureState() {
         discordAccounts: [],
         wechatAccounts: [],
         connectorsResponse: null,
+        runtimeToolsResponse: null,
+        runtimeToolJobs: {},
+        runtimeToolsModalOpen: false,
         connectorSearch: '',
         connectorStatusFilter: 'all',
         connectorModalProvider: '',
@@ -4246,6 +4254,7 @@ export async function openImFeatureView() {
             feishuEditingTriggerId: '',
             feishuDraft: null,
             connectorsResponse,
+            runtimeToolsResponse: null,
             xiaolubanAccounts: normalizeXiaolubanAccounts(xiaolubanAccounts),
             wechatAccounts: normalizeWeChatAccounts(wechatAccounts),
             discordAccounts: normalizeDiscordAccounts(discordAccounts),
@@ -4254,6 +4263,7 @@ export async function openImFeatureView() {
             orchestrationPresets: normalizeOrchestrationPresets(orchestrationConfig),
         };
         renderGatewayFeatureView();
+        void loadGatewayRuntimeTools(request.token, request.signal);
     } catch (error) {
         if (isAbortError(error) || !isCurrentFeatureRequest(FEATURE_VIEW_IDS.gateway, request.token)) {
             return;
@@ -4262,6 +4272,27 @@ export async function openImFeatureView() {
         sysLog(`Failed to load IM feature: ${error?.message || error}`, 'log-error');
     } finally {
         finishFeatureRequest(request.controller);
+    }
+}
+
+async function loadGatewayRuntimeTools(requestToken, signal = null) {
+    try {
+        const runtimeToolsResponse = await fetchRuntimeTools({ signal });
+        if (!isCurrentFeatureRequest(FEATURE_VIEW_IDS.gateway, requestToken)) {
+            return;
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            runtimeToolsResponse,
+        };
+        resumeRuntimeToolDownloadPolling(runtimeToolsResponse);
+        renderGatewayFeatureView();
+        renderGatewayFeatureModal();
+    } catch (error) {
+        if (isAbortError(error) || !isCurrentFeatureRequest(FEATURE_VIEW_IDS.gateway, requestToken)) {
+            return;
+        }
+        sysLog(`Failed to load runtime tools: ${error?.message || error}`, 'log-warn');
     }
 }
 
@@ -5783,6 +5814,8 @@ function renderGatewayFeatureModal() {
         content = renderGatewayDiscordModal();
     } else if (currentGatewayFeatureState.wechatModalOpen) {
         content = renderGatewayWeChatConnectModal();
+    } else if (currentGatewayFeatureState.runtimeToolsModalOpen) {
+        content = renderRuntimeToolsModal();
     } else {
         content = renderConnectorConfigModal();
     }
@@ -5791,6 +5824,7 @@ function renderGatewayFeatureModal() {
         return;
     }
     bindConnectorConfigModalHandlers(root);
+    bindRuntimeToolsModalHandlers(root);
     root.querySelectorAll('[data-feature-gateway-modal-close]').forEach(button => {
         button.addEventListener('click', () => {
             if (currentGatewayFeatureState.discordDraft) {
@@ -5855,6 +5889,13 @@ function renderConnectorConfigModal() {
     return renderConnectorConfigModalMarkup({
         item,
         accountManagementMarkup: renderConnectorAccountManagement(item),
+    });
+}
+
+function renderRuntimeToolsModal() {
+    return renderRuntimeToolsModalMarkup({
+        runtimeToolsResponse: currentGatewayFeatureState.runtimeToolsResponse,
+        runtimeToolJobs: currentGatewayFeatureState.runtimeToolJobs,
     });
 }
 
@@ -6120,6 +6161,8 @@ function renderGatewayFeatureView({ restoreSearchFocus = false, searchSelectionS
     els.projectViewContent.innerHTML = `
         ${renderConnectorsCardPageMarkup({
             connectorsResponse: currentGatewayFeatureState.connectorsResponse,
+            runtimeToolsResponse: currentGatewayFeatureState.runtimeToolsResponse,
+            runtimeToolJobs: currentGatewayFeatureState.runtimeToolJobs,
             searchQuery: currentGatewayFeatureState.connectorSearch,
             statusFilter: currentGatewayFeatureState.connectorStatusFilter,
         })}
@@ -6159,6 +6202,22 @@ function renderGatewayFeatureView({ restoreSearchFocus = false, searchSelectionS
     els.projectViewContent.querySelectorAll('[data-connector-manage]').forEach(button => {
         button.addEventListener('click', () => {
             void handleManageConnectorCard(button.getAttribute('data-connector-manage'));
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-runtime-tools-card]').forEach(card => {
+        card.addEventListener('click', () => {
+            handleOpenRuntimeToolsModal();
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-runtime-tools-open]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            handleOpenRuntimeToolsModal();
+        });
+    });
+    els.projectViewContent.querySelectorAll('[data-runtime-tool-download]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleDownloadRuntimeTool(button.getAttribute('data-runtime-tool-download'));
         });
     });
     bindGatewayRecordHandlers();
@@ -6201,6 +6260,7 @@ async function handleOpenConnectorCard(provider) {
     currentGatewayFeatureState = {
         ...currentGatewayFeatureState,
         connectorModalProvider: normalizedProvider,
+        runtimeToolsModalOpen: false,
     };
     renderGatewayFeatureModal();
 }
@@ -6214,8 +6274,145 @@ async function handleManageConnectorCard(provider) {
     currentGatewayFeatureState = {
         ...currentGatewayFeatureState,
         connectorModalProvider: normalizedProvider,
+        runtimeToolsModalOpen: false,
     };
     renderGatewayFeatureModal();
+}
+
+function handleOpenRuntimeToolsModal() {
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        runtimeToolsModalOpen: true,
+        connectorModalProvider: '',
+    };
+    renderGatewayFeatureModal();
+}
+
+function handleCloseRuntimeToolsModal() {
+    currentGatewayFeatureState = {
+        ...currentGatewayFeatureState,
+        runtimeToolsModalOpen: false,
+    };
+    renderGatewayFeatureModal();
+}
+
+function bindRuntimeToolsModalHandlers(root) {
+    root.querySelectorAll('[data-runtime-tools-modal-close]').forEach(button => {
+        button.addEventListener('click', () => {
+            handleCloseRuntimeToolsModal();
+        });
+    });
+    root.querySelectorAll('[data-runtime-tool-download]').forEach(button => {
+        button.addEventListener('click', () => {
+            void handleDownloadRuntimeTool(button.getAttribute('data-runtime-tool-download'));
+        });
+    });
+}
+
+async function handleDownloadRuntimeTool(toolId) {
+    const normalizedToolId = String(toolId || '').trim();
+    if (!normalizedToolId) {
+        return;
+    }
+    try {
+        const job = await startRuntimeToolDownload(normalizedToolId);
+        if (currentFeatureViewId !== FEATURE_VIEW_IDS.gateway) {
+            return;
+        }
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            runtimeToolJobs: {
+                ...currentGatewayFeatureState.runtimeToolJobs,
+                [job.job_id]: job,
+            },
+        };
+        await refreshRuntimeToolsStatus();
+        if (currentFeatureViewId !== FEATURE_VIEW_IDS.gateway) {
+            return;
+        }
+        renderGatewayFeatureView();
+        renderGatewayFeatureModal();
+        pollRuntimeToolDownload(job.job_id);
+    } catch (error) {
+        showToast({
+            title: t('feature.connectors.runtime_tools.download_failed'),
+            message: String(error?.message || error || ''),
+            tone: 'danger',
+        });
+    }
+}
+
+async function refreshRuntimeToolsStatus() {
+    try {
+        const runtimeToolsResponse = await fetchRuntimeTools();
+        currentGatewayFeatureState = {
+            ...currentGatewayFeatureState,
+            runtimeToolsResponse,
+        };
+        resumeRuntimeToolDownloadPolling(runtimeToolsResponse);
+    } catch (error) {
+        sysLog(`Failed to refresh runtime tools: ${error?.message || error}`, 'log-warn');
+    }
+}
+
+function pollRuntimeToolDownload(jobId) {
+    const normalizedJobId = String(jobId || '').trim();
+    if (!normalizedJobId || runtimeToolPollingJobIds.has(normalizedJobId)) {
+        return;
+    }
+    runtimeToolPollingJobIds.add(normalizedJobId);
+    scheduleRuntimeToolDownloadPoll(normalizedJobId);
+}
+
+function scheduleRuntimeToolDownloadPoll(normalizedJobId) {
+    window.setTimeout(async () => {
+        if (currentFeatureViewId !== FEATURE_VIEW_IDS.gateway) {
+            runtimeToolPollingJobIds.delete(normalizedJobId);
+            return;
+        }
+        try {
+            const job = await fetchRuntimeToolDownload(normalizedJobId);
+            if (currentFeatureViewId !== FEATURE_VIEW_IDS.gateway) {
+                runtimeToolPollingJobIds.delete(normalizedJobId);
+                return;
+            }
+            currentGatewayFeatureState = {
+                ...currentGatewayFeatureState,
+                runtimeToolJobs: {
+                    ...currentGatewayFeatureState.runtimeToolJobs,
+                    [job.job_id]: job,
+                },
+            };
+            await refreshRuntimeToolsStatus();
+            if (currentFeatureViewId !== FEATURE_VIEW_IDS.gateway) {
+                runtimeToolPollingJobIds.delete(normalizedJobId);
+                return;
+            }
+            renderGatewayFeatureView();
+            renderGatewayFeatureModal();
+            if (job.status === 'queued' || job.status === 'running') {
+                scheduleRuntimeToolDownloadPoll(normalizedJobId);
+            } else {
+                runtimeToolPollingJobIds.delete(normalizedJobId);
+            }
+        } catch (error) {
+            runtimeToolPollingJobIds.delete(normalizedJobId);
+            sysLog(`Failed to poll runtime tool download: ${error?.message || error}`, 'log-warn');
+        }
+    }, 600);
+}
+
+function resumeRuntimeToolDownloadPolling(runtimeToolsResponse) {
+    const items = Array.isArray(runtimeToolsResponse?.items)
+        ? runtimeToolsResponse.items
+        : [];
+    items.forEach(item => {
+        const status = String(item?.status || '').trim();
+        const jobId = String(item?.download_job_id || '').trim();
+        if (jobId && status === 'downloading') {
+            pollRuntimeToolDownload(jobId);
+        }
+    });
 }
 
 function getConnectorItemByProvider(provider) {

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 import asyncio
 import json
-import os
+from os import environ, pathsep
 from pathlib import Path
 from time import perf_counter
 import re
@@ -27,7 +27,7 @@ from relay_teams.env.proxy_env import (
     proxy_applies_to_url,
 )
 from relay_teams.net.clients import create_async_http_client
-from relay_teams.net.github_cli import BIN_DIR, get_gh_path
+from relay_teams.net.github_cli import BIN_DIR, get_bundled_gh_path, get_gh_path
 from relay_teams.net.github_cli_errors import GitHubCliNotFoundError
 
 _MAX_GITHUB_PROBE_TIMEOUT_MS = 300_000
@@ -225,7 +225,7 @@ class GitHubConnectivityProbeService:
             else request.timeout_ms / 1000.0
         )
         env = build_subprocess_env(
-            base_env=os.environ,
+            base_env=environ,
             extra_env=build_github_cli_env(context.token),
         )
         env["PATH"] = _prepend_to_path(env.get("PATH"), gh_path.parent)
@@ -597,11 +597,14 @@ def _prepend_to_path(existing_path: str | None, directory: Path) -> str:
     path_parts = [str(directory)]
     if existing_path:
         path_parts.append(existing_path)
-    return ":".join(path_parts)
+    return pathsep.join(path_parts)
 
 
 def _is_bundled_binary(gh_path: Path) -> bool:
-    return gh_path.parent == BIN_DIR
+    bundled_path = get_bundled_gh_path()
+    if bundled_path is not None:
+        return gh_path == bundled_path
+    return BIN_DIR is not None and gh_path.parent == BIN_DIR
 
 
 def _parse_status_code(value: str) -> int | None:

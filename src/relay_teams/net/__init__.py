@@ -6,11 +6,6 @@ from relay_teams.net.clients import (
     create_runtime_async_http_client,
 )
 from relay_teams.net.constants import DEFAULT_HTTP_CONNECT_TIMEOUT_SECONDS
-from relay_teams.net.github_cli import (
-    get_gh_path,
-    resolve_existing_gh_path,
-    resolve_system_gh_path,
-)
 from relay_teams.net.llm_client import (
     build_llm_http_client,
     clear_llm_http_client_cache,
@@ -31,8 +26,5 @@ __all__ = [
     "reset_llm_http_client_cache_entry",
     "create_async_http_client",
     "create_runtime_async_http_client",
-    "get_gh_path",
-    "resolve_existing_gh_path",
-    "resolve_system_gh_path",
     "resolve_websocket_proxy_url",
 ]

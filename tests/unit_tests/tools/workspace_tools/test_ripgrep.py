@@ -10,6 +10,8 @@ import zipfile
 
 import pytest
 
+from relay_teams.binary_tools import BinaryToolId
+
 
 class TestRipgrepFilepath:
     def test_platform_detection(self) -> None:
@@ -155,60 +157,42 @@ class TestRipgrepFilepath:
 
 class TestRipgrepDownload:
     @pytest.mark.asyncio
-    async def test_download_enables_redirect_following(self, tmp_path: Path) -> None:
+    async def test_download_delegates_to_binary_tool_service(
+        self,
+        tmp_path: Path,
+    ) -> None:
         from relay_teams.tools.workspace_tools import ripgrep
 
         target = tmp_path / "rg.exe"
-        response = MagicMock(status_code=200, content=b"fake-zip")
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=response)
-        client_cm = AsyncMock()
-        client_cm.__aenter__.return_value = client
-        client_cm.__aexit__.return_value = None
 
+        service = _FakeDownloadService()
         with patch(
-            "relay_teams.tools.workspace_tools.ripgrep.create_async_http_client",
-            return_value=client_cm,
-        ) as mock_client_cls:
-            with patch(
-                "relay_teams.tools.workspace_tools.ripgrep._get_platform_key",
-                return_value="x64-windows",
-            ):
-                with patch(
-                    "relay_teams.tools.workspace_tools.ripgrep._extract_zip"
-                ) as mock_extract_zip:
-                    with patch("relay_teams.tools.workspace_tools.ripgrep.os.chmod"):
-                        await ripgrep._download_rg(target)
+            "relay_teams.tools.workspace_tools.ripgrep._build_binary_tool_service",
+            return_value=service,
+        ):
+            await ripgrep._download_rg(target)
 
-        mock_client_cls.assert_called_once_with(follow_redirects=True)
-        client.get.assert_awaited_once()
-        mock_extract_zip.assert_called_once_with(b"fake-zip", target)
+        assert service.calls == [(BinaryToolId.RIPGREP, target)]
 
     @pytest.mark.asyncio
-    async def test_download_non_200_raises(self, tmp_path: Path) -> None:
+    async def test_download_propagates_binary_tool_service_failure(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from relay_teams.binary_tools import BinaryToolDownloadError
         from relay_teams.tools.workspace_tools import ripgrep
-        from relay_teams.tools.workspace_tools.ripgrep_errors import DownloadFailedError
 
         target = tmp_path / "rg.exe"
-        response = MagicMock(status_code=404, content=b"")
-        client = AsyncMock()
-        client.get = AsyncMock(return_value=response)
-        client_cm = AsyncMock()
-        client_cm.__aenter__.return_value = client
-        client_cm.__aexit__.return_value = None
+        service = _FakeDownloadService(error=BinaryToolDownloadError("HTTP 404"))
 
         with patch(
-            "relay_teams.tools.workspace_tools.ripgrep.create_async_http_client",
-            return_value=client_cm,
+            "relay_teams.tools.workspace_tools.ripgrep._build_binary_tool_service",
+            return_value=service,
         ):
-            with patch(
-                "relay_teams.tools.workspace_tools.ripgrep._get_platform_key",
-                return_value="x64-windows",
-            ):
-                with pytest.raises(DownloadFailedError) as exc:
-                    await ripgrep._download_rg(target)
+            with pytest.raises(BinaryToolDownloadError):
+                await ripgrep._download_rg(target)
 
-        assert exc.value.status == 404
+        assert service.calls == [(BinaryToolId.RIPGREP, target)]
 
     def test_extract_zip_replaces_existing_target(self, tmp_path: Path) -> None:
         from relay_teams.tools.workspace_tools import ripgrep
@@ -223,6 +207,17 @@ class TestRipgrepDownload:
         ripgrep._extract_zip(buffer.getvalue(), target)
 
         assert target.read_bytes() == b"new"
+
+
+class _FakeDownloadService:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.calls: list[tuple[BinaryToolId, Path]] = []
+        self._error = error
+
+    async def download_tool_to_path(self, tool_id: BinaryToolId, target: Path) -> None:
+        self.calls.append((tool_id, target))
+        if self._error is not None:
+            raise self._error
 
 
 class TestGrepSearch:
