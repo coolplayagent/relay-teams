@@ -101,6 +101,7 @@ import { showConfirmDialog, showFormDialog, showToast } from '../utils/feedback.
 import { logWarn, sysLog } from '../utils/logger.js';
 
 let currentWorkspace = null;
+let lastKnownWorkspaceId = '';
 let currentAutomationProject = null;
 let currentProjectViewMode = 'workspace';
 let currentFeatureViewId = '';
@@ -2733,7 +2734,16 @@ function renderFeatureEmptyState(title, copy, action = '') {
     `;
 }
 
+function rememberLastKnownWorkspaceId(workspaceId = state.currentWorkspaceId) {
+    const safeWorkspaceId = String(workspaceId || '').trim();
+    if (!safeWorkspaceId || safeWorkspaceId.startsWith('feature:')) {
+        return;
+    }
+    lastKnownWorkspaceId = safeWorkspaceId;
+}
+
 function openFeatureShell(featureId) {
+    rememberLastKnownWorkspaceId();
     cacheProjectViewState();
     resetFeatureSurface();
     currentProjectViewMode = 'feature';
@@ -4091,6 +4101,7 @@ export async function openWorkspaceProjectView(workspace) {
         return;
     }
 
+    rememberLastKnownWorkspaceId(workspaceId);
     abortCurrentFeatureRequest();
     currentFeatureRequestToken += 1;
     cacheProjectViewState();
@@ -4329,6 +4340,7 @@ function resolveBoardsFeaturePreferredWorkspaceId() {
     return String(
         state.pendingNewSessionWorkspaceId
         || state.currentWorkspaceId
+        || lastKnownWorkspaceId
         || '',
     ).trim();
 }
@@ -4414,6 +4426,7 @@ export function prepareExternalFeatureView(featureId) {
     if (!safeFeatureId) {
         return;
     }
+    rememberLastKnownWorkspaceId();
     abortCurrentFeatureRequest();
     currentFeatureRequestToken += 1;
     resetFeatureSurface();
