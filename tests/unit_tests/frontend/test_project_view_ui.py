@@ -5167,9 +5167,11 @@ import {
     openBoardsFeatureView,
 } from "./projectView.mjs";
 import { openMemoryFeatureView } from "./memoryView.mjs";
+import { state } from "./mockState.mjs";
 import { els, flushTasks } from "./mockDom.mjs";
 
 initializeProjectView();
+state.currentWorkspaceId = "alpha-project";
 await openMemoryFeatureView();
 await flushTasks();
 await flushTasks();
@@ -5203,7 +5205,9 @@ console.log(JSON.stringify({ afterMemory, afterBoards }));
     assert after_boards["toolbarHidden"] is True
     assert "board-todo-root" in str(after_boards["contentHtml"])
     assert "memory-toolbar-controls" not in str(after_boards["toolbarHtml"])
-    assert len(cast(list[object], after_boards["mountCalls"])) == 1
+    assert cast(list[dict[str, object]], after_boards["mountCalls"]) == [
+        {"preferredWorkspaceId": "alpha-project"}
+    ]
 
 
 def test_board_todo_full_sync_bypasses_stale_delta_cache() -> None:
