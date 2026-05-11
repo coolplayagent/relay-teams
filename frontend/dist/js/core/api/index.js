@@ -108,6 +108,7 @@ export {
     fetchClawHubSkill,
     fetchClawHubSkills,
     addMcpServer,
+    deleteMcpServer,
     configurePlugin,
     installPlugin,
     reloadMcpConfig,

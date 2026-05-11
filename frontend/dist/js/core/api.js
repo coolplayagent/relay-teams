@@ -94,6 +94,7 @@ export {
     fetchClawHubSkill,
     fetchClawHubSkills,
     addMcpServer,
+    deleteMcpServer,
     fetchGitHubConfig,
     revealGitHubToken,
     revealSshProfilePassword,
