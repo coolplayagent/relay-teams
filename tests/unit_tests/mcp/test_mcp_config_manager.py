@@ -524,6 +524,51 @@ def test_set_server_enabled_rejects_empty_and_unknown_names(tmp_path: Path) -> N
         raise AssertionError("Expected unknown MCP server to be rejected")
 
 
+def test_delete_server_removes_entry_from_app_mcp_config(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    config_path = app_config_dir / "mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "filesystem": {"command": "npx"},
+                    "docs": {"command": "uvx"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    manager.delete_server(name="filesystem")
+
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload == {"mcpServers": {"docs": {"command": "uvx"}}}
+    registry = manager.load_registry()
+    assert registry.list_names() == ("docs",)
+
+
+def test_delete_server_rejects_empty_and_unknown_names(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / ".agent-teams"
+    app_config_dir.mkdir(parents=True)
+    manager = config_manager.McpConfigManager(app_config_dir=app_config_dir)
+
+    try:
+        manager.delete_server(name=" ")
+    except ValueError as exc:
+        assert "MCP server name must be a non-empty string" in str(exc)
+    else:
+        raise AssertionError("Expected empty MCP server name to be rejected")
+
+    try:
+        manager.delete_server(name="missing")
+    except ValueError as exc:
+        assert "Unknown MCP server: missing" in str(exc)
+    else:
+        raise AssertionError("Expected unknown MCP server to be rejected")
+
+
 def test_update_server_preserves_enabled_state(tmp_path: Path) -> None:
     app_config_dir = tmp_path / ".agent-teams"
     app_config_dir.mkdir(parents=True)

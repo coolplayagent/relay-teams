@@ -86,6 +86,19 @@ async def update_mcp_server(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.delete("/servers/{server_name}")
+async def delete_mcp_server(
+    server_name: str,
+    service: McpService = Depends(get_mcp_service),
+) -> McpServerSummary:
+    try:
+        return service.delete_server(server_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.put("/servers/{server_name}/enabled")
 async def set_mcp_server_enabled(
     server_name: str,

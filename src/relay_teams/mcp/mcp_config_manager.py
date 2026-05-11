@@ -223,6 +223,30 @@ class McpConfigManager:
             config_path.write_text(json_dumps(payload), encoding="utf-8")
             return config_path
 
+    def delete_server(self, *, name: str) -> Path:
+        ensure_app_config_bootstrap(self._app_config_dir)
+        with trace_span(
+            logger,
+            component="mcp.config",
+            operation="delete_server",
+            attributes={"app_config_dir": str(self._app_config_dir), "name": name},
+        ):
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise ValueError("MCP server name must be a non-empty string")
+
+            config_path = self._app_config_dir / _MCP_FILE_NAME
+            raw_payload = _load_json_object(config_path) if config_path.exists() else {}
+            payload, existing_servers = _writable_mcp_servers_payload(raw_payload)
+            if not existing_servers:
+                raise ValueError(f"Unknown MCP server: {normalized_name}")
+            if normalized_name not in existing_servers:
+                raise ValueError(f"Unknown MCP server: {normalized_name}")
+
+            del existing_servers[normalized_name]
+            config_path.write_text(json_dumps(payload), encoding="utf-8")
+            return config_path
+
 
 def _load_specs_from_file(
     *, file_path: Path, source: McpConfigScope, proxy_env: dict[str, str]

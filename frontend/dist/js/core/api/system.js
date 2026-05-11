@@ -727,6 +727,16 @@ export async function updateMcpServer(serverName, payload) {
     return result;
 }
 
+export async function deleteMcpServer(serverName) {
+    const result = await requestJson(
+        `/api/mcp/servers/${encodeURIComponent(serverName)}`,
+        { method: 'DELETE' },
+        `Failed to delete MCP server ${serverName}`,
+    );
+    invalidateRoleOptionDependencies();
+    return result;
+}
+
 export async function testMcpServerConnection(serverName) {
     return requestJson(
         `/api/mcp/servers/${encodeURIComponent(serverName)}/test`,

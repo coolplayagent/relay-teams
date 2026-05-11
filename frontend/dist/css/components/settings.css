@@ -1624,6 +1624,36 @@
     flex-wrap: wrap;
 }
 
+.mcp-status-card-controls {
+    min-width: min(420px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.7rem;
+}
+
+.mcp-status-card-footer {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    padding-top: 0.15rem;
+    border-top: 1px solid color-mix(in srgb, var(--settings-divider) 72%, transparent);
+}
+
+.mcp-status-toggle-danger {
+    color: color-mix(in srgb, var(--danger) 82%, var(--text-primary));
+    border-color: color-mix(in srgb, var(--danger) 24%, var(--settings-divider));
+    background: color-mix(in srgb, var(--danger) 5%, var(--settings-row-bg));
+}
+
+.mcp-status-toggle-danger:hover {
+    background: color-mix(in srgb, var(--danger) 9%, var(--bg-hover));
+    border-color: color-mix(in srgb, var(--danger) 42%, var(--primary));
+    color: var(--danger);
+}
+
 .mcp-test-result {
     margin: 0 1rem 0.85rem;
     padding: 0.55rem 0.7rem;
@@ -1862,6 +1892,17 @@
 @media (max-width: 720px) {
     .hooks-runtime-card .hooks-runtime-detail-row {
         gap: 0.75rem;
+    }
+
+    .mcp-status-card-controls {
+        min-width: 0;
+        width: 100%;
+        align-items: stretch;
+    }
+
+    .mcp-status-card-actions,
+    .mcp-status-card-footer {
+        justify-content: flex-start;
     }
 
     .hooks-config-card-editing .mcp-status-card-header {
