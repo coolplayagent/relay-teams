@@ -1,192 +1,50 @@
 # Workspace TODO Board Design
 
-## Purpose
+本文档是 Workspace TODO Board 设计文档索引。详细设计已拆分到多个文件，避免单一文档继续承载产品目标、数据来源、状态机、AGENTS 交付和模块结构等不同层面的内容。
 
-Workspace TODO Board is the Agent Teams-owned kanban for workspace work items. It
-uses external systems only as sources of truth for evidence, not for board column
-state. In v1, GitHub issues are imported as TODO items. Pull requests are linked
-to review items and are used as evidence for completion.
+当前阶段只定义目标设计，不表示所有 API、数据库表或前端交互已经实现。实现阶段如果修改公共 API 或持久化结构，必须同步更新 `docs/core/api-design.md` 和 `docs/core/database-schema.md`。
 
-The feature is owned by the `boards` domain. It is intentionally separate from
-the connector overview: connectors report availability and health, while boards
-own TODO persistence, session binding, status transitions, and archive semantics.
+## 文档入口
 
-## User Experience
+- [整体设计](workspace-todo-board-overview.md)
+  - 说明 TODO 看板的产品目标、核心概念、系统边界和端到端用户流程。
+  - 给出从 source sync 到 AGENTS handoff、session/run、review/done 的完整流程。
 
-The frontend exposes a dedicated `Boards` feature page alongside Skills,
-Automation, and Connectors. The main board shows four workflow columns:
+- [数据来源设计](workspace-todo-board-source-design.md)
+  - 说明 source 配置模型、GitHub 显式配置、自动探测 fallback、多 source 同步和未来扩展方式。
+  - 定义 `source_id` 目标 identity、legacy provider/type/key 兼容边界，以及旧 `TaskBoardAdapter` 可复用逻辑迁移后删除的方向。
 
-- `todo`
-- `in_progress`
-- `review`
-- `done`
+- [状态机设计](workspace-todo-board-state-machine.md)
+  - 定义 board 状态、run runtime 状态、session 删除、PR merged、issue closed/reopened、archive/restore 之间的关系。
+  - 包含状态表、事件表和 Mermaid 状态图。
 
-`archived` is a separate view. Archived items can be restored to `todo`; restore
-does not recover the pre-archive status because that would bypass the
-session/PR-driven state machine.
+- [AGENTS 交付设计](workspace-todo-board-agent-handoff.md)
+  - 说明用户点击 Start 后如何先编辑 prompt，再确认交给 AGENTS 执行。
+  - 定义模板优先级、模板变量、preview API、start API 和 request changes 语义。
 
-Each card shows source, title, repository, session, linked PR, source update
-time, and actions. GitHub issue cards use GitHub issue `updated_at`; manual TODOs
-fall back to the local board row update time. Details open in a modal with the
-full body, issue URL, linked PR URL, session/run ids, source update time, board
-update time, and status reason. The card also has a direct source-link action for
-the GitHub issue. Source links are icon-only external links. The details modal
-paginates long bodies by paragraph so large issue descriptions remain readable
-without losing the metadata context.
+- [执行 Runtime、AI 发放和并发设计](workspace-todo-board-execution-runtime-design.md)
+  - 说明 TODO handoff 如何绑定本地 role、外部 agent runtime 或 orchestration preset。
+  - 定义 AI start、AI review、AI auto done、queue ticket、attempt phase 和 Workspace+Runtime 并发限制。
 
-Each column has its own client-side search and sort controls. Search matches the
-title, body, repository, issue/PR numbers, and session id. Sort modes are newest,
-oldest, title A-Z, and title Z-A. Time sort uses `source_updated_at || updated_at`
-so GitHub issue ordering follows issue activity rather than the time Agent Teams
-persisted the row. These controls are view state only; they do not change board
-persistence or revision.
+- [协作审计、Attempt 和诊断设计](workspace-todo-board-collaboration-design.md)
+  - 说明 TODO 的 attempt/run history、comments/events、structured completion metadata、diagnostics、idempotency 和 TODO-bound worker context。
+  - 明确 TODO 是线性列表，不引入 parent/child dependency graph，也不照搬 Hermes Kanban 的 `triage`、`ready`、`blocked` 等状态体系。
 
-Small screens keep the kanban interaction instead of collapsing the workflow
-into a single list. The board uses horizontal snap columns, compact spacing, a
-stacked toolbar, fixed column headers, independently scrolling card lists, and a
-near-fullscreen details modal.
+- [模块目录结构设计](workspace-todo-board-module-layout.md)
+  - 规划 `src/relay_teams/boards/` 的目标目录结构、职责拆分、依赖方向和迁移策略。
+  - 明确旧空 API 与旧 dispatcher 语义的迁移边界。
 
-## State Machine
+## 设计原则
 
-The board status is owned by Agent Teams:
-
-- `todo`: new manual item or imported GitHub issue.
-- `in_progress`: a user starts processing; the backend creates a dedicated
-  session/run and stores `session_id/run_id`.
-- `review`: the bound run completes.
-- `done`: the item has a linked PR and the PR is merged.
-- `archived`: soft delete; hidden from the main board.
-
-GitHub PRs are not TODO cards. During sync/reconcile, review GitHub issue items
-may query issue timeline events to discover linked PRs. A merged linked PR moves
-the issue TODO to `done`.
-
-If a bound session is deleted, active board items cannot remain in
-`in_progress` or `review` with a dead session reference. Non-archived,
-non-`done` items bound to the deleted session return to `todo`, clear
-`session_id/run_id`, and record `Bound session deleted`. `done` items keep their
-status but clear the stale session reference.
-
-## API
-
-Full board APIs remain available for cold start and compatibility:
-
-- `GET /api/boards/todos`
-- `POST /api/boards/todos:sync`
-
-Incremental APIs support cached frontend views:
-
-- `GET /api/boards/todos:changes`
-- `POST /api/boards/todos:sync-changes`
-
-Delta requests include `workspace_id`, `include_archived`, and
-`after_revision`. Sync delta also accepts `force_full`. Delta responses include
-changed items, removed active-view ids, status counts, diagnostics, synced time,
-and the latest workspace revision.
-
-Mutation APIs return the changed item so the frontend can update local cache
-without reloading the whole board:
-
-- `POST /api/boards/todos`
-- `POST /api/boards/todos/{todo_id}:start`
-- `POST /api/boards/todos/{todo_id}:request-changes`
-- `POST /api/boards/todos/{todo_id}:archive`
-- `POST /api/boards/todos/{todo_id}:restore`
-- `POST /api/boards/todos/{todo_id}:link-pr`
-
-## Persistence
-
-`board_todo_items` stores the item state and source references. Each row has an
-`item_revision`. `updated_at` is the Agent Teams row update time, while
-`source_updated_at` is the external source update time used for board sorting.
-`board_todo_workspace_state` stores the current workspace revision and the
-GitHub issue sync cursor.
-
-Every write that changes an item increments the workspace revision and writes
-that value into the item row. Delta queries return rows with
-`item_revision > after_revision`. In active view, archived rows are returned as
-`removed_todo_ids` so the frontend can remove them from the main board.
-
-The GitHub issue cursor is per workspace/repository. A repository change resets
-incremental behavior by ignoring the old cursor.
-
-## Sync Behavior
-
-Sync resolves the workspace Git remote to `owner/repo`, then obtains a GitHub
-token from enabled trigger accounts or the shared GitHub token.
-
-Full sync fetches all open issues and treats that open issue number set as the
-authoritative active TODO set. Incremental sync fetches all issues changed since
-the stored cursor so recent close/reopen events can be reconciled. Pull request
-refresh uses the same cursor during incremental sync and only full sync scans
-all PRs. After a successful sync, the cursor is advanced to the sync time.
-
-GitHub `/issues` responses that contain a `pull_request` object are ignored as
-TODO sources. Closed issues are not imported as new TODO items. If an existing
-active issue item is later observed as closed, sync moves it to `done` only when
-its linked PR is merged; otherwise it is soft-archived with status reason
-`GitHub issue closed`. Pull requests are still listed so linked PR merge state
-can be reconciled for review items.
-
-The frontend uses a versioned localStorage cache. A cache-version bump forces a
-new cold start. The first board load for each workspace in a browser session
-shows cache immediately and may perform a sync in the background only when the
-workspace has not auto-synced in the last hour. Manual `Sync GitHub` is always a
-deliberate full reconciliation so stale closed issues are removed from the active
-board. If a full reconciliation does not see a previously active GitHub issue in
-the open issue set, that item is archived as
-`GitHub issue no longer open`.
-
-If GitHub later reports the same issue as open again, sync restores only items
-that were archived by GitHub closed/non-open reconciliation back to `todo`.
-Items manually archived by a user remain archived until the user explicitly
-restores them.
-
-## Frontend Cache And Progressive Loading
-
-The frontend cache is keyed by `workspace_id + include_archived`. Each cached
-board stores the latest revision. On mount or workspace switch:
-
-- Cached data renders immediately.
-- A delta request refreshes in the background.
-- Without cache, the page shows column skeletons.
-- When full data arrives, cards are rendered in batches to create visible
-  progress instead of a single long blocking update.
-
-Column headers, counts, search, and sort controls do not scroll with the card
-list. Only the cards inside each column have vertical scrolling.
-
-Mutation results are merged into active and archived caches immediately. A
-background delta refresh follows to reconcile any lifecycle updates. Archived
-items are never reactivated by sync unless they were auto-archived because a
-GitHub issue was closed or no longer open and GitHub later reports that issue as
-open again.
-
-Progressive loading animates only cards that first enter the DOM. Cached boards
-render without entrance animation, and non-data interactions such as opening
-details or source links do not re-render the columns. This avoids the impression
-that the whole board is refreshing for every click.
-
-## Failure Modes
-
-If workspace Git remote resolution fails, the board still loads local/manual
-items and returns diagnostics.
-
-If GitHub token resolution or sync fails, cached/local data remains usable and
-diagnostics are displayed. GitHub sync diagnostics must always include a
-non-empty message; API failures include the status code when available. Archived
-items are never reactivated by sync.
-
-If a delta is requested without a usable cache, the frontend falls back to the
-full board endpoint.
-
-## Test Strategy
-
-Backend unit tests cover workspace independence, revision/delta behavior,
-archive/remove semantics, restore, incremental GitHub cursor use, issue-only
-sync, closed issue filtering, review PR linking, merged PR completion, session
-delete recovery, and historical PR TODO archival.
-
-Frontend checks cover cache-first rendering, delta merge, progressive loading,
-workspace/view switch cancellation, per-column search/sort, detail pagination,
-restore from archive, and responsive layout.
+- Board column state 由 Agent Teams 拥有，外部系统只提供 source record 和 completion evidence。
+- TODO source 必须可配置；GitHub 自动探测只能作为默认建议，不能是唯一入口。
+- TODO source 目标 identity 使用 `source_id + source_key`；`source_provider/source_type/source_key` 旧三元组只用于迁移兼容和展示。
+- TODO board 的持久化归属由 `board_workspace_id` 决定；普通 workspace 的 `view_workspace_id` 与 `board_workspace_id` 相同，`git_worktree` fork workspace 只作为 view/execution workspace，共享最终 root workspace 的同一套 TODO board。
+- AGENTS handoff 必须由用户确认最终 prompt 后触发，后端不再隐式拼装不可见提示词。
+- AI 发放也必须走同一条 handoff preview/final prompt/start 管线，不能绕过模板、runtime target、execution workspace 或并发限制。
+- 状态机必须以 session/run 生命周期为一等输入，避免卡片状态和实际执行状态分裂。
+- linked PR merged 只自动完成已经处于 `review` 的 item；`todo` 或 `in_progress` item 只记录 evidence。
+- 排队 handoff 必须保存完整 final prompt snapshot/ref，摘要不能作为后续 run 创建输入。
+- `in_progress` 表示“已发放或处理中”；卡片展示从 queue ticket、attempt phase、run runtime status、review policy/state 和 diagnostics 等事实派生，不新增一套 Hermes 式公共子标签体系。
+- TODO 来源是线性的；AI 或人工可以创建新的 TODO，但新 TODO 与原 TODO 不形成调度依赖。
+- Boards 模块只拥有 TODO board 和 tracker/source 集成，不拥有 run-local todo 工具状态，也不绕过 sessions/runs 的生命周期边界。
