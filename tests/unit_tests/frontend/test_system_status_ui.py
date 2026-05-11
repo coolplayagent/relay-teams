@@ -596,6 +596,8 @@ const elements = createElements();
     'add-mcp-server-btn',
     'save-mcp-server-btn',
     'cancel-mcp-server-btn',
+    'copy-mcp-server-json-btn',
+    'mcp-server-json-input',
     'mcp-server-name-input',
     'mcp-server-transport-input',
     'mcp-server-command-input',
@@ -633,6 +635,192 @@ console.log(JSON.stringify({
     assert config["env"] == {"TOKEN": "new"}
     assert config["cwd"] == "C:/workspace"
     assert config["read_timeout"] == 300
+
+
+def test_mcp_editor_populates_json_preview_when_editing_existing_server(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: ['filesystem'],
+    },
+    skills: {
+        skills: [],
+    },
+};
+
+export async function fetchConfigStatus() {
+    return status;
+}
+
+export async function fetchMcpServer(serverName) {
+    return {
+        server: { name: serverName, source: 'app', transport: 'stdio', enabled: true },
+        config: {
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', 'server-filesystem'],
+            env: { TOKEN: 'old' },
+            cwd: 'C:/workspace',
+        },
+    };
+}
+
+export async function fetchMcpServerTools(serverName) {
+    return { server: serverName, source: 'app', transport: 'stdio', tools: [] };
+}
+
+export async function reloadMcpConfig() {
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'copy-mcp-server-json-btn',
+    'mcp-server-json-input',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+
+bindSystemStatusHandlers();
+await globalThis.__agentTeamsEditMcpServer('filesystem');
+
+console.log(JSON.stringify({
+    jsonConfig: document.getElementById('mcp-server-json-input').value,
+}));
+""".strip(),
+    )
+
+    assert payload["jsonConfig"] == json.dumps(
+        {
+            "mcpServers": {
+                "filesystem": {
+                    "transport": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "server-filesystem"],
+                    "env": {"TOKEN": "old"},
+                    "cwd": "C:/workspace",
+                }
+            }
+        },
+        indent=2,
+    )
+
+
+def test_mcp_editor_copy_json_copies_current_preview(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        mock_api_source="""
+const status = {
+    mcp: {
+        servers: ['filesystem'],
+    },
+    skills: {
+        skills: [],
+    },
+};
+
+export async function fetchConfigStatus() {
+    return status;
+}
+
+export async function fetchMcpServer(serverName) {
+    return {
+        server: { name: serverName, source: 'app', transport: 'stdio', enabled: true },
+        config: {
+            transport: 'stdio',
+            command: 'npx',
+            args: ['-y', 'server-filesystem'],
+        },
+    };
+}
+
+export async function fetchMcpServerTools(serverName) {
+    return { server: serverName, source: 'app', transport: 'stdio', tools: [] };
+}
+
+export async function reloadMcpConfig() {
+    return { status: 'ok' };
+}
+
+export async function reloadSkillsConfig() {
+    return { status: 'ok' };
+}
+""".strip(),
+        runner_source="""
+const { bindSystemStatusHandlers } = await import('./systemStatus.mjs');
+
+const elements = createElements();
+[
+    'add-mcp-server-btn',
+    'save-mcp-server-btn',
+    'cancel-mcp-server-btn',
+    'copy-mcp-server-json-btn',
+    'mcp-server-json-input',
+    'mcp-server-name-input',
+    'mcp-server-transport-input',
+    'mcp-server-command-input',
+    'mcp-server-args-input',
+    'mcp-server-extra-input',
+    'mcp-server-url-input',
+    'mcp-server-overwrite-input',
+].forEach(id => elements.set(id, createElement('block')));
+installGlobals(elements);
+
+bindSystemStatusHandlers();
+await globalThis.__agentTeamsEditMcpServer('filesystem');
+await document.getElementById('copy-mcp-server-json-btn').onclick();
+
+console.log(JSON.stringify({
+    clipboardWrites: globalThis.__clipboardWrites,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    assert payload["clipboardWrites"] == [
+        json.dumps(
+            {
+                "mcpServers": {
+                    "filesystem": {
+                        "transport": "stdio",
+                        "command": "npx",
+                        "args": ["-y", "server-filesystem"],
+                    }
+                }
+            },
+            indent=2,
+        )
+    ]
+    assert payload["toasts"] == [
+        {
+            "title": "JSON Copied",
+            "message": "The MCP JSON has been copied to your clipboard.",
+            "tone": "success",
+            "durationMs": 1800,
+        }
+    ]
 
 
 def test_mcp_editor_populates_fields_from_mcp_servers_json(
@@ -951,6 +1139,7 @@ def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     assert ".mcp-status-shell {" in components_css
     assert ".mcp-status-toolbar {" in components_css
     assert ".mcp-status-toolbar-btn," in components_css
+    assert ".mcp-editor-label-row {" in components_css
     assert ".mcp-status-toggle {" in components_css
     assert ".mcp-status-list {" in components_css
     assert ".mcp-status-card {" in components_css
@@ -1031,6 +1220,12 @@ const translations = {
     "settings.mcp.testing": "Testing...",
     "settings.mcp.json_config": "JSON config",
     "settings.mcp.json_placeholder": "{}",
+    "settings.mcp.copy_json": "Copy JSON",
+    "settings.mcp.copy_json_empty": "No MCP JSON is available to copy.",
+    "settings.mcp.copy_json_success": "JSON Copied",
+    "settings.mcp.copy_json_success_message": "The MCP JSON has been copied to your clipboard.",
+    "settings.mcp.copy_json_failed": "Copy Failed",
+    "settings.mcp.copy_json_failed_message": "Failed to copy the MCP JSON.",
     "settings.mcp.test_ok": "Connection succeeded. {count} tools loaded.",
     "settings.mcp.test_failed_message": "Connection test failed.",
     "settings.mcp.disabled_state": "This MCP server is disabled.",
@@ -1114,6 +1309,13 @@ function installGlobals(elements) {{
             return element;
         }},
     }};
+    globalThis.navigator = {{
+        clipboard: {{
+            async writeText(value) {{
+                globalThis.__clipboardWrites.push(String(value));
+            }},
+        }},
+    }};
     globalThis.__fetchConfigStatusCalls = 0;
     globalThis.__reloadMcpCalls = 0;
     globalThis.__reloadSkillsCalls = 0;
@@ -1122,6 +1324,7 @@ function installGlobals(elements) {{
     globalThis.__addMcpServerCalls = [];
     globalThis.__setMcpServerEnabledCalls = [];
     globalThis.__testMcpServerCalls = [];
+    globalThis.__clipboardWrites = [];
     globalThis.__toasts = [];
     globalThis.__logEntries = [];
 }};
