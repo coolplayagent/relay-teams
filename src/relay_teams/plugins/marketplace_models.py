@@ -2,14 +2,31 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from relay_teams.plugins.plugin_models import (
     PluginDependency,
     PluginInstallSource,
+    PluginInstallSourceKind,
 )
 from relay_teams.validation import RequiredIdentifierStr
+
+
+class PluginMarketplaceProviderKind(str, Enum):
+    LOCAL_JSON = "local_json"
+    CLAUDE = "claude"
+
+
+class PluginMarketplaceSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider: PluginMarketplaceProviderKind = PluginMarketplaceProviderKind.LOCAL_JSON
+    name: str = ""
+    value: str = ""
+    ref: str = ""
+    refresh: bool = False
 
 
 class PluginMarketplaceVersion(BaseModel):
@@ -19,6 +36,8 @@ class PluginMarketplaceVersion(BaseModel):
     source: PluginInstallSource
     sha256: str = ""
     dependencies: tuple[PluginDependency, ...] = ()
+    warnings: tuple[str, ...] = ()
+    unsupported_reason: str = ""
 
 
 class PluginMarketplaceEntry(BaseModel):
@@ -33,8 +52,33 @@ class PluginMarketplaceEntry(BaseModel):
         self,
         requested_version: str | None,
     ) -> PluginMarketplaceVersion:
-        version = requested_version or self.latest
-        if not version and self.versions:
+        if requested_version:
+            for item in self.versions:
+                if item.version == requested_version:
+                    return item
+            raise ValueError(
+                f"Marketplace plugin version not found: {self.name}@{requested_version}"
+            )
+        candidates = self.supported_versions()
+        version = self.latest
+        if version:
+            for item in candidates:
+                if item.version == version:
+                    return item
+            if candidates:
+                return max(
+                    candidates,
+                    key=lambda candidate: _version_sort_key(candidate.version),
+                )
+            for item in self.versions:
+                if item.version == version:
+                    return item
+        if candidates:
+            return max(
+                candidates,
+                key=lambda candidate: _version_sort_key(candidate.version),
+            )
+        if self.versions:
             return max(
                 self.versions,
                 key=lambda candidate: _version_sort_key(candidate.version),
@@ -43,6 +87,14 @@ class PluginMarketplaceEntry(BaseModel):
             if item.version == version:
                 return item
         raise ValueError(f"Marketplace plugin version not found: {self.name}@{version}")
+
+    def supported_versions(self) -> tuple[PluginMarketplaceVersion, ...]:
+        return tuple(
+            version
+            for version in self.versions
+            if not version.unsupported_reason
+            and version.source.kind != PluginInstallSourceKind.UNSUPPORTED
+        )
 
 
 class PluginMarketplaceIndex(BaseModel):

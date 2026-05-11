@@ -62,9 +62,9 @@ def _plugin_var_value(
     user_config: dict[str, JsonValue],
     allow_env: bool,
 ) -> str:
-    if name in {"plugin_root", "RELAY_TEAMS_PLUGIN_ROOT"}:
+    if name in {"plugin_root", "RELAY_TEAMS_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"}:
         return str(plugin_root)
-    if name in {"plugin_data", "RELAY_TEAMS_PLUGIN_DATA"}:
+    if name in {"plugin_data", "RELAY_TEAMS_PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"}:
         return str(plugin_data)
     if name.startswith("env:"):
         if not allow_env:

@@ -155,7 +155,11 @@ from relay_teams.skills.clawhub_skill_service import ClawHubSkillService
 from relay_teams.triggers import GitHubTriggerService
 from relay_teams.hooks import HookRuntimeView, HookService, HooksConfig
 from relay_teams.plugins import PluginInstallSourceKind, PluginRegistry, PluginScope
-from relay_teams.plugins.marketplace_models import PluginMarketplaceIndex
+from relay_teams.plugins.marketplace_models import (
+    PluginMarketplaceIndex,
+    PluginMarketplaceProviderKind,
+    PluginMarketplaceSource,
+)
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
 from relay_teams.plugins.views import build_public_plugin_registry
 from relay_teams.validation import RequiredIdentifierStr
@@ -184,6 +188,11 @@ class PluginInstallRequest(BaseModel):
     source_kind: PluginInstallSourceKind | None = None
     source_ref: str = ""
     marketplace: str | None = None
+    marketplace_provider: PluginMarketplaceProviderKind = (
+        PluginMarketplaceProviderKind.LOCAL_JSON
+    )
+    marketplace_source: str = ""
+    marketplace_ref: str = ""
     version: str | None = None
 
 
@@ -197,6 +206,12 @@ class PluginMarketplaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     marketplace: str
+    marketplace_provider: PluginMarketplaceProviderKind = (
+        PluginMarketplaceProviderKind.LOCAL_JSON
+    )
+    marketplace_source: str = ""
+    marketplace_ref: str = ""
+    refresh: bool = False
 
 
 class PluginScopeRequest(BaseModel):
@@ -341,11 +356,13 @@ async def validate_plugin_config(
 @router.post("/configs/plugins/marketplace")
 async def load_plugin_marketplace(
     req: PluginMarketplaceRequest,
+    container: ServerContainer = Depends(get_container),
 ) -> PluginMarketplaceIndex:
     try:
         return await asyncio.to_thread(
-            PluginMarketplaceService().load_index,
-            Path(req.marketplace),
+            PluginMarketplaceService().load_provider_index,
+            source=_plugin_marketplace_source(req),
+            app_config_dir=container.config_dir,
         )
     except Exception as exc:
         _raise_system_http_error(exc, value_error_status=400, os_error_status=400)
@@ -386,6 +403,9 @@ async def install_plugin_config(
                 scope=req.scope,
                 version=req.version,
                 enabled=req.enabled,
+                marketplace_provider=req.marketplace_provider,
+                marketplace_source=req.marketplace_source,
+                marketplace_ref=req.marketplace_ref,
             )
     except Exception as exc:
         _raise_system_http_error(
@@ -405,6 +425,36 @@ def _infer_plugin_install_source_kind(source: str) -> PluginInstallSourceKind:
     if normalized.endswith(".git"):
         return PluginInstallSourceKind.GIT
     return PluginInstallSourceKind.LOCAL
+
+
+def _plugin_marketplace_source(
+    req: PluginMarketplaceRequest,
+) -> PluginMarketplaceSource:
+    if req.marketplace_provider == PluginMarketplaceProviderKind.LOCAL_JSON:
+        return PluginMarketplaceSource(
+            provider=req.marketplace_provider,
+            name=Path(req.marketplace).stem,
+            value=req.marketplace,
+        )
+    return PluginMarketplaceSource(
+        provider=req.marketplace_provider,
+        name=req.marketplace,
+        value=_plugin_marketplace_source_value(req),
+        ref=req.marketplace_ref,
+        refresh=req.refresh,
+    )
+
+
+def _plugin_marketplace_source_value(req: PluginMarketplaceRequest) -> str:
+    if req.marketplace_provider != PluginMarketplaceProviderKind.CLAUDE:
+        return req.marketplace_source
+    normalized = req.marketplace_source.strip()
+    if not normalized:
+        return ""
+    local_path = Path(normalized).expanduser()
+    if local_path.exists():
+        return str(local_path.resolve())
+    return normalized
 
 
 @router.post("/configs/plugins/{name}:enable")

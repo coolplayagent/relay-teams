@@ -154,13 +154,13 @@ export async function validatePlugin(path) {
     );
 }
 
-export async function fetchPluginMarketplace(marketplace) {
+export async function fetchPluginMarketplace(marketplace, options = {}) {
     return requestJson(
         '/api/system/configs/plugins/marketplace',
         {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ marketplace }),
+            body: JSON.stringify({ marketplace, ...options }),
         },
         'Failed to fetch plugin marketplace',
     );

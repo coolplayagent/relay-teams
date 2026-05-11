@@ -8,11 +8,21 @@ import subprocess
 
 import pytest
 
-from relay_teams.plugins import installers as plugin_installers
 from relay_teams.plugins import config_manager as plugin_config_manager
+from relay_teams.plugins import installers as plugin_installers
+from relay_teams.plugins import claude_marketplace_provider
+from relay_teams.env import ProxyEnvConfig
+from relay_teams.plugins.claude_plugin_adapter import adapt_plugin_tree
 from relay_teams.plugins.config_manager import PluginConfigManager
 from relay_teams.plugins.integrity import compute_plugin_tree_sha256
 from relay_teams.plugins.marketplace_service import PluginMarketplaceService
+from relay_teams.plugins.marketplace_models import (
+    PluginMarketplaceEntry,
+    PluginMarketplaceIndex,
+    PluginMarketplaceProviderKind,
+    PluginMarketplaceSource,
+    PluginMarketplaceVersion,
+)
 from relay_teams.plugins.plugin_models import (
     PluginInstallSource,
     PluginInstallSourceKind,
@@ -150,7 +160,7 @@ def test_copy_local_plugin_source_rejects_symlinked_content(tmp_path: Path) -> N
     assert not target_dir.exists()
 
 
-def test_install_git_plugin_source_reports_clone_errors(
+def test_install_git_plugin_source_reports_runtime_clone_errors(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -201,6 +211,435 @@ def test_install_git_plugin_source_fetches_unavailable_ref(
 
     assert any("fetch" in call for call in calls)
     assert (tmp_path / "target").exists()
+
+
+def test_install_git_plugin_source_checks_out_sha_without_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = PluginInstallSource(
+        kind=PluginInstallSourceKind.GIT,
+        value="https://example.test/plugin.git",
+        sha="a" * 40,
+    )
+    calls: list[list[str]] = []
+
+    def fake_git(args: list[str]) -> None:
+        calls.append(args)
+        if args[1] == "clone":
+            Path(args[-1]).mkdir(parents=True)
+
+    def skip_sha_verification(*, clone_dir: Path, expected_sha: str) -> None:
+        assert clone_dir.exists()
+        assert expected_sha == source.sha
+
+    monkeypatch.setattr(plugin_installers, "_run_git", fake_git)
+    monkeypatch.setattr(plugin_installers, "_verify_git_sha", skip_sha_verification)
+
+    plugin_installers.install_git_plugin_source(
+        source=source,
+        app_config_dir=tmp_path / "app",
+        target_dir=tmp_path / "target",
+    )
+
+    assert calls[0][:4] == ["git", "clone", "--no-checkout", source.value]
+    assert any(call[-1] == source.sha for call in calls if "checkout" in call)
+    assert (tmp_path / "target").exists()
+
+
+def test_clone_git_ref_prefers_sha_over_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_git(args: list[str]) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr(plugin_installers, "_run_git", fake_git)
+
+    plugin_installers._clone_git_ref(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.GIT,
+            value="https://example.test/plugin.git",
+            ref="main",
+            sha="abc123",
+        ),
+        clone_dir=tmp_path / "clone",
+    )
+
+    assert calls[1][-1] == "abc123"
+
+
+def test_install_git_plugin_source_accepts_short_sha(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = PluginInstallSource(
+        kind=PluginInstallSourceKind.GIT,
+        value="https://example.test/plugin.git",
+        sha="abc1234",
+    )
+
+    def fake_git(args: list[str]) -> None:
+        if args[1] == "clone":
+            clone_dir = Path(args[-1])
+            clone_dir.mkdir(parents=True)
+            (clone_dir / "plugin.json").write_text("{}", encoding="utf-8")
+
+    def fake_run(
+        args: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        env: dict[str, str],
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        assert args[-1] == "HEAD"
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="abc1234fffffffffffffffffffffffffffffffff\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(plugin_installers, "_run_git", fake_git)
+    monkeypatch.setattr(plugin_installers.subprocess, "run", fake_run)
+
+    plugin_installers.install_git_plugin_source(
+        source=source,
+        app_config_dir=tmp_path / "app",
+        target_dir=tmp_path / "target",
+    )
+
+    assert (tmp_path / "target" / "plugin.json").exists()
+
+
+def test_verify_git_sha_accepts_uppercase_expected_sha(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_run(
+        args: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        env: dict[str, str],
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        assert args[-1] == "HEAD"
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="abc1234fffffffffffffffffffffffffffffffff\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(plugin_installers.subprocess, "run", fake_run)
+
+    plugin_installers._verify_git_sha(
+        clone_dir=tmp_path / "clone",
+        expected_sha="ABC1234",
+    )
+
+
+def test_install_git_subdir_plugin_source_copies_selected_subdir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = PluginInstallSource(
+        kind=PluginInstallSourceKind.GIT_SUBDIR,
+        value="https://example.test/marketplace.git",
+        subdir="plugins/quality",
+    )
+
+    def fake_git(args: list[str]) -> None:
+        clone_dir = Path(args[-1])
+        plugin_dir = clone_dir / "plugins" / "quality"
+        plugin_dir.mkdir(parents=True)
+        (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
+        (clone_dir / "plugins" / "ignored").mkdir()
+
+    monkeypatch.setattr(plugin_installers, "_run_git", fake_git)
+
+    plugin_installers.install_git_subdir_plugin_source(
+        source=source,
+        app_config_dir=tmp_path / "app",
+        target_dir=tmp_path / "target",
+    )
+
+    assert (tmp_path / "target" / "plugin.json").exists()
+    assert not (tmp_path / "target" / "ignored").exists()
+
+
+def test_install_git_subdir_plugin_source_replaces_stale_cache_and_uses_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+    source = PluginInstallSource(
+        kind=PluginInstallSourceKind.GIT_SUBDIR,
+        value="https://example.test/marketplace.git",
+        ref="feature",
+        subdir="plugins/quality",
+    )
+    target_dir = tmp_path / "target"
+    cache_root = tmp_path / "app" / "plugins" / "cache"
+    stale_cache = cache_root / plugin_installers._cache_dir_name(
+        f"{source.value}:{source.subdir}:{target_dir.expanduser().resolve()}"
+    )
+    stale_cache.mkdir(parents=True)
+    (stale_cache / "stale.txt").write_text("old", encoding="utf-8")
+
+    def fake_git(args: list[str]) -> None:
+        calls.append(args)
+        if "clone" in args:
+            clone_dir = Path(args[-1])
+            plugin_dir = clone_dir / "plugins" / "quality"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "plugin.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(plugin_installers, "_run_git", fake_git)
+
+    plugin_installers.install_git_subdir_plugin_source(
+        source=source,
+        app_config_dir=tmp_path / "app",
+        target_dir=target_dir,
+    )
+
+    assert calls[0][:3] == ["git", "clone", "--no-checkout"]
+    assert calls[1][-1] == "feature"
+    assert (target_dir / "plugin.json").exists()
+    assert not (stale_cache / "stale.txt").exists()
+
+
+def test_install_git_plugin_source_reports_clone_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = PluginInstallSource(
+        kind=PluginInstallSourceKind.GIT,
+        value="https://example.test/plugin.git",
+    )
+
+    def failed_git(args: list[str]) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=args,
+            stderr="clone failed",
+        )
+
+    monkeypatch.setattr(plugin_installers, "_run_git", failed_git)
+    with pytest.raises(ValueError, match="clone failed"):
+        plugin_installers.install_git_plugin_source(
+            source=source,
+            app_config_dir=tmp_path / "app",
+            target_dir=tmp_path / "target",
+        )
+
+    def missing_git(args: list[str]) -> None:
+        raise OSError("git missing")
+
+    monkeypatch.setattr(plugin_installers, "_run_git", missing_git)
+    with pytest.raises(ValueError, match="git missing"):
+        plugin_installers.install_git_plugin_source(
+            source=source,
+            app_config_dir=tmp_path / "app",
+            target_dir=tmp_path / "target",
+        )
+
+    def timed_out_git(args: list[str]) -> None:
+        raise subprocess.TimeoutExpired(cmd=args, timeout=1)
+
+    monkeypatch.setattr(plugin_installers, "_run_git", timed_out_git)
+    with pytest.raises(ValueError, match="Timed out"):
+        plugin_installers.install_git_plugin_source(
+            source=source,
+            app_config_dir=tmp_path / "app",
+            target_dir=tmp_path / "target",
+        )
+
+
+def test_install_plugin_source_dispatches_git_subdir_and_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[Path] = []
+
+    def fake_install_git_subdir_plugin_source(
+        *,
+        source: PluginInstallSource,
+        app_config_dir: Path,
+        target_dir: Path,
+    ) -> None:
+        calls.append(target_dir)
+
+    monkeypatch.setattr(
+        plugin_installers,
+        "install_git_subdir_plugin_source",
+        fake_install_git_subdir_plugin_source,
+    )
+
+    plugin_installers.install_plugin_source(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.GIT_SUBDIR,
+            value="https://example.test/repo.git",
+            subdir="plugins/quality",
+        ),
+        app_config_dir=tmp_path / "app",
+        target_dir=tmp_path / "target",
+    )
+
+    assert calls == [tmp_path / "target"]
+    with pytest.raises(ValueError, match="Unsupported plugin source kind"):
+        plugin_installers.install_plugin_source(
+            source=PluginInstallSource(
+                kind=PluginInstallSourceKind.UNSUPPORTED,
+                value="npm",
+            ),
+            app_config_dir=tmp_path / "app",
+            target_dir=tmp_path / "target",
+        )
+
+
+def test_git_sha_and_subdir_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    clone_dir = tmp_path / "clone"
+    clone_dir.mkdir()
+
+    def failed_run(
+        args: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        env: dict[str, str],
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=args,
+            stderr="rev-parse failed",
+        )
+
+    monkeypatch.setattr(plugin_installers.subprocess, "run", failed_run)
+    with pytest.raises(ValueError, match="rev-parse failed"):
+        plugin_installers._verify_git_sha(clone_dir=clone_dir, expected_sha="abc")
+
+    def mismatched_run(
+        args: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        env: dict[str, str],
+        text: bool,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout="def456\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(plugin_installers.subprocess, "run", mismatched_run)
+    with pytest.raises(ValueError, match="commit mismatch"):
+        plugin_installers._verify_git_sha(clone_dir=clone_dir, expected_sha="abc")
+    with pytest.raises(ValueError, match="subdirectory is unsafe"):
+        plugin_installers._resolve_git_subdir(clone_dir=clone_dir, subdir="../x")
+    with pytest.raises(ValueError, match="subdirectory does not exist"):
+        plugin_installers._resolve_git_subdir(clone_dir=clone_dir, subdir="missing")
+
+
+def test_plugin_git_subprocess_env_includes_saved_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXISTING_ENV", "1")
+    monkeypatch.setattr(
+        plugin_installers,
+        "load_proxy_env_config",
+        lambda: ProxyEnvConfig(https_proxy="http://proxy.example:8080"),
+    )
+
+    env = plugin_installers._git_subprocess_env()
+
+    assert env["EXISTING_ENV"] == "1"
+    assert env["HTTPS_PROXY"] == "http://proxy.example:8080"
+    assert env["https_proxy"] == "http://proxy.example:8080"
+
+
+def test_claude_marketplace_git_subprocess_env_includes_saved_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EXISTING_ENV", "1")
+    monkeypatch.setattr(
+        claude_marketplace_provider,
+        "load_proxy_env_config",
+        lambda: ProxyEnvConfig(https_proxy="http://proxy.example:8080"),
+    )
+
+    env = claude_marketplace_provider._git_subprocess_env()
+
+    assert env["EXISTING_ENV"] == "1"
+    assert env["HTTPS_PROXY"] == "http://proxy.example:8080"
+    assert env["https_proxy"] == "http://proxy.example:8080"
+
+
+def test_claude_marketplace_refresh_reclones_cached_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_git(args: list[str]) -> None:
+        calls.append(args)
+        checkout_dir = Path(args[-1])
+        if "clone" in args:
+            marketplace_dir = checkout_dir / ".claude-plugin"
+            marketplace_dir.mkdir(parents=True)
+            (marketplace_dir / "marketplace.json").write_text(
+                '{"plugins": []}',
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(claude_marketplace_provider, "_run_git", fake_git)
+    service = PluginMarketplaceService()
+    source = PluginMarketplaceSource(
+        provider=PluginMarketplaceProviderKind.CLAUDE,
+        name="test-claude",
+        value="example/marketplace",
+    )
+
+    service.load_provider_index(source=source, app_config_dir=tmp_path / "app")
+    service.load_provider_index(source=source, app_config_dir=tmp_path / "app")
+    service.load_provider_index(
+        source=source.model_copy(update={"refresh": True}),
+        app_config_dir=tmp_path / "app",
+    )
+
+    clone_calls = [call for call in calls if "clone" in call]
+    assert len(clone_calls) == 2
+
+
+def test_plugin_git_args_enable_windows_long_paths() -> None:
+    assert plugin_installers._git_args(["git", "clone", "repo"]) == [
+        "git",
+        "-c",
+        "core.longpaths=true",
+        "clone",
+        "repo",
+    ]
+    assert claude_marketplace_provider._git_args(["git", "clone", "repo"]) == [
+        "git",
+        "-c",
+        "core.longpaths=true",
+        "clone",
+        "repo",
+    ]
 
 
 def test_update_plugin_persists_new_sensitive_defaults_in_secret_store(
@@ -733,6 +1172,954 @@ def test_marketplace_install_resolves_local_source(tmp_path: Path) -> None:
     assert installed.root_dir.exists()
 
 
+def test_marketplace_install_persists_resolved_relative_marketplace_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    plugin_root = tmp_path / "quality"
+    marketplace_path = tmp_path / "marketplace.json"
+    _write_plugin_manifest(plugin_root, name="quality", version="1.0.0")
+    _write_marketplace(
+        marketplace_path,
+        name="quality",
+        version="1.0.0",
+        source=plugin_root,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    installed = PluginConfigManager(
+        app_config_dir=app_config_dir
+    ).install_marketplace_plugin(
+        name="quality",
+        marketplace=Path("marketplace.json"),
+        scope=PluginScope.USER,
+    )
+
+    assert installed.source.marketplace == str(marketplace_path.resolve())
+
+
+def test_claude_marketplace_loads_relative_plugin_source(tmp_path: Path) -> None:
+    app_config_dir = tmp_path / "app"
+    marketplace_root = tmp_path / "claude-marketplace"
+    plugin_root = marketplace_root / "plugins" / "quality"
+    _write_plugin_manifest(plugin_root, name="quality", version="1.0.0")
+    _write_claude_marketplace(
+        marketplace_root,
+        name="quality",
+        source="./plugins/quality",
+        version="1.0.0",
+    )
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test-claude",
+            value=str(marketplace_root),
+        ),
+        app_config_dir=app_config_dir,
+    )
+
+    assert index.plugins[0].name == "quality"
+    assert index.plugins[0].versions[0].source.kind == PluginInstallSourceKind.LOCAL
+    assert index.plugins[0].versions[0].source.value == str(plugin_root.resolve())
+
+
+def test_claude_marketplace_treats_slash_relative_source_as_local(
+    tmp_path: Path,
+) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    plugin_root = marketplace_root / "plugins" / "quality"
+    _write_plugin_manifest(plugin_root, name="quality", version="1.0.0")
+    _write_claude_marketplace(
+        marketplace_root,
+        name="quality",
+        source="plugins/quality",
+        version="1.0.0",
+    )
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test-claude",
+            value=str(marketplace_root),
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+
+    assert index.plugins[0].versions[0].source.kind == PluginInstallSourceKind.LOCAL
+    assert index.plugins[0].versions[0].source.value == str(plugin_root.resolve())
+
+
+def test_claude_marketplace_uses_plugin_root_metadata(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    plugin_root = marketplace_root / "packages" / "quality"
+    _write_plugin_manifest(plugin_root, name="quality", version="1.0.0")
+    marketplace_dir = marketplace_root / ".claude-plugin"
+    marketplace_dir.mkdir(parents=True)
+    (marketplace_dir / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"pluginRoot": "packages"},
+                "plugins": [
+                    {
+                        "name": "quality",
+                        "version": "1.0.0",
+                        "source": "quality",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test-claude",
+            value=str(marketplace_root),
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+
+    assert index.plugins[0].versions[0].source.value == str(plugin_root.resolve())
+
+
+def test_claude_marketplace_install_resolves_relative_plugin_source(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    marketplace_root = tmp_path / "claude-marketplace"
+    plugin_root = marketplace_root / "plugins" / "quality"
+    _write_plugin_manifest(plugin_root, name="quality", version="1.0.0")
+    _write_claude_marketplace(
+        marketplace_root,
+        name="quality",
+        source="./plugins/quality",
+        version="1.0.0",
+    )
+
+    installed = PluginConfigManager(
+        app_config_dir=app_config_dir
+    ).install_marketplace_plugin(
+        name="quality",
+        marketplace=Path("test-claude"),
+        marketplace_provider=PluginMarketplaceProviderKind.CLAUDE,
+        marketplace_source=str(marketplace_root),
+        marketplace_ref="main",
+        scope=PluginScope.USER,
+    )
+
+    assert installed.name == "quality"
+    assert installed.source.kind == PluginInstallSourceKind.MARKETPLACE
+    assert installed.source.marketplace == "test-claude"
+    assert installed.source.marketplace_provider == "claude"
+    assert installed.source.marketplace_source == str(marketplace_root)
+    assert installed.source.marketplace_ref == "main"
+    assert installed.root_dir.exists()
+
+
+def test_claude_marketplace_install_persists_resolved_local_source_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    marketplace_root = tmp_path / "claude-marketplace"
+    plugin_root = marketplace_root / "plugins" / "quality"
+    _write_plugin_manifest(plugin_root, name="quality", version="1.0.0")
+    _write_claude_marketplace(
+        marketplace_root,
+        name="quality",
+        source="./plugins/quality",
+        version="1.0.0",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    installed = PluginConfigManager(
+        app_config_dir=app_config_dir
+    ).install_marketplace_plugin(
+        name="quality",
+        marketplace=Path("test-claude"),
+        marketplace_provider=PluginMarketplaceProviderKind.CLAUDE,
+        marketplace_source="claude-marketplace",
+        scope=PluginScope.USER,
+    )
+
+    assert installed.source.marketplace_source == str(marketplace_root.resolve())
+
+
+def test_claude_marketplace_source_preserves_empty_default() -> None:
+    source = PluginConfigManager._marketplace_source(
+        provider=PluginMarketplaceProviderKind.CLAUDE,
+        marketplace="claude-plugins-official",
+        marketplace_source="",
+    )
+
+    assert source.value == ""
+
+
+def test_claude_marketplace_source_reference_resolves_existing_local_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    marketplace_root.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    assert PluginConfigManager._marketplace_source_reference(
+        provider=PluginMarketplaceProviderKind.CLAUDE,
+        marketplace_source="claude-marketplace",
+    ) == str(marketplace_root.resolve())
+    assert (
+        PluginConfigManager._marketplace_source_reference(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            marketplace_source="anthropics/claude-plugins-official",
+        )
+        == "anthropics/claude-plugins-official"
+    )
+    assert (
+        PluginConfigManager._marketplace_source_reference(
+            provider=PluginMarketplaceProviderKind.LOCAL_JSON,
+            marketplace_source="marketplace.json",
+        )
+        == "marketplace.json"
+    )
+
+
+def test_config_manager_materializes_validation_sources_for_cached_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    manager = PluginConfigManager(app_config_dir=tmp_path / "app")
+    installed_targets: list[Path] = []
+
+    def fake_install_plugin_source(
+        *,
+        source: PluginInstallSource,
+        app_config_dir: Path,
+        target_dir: Path,
+    ) -> None:
+        installed_targets.append(target_dir)
+        target_dir.mkdir(parents=True)
+        (target_dir / "plugin.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        plugin_config_manager,
+        "install_plugin_source",
+        fake_install_plugin_source,
+    )
+    local_source = PluginInstallSource(
+        kind=PluginInstallSourceKind.LOCAL,
+        value="local-quality",
+        adapter="claude",
+    )
+    local_cache = (
+        tmp_path
+        / "app"
+        / "plugins"
+        / "cache"
+        / "validation"
+        / manager._cache_dir_name(local_source.value)
+    )
+    local_cache.mkdir(parents=True)
+    (local_cache / "old.txt").write_text("old", encoding="utf-8")
+
+    local_target = manager._materialize_validation_source(local_source)
+    git_subdir_target = manager._materialize_validation_source(
+        PluginInstallSource(
+            kind=PluginInstallSourceKind.GIT_SUBDIR,
+            value="https://example.test/repo.git",
+            subdir="plugins/quality",
+        )
+    )
+
+    assert local_target == installed_targets[0]
+    assert not (local_target / "old.txt").exists()
+    assert git_subdir_target == installed_targets[1]
+    with pytest.raises(ValueError, match="Unsupported plugin source kind"):
+        manager._materialize_validation_source(
+            PluginInstallSource(kind=PluginInstallSourceKind.UNSUPPORTED, value="npm")
+        )
+
+
+def test_marketplace_provider_from_string_defaults_and_rejects_unknown() -> None:
+    assert (
+        plugin_config_manager._marketplace_provider_from_string("")
+        == PluginMarketplaceProviderKind.LOCAL_JSON
+    )
+    assert (
+        plugin_config_manager._marketplace_provider_from_string("claude")
+        == PluginMarketplaceProviderKind.CLAUDE
+    )
+    with pytest.raises(ValueError, match="Unsupported plugin marketplace provider"):
+        plugin_config_manager._marketplace_provider_from_string("unknown")
+
+
+def test_claude_marketplace_update_refreshes_provider_index(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured_sources: list[PluginMarketplaceSource] = []
+
+    def fake_load_provider_index(
+        self: PluginMarketplaceService,
+        *,
+        source: PluginMarketplaceSource,
+        app_config_dir: Path,
+    ) -> PluginMarketplaceIndex:
+        captured_sources.append(source)
+        return PluginMarketplaceIndex(
+            plugins=(
+                PluginMarketplaceEntry(
+                    name="quality",
+                    latest="1.0.0",
+                    versions=(
+                        PluginMarketplaceVersion(
+                            version="1.0.0",
+                            source=PluginInstallSource(
+                                kind=PluginInstallSourceKind.LOCAL,
+                                value=str(tmp_path / "quality"),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+    monkeypatch.setattr(
+        PluginMarketplaceService,
+        "load_provider_index",
+        fake_load_provider_index,
+    )
+    manager = PluginConfigManager(app_config_dir=tmp_path / "app")
+
+    manager._resolve_update_install_source(
+        source=PluginInstallSource(
+            kind=PluginInstallSourceKind.MARKETPLACE,
+            value="quality",
+            marketplace="claude-plugins-official",
+            marketplace_provider="claude",
+        ),
+        version=None,
+    )
+
+    assert captured_sources[0].refresh is True
+
+
+def test_claude_marketplace_provider_rejects_invalid_payloads(tmp_path: Path) -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    marketplace_root = tmp_path / "marketplace"
+    marketplace_dir = marketplace_root / ".claude-plugin"
+    marketplace_dir.mkdir(parents=True)
+    marketplace_file = marketplace_dir / "marketplace.json"
+
+    marketplace_file.write_text('{"plugins": {}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="plugins must be a list"):
+        provider.load_index(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value=str(marketplace_root),
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+
+    marketplace_file.write_text('{"plugins": [1]}', encoding="utf-8")
+    with pytest.raises(ValueError, match="plugin entries must be objects"):
+        provider.load_index(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value=str(marketplace_root),
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+
+    marketplace_file.write_text(
+        json.dumps({"plugins": [{"name": "quality"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="plugin source is required"):
+        provider.load_index(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value=str(marketplace_root),
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+
+
+def test_claude_marketplace_provider_normalizes_source_variants(
+    tmp_path: Path,
+) -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+
+    git_source = provider._string_source(
+        value="https://example.test/plugin.git",
+        marketplace_root=tmp_path,
+        plugin_root="",
+    )
+    github_source, _ = provider._object_source(
+        {"source": "github", "repo": "owner/repo", "ref": "main"}
+    )
+    git_subdir_source, _ = provider._object_source(
+        {
+            "source": "git-subdir",
+            "url": "owner/repo",
+            "path": "plugins/quality",
+            "commit": "abc123",
+        }
+    )
+    unknown_source, reason = provider._object_source({"source": "archive"})
+
+    assert git_source.kind == PluginInstallSourceKind.GIT
+    assert github_source.value == "https://github.com/owner/repo.git"
+    assert github_source.ref == "main"
+    assert git_subdir_source.kind == PluginInstallSourceKind.GIT_SUBDIR
+    assert git_subdir_source.subdir == "plugins/quality"
+    assert git_subdir_source.sha == "abc123"
+    assert unknown_source.kind == PluginInstallSourceKind.UNSUPPORTED
+    assert reason == "Unsupported Claude marketplace plugin source: archive"
+
+
+def test_claude_marketplace_provider_normalizes_plugin_root_trailing_slash(
+    tmp_path: Path,
+) -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    source = provider._string_source(
+        value="quality",
+        marketplace_root=tmp_path,
+        plugin_root="./plugins/",
+    )
+
+    assert source.kind == PluginInstallSourceKind.LOCAL
+    assert source.value == str(tmp_path.resolve() / "plugins" / "quality")
+
+
+def test_claude_marketplace_provider_rejects_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    marketplace_root = tmp_path / "marketplace"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    plugin_parent = marketplace_root / "plugins"
+    plugin_parent.mkdir(parents=True)
+    try:
+        (plugin_parent / "quality").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is not available: {exc}")
+
+    with pytest.raises(ValueError, match="escapes marketplace root"):
+        provider._string_source(
+            value="./plugins/quality",
+            marketplace_root=marketplace_root,
+            plugin_root="",
+        )
+
+
+def test_claude_marketplace_provider_derives_versions_and_dependencies() -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    source_with_sha = PluginInstallSource(
+        kind=PluginInstallSourceKind.GIT,
+        value="https://example.test/plugin.git",
+        sha="abc123",
+    )
+    source_with_ref = source_with_sha.model_copy(update={"sha": "", "ref": "main"})
+
+    dependencies = provider._dependencies_from_raw_plugin(
+        {
+            "dependencies": [
+                "base",
+                {"name": "tools", "version": "1.0.0"},
+            ]
+        }
+    )
+
+    assert (
+        provider._version_from_raw_plugin(raw_plugin={}, source=source_with_sha)
+        == "abc123"
+    )
+    assert (
+        provider._version_from_raw_plugin(raw_plugin={}, source=source_with_ref)
+        == "main"
+    )
+    assert (
+        provider._version_from_raw_plugin(
+            raw_plugin={}, source=source_with_ref.model_copy(update={"ref": ""})
+        )
+        == "latest"
+    )
+    assert [dependency.name for dependency in dependencies] == ["base", "tools"]
+    assert dependencies[1].version == "1.0.0"
+    with pytest.raises(ValueError, match="dependencies must be a list"):
+        provider._dependencies_from_raw_plugin({"dependencies": "base"})
+    with pytest.raises(ValueError, match="dependency name is required"):
+        provider._dependencies_from_raw_plugin({"dependencies": [{}]})
+    with pytest.raises(ValueError, match="dependency entries must be objects"):
+        provider._dependencies_from_raw_plugin({"dependencies": [1]})
+
+
+def test_claude_marketplace_provider_materializes_local_marketplace_paths(
+    tmp_path: Path,
+) -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    marketplace_root = tmp_path / "marketplace"
+    marketplace_dir = marketplace_root / ".claude-plugin"
+    marketplace_dir.mkdir(parents=True)
+    marketplace_file = marketplace_dir / "marketplace.json"
+    marketplace_file.write_text('{"plugins": []}', encoding="utf-8")
+    plain_file = tmp_path / "plain.json"
+    plain_file.write_text("{}", encoding="utf-8")
+
+    assert (
+        provider._materialize_marketplace(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value=str(marketplace_file),
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+        == marketplace_root.resolve()
+    )
+    assert (
+        provider._materialize_marketplace(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value=str(plain_file),
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+        == tmp_path.resolve()
+    )
+    assert (
+        provider._materialize_marketplace(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value=str(marketplace_root),
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+        == marketplace_root.resolve()
+    )
+
+
+def test_claude_marketplace_provider_clones_refs_and_reports_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_git(args: list[str]) -> None:
+        calls.append(args)
+        if "clone" in args:
+            checkout_dir = Path(args[-1])
+            (checkout_dir / ".claude-plugin").mkdir(parents=True)
+            (checkout_dir / ".claude-plugin" / "marketplace.json").write_text(
+                '{"plugins": []}',
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(claude_marketplace_provider, "_run_git", fake_git)
+
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    provider._materialize_marketplace(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test",
+            value="owner/repo",
+            ref="feature",
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+
+    assert calls[0][:3] == ["git", "clone", "--no-checkout"]
+    assert calls[1][-1] == "feature"
+
+    def failed_git(args: list[str]) -> None:
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=args,
+            stderr="clone failed",
+        )
+
+    monkeypatch.setattr(claude_marketplace_provider, "_run_git", failed_git)
+    with pytest.raises(ValueError, match="clone failed"):
+        provider._materialize_marketplace(
+            source=PluginMarketplaceSource(
+                provider=PluginMarketplaceProviderKind.CLAUDE,
+                value="owner/failed",
+            ),
+            app_config_dir=tmp_path / "app",
+        )
+
+
+def test_claude_marketplace_provider_fetches_unavailable_ref(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_git(args: list[str]) -> None:
+        calls.append(args)
+        if "clone" in args:
+            checkout_dir = Path(args[-1])
+            (checkout_dir / ".claude-plugin").mkdir(parents=True)
+            (checkout_dir / ".claude-plugin" / "marketplace.json").write_text(
+                '{"plugins": []}',
+                encoding="utf-8",
+            )
+            return
+        if "checkout" in args and args[-1] == "feature":
+            raise subprocess.CalledProcessError(1, args, stderr="missing ref")
+
+    monkeypatch.setattr(claude_marketplace_provider, "_run_git", fake_git)
+
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    provider._materialize_marketplace(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test",
+            value="owner/repo",
+            ref="feature",
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+
+    assert any("fetch" in call and call[-1] == "feature" for call in calls)
+    assert any("checkout" in call and call[-1] == "FETCH_HEAD" for call in calls)
+
+
+def test_claude_marketplace_provider_reports_read_and_path_errors(
+    tmp_path: Path,
+) -> None:
+    provider = claude_marketplace_provider.ClaudeMarketplaceProvider()
+    marketplace_root = tmp_path / "marketplace"
+    marketplace_dir = marketplace_root / ".claude-plugin"
+    marketplace_dir.mkdir(parents=True)
+    marketplace_file = marketplace_dir / "marketplace.json"
+
+    with pytest.raises(ValueError, match="relative path is unsafe"):
+        claude_marketplace_provider._safe_relative_path("../outside")
+    with pytest.raises(ValueError, match="relative path is unsafe"):
+        claude_marketplace_provider._safe_relative_path(".//plugins/quality")
+    with pytest.raises(ValueError, match="relative path is unsafe"):
+        claude_marketplace_provider._safe_relative_path("")
+    sentinel = object()
+    assert claude_marketplace_provider._json_value({"items": [sentinel]}) == {
+        "items": [str(sentinel)]
+    }
+    assert claude_marketplace_provider._git_args(["echo", "ok"]) == ["echo", "ok"]
+    assert (
+        claude_marketplace_provider._github_shorthand_to_url("C:/plugins")
+        == "C:/plugins"
+    )
+    assert (
+        claude_marketplace_provider._github_shorthand_to_url("owner/repo.git")
+        == "https://github.com/owner/repo.git"
+    )
+
+    with pytest.raises(ValueError, match="file not found"):
+        provider._read_marketplace_json(marketplace_root)
+    marketplace_file.write_text("{", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid Claude marketplace JSON"):
+        provider._read_marketplace_json(marketplace_root)
+    marketplace_file.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="must be an object"):
+        provider._read_marketplace_json(marketplace_root)
+
+
+def test_claude_marketplace_supports_url_source_with_path(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    _write_claude_marketplace(
+        marketplace_root,
+        name="atomic-agents",
+        source={
+            "source": "url",
+            "url": "https://github.com/BrainBlend-AI/atomic-agents.git",
+            "path": "claude-plugin/atomic-agents",
+            "sha": "f849087b26bbb6fb5e63acb60f2b566ce874aaa7",
+        },
+        version="1.0.0",
+    )
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test-claude",
+            value=str(marketplace_root),
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+    version = index.plugins[0].versions[0]
+
+    assert version.source.kind == PluginInstallSourceKind.GIT_SUBDIR
+    assert version.source.subdir == "claude-plugin/atomic-agents"
+    assert version.source.sha == "f849087b26bbb6fb5e63acb60f2b566ce874aaa7"
+    assert not version.warnings
+    assert not version.unsupported_reason
+
+
+def test_claude_marketplace_marks_npm_source_unsupported(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    _write_claude_marketplace(
+        marketplace_root,
+        name="npm-plugin",
+        source={
+            "source": "npm",
+            "package": "@example/plugin",
+        },
+        version="1.0.0",
+    )
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test-claude",
+            value=str(marketplace_root),
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+    version = index.plugins[0].versions[0]
+
+    assert version.source.kind == PluginInstallSourceKind.UNSUPPORTED
+    assert version.source.value == "@example/plugin"
+    assert version.unsupported_reason == (
+        "Claude marketplace npm plugin sources are not supported"
+    )
+
+
+def test_claude_marketplace_warns_for_unpinned_git_source(tmp_path: Path) -> None:
+    marketplace_root = tmp_path / "claude-marketplace"
+    _write_claude_marketplace(
+        marketplace_root,
+        name="floating",
+        source={
+            "source": "url",
+            "url": "https://github.com/example/plugin.git",
+            "ref": "main",
+        },
+        version="1.0.0",
+    )
+
+    index = PluginMarketplaceService().load_provider_index(
+        source=PluginMarketplaceSource(
+            provider=PluginMarketplaceProviderKind.CLAUDE,
+            name="test-claude",
+            value=str(marketplace_root),
+        ),
+        app_config_dir=tmp_path / "app",
+    )
+
+    assert index.plugins[0].versions[0].warnings == (
+        "Plugin source is not pinned to a commit sha.",
+    )
+
+
+def test_claude_plugin_adapter_normalizes_agent_front_matter(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "plugin"
+    manifest_dir = plugin_root / ".claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text(
+        (
+            "name: atomic-agents\n"
+            "description: Atomic Agents plugin\n"
+            "category: development\n"
+        ),
+        encoding="utf-8",
+    )
+    agents_dir = plugin_root / "agents"
+    agents_dir.mkdir(parents=True)
+    agent_path = agents_dir / "atomic-explorer.md"
+    agent_path.write_text(
+        (
+            "---\n"
+            "name: atomic-explorer\n"
+            "description: Explore Atomic Agents apps\n"
+            "tools: Glob, Grep, Read\n"
+            "---\n"
+            "Prompt body\n"
+        ),
+        encoding="utf-8",
+    )
+    hooks_dir = plugin_root / "hooks"
+    hooks_dir.mkdir(parents=True)
+    hook_path = hooks_dir / "hooks.json"
+    hook_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 guardrails.py",
+                                    "timeout": 5000,
+                                }
+                            ],
+                        }
+                    ],
+                    "PostToolUse": [
+                        {
+                            "matcher": "Write|Edit",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 validator.py",
+                                    "timeout_seconds": 10000,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapt_plugin_tree(plugin_root=plugin_root, adapter="claude")
+
+    content = agent_path.read_text(encoding="utf-8")
+    manifest_content = (manifest_dir / "plugin.json").read_text(encoding="utf-8")
+    hook_content = json.loads(hook_path.read_text(encoding="utf-8"))
+    assert "role_id: atomic-explorer" in content
+    assert "version: 1.0.0" in content
+    assert "mode: subagent" in content
+    assert "tools: []" in content
+    assert "category" not in manifest_content
+    assert '"name": "atomic-agents"' in manifest_content
+    assert hook_content["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"] == 5.0
+    assert (
+        hook_content["hooks"]["PostToolUse"][0]["hooks"][0]["timeout_seconds"] == 10.0
+    )
+
+
+def test_claude_plugin_adapter_reads_manifest_declared_hook_path(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "plugin"
+    manifest_dir = plugin_root / ".claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "custom-hooks",
+                "version": "1.0.0",
+                "hooks": "./custom/hooks.json",
+            }
+        ),
+        encoding="utf-8",
+    )
+    hook_path = plugin_root / "custom" / "hooks.json"
+    hook_path.parent.mkdir()
+    hook_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 validate.py",
+                                    "timeout": 900,
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapt_plugin_tree(plugin_root=plugin_root, adapter="claude")
+
+    hook_content = json.loads(hook_path.read_text(encoding="utf-8"))
+    assert hook_content["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 900
+
+
+def test_claude_plugin_adapter_preserves_oversized_second_timeout(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "plugin"
+    manifest_dir = plugin_root / ".claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "oversized-timeout",
+                "version": "1.0.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    hooks_dir = plugin_root / "hooks"
+    hooks_dir.mkdir()
+    hook_path = hooks_dir / "hooks.json"
+    hook_path.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 validate.py",
+                                    "timeout": 1000,
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapt_plugin_tree(plugin_root=plugin_root, adapter="claude")
+
+    hook_content = json.loads(hook_path.read_text(encoding="utf-8"))
+    assert hook_content["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 1000
+
+
+def test_claude_plugin_adapter_normalizes_inline_manifest_hooks(
+    tmp_path: Path,
+) -> None:
+    plugin_root = tmp_path / "plugin"
+    manifest_dir = plugin_root / ".claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    manifest_path = manifest_dir / "plugin.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "name": "inline-hooks",
+                "version": "1.0.0",
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 validate.py",
+                                    "timeout": 5000,
+                                }
+                            ]
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    adapt_plugin_tree(plugin_root=plugin_root, adapter="claude")
+
+    manifest_content = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_content["hooks"]["Stop"][0]["hooks"][0]["timeout"] == 5.0
+
+
 def test_marketplace_install_without_latest_uses_highest_version(
     tmp_path: Path,
 ) -> None:
@@ -829,6 +2216,56 @@ def test_marketplace_install_without_latest_prefers_stable_release(
     )
 
     assert installed.version == "1.0.0"
+
+
+def test_marketplace_install_without_version_skips_unsupported_latest(
+    tmp_path: Path,
+) -> None:
+    app_config_dir = tmp_path / "app"
+    supported_root = tmp_path / "quality-v1"
+    marketplace_path = tmp_path / "marketplace.json"
+    _write_plugin_manifest(supported_root, name="quality", version="1.0.0")
+    marketplace_path.write_text(
+        json.dumps(
+            {
+                "plugins": [
+                    {
+                        "name": "quality",
+                        "latest": "2.0.0",
+                        "versions": [
+                            {
+                                "version": "2.0.0",
+                                "source": {
+                                    "kind": "unsupported",
+                                    "value": "npm-package",
+                                },
+                                "unsupported_reason": "Unsupported source",
+                            },
+                            {
+                                "version": "1.0.0",
+                                "source": {
+                                    "kind": "local",
+                                    "value": str(supported_root.resolve()),
+                                },
+                            },
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    installed = PluginConfigManager(
+        app_config_dir=app_config_dir
+    ).install_marketplace_plugin(
+        name="quality",
+        marketplace=marketplace_path,
+        scope=PluginScope.USER,
+    )
+
+    assert installed.version == "1.0.0"
+    assert installed.source.requested_version == "1.0.0"
 
 
 def test_marketplace_install_without_latest_orders_prerelease_tokens(
@@ -1431,6 +2868,34 @@ def _write_marketplace(
                         ],
                     }
                 ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_claude_marketplace(
+    marketplace_root: Path,
+    *,
+    name: str,
+    source: str | dict[str, object],
+    version: str,
+) -> None:
+    marketplace_dir = marketplace_root / ".claude-plugin"
+    marketplace_dir.mkdir(parents=True, exist_ok=True)
+    (marketplace_dir / "marketplace.json").write_text(
+        json.dumps(
+            {
+                "name": "test-claude",
+                "owner": {"name": "Tests"},
+                "plugins": [
+                    {
+                        "name": name,
+                        "description": "Quality tools",
+                        "version": version,
+                        "source": source,
+                    }
+                ],
             }
         ),
         encoding="utf-8",

@@ -18,6 +18,8 @@ import { formatMessage, t, translateDocument } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const CONFIGURED_SECRET_VALUE = '<configured>';
+const CLAUDE_MARKETPLACE_NAME = 'claude-plugins-official';
+const CLAUDE_MARKETPLACE_SOURCE = 'anthropics/claude-plugins-official';
 const MUTABLE_SCOPES = new Set(['user', 'project', 'project_local']);
 const COMPONENT_FIELDS = [
     ['skill_sources', 'Skills'],
@@ -83,7 +85,7 @@ export function bindPluginsSettingsHandlers() {
             if (target.name === 'marketplace_plugin') {
                 installDraft.version = '';
                 renderPluginsPanel();
-            } else if (target.name === 'source_kind') {
+            } else if (target.name === 'source_kind' || target.name === 'marketplace_provider') {
                 renderPluginsPanel();
             }
         } else if (target.form?.id === 'plugin-config-form') {
@@ -285,10 +287,13 @@ function renderPluginDetail(plugin) {
 
 function renderInstallForm() {
     const marketplaceMode = installDraft.source_kind === 'marketplace';
+    const claudeMarketplaceMode = marketplaceMode && installDraft.marketplace_provider === 'claude';
     const gitMode = installDraft.source_kind === 'git';
     const marketplacePlugins = Array.isArray(marketplaceBrowser.plugins) ? marketplaceBrowser.plugins : [];
     const selectedMarketplacePlugin = selectedMarketplaceEntry();
     const versions = Array.isArray(selectedMarketplacePlugin?.versions) ? selectedMarketplacePlugin.versions : [];
+    const selectedVersion = selectedMarketplaceVersion();
+    const selectedUnsupported = Boolean(marketplaceMode && versionUnsupportedReason(selectedVersion));
     return `
         <form class="plugins-editor-panel" id="plugin-install-form">
             <div class="proxy-form-section-header"><h5>${escapeHtml(t('settings.plugins.install_title'))}</h5></div>
@@ -302,7 +307,7 @@ function renderInstallForm() {
                     <select name="source_kind">
                         <option value="local" ${installDraft.source_kind === 'local' ? 'selected' : ''}>${escapeHtml(t('settings.plugins.source_type_local'))}</option>
                         <option value="git" ${installDraft.source_kind === 'git' ? 'selected' : ''}>${escapeHtml(t('settings.plugins.source_type_git'))}</option>
-                        <option value="marketplace" ${marketplaceMode ? 'selected' : ''}>${escapeHtml(t('settings.plugins.source_type_marketplace'))}</option>
+                        <option value="marketplace" ${installDraft.source_kind === 'marketplace' ? 'selected' : ''}>${escapeHtml(t('settings.plugins.source_type_marketplace'))}</option>
                     </select>
                 </label>
                 <label class="plugins-form-field">
@@ -314,13 +319,26 @@ function renderInstallForm() {
                     </select>
                 </label>
                 ${marketplaceMode ? `
+                    <label class="plugins-form-field">
+                        <span>${escapeHtml(t('settings.plugins.marketplace_provider'))}</span>
+                        <select name="marketplace_provider">
+                            <option value="relay" ${installDraft.marketplace_provider !== 'claude' ? 'selected' : ''}>${escapeHtml(t('settings.plugins.marketplace_provider_relay'))}</option>
+                            <option value="claude" ${claudeMarketplaceMode ? 'selected' : ''}>${escapeHtml(t('settings.plugins.marketplace_provider_claude'))}</option>
+                        </select>
+                    </label>
                     <label class="plugins-form-field plugins-form-field-with-action">
-                        <span>${escapeHtml(t('settings.plugins.marketplace_path'))}</span>
+                        <span>${escapeHtml(t(claudeMarketplaceMode ? 'settings.plugins.marketplace_name' : 'settings.plugins.marketplace_path'))}</span>
                         <span class="plugins-input-row">
-                            <input type="text" name="marketplace" value="${escapeHtml(installDraft.marketplace)}" placeholder="${escapeHtml(t('settings.plugins.marketplace_placeholder'))}" spellcheck="false" />
+                            <input type="text" name="marketplace" value="${escapeHtml(installDraft.marketplace)}" placeholder="${escapeHtml(t(claudeMarketplaceMode ? 'settings.plugins.claude_marketplace_placeholder' : 'settings.plugins.marketplace_placeholder'))}" spellcheck="false" />
                             <button class="secondary-btn section-action-btn" type="button" data-plugin-action="load-marketplace">${escapeHtml(t('settings.plugins.load_marketplace'))}</button>
                         </span>
                     </label>
+                    ${claudeMarketplaceMode ? `
+                        <label class="plugins-form-field plugins-form-field-wide">
+                            <span>${escapeHtml(t('settings.plugins.marketplace_source'))}</span>
+                            <input type="text" name="marketplace_source" value="${escapeHtml(installDraft.marketplace_source)}" placeholder="${escapeHtml(t('settings.plugins.claude_marketplace_source_placeholder'))}" spellcheck="false" />
+                        </label>
+                    ` : ''}
                     <label class="plugins-form-field">
                         <span>${escapeHtml(t('settings.plugins.version'))}</span>
                         ${versions.length
@@ -338,11 +356,12 @@ function renderInstallForm() {
                 ` : ''}
             </div>
             ${marketplaceMode ? renderMarketplaceStatus() : ''}
-            ${marketplaceMode ? renderMarketplaceVersionDetails(selectedMarketplaceVersion()) : ''}
+            ${marketplaceMode ? renderSelectedMarketplacePluginDescription(selectedMarketplacePlugin) : ''}
+            ${marketplaceMode ? renderMarketplaceVersionDetails(selectedVersion) : ''}
             <div class="plugins-editor-actions">
                 <button class="secondary-btn section-action-btn" type="button" data-plugin-action="cancel-editor">${escapeHtml(t('settings.action.cancel'))}</button>
-                <button class="secondary-btn section-action-btn" type="button" data-plugin-action="validate-install-source" ${marketplaceMode ? 'disabled' : ''}>${escapeHtml(t('settings.plugins.validate_source'))}</button>
-                <button class="primary-btn section-action-btn" type="submit">${escapeHtml(t('settings.action.save'))}</button>
+                ${marketplaceMode ? '' : `<button class="secondary-btn section-action-btn" type="button" data-plugin-action="validate-install-source">${escapeHtml(t('settings.plugins.validate_source'))}</button>`}
+                <button class="primary-btn section-action-btn" type="submit" ${selectedUnsupported ? 'disabled' : ''}>${escapeHtml(t('settings.action.save'))}</button>
             </div>
             ${validationRegistry ? renderValidationResult(validationRegistry) : ''}
         </form>
@@ -361,14 +380,25 @@ function renderMarketplacePluginSelect(plugins) {
                     const name = String(plugin?.name || '').trim();
                     const selected = installDraft.marketplace_plugin === name ? 'selected' : '';
                     const latest = String(plugin?.latest || '').trim();
-                    const description = String(plugin?.description || '').trim();
-                    const label = latest
-                        ? `${name} @ ${latest}${description ? ` - ${description}` : ''}`
-                        : `${name}${description ? ` - ${description}` : ''}`;
-                    return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(label)}</option>`;
+                    const unsupported = !installableMarketplaceVersions(plugin).length;
+                    const label = latest ? `${name} @ ${latest}` : name;
+                    return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(unsupported ? `${label} - ${t('settings.plugins.unsupported')}` : label)}</option>`;
                 }).join('')}
             </select>
         </label>
+    `;
+}
+
+function renderSelectedMarketplacePluginDescription(plugin) {
+    const description = String(plugin?.description || '').trim();
+    if (!description) {
+        return '';
+    }
+    return `
+        <section class="plugin-detail-section">
+            <h6>${escapeHtml(t('settings.plugins.plugin_description'))}</h6>
+            <p class="plugins-muted">${escapeHtml(description)}</p>
+        </section>
     `;
 }
 
@@ -379,7 +409,8 @@ function renderMarketplaceVersionSelect(versions) {
             ${versions.map(version => {
                 const value = String(version?.version || '').trim();
                 const selected = installDraft.version === value ? 'selected' : '';
-                return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(value)}</option>`;
+                const unsupported = Boolean(versionUnsupportedReason(version));
+                return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(unsupported ? `${value} - ${t('settings.plugins.unsupported')}` : value)}</option>`;
             }).join('')}
         </select>
     `;
@@ -389,10 +420,17 @@ function renderMarketplaceStatus() {
     if (marketplaceBrowser.error) {
         return `<div class="plugin-validation-result has-diagnostics"><strong>${escapeHtml(t('settings.plugins.marketplace_load_failed'))}</strong><span>${escapeHtml(marketplaceBrowser.error)}</span></div>`;
     }
+    if (marketplaceBrowser.loading) {
+        return `<div class="plugin-validation-result"><strong>${escapeHtml(t('settings.plugins.marketplace_loading'))}</strong><span>${escapeHtml(marketplaceBrowser.path)}</span></div>`;
+    }
     if (!marketplaceBrowser.plugins.length) {
         return '';
     }
-    return `<div class="plugin-validation-result"><strong>${escapeHtml(formatMessage('settings.plugins.marketplace_loaded', { count: marketplaceBrowser.plugins.length }))}</strong><span>${escapeHtml(marketplaceBrowser.path)}</span></div>`;
+    const unsupportedCount = marketplaceBrowser.plugins.filter(plugin => !installableMarketplaceVersions(plugin).length).length;
+    const detail = unsupportedCount
+        ? formatMessage('settings.plugins.marketplace_loaded_with_unsupported', { count: unsupportedCount })
+        : marketplaceBrowser.path;
+    return `<div class="plugin-validation-result"><strong>${escapeHtml(formatMessage('settings.plugins.marketplace_loaded', { count: marketplaceBrowser.plugins.length }))}</strong><span>${escapeHtml(detail)}</span></div>`;
 }
 
 function renderMarketplaceVersionDetails(version) {
@@ -401,6 +439,8 @@ function renderMarketplaceVersionDetails(version) {
     }
     const source = version.source || {};
     const dependencies = Array.isArray(version.dependencies) ? version.dependencies : [];
+    const warnings = versionWarnings(version);
+    const unsupportedReason = versionUnsupportedReason(version);
     return `
         <section class="plugin-detail-section">
             <h6>${escapeHtml(t('settings.plugins.marketplace_version_details'))}</h6>
@@ -410,6 +450,8 @@ function renderMarketplaceVersionDetails(version) {
                 ${source.ref ? renderDetailItem(t('settings.plugins.git_ref'), source.ref) : ''}
                 ${version.sha256 ? renderDetailItem('SHA-256', version.sha256) : ''}
             </div>
+            ${unsupportedReason ? `<div class="plugin-validation-result has-diagnostics"><strong>${escapeHtml(t('settings.plugins.unsupported'))}</strong><span>${escapeHtml(unsupportedReason)}</span></div>` : ''}
+            ${warnings.length ? `<div class="plugin-validation-result has-diagnostics"><strong>${escapeHtml(t('settings.plugins.marketplace_warnings'))}</strong>${warnings.map(warning => `<span>${escapeHtml(warning)}</span>`).join('')}</div>` : ''}
             ${dependencies.length ? `
                 <div class="plugin-chip-row">
                     ${dependencies.map(dependency => `<span class="plugin-chip">${escapeHtml(dependencyLabel(dependency))}</span>`).join('')}
@@ -679,12 +721,19 @@ async function submitPluginInstall(form) {
         enabled: true,
     };
     const sourceKind = installDraft.source_kind || 'local';
+    const marketplaceMode = sourceKind === 'marketplace';
+    const claudeMarketplaceMode = marketplaceMode && installDraft.marketplace_provider === 'claude';
     const marketplace = installDraft.marketplace;
     const version = installDraft.version;
-    if (sourceKind === 'marketplace') {
+    if (marketplaceMode) {
         payload.source = installDraft.marketplace_plugin || payload.source;
         payload.marketplace = marketplace;
         payload.version = version || null;
+        if (claudeMarketplaceMode) {
+            payload.marketplace_provider = 'claude';
+            payload.marketplace_source = installDraft.marketplace_source;
+            payload.marketplace_ref = installDraft.marketplace_ref;
+        }
     } else {
         payload.source_kind = sourceKind;
         if (sourceKind === 'git' && installDraft.source_ref) {
@@ -695,8 +744,17 @@ async function submitPluginInstall(form) {
         showToast({ tone: 'warning', message: t('settings.plugins.source_required') });
         return;
     }
-    if (sourceKind === 'marketplace' && !payload.marketplace) {
+    if (marketplaceMode && !payload.marketplace) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_required') });
+        return;
+    }
+    if (claudeMarketplaceMode && !installDraft.marketplace_source) {
+        showToast({ tone: 'warning', message: t('settings.plugins.marketplace_source_required') });
+        return;
+    }
+    const unsupportedReason = versionUnsupportedReason(selectedMarketplaceVersion());
+    if (marketplaceMode && unsupportedReason) {
+        showToast({ tone: 'warning', message: unsupportedReason });
         return;
     }
     try {
@@ -711,21 +769,39 @@ async function submitPluginInstall(form) {
 
 async function loadMarketplaceForInstall(form) {
     syncInstallDraftFromForm(form);
+    const claudeMarketplaceMode = installDraft.source_kind === 'marketplace' && installDraft.marketplace_provider === 'claude';
     if (!installDraft.marketplace) {
         showToast({ tone: 'warning', message: t('settings.plugins.marketplace_required') });
+        return;
+    }
+    if (claudeMarketplaceMode && !installDraft.marketplace_source) {
+        showToast({ tone: 'warning', message: t('settings.plugins.marketplace_source_required') });
         return;
     }
     marketplaceBrowser = {
         ...defaultMarketplaceBrowser(),
         path: installDraft.marketplace,
+        loading: true,
     };
+    renderPluginsPanel();
     try {
-        const marketplace = await fetchPluginMarketplace(installDraft.marketplace);
+        const marketplace = await fetchPluginMarketplace(
+            installDraft.marketplace,
+            claudeMarketplaceMode
+                ? {
+                    marketplace_provider: 'claude',
+                    marketplace_source: installDraft.marketplace_source,
+                    marketplace_ref: installDraft.marketplace_ref,
+                    refresh: true,
+                }
+                : {},
+        );
         const plugins = Array.isArray(marketplace?.plugins) ? marketplace.plugins : [];
         marketplaceBrowser = {
             path: installDraft.marketplace,
             plugins,
             error: '',
+            loading: false,
         };
         const currentSelection = plugins.find(plugin => plugin?.name === installDraft.marketplace_plugin);
         const selected = currentSelection || plugins[0] || null;
@@ -739,6 +815,7 @@ async function loadMarketplaceForInstall(form) {
             path: installDraft.marketplace,
             plugins: [],
             error: String(error?.message || t('settings.plugins.marketplace_load_failed')),
+            loading: false,
         };
         renderPluginsPanel();
         showToast({ tone: 'error', message: marketplaceBrowser.error });
@@ -850,16 +927,26 @@ async function promptAndUpdatePlugin(plugin) {
 
 async function promptAndUpdateMarketplacePlugin(plugin) {
     try {
-        const marketplace = await fetchPluginMarketplace(plugin.source.marketplace);
+        const marketplace = await fetchPluginMarketplace(
+            plugin.source.marketplace,
+            pluginMarketplaceRequestOptions(plugin),
+        );
         const entry = (Array.isArray(marketplace?.plugins) ? marketplace.plugins : [])
             .find(item => item?.name === plugin.name);
-        const versions = Array.isArray(entry?.versions) ? entry.versions : [];
-        if (!versions.length) {
+        const allVersions = Array.isArray(entry?.versions) ? entry.versions : [];
+        if (!allVersions.length) {
             await updatePlugin(plugin.name, { scope: plugin.scope, version: null });
             showToast({ tone: 'success', message: t('settings.plugins.updated') });
             await loadPluginsSettingsPanel({ force: true });
             return;
         }
+        const versions = installableMarketplaceVersions(entry);
+        if (!versions.length) {
+            showToast({ tone: 'warning', message: t('settings.plugins.unsupported') });
+            return;
+        }
+        const latestVersion = marketplacePreferredVersion(entry, allVersions);
+        const latestInstallable = !latestVersion || !versionUnsupportedReason(latestVersion);
         const result = await showFormDialog({
             title: t('settings.plugins.update_title'),
             message: t('settings.plugins.update_version_prompt'),
@@ -871,7 +958,9 @@ async function promptAndUpdateMarketplacePlugin(plugin) {
                     type: 'select',
                     value: '',
                     options: [
-                        { value: '', label: t('settings.plugins.version_latest') },
+                        ...(latestInstallable
+                            ? [{ value: '', label: t('settings.plugins.version_latest') }]
+                            : []),
                         ...versions.map(version => {
                             const value = String(version?.version || '').trim();
                             return { value, label: value };
@@ -892,6 +981,19 @@ async function promptAndUpdateMarketplacePlugin(plugin) {
     } catch (error) {
         showToast({ tone: 'error', message: String(error?.message || t('settings.plugins.update_failed')) });
     }
+}
+
+function pluginMarketplaceRequestOptions(plugin) {
+    const provider = plugin?.source?.marketplace_provider;
+    if (provider !== 'claude') {
+        return {};
+    }
+    return {
+        marketplace_provider: provider,
+        marketplace_source: plugin?.source?.marketplace_source || '',
+        marketplace_ref: plugin?.source?.marketplace_ref || '',
+        refresh: true,
+    };
 }
 
 async function confirmAndDeletePlugin(plugin) {
@@ -936,6 +1038,9 @@ function defaultInstallDraft() {
         source_ref: '',
         scope: 'user',
         marketplace: '',
+        marketplace_provider: 'relay',
+        marketplace_source: '',
+        marketplace_ref: '',
         marketplace_plugin: '',
         version: '',
         enabled: true,
@@ -947,6 +1052,7 @@ function defaultMarketplaceBrowser() {
         path: '',
         plugins: [],
         error: '',
+        loading: false,
     };
 }
 
@@ -968,6 +1074,22 @@ function updateInstallDraft(element) {
         return;
     }
     installDraft[name] = String(element.value || '').trim();
+    if (name === 'source_kind' && installDraft.source_kind === 'marketplace') {
+        installDraft.marketplace_provider = installDraft.marketplace_provider || 'relay';
+    }
+    if (name === 'marketplace_provider' && installDraft.marketplace_provider === 'relay') {
+        if (installDraft.marketplace === CLAUDE_MARKETPLACE_NAME) {
+            installDraft.marketplace = '';
+        }
+        if (installDraft.marketplace_source === CLAUDE_MARKETPLACE_SOURCE) {
+            installDraft.marketplace_source = '';
+        }
+        installDraft.marketplace_ref = '';
+    }
+    if (name === 'marketplace_provider' && installDraft.marketplace_provider === 'claude') {
+        installDraft.marketplace = installDraft.marketplace || CLAUDE_MARKETPLACE_NAME;
+        installDraft.marketplace_source = installDraft.marketplace_source || CLAUDE_MARKETPLACE_SOURCE;
+    }
     if (name === 'marketplace_plugin') {
         installDraft.source = installDraft.marketplace_plugin;
     }
@@ -1039,11 +1161,39 @@ function selectedMarketplaceVersion() {
     if (selectedVersion) {
         return versions.find(version => String(version?.version || '').trim() === selectedVersion) || null;
     }
+    return marketplacePreferredVersion(entry, versions);
+}
+
+function installableMarketplaceVersions(plugin) {
+    const versions = Array.isArray(plugin?.versions) ? plugin.versions : [];
+    return versions.filter(version => !versionUnsupportedReason(version));
+}
+
+function marketplacePreferredVersion(entry, versions) {
     const latest = String(entry?.latest || '').trim();
     if (latest) {
         return versions.find(version => String(version?.version || '').trim() === latest) || semanticLatestMarketplaceVersion(versions);
     }
     return semanticLatestMarketplaceVersion(versions);
+}
+
+function versionUnsupportedReason(version) {
+    if (!version) {
+        return '';
+    }
+    const reason = String(version?.unsupported_reason || '').trim();
+    if (reason) {
+        return reason;
+    }
+    return version?.source?.kind === 'unsupported'
+        ? t('settings.plugins.unsupported_source')
+        : '';
+}
+
+function versionWarnings(version) {
+    return Array.isArray(version?.warnings)
+        ? version.warnings.map(warning => String(warning || '').trim()).filter(Boolean)
+        : [];
 }
 
 function semanticLatestMarketplaceVersion(versions) {

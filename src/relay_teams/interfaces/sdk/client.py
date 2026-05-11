@@ -124,6 +124,9 @@ class AsyncAgentTeamsClient:
         source_kind: str | None = None,
         source_ref: str | None = None,
         marketplace: str | None = None,
+        marketplace_provider: str | None = None,
+        marketplace_source: str | None = None,
+        marketplace_ref: str | None = None,
         version: str | None = None,
     ) -> dict[str, JsonValue]:
         payload: dict[str, JsonValue] = {
@@ -137,6 +140,12 @@ class AsyncAgentTeamsClient:
             payload["source_kind"] = source_kind
         if source_ref is not None:
             payload["source_ref"] = source_ref
+        if marketplace_provider is not None:
+            payload["marketplace_provider"] = marketplace_provider
+        if marketplace_source is not None:
+            payload["marketplace_source"] = marketplace_source
+        if marketplace_ref is not None:
+            payload["marketplace_ref"] = marketplace_ref
         return await self._request_json(
             "POST",
             "/api/system/configs/plugins:install",
