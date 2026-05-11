@@ -1,3 +1,7 @@
 # Shell scripts must keep LF endings — CRLF breaks #!/bin/sh in Linux containers.
 *.sh text eol=lf
 docker/* text eol=lf
+
+# Windows batch files must keep CRLF endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf

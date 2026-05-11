@@ -1427,13 +1427,16 @@ function installGlobals(elements) {{
             return element;
         }},
     }};
-    globalThis.navigator = {{
-        clipboard: {{
-            async writeText(value) {{
-                globalThis.__clipboardWrites.push(String(value));
+    Object.defineProperty(globalThis, 'navigator', {{
+        configurable: true,
+        value: {{
+            clipboard: {{
+                async writeText(value) {{
+                    globalThis.__clipboardWrites.push(String(value));
+                }},
             }},
         }},
-    }};
+    }});
     globalThis.__fetchConfigStatusCalls = 0;
     globalThis.__reloadMcpCalls = 0;
     globalThis.__reloadSkillsCalls = 0;
