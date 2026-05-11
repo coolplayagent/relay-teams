@@ -3,11 +3,12 @@
  * MCP/Skills tab logic.
  */
 import * as api from '../../core/api.js';
-import { showToast } from '../../utils/feedback.js';
+import { showConfirmDialog, showToast } from '../../utils/feedback.js';
 import { formatMessage, t } from '../../utils/i18n.js';
 import { errorToPayload, logError } from '../../utils/logger.js';
 
 const addMcpServer = api.addMcpServer || postMcpServer;
+const deleteMcpServer = api.deleteMcpServer || deleteMcpServerRequest;
 const fetchMcpServer = api.fetchMcpServer || getMcpServer;
 const fetchConfigStatus = api.fetchConfigStatus;
 const fetchMcpServers = api.fetchMcpServers || fetchMcpServersFromConfigStatus;
@@ -74,6 +75,12 @@ async function putMcpServer(serverName, payload) {
     });
 }
 
+async function deleteMcpServerRequest(serverName) {
+    return requestMcpJson(`/api/mcp/servers/${encodeURIComponent(serverName)}`, {
+        method: 'DELETE',
+    });
+}
+
 async function putMcpServerEnabled(serverName, enabled) {
     return requestMcpJson(`/api/mcp/servers/${encodeURIComponent(serverName)}/enabled`, {
         method: 'PUT',
@@ -129,6 +136,7 @@ export function bindSystemStatusHandlers() {
     globalThis.__agentTeamsRefreshMcpTools = refreshMcpServerToolsFromPanel;
     globalThis.__agentTeamsSetMcpServerEnabled = setMcpServerEnabledFromPanel;
     globalThis.__agentTeamsEditMcpServer = editMcpServer;
+    globalThis.__agentTeamsDeleteMcpServer = deleteMcpServerFromPanel;
     if (!languageBound && typeof document.addEventListener === 'function') {
         document.addEventListener('agent-teams-language-changed', () => {
             renderMcpStatusPanel();
@@ -412,6 +420,40 @@ async function setMcpServerEnabledFromPanel(serverName, enabled) {
     }
 }
 
+async function deleteMcpServerFromPanel(serverName) {
+    const safeName = String(serverName || '').trim();
+    if (!safeName) {
+        return;
+    }
+    const confirmed = await showConfirmDialog({
+        title: t('settings.mcp.delete_title'),
+        message: formatMessage('settings.mcp.delete_message', { name: safeName }),
+        tone: 'warning',
+        confirmLabel: t('settings.action.delete'),
+        cancelLabel: t('settings.action.cancel'),
+    });
+    if (!confirmed) {
+        return;
+    }
+    try {
+        await deleteMcpServer(safeName);
+        mcpConnectionTests.delete(safeName);
+        collapsedMcpServers.delete(safeName);
+        showToast({
+            title: t('settings.mcp.deleted'),
+            message: formatMessage('settings.mcp.deleted_message', { name: safeName }),
+            tone: 'success',
+        });
+        await loadMcpStatusPanel();
+    } catch (e) {
+        showToast({
+            title: t('settings.mcp.delete_failed'),
+            message: e.message || t('settings.mcp.delete_failed_message'),
+            tone: 'danger',
+        });
+    }
+}
+
 async function handleReloadSkills() {
     try {
         await reloadSkillsConfig();
@@ -619,6 +661,15 @@ function renderMcpServerCard(serverView) {
     const collapsed = collapsedMcpServers.has(serverView.name);
     const canCollapse = canCollapseTools(serverView);
     const testState = mcpConnectionTests.get(serverView.name);
+    const collapseButton = canCollapse ? `
+        <button
+            class="mcp-status-toggle"
+            type="button"
+            onclick='globalThis.__agentTeamsToggleMcpTools(${serializeForInlineScript(serverView.name)})'
+        >
+            ${collapsed ? t('settings.system.expand_tools') : t('settings.system.collapse_tools')}
+        </button>
+    ` : '';
     return `
         <section class="mcp-status-card">
             <div class="mcp-status-card-header">
@@ -626,47 +677,50 @@ function renderMcpServerCard(serverView) {
                     <div class="mcp-status-card-name">${escapeHtml(serverView.name)}</div>
                     ${meta ? `<div class="mcp-status-card-meta">${escapeHtml(meta)}</div>` : ''}
                 </div>
-                <div class="mcp-status-card-actions">
-                    <button
-                        class="mcp-status-toggle"
-                        type="button"
-                        onclick='globalThis.__agentTeamsEditMcpServer(${serializeForInlineScript(serverView.name)})'
-                    >
-                        ${t('settings.action.edit')}
-                    </button>
-                    <button
-                        class="mcp-status-toggle"
-                        type="button"
-                        onclick='globalThis.__agentTeamsTestMcpServer(${serializeForInlineScript(serverView.name)})'
-                        ${testState?.loading || serverView.enabled === false ? 'disabled' : ''}
-                    >
-                        ${testState?.loading ? t('settings.mcp.testing') : t('settings.action.test')}
-                    </button>
-                    <button
-                        class="mcp-status-toggle"
-                        type="button"
-                        onclick='globalThis.__agentTeamsRefreshMcpTools(${serializeForInlineScript(serverView.name)})'
-                        ${serverView.enabled === false || serverView.discoveryStatus === 'loading' ? 'disabled' : ''}
-                    >
-                        ${t('settings.action.refresh')}
-                    </button>
-                    <button
-                        class="mcp-status-toggle"
-                        type="button"
-                        onclick='globalThis.__agentTeamsSetMcpServerEnabled(${serializeForInlineScript(serverView.name)}, ${serverView.enabled === false ? 'true' : 'false'})'
-                    >
-                        ${serverView.enabled === false ? t('settings.action.enable') : t('settings.action.disable')}
-                    </button>
-                    ${canCollapse ? `
+                <div class="mcp-status-card-controls">
+                    <div class="mcp-status-card-actions">
                         <button
                             class="mcp-status-toggle"
                             type="button"
-                            onclick='globalThis.__agentTeamsToggleMcpTools(${serializeForInlineScript(serverView.name)})'
+                            onclick='globalThis.__agentTeamsEditMcpServer(${serializeForInlineScript(serverView.name)})'
                         >
-                            ${collapsed ? t('settings.system.expand_tools') : t('settings.system.collapse_tools')}
+                            ${t('settings.action.edit')}
                         </button>
-                    ` : ''}
-                    <div class="status-list-state">${escapeHtml(getMcpServerStateLabel(serverView))}</div>
+                        <button
+                            class="mcp-status-toggle"
+                            type="button"
+                            onclick='globalThis.__agentTeamsTestMcpServer(${serializeForInlineScript(serverView.name)})'
+                            ${testState?.loading || serverView.enabled === false ? 'disabled' : ''}
+                        >
+                            ${testState?.loading ? t('settings.mcp.testing') : t('settings.action.test')}
+                        </button>
+                        <button
+                            class="mcp-status-toggle"
+                            type="button"
+                            onclick='globalThis.__agentTeamsRefreshMcpTools(${serializeForInlineScript(serverView.name)})'
+                            ${serverView.enabled === false || serverView.discoveryStatus === 'loading' ? 'disabled' : ''}
+                        >
+                            ${t('settings.action.refresh')}
+                        </button>
+                        <button
+                            class="mcp-status-toggle"
+                            type="button"
+                            onclick='globalThis.__agentTeamsSetMcpServerEnabled(${serializeForInlineScript(serverView.name)}, ${serverView.enabled === false ? 'true' : 'false'})'
+                        >
+                            ${serverView.enabled === false ? t('settings.action.enable') : t('settings.action.disable')}
+                        </button>
+                        ${collapseButton}
+                    </div>
+                    <div class="mcp-status-card-footer">
+                        <div class="status-list-state">${escapeHtml(getMcpServerStateLabel(serverView))}</div>
+                        <button
+                            class="mcp-status-toggle mcp-status-toggle-danger"
+                            type="button"
+                            onclick='globalThis.__agentTeamsDeleteMcpServer(${serializeForInlineScript(serverView.name)})'
+                        >
+                            ${t('settings.action.delete')}
+                        </button>
+                    </div>
                 </div>
             </div>
             ${testState ? renderMcpConnectionTestState(testState) : ''}

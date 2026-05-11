@@ -303,6 +303,32 @@ class McpService:
                 config=self._config_manager.get_server_config(name),
             )
 
+    def delete_server(self, name: str) -> McpServerSummary:
+        if self._config_manager is None:
+            raise RuntimeError("MCP config manager is not available")
+        with trace_span(
+            LOGGER,
+            component="mcp.service",
+            operation="delete_server",
+            attributes={"server_name": name},
+        ):
+            self._require_app_managed_server(name)
+            spec = self._registry.get_spec(name.strip())
+            result = McpServerSummary(
+                name=spec.name,
+                source=spec.source,
+                transport=_detect_transport(spec.server_config),
+                enabled=spec.enabled,
+                discovery_status=(
+                    McpDiscoveryStatus.PENDING
+                    if spec.enabled
+                    else McpDiscoveryStatus.DISABLED
+                ),
+            )
+            self._config_manager.delete_server(name=name)
+            self._publish_registry(self._load_registry())
+            return result
+
     async def test_server_connection(self, name: str) -> McpServerConnectionTestResult:
         with trace_span(
             LOGGER,

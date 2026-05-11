@@ -133,6 +133,11 @@ export async function setMcpServerEnabled(serverName, enabled) {
     return { name: serverName, enabled };
 }
 
+export async function deleteMcpServer(serverName) {
+    globalThis.__deleteMcpServerCalls.push(serverName);
+    return { name: serverName };
+}
+
 export async function testMcpServerConnection(serverName) {
     globalThis.__testMcpServerCalls.push(serverName);
     return { server: serverName, ok: true, tool_count: 2, tools: [] };
@@ -186,12 +191,83 @@ console.log(JSON.stringify({
     assert "No tools exposed by this MCP server." in html
     assert "broken-mcp" in html
     assert "Connection closed" in html
+    assert 'class="mcp-status-card-controls"' in html
+    assert 'class="mcp-status-card-footer"' in html
+    assert 'class="mcp-status-toggle mcp-status-toggle-danger"' in html
     assert "Expand all tools" in collapsed_html
     assert "Expand tools" in collapsed_html
     assert "2 tools hidden." in collapsed_html
     assert "current_time" not in collapsed_html
     assert payload["toolFetchCalls"] == ["time-mcp", "empty-mcp", "broken-mcp"]
     assert log_entries == []
+
+
+def test_mcp_status_panel_confirms_before_deleting_server(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { bindSystemStatusHandlers, loadMcpStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+globalThis.__confirmDialogResponses.push(true);
+bindSystemStatusHandlers();
+await loadMcpStatusPanel();
+await globalThis.__agentTeamsDeleteMcpServer('time-mcp');
+
+console.log(JSON.stringify({
+    confirmCalls: globalThis.__confirmDialogCalls,
+    deleteCalls: globalThis.__deleteMcpServerCalls,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    toasts = cast(list[JsonValue], payload["toasts"])
+    assert payload["deleteCalls"] == ["time-mcp"]
+    assert payload["confirmCalls"] == [
+        {
+            "title": "Delete MCP Server",
+            "message": 'Delete the MCP server "time-mcp"? This cannot be undone.',
+            "tone": "warning",
+            "confirmLabel": "Delete",
+            "cancelLabel": "Cancel",
+        }
+    ]
+    assert cast(dict[str, JsonValue], toasts[0]) == {
+        "title": "MCP Server Deleted",
+        "message": "time-mcp was deleted.",
+        "tone": "success",
+    }
+
+
+def test_mcp_status_panel_skips_delete_when_confirmation_is_cancelled(
+    tmp_path: Path,
+) -> None:
+    payload = _run_system_status_script(
+        tmp_path=tmp_path,
+        runner_source="""
+const { bindSystemStatusHandlers, loadMcpStatusPanel } = await import('./systemStatus.mjs');
+
+installGlobals(createElements());
+globalThis.__confirmDialogResponses.push(false);
+bindSystemStatusHandlers();
+await loadMcpStatusPanel();
+await globalThis.__agentTeamsDeleteMcpServer('time-mcp');
+
+console.log(JSON.stringify({
+    confirmCalls: globalThis.__confirmDialogCalls,
+    deleteCalls: globalThis.__deleteMcpServerCalls,
+    toasts: globalThis.__toasts,
+}));
+""".strip(),
+    )
+
+    confirm_calls = cast(list[JsonValue], payload["confirmCalls"])
+    assert len(confirm_calls) == 1
+    assert payload["deleteCalls"] == []
+    assert payload["toasts"] == []
 
 
 def test_mcp_status_panel_shows_loading_shell_before_tools_finish(
@@ -1144,6 +1220,9 @@ def test_system_status_styles_include_mcp_tool_list_tokens() -> None:
     assert ".mcp-status-list {" in components_css
     assert ".mcp-status-card {" in components_css
     assert ".mcp-status-card-actions {" in components_css
+    assert ".mcp-status-card-controls {" in components_css
+    assert ".mcp-status-card-footer {" in components_css
+    assert ".mcp-status-toggle-danger {" in components_css
     assert ".mcp-tools-list {" in components_css
     assert ".mcp-tools-collapsed-summary," in components_css
     assert ".mcp-tool-row {" in components_css
@@ -1186,6 +1265,14 @@ def _run_system_status_script(
 export function showToast(payload) {
     globalThis.__toasts.push(payload);
 }
+
+export async function showConfirmDialog(payload = {}) {
+    globalThis.__confirmDialogCalls.push(payload);
+    if (Array.isArray(globalThis.__confirmDialogResponses) && globalThis.__confirmDialogResponses.length > 0) {
+        return globalThis.__confirmDialogResponses.shift();
+    }
+    return true;
+}
 """.strip(),
         encoding="utf-8",
     )
@@ -1226,6 +1313,14 @@ const translations = {
     "settings.mcp.copy_json_success_message": "The MCP JSON has been copied to your clipboard.",
     "settings.mcp.copy_json_failed": "Copy Failed",
     "settings.mcp.copy_json_failed_message": "Failed to copy the MCP JSON.",
+    "settings.mcp.delete_title": "Delete MCP Server",
+    "settings.mcp.delete_message": "Delete the MCP server \\\"{name}\\\"? This cannot be undone.",
+    "settings.mcp.deleted": "MCP Server Deleted",
+    "settings.mcp.deleted_message": "{name} was deleted.",
+    "settings.mcp.delete_failed": "Delete Failed",
+    "settings.mcp.delete_failed_message": "Failed to delete the MCP server.",
+    "settings.action.delete": "Delete",
+    "settings.action.cancel": "Cancel",
     "settings.mcp.test_ok": "Connection succeeded. {count} tools loaded.",
     "settings.mcp.test_failed_message": "Connection test failed.",
     "settings.mcp.disabled_state": "This MCP server is disabled.",
@@ -1322,9 +1417,12 @@ function installGlobals(elements) {{
     globalThis.__toolFetchCalls = [];
     globalThis.__refreshMcpToolsCalls = [];
     globalThis.__addMcpServerCalls = [];
+    globalThis.__deleteMcpServerCalls = [];
     globalThis.__setMcpServerEnabledCalls = [];
     globalThis.__testMcpServerCalls = [];
     globalThis.__clipboardWrites = [];
+    globalThis.__confirmDialogCalls = [];
+    globalThis.__confirmDialogResponses = [];
     globalThis.__toasts = [];
     globalThis.__logEntries = [];
 }};

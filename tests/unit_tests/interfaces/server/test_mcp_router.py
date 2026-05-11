@@ -74,6 +74,15 @@ class _FakeMcpService:
             config=request.config,
         )
 
+    def delete_server(self, name: str) -> McpServerSummary:
+        if name != "filesystem":
+            raise ValueError(f"Unknown MCP server: {name}")
+        return McpServerSummary(
+            name=name,
+            source=McpConfigScope.APP,
+            transport="stdio",
+        )
+
     def set_server_enabled(
         self,
         name: str,
@@ -384,6 +393,47 @@ def test_update_mcp_server_config_returns_503_when_unavailable() -> None:
         "/api/mcp/servers/filesystem",
         json={"config": {"transport": "stdio", "command": "uvx"}},
     )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "MCP config manager is not available"}
+
+
+def test_delete_mcp_server() -> None:
+    client = _create_test_client(_FakeMcpService())
+
+    response = client.delete("/api/mcp/servers/filesystem")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "name": "filesystem",
+        "source": "app",
+        "transport": "stdio",
+        "enabled": True,
+        "discovery_status": "pending",
+        "tool_count": 0,
+        "last_checked_at": None,
+        "error": None,
+    }
+
+
+def test_delete_mcp_server_returns_404_for_unknown_server() -> None:
+    client = _create_test_client(_FakeMcpService())
+
+    response = client.delete("/api/mcp/servers/missing")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Unknown MCP server: missing"}
+
+
+def test_delete_mcp_server_returns_503_when_unavailable() -> None:
+    class _UnavailableDeleteService(_FakeMcpService):
+        def delete_server(self, name: str) -> McpServerSummary:
+            _ = name
+            raise RuntimeError("MCP config manager is not available")
+
+    client = _create_test_client(_UnavailableDeleteService())
+
+    response = client.delete("/api/mcp/servers/filesystem")
 
     assert response.status_code == 503
     assert response.json() == {"detail": "MCP config manager is not available"}
